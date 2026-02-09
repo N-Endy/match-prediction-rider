@@ -110,7 +110,7 @@ using (var scope = app.Services.CreateScope())
 RecurringJob.AddOrUpdate<IAnalyzerService>(
     "RunScraperAndAnalyzer",
     service => service.RunScraperAndAnalyzerAsync(),
-    Cron.Daily(2));
+    Cron.Hourly(5));
 
 app.Run();
 
