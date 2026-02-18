@@ -3,53 +3,50 @@
 @model MatchPredictor.Web.Pages.ScrapeStatus
 
 @{
-    Layout = null;
+    ViewData["Title"] = "System Status";
 }
 
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Scraping Logs</title>
-</head>
-<body class="bg-gradient-to-br from-slate-50 via-white to-blue-50 text-gray-800">
+<div class="mp-container">
+    <div class="mp-page-header">
+        <div class="mp-page-title">
+            <div class="mp-page-title-icon" style="background: rgba(6, 182, 212, 0.1);">📄</div>
+            <h1>System Status</h1>
+        </div>
+    </div>
 
-<section class="min-h-screen py-10 px-4 sm:px-6 md:px-8">
-    <div class="max-w-4xl mx-auto">
-        <h1 class="text-3xl font-bold mb-8 text-center text-emerald-700 tracking-tight">
-            📄 Scraping Activity Logs
-        </h1>
+    @if (Model.Logs?.Any() == true)
+    {
+        <div class="mp-match-count">
+            <span class="mp-live-dot"></span>
+            @Model.Logs.Count() log entries
+        </div>
 
-        @if (Model.Logs?.Any() == true)
-        {
+        <div class="mp-predictions-list">
             @foreach (var status in Model.Logs)
             {
-                <div class="bg-white shadow-md rounded-md p-6 @(status.Status.ToLower() == "success" ? "border-l-4 border-green-500" : "border-l-4 border-red-500")">
-                    <div class="flex justify-between items-center mb-2">
-                        <h2 class="text-lg font-semibold text-slate-800">Scrape Attempt</h2>
-                        <span class="text-xs font-bold text-white px-2 py-1 rounded @(status.Status.ToLower() == "success" ? "bg-green-500" : "bg-red-500")">
-                            @status.Status
-                        </span>
+                var isSuccess = status.Status.ToLower() == "success";
+                <div class="mp-prediction-card" style="border-left: 3px solid @(isSuccess ? "var(--accent-emerald)" : "var(--accent-rose)");">
+                    <div class="mp-match-info">
+                        <div class="mp-match-league">
+                            Scrape Attempt
+                            <span class="mp-time">@status.Timestamp.ToLocalTime().ToString("dd MMM yyyy, hh:mm tt", CultureInfo.InvariantCulture)</span>
+                        </div>
+                        <div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 4px;">
+                            @status.Message
+                        </div>
                     </div>
-
-                    <p class="text-sm text-gray-600 mb-1">
-                        <strong>🕒 Time:</strong> @status.Timestamp.ToLocalTime().ToString("dd MMM yyyy, hh:mm tt", CultureInfo.InvariantCulture)
-                    </p>
-                    <p class="text-sm text-gray-600">
-                        <strong>📋 Message:</strong> @status.Message
-                    </p>
+                    <span class="mp-prediction-badge" style="background: @(isSuccess ? "rgba(16,185,129,0.12)" : "rgba(244,63,94,0.12)"); color: @(isSuccess ? "var(--accent-emerald)" : "var(--accent-rose)"); border: 1px solid @(isSuccess ? "rgba(16,185,129,0.2)" : "rgba(244,63,94,0.2)");">
+                        @status.Status
+                    </span>
                 </div>
             }
-        }
-        else
-        {
-            <div class="text-center text-gray-500 italic mt-10">
-                No scraping logs available yet.
-            </div>
-        }
-    </div>
-</section>
-
-</body>
-</html>
+        </div>
+    }
+    else
+    {
+        <div class="mp-empty-state">
+            <div class="mp-empty-state-icon">📄</div>
+            <p>No scraping logs available yet.</p>
+        </div>
+    }
+</div>

@@ -2,81 +2,86 @@
 @model MatchPredictor.Web.Pages.IndexModel
 
 @{
-    Layout = null;
     ViewData["Title"] = "Smart Daily Football Predictions";
 }
 
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Get accurate, data-driven football predictions daily. BTTS, Over 2.5, Straight Win and more!">
-    <title>@ViewData["Title"]</title>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-</head>
-<body class="bg-gradient-to-b from-white via-slate-50 to-slate-100 text-gray-800">
-
-<!-- Hero -->
-<section class="text-center py-20 px-4">
-    <h1 class="text-4xl font-bold mb-4 text-gray-900">Smart Daily Football Predictions</h1>
-    <p class="text-lg text-gray-600 max-w-xl mx-auto">No stress, just reliable football tips backed by smart analysis and scraped odds.</p>
-    <a href="/predictions/btts" class="inline-block mt-6 bg-black text-white px-6 py-3 rounded-full text-lg font-semibold hover:bg-gray-900 transition duration-300 shadow">Explore Today’s Tips →</a>
+<!-- Hero Section -->
+<section class="mp-hero">
+    <div class="mp-hero-badge">
+        <span class="mp-live-dot"></span>
+        Updated Daily · AI-Powered
+    </div>
+    <h1>Smart Football<br>Predictions</h1>
+    <p>Daily AI-driven football tips backed by smart analysis. BTTS, Over 2.5, Straight Win, Draws and more — updated every day.</p>
+    <a href="/predictions/btts" class="mp-hero-cta">
+        Explore Today's Tips →
+    </a>
 </section>
 
-<!-- How It Works -->
-<section class="bg-white py-16 px-6">
-    <div class="max-w-4xl mx-auto">
-        <h2 class="text-2xl font-bold text-center mb-10">How It Works</h2>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-8 text-center">
-            <div>
-                <div class="text-4xl mb-2">🕵️‍♂️</div>
-                <h3 class="font-semibold">1. Scrape & Collect Odds</h3>
-                <p class="text-gray-600 text-sm">We scrape odds from a reliable source every midnight.</p>
+<!-- Prediction Categories -->
+<div class="mp-container">
+    <h2 class="mp-section-heading">Today's Predictions</h2>
+    <p class="mp-section-subtitle">Choose a prediction category to see today's picks</p>
+
+    <div class="mp-category-grid">
+        <a href="/predictions/btts" class="mp-category-card">
+            <div class="mp-category-icon" style="background: rgba(16, 185, 129, 0.1);">⚽</div>
+            <div class="mp-category-info">
+                <h3>Both Teams to Score</h3>
+                <p>Matches where both teams are likely to score</p>
             </div>
-            <div>
-                <div class="text-4xl mb-2">🧠</div>
-                <h3 class="font-semibold">2. Analyze with Logic</h3>
-                <p class="text-gray-600 text-sm">We run the data through intelligent logic to predict likely outcomes.</p>
+        </a>
+        <a href="/predictions/over2" class="mp-category-card">
+            <div class="mp-category-icon" style="background: rgba(59, 130, 246, 0.1);">🎯</div>
+            <div class="mp-category-info">
+                <h3>Over 2.5 Goals</h3>
+                <p>Matches likely to have 3 or more total goals</p>
             </div>
-            <div>
-                <div class="text-4xl mb-2">📲</div>
-                <h3 class="font-semibold">3. Publish for You</h3>
-                <p class="text-gray-600 text-sm">You get a clean list of daily tips to use right away.</p>
+        </a>
+        <a href="/predictions/straightwin" class="mp-category-card">
+            <div class="mp-category-icon" style="background: rgba(139, 92, 246, 0.1);">🏆</div>
+            <div class="mp-category-info">
+                <h3>Straight Win</h3>
+                <p>Strong home or away win predictions</p>
+            </div>
+        </a>
+        <a href="/predictions/draw" class="mp-category-card">
+            <div class="mp-category-icon" style="background: rgba(245, 158, 11, 0.1);">🤝</div>
+            <div class="mp-category-info">
+                <h3>Draw</h3>
+                <p>Matches with high draw probability</p>
+            </div>
+        </a>
+    </div>
+
+    <!-- How It Works -->
+    <div style="margin-top: 4rem;">
+        <h2 class="mp-section-heading">How It Works</h2>
+        <p class="mp-section-subtitle">Three steps to smarter predictions</p>
+
+        <div class="mp-features">
+            <div class="mp-feature-card">
+                <div class="mp-feature-icon" style="background: rgba(59, 130, 246, 0.1);">🕵️</div>
+                <h3>Collect & Analyze</h3>
+                <p>We scrape AI-generated odds from a reliable source every day and run them through intelligent logic.</p>
+            </div>
+            <div class="mp-feature-card">
+                <div class="mp-feature-icon" style="background: rgba(16, 185, 129, 0.1);">🧠</div>
+                <h3>Smart Filtering</h3>
+                <p>Our algorithms filter for high-probability matches across multiple prediction categories.</p>
+            </div>
+            <div class="mp-feature-card">
+                <div class="mp-feature-icon" style="background: rgba(6, 182, 212, 0.1);">📲</div>
+                <h3>Publish Daily</h3>
+                <p>Get a clean, curated list of daily football tips — no clutter, no ads, just picks.</p>
             </div>
         </div>
     </div>
-</section>
 
-<!-- Prediction Types -->
-<section class="py-16 px-6 bg-slate-50">
-    <div class="max-w-5xl mx-auto">
-        <h2 class="text-2xl font-bold text-center mb-10">What We Predict</h2>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-            <div class="bg-white shadow rounded p-6">⚽ BTTS</div>
-            <div class="bg-white shadow rounded p-6">🎯 Over 2.5</div>
-            <div class="bg-white shadow rounded p-6">🏆 Straight Win</div>
-            <div class="bg-white shadow rounded p-6">🤝 Draw</div>
-        </div>
+    <!-- CTA -->
+    <div style="text-align: center; margin: 4rem 0 2rem;">
+        <a href="/predictions/combined" class="mp-hero-cta">
+            View Combined Picks →
+        </a>
     </div>
-</section>
-
-<!-- Why Choose Us -->
-<section class="py-16 px-6">
-    <div class="max-w-4xl mx-auto">
-        <h2 class="text-2xl font-bold text-center mb-10">Why Choose Us?</h2>
-        <ul class="space-y-4 text-center text-gray-700">
-            <li>✅ Cleaner and simpler than bloated tipster sites</li>
-            <li>✅ Predictions updated daily, 5 mins past midnight</li>
-            <li>✅ Built with accuracy, logic, and passion for football</li>
-        </ul>
-    </div>
-</section>
-
-<!-- CTA -->
-<section class="text-center py-16">
-    <a href="/predictions/btts" class="inline-block bg-black text-white px-8 py-3 rounded-full text-lg font-semibold hover:bg-gray-900 transition duration-300">View Today’s Predictions</a>
-</section>
-
-</body>
-</html>
+</div>

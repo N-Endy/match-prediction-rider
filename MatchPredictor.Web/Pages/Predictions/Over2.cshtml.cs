@@ -25,8 +25,8 @@ public class Over2 : PageModel
     
     public async Task<IActionResult> OnGet()
     {
-        var dateString = Infrastructure.Utils.DateTimeProvider.GetLocalTimeString();
-        var today = Infrastructure.Utils.DateTimeProvider.GetLocalTime();
+        var dateString = DateTime.UtcNow.Date.ToString("dd-MM-yyyy");
+        var today = DateTime.UtcNow.Date;
         Matches = await _cache.GetOrCreateAsync($"over2_{today}", async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(12);

@@ -17,7 +17,7 @@ public class PredictionThresholds
     public const double OverGoalsForWin = 0.6;
     public const double UnderGoalsForControl = 0.4;
     
-    public const double BTTSScoreThreshold = 0.5;
+    public const double BTTSScoreThreshold = 0.6;
     
     public const double OverGoalsForControl = 0.4;
 }

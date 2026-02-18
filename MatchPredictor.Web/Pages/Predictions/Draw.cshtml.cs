@@ -4,7 +4,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
-using MatchPredictor.Infrastructure.Utils;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
@@ -26,8 +25,8 @@ public class Draw : PageModel
     
     public async Task<IActionResult> OnGet()
     {
-        var dateString = DateTimeProvider.GetLocalTimeString();
-        var today = DateTimeProvider.GetLocalTime();
+        var dateString = DateTime.UtcNow.Date.ToString("dd-MM-yyyy");
+        var today = DateTime.UtcNow.Date;
         Matches = await _cache.GetOrCreateAsync($"draw_{today}", async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(12);

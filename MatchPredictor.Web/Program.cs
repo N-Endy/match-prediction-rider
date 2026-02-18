@@ -1,13 +1,20 @@
+using System;
 using Hangfire;
-using Hangfire.Storage.SQLite;
+using Hangfire.Common;
+using Hangfire.MemoryStorage;
 using MatchPredictor.Application.Services;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Infrastructure;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Repositories;
 using MatchPredictor.Infrastructure.Services;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -15,6 +22,7 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container
 builder.Services.AddRazorPages();
 builder.Services.AddMemoryCache();
+builder.Services.AddHealthChecks();
 
 builder.Configuration
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
@@ -30,15 +38,6 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
            .ConfigureWarnings(warnings => 
                warnings.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
 
-builder.Services.AddDataProtection()
-    .PersistKeysToDbContext<ApplicationDbContext>();
-
-builder.Services.AddAntiforgery(options =>
-{
-    options.SuppressXFrameOptionsHeader = false;
-    // Optionally reset token on validation failure
-});
-
 // Register application services
 builder.Services.AddScoped<IMatchDataRepository, MatchDataRepository>();
 builder.Services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
@@ -48,7 +47,7 @@ builder.Services.AddScoped<IProbabilityCalculator, ProbabilityCalculator>();
 builder.Services.AddScoped<IAnalyzerService, AnalyzerService>();
 builder.Services.AddScoped<IRegressionPredictorService, RegressionPredictorService>();
 
-// Configure data protection (keys stored in database)
+// Configure data protection
 builder.Services.AddDataProtection()
     .PersistKeysToDbContext<ApplicationDbContext>();
 
@@ -60,14 +59,19 @@ builder.Host.UseSerilog((context, services, configuration) =>
         .Enrich.FromLogContext()
 );
 
-// Configure Hangfire with SQLite storage for jobs
-var hangfireDatabasePath = Path.Combine(builder.Environment.ContentRootPath, "matchpredictor.db");
-builder.Services.AddHangfire(config =>
-    config
-        .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
-        .UseSimpleAssemblyNameTypeSerializer()
-        .UseRecommendedSerializerSettings()
-        .UseSQLiteStorage(hangfireDatabasePath));
+// Configure Hangfire
+builder.Services.AddLogging();
+builder.Services.AddSingleton<LogFailureAttribute>();
+builder.Services.AddSingleton<IJobFilterProvider, DependencyInjectionFilterProvider>();
+
+builder.Services.AddHangfire((_, config) =>
+{
+    config.UseSimpleAssemblyNameTypeSerializer()
+          .UseRecommendedSerializerSettings()
+          .UseMemoryStorage();  // Using memory storage for development
+
+    config.UseFilter(new AutomaticRetryAttribute { Attempts = 3 });
+});
 
 builder.Services.AddHangfireServer();
 
@@ -80,7 +84,69 @@ builder.WebHost.ConfigureKestrel(serverOptions =>
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+// Ensure database exists (migrations already applied manually for SQLite)
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    db.Database.EnsureCreated();
+}
+
+// Register recurring Hangfire jobs properly
+using (var scope = app.Services.CreateScope())
+{
+    var recurringJobs = scope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
+
+    recurringJobs.AddOrUpdate<AnalyzerService>(
+        "daily-prediction-job",
+        service => service.RunScraperAndAnalyzerAsync(),
+        Cron.Hourly(5),   // Every hour at minute 5
+        new RecurringJobOptions
+        {
+            TimeZone = TimeZoneInfo.Utc
+        }
+    );
+
+    recurringJobs.AddOrUpdate<AnalyzerService>(
+        "cleanup-old-predictions",
+        service => service.CleanupOldPredictionsAsync(),
+        "0 1 * * *", // Daily at 1:00 AM
+        new RecurringJobOptions
+        {
+            TimeZone = TimeZoneInfo.Utc
+        }
+    );
+}
+
+// Auto-trigger initial data scraping if no predictions exist for today
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    
+    try
+    {
+        var today = DateTime.Now.ToString("yyyy-MM-dd");
+        var hasTodaysPredictions = await db.Predictions.AnyAsync(p => p.Date == today);
+        
+        if (!hasTodaysPredictions)
+        {
+            logger.LogInformation("No predictions found for today. Triggering initial data scraping...");
+            var backgroundJobs = scope.ServiceProvider.GetRequiredService<IBackgroundJobClient>();
+            backgroundJobs.Enqueue<AnalyzerService>(service => service.RunScraperAndAnalyzerAsync());
+            logger.LogInformation("Initial scraping job queued successfully.");
+        }
+        else
+        {
+            logger.LogInformation("Predictions already exist for today. Skipping initial data scraping.");
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Could not check for existing predictions or trigger initial scraping.");
+    }
+}
+
+// Configure the HTTP request pipeline
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");
@@ -89,29 +155,17 @@ if (!app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseStaticFiles();
-
 app.UseRouting();
+
 app.UseAuthorization();
 
-// Use Hangfire Dashboard
-app.UseHangfireDashboard();
+// Start Hangfire Server and Dashboard
+app.UseHangfireDashboard("/hangfire", new DashboardOptions
+{
+    DashboardTitle = "Match Predictor Jobs"
+});
 
 app.MapRazorPages();
-
-// Seed database and start background jobs
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-    db.Database.EnsureCreated();
-    db.Database.Migrate();
-}
-
-// Hangfire job configuration
-RecurringJob.AddOrUpdate<IAnalyzerService>(
-    "RunScraperAndAnalyzer",
-    service => service.RunScraperAndAnalyzerAsync(),
-    Cron.Hourly(5));
+app.MapHealthChecks("/health");
 
 app.Run();
-
-

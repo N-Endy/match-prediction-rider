@@ -20,7 +20,7 @@ public class DataAnalyzerService : IDataAnalyzerService
 
     public IEnumerable<MatchData> OverTwoGoals(IEnumerable<MatchData> matches) =>
         matches.Where(m => 
-            _probabilityCalculator.CalculateOverTwoGoalsProbability(m) >= 0.55);
+            _probabilityCalculator.CalculateOverTwoGoalsProbability(m) >= 0.6);
     
     public IEnumerable<MatchData> Draw(IEnumerable<MatchData> matches)=>
         matches.Where(m => 

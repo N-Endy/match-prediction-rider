@@ -3,6 +3,7 @@ using System;
 using MatchPredictor.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MatchPredictor.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20250702075808_CreateDataProtectionKeys")]
+    partial class CreateDataProtectionKeys
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -35,9 +38,6 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     b.Property<double>("AwayWin")
                         .HasColumnType("double precision");
-
-                    b.Property<int>("BttsLabel")
-                        .HasColumnType("integer");
 
                     b.Property<string>("Date")
                         .HasColumnType("text");
@@ -63,9 +63,6 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<double>("OverTwoGoals")
                         .HasColumnType("double precision");
 
-                    b.Property<string>("Score")
-                        .HasColumnType("text");
-
                     b.Property<string>("Time")
                         .HasColumnType("text");
 
@@ -80,41 +77,6 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.ToTable("MatchDatas");
                 });
 
-            modelBuilder.Entity("MatchPredictor.Domain.Models.MatchScore", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("AwayTeam")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<bool>("BTTSLabel")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("HomeTeam")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("League")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("MatchTime")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Score")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("MatchScores");
-                });
-
             modelBuilder.Entity("MatchPredictor.Domain.Models.Prediction", b =>
                 {
                     b.Property<int>("Id")
@@ -122,12 +84,6 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .HasColumnType("integer");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("ActualOutcome")
-                        .HasColumnType("text");
-
-                    b.Property<string>("ActualScore")
-                        .HasColumnType("text");
 
                     b.Property<string>("AwayTeam")
                         .IsRequired()
@@ -166,29 +122,6 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("Predictions");
-                });
-
-            modelBuilder.Entity("MatchPredictor.Domain.Models.ScrapingLog", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Message")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("Timestamp")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("ScrapingLogs");
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.DataProtection.EntityFrameworkCore.DataProtectionKey", b =>

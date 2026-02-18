@@ -4,71 +4,51 @@
 @{
     ViewData["Title"] = "Both Teams to Score";
     var today = DateTime.UtcNow.ToString("dd MMM yyyy");
+    var count = Model.Matches?.Count ?? 0;
 }
 
-<!DOCTYPE html>
+<div class="mp-container">
+    <div class="mp-page-header">
+        <div class="mp-page-title">
+            <div class="mp-page-title-icon" style="background: rgba(16, 185, 129, 0.1);">⚽</div>
+            <h1>Both Teams to Score</h1>
+        </div>
+        <div class="mp-date-badge">📅 @today</div>
+    </div>
 
-<html lang="en">
-<head>
-    <title>⚽ Both Teams to Score (BTTS)</title>
-</head>
-<body>
-<div>
-    <section class="min-h-screen bg-gradient-to-br from-green-50 via-white to-blue-50 py-10 px-4 sm:px-6 md:px-8 text-gray-800">
-        <div class="max-w-3xl mx-auto">
-
-            <div class="bg-emerald-700 text-black font-semibold px-6 py-3 rounded-xl shadow-lg mb-6 text-center tracking-wide">
-                ✅ BTTS Predictions for Today – @today
-            </div>
-
-            @if (Model.Matches.Any())
-            {
-                <div class="space-y-6">
-                    @foreach (var match in Model.Matches)
-                    {
-                        <div class="bg-slate-50 border border-slate-200 rounded-lg p-4 shadow-sm hover:shadow-md transition">
-                            <div class="text-sm text-gray-500 font-semibold uppercase mb-1">
-                                <strong>@match.League – @match.Time</strong>
-                            </div>
-                            <div class="text-xl font-medium text-gray-800">
-                                @match.HomeTeam
-                                <span class="text-sm text-gray-500 font-normal">vs</span>
-                                @match.AwayTeam
-                            </div>
-                        </div>
-                    }
-                </div>
-            }
-            else
-            {
-                <p class="text-gray-600 italic text-center mt-6">No predictions available for today.</p>
-            }
+    @if (count > 0)
+    {
+        <div class="mp-match-count">
+            <span class="mp-live-dot"></span>
+            @count match@(count != 1 ? "es" : "") found
         </div>
 
-        <!-- Scroll to top arrow -->
-        <button onclick="scrollToTop()" class="fixed bottom-5 right-5 bg-black hover:bg-gray-800 text-white p-3 rounded-full shadow-lg transition-opacity duration-300 opacity-100" id="scrollTopBtn">
-            ⬆️
-        </button>
-    </section>
-
-    @section Scripts {
-        <script>
-            const scrollBtn = document.getElementById("scrollTopBtn");
-
-            window.onscroll = function () {
-                if (document.body.scrollTop > 300 || document.documentElement.scrollTop > 300) {
-                    scrollBtn.style.opacity = 1;
-                } else {
-                    scrollBtn.style.opacity = 0;
-                }
-            };
-
-            function scrollToTop() {
-                window.scrollTo({ top: 0, behavior: 'smooth' });
+        <div class="mp-predictions-list">
+            @foreach (var match in Model.Matches!)
+            {
+                <div class="mp-prediction-card">
+                    <div class="mp-match-info">
+                        <div class="mp-match-league">
+                            @match.League
+                            <span class="mp-time">@match.Time</span>
+                        </div>
+                        <div class="mp-match-teams">
+                            @match.HomeTeam
+                            <span class="mp-vs">vs</span>
+                            @match.AwayTeam
+                        </div>
+                    </div>
+                    <span class="mp-prediction-badge mp-badge-btts">BTTS ✓</span>
+                </div>
             }
-        </script>
+        </div>
     }
-
+    else
+    {
+        <div class="mp-empty-state">
+            <div class="mp-empty-state-icon">⚽</div>
+            <p>No BTTS predictions available for today yet.</p>
+            <p style="font-size: 0.85rem; margin-top: 0.5rem;">Predictions are updated daily. Check back soon!</p>
+        </div>
+    }
 </div>
-</body>
-</html>
