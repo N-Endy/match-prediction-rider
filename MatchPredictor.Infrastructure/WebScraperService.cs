@@ -203,19 +203,24 @@ public partial class WebScraperService : IWebScraperService
     
     private void DeletePreviousFile()
     {
-        var files = Directory.GetFiles(_downloadFolder, "*predictions*");
-        var otherFiles = Directory.GetFiles(_downloadFolder, "*Unconfirmed");
-
-        foreach (var filePath in files)
+        if (!Directory.Exists(_downloadFolder)) return;
+        
+        foreach (var filePath in Directory.GetFiles(_downloadFolder))
         {
-            File.Delete(filePath);
-            _logger.LogInformation("Deleted previous file: {FilePath}", filePath);
-        }
-
-        foreach (var otherFile in otherFiles)
-        {
-            File.Delete(otherFile);
-            _logger.LogInformation("Deleted unconfirmed file: {OtherFile}", otherFile);
+            var fileName = Path.GetFileName(filePath);
+            
+            // Skip system files
+            if (fileName == ".DS_Store" || fileName == ".gitkeep") continue;
+            
+            try
+            {
+                File.Delete(filePath);
+                _logger.LogInformation("Deleted file: {FilePath}", filePath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to delete file: {FilePath}", filePath);
+            }
         }
     }
 

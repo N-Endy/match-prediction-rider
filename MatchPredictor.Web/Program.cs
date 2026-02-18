@@ -84,10 +84,17 @@ builder.WebHost.ConfigureKestrel(serverOptions =>
 
 var app = builder.Build();
 
-// Ensure database exists (migrations already applied manually for SQLite)
+// Ensure database directory and file exist
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    var dbPath = db.Database.GetConnectionString()?.Replace("Data Source=", "");
+    if (!string.IsNullOrEmpty(dbPath))
+    {
+        var dir = Path.GetDirectoryName(dbPath);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+    }
     db.Database.EnsureCreated();
 }
 
