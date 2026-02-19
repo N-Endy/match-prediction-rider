@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using MatchPredictor.Application.Helpers;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
@@ -25,12 +27,12 @@ public class Combined : PageModel
     
     public async Task<IActionResult> OnGet()
     {
-        var dateString = DateTime.UtcNow.Date.ToString("dd-MM-yyyy");
-        var today = DateTime.UtcNow.Date;
+        var dateString = DateTimeProvider.GetLocalTimeString();
+        var today = DateTimeProvider.GetLocalTime();
         var random = new Random();
         Matches = await _cache.GetOrCreateAsync($"combined_{today}", async entry =>
         {
-            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(12);
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30);
             return await _context.Predictions
                 .Where(p => p.Date == dateString)
                 .ToListAsync();
@@ -44,6 +46,15 @@ public class Combined : PageModel
             .ThenBy(p => p.League)
             .ThenBy(p => p.HomeTeam)
             .ToList();
+
+        if (Matches?.Any(m => string.IsNullOrEmpty(m.ActualScore)) == true)
+        {
+            var todayScores = await _context.MatchScores
+                .Where(s => s.MatchTime.Date == today.Date)
+                .ToListAsync();
+
+            ScoreMatchingHelper.PatchMissingScores(Matches, todayScores);
+        }
         
         return Page();
     }

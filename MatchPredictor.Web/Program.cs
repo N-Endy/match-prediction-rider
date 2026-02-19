@@ -95,7 +95,7 @@ using (var scope = app.Services.CreateScope())
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
     }
-    db.Database.EnsureCreated();
+    db.Database.Migrate();
 }
 
 // Register recurring Hangfire jobs properly
@@ -115,7 +115,7 @@ using (var scope = app.Services.CreateScope())
 
     recurringJobs.AddOrUpdate<AnalyzerService>(
         "cleanup-old-predictions",
-        service => service.CleanupOldPredictionsAsync(),
+        service => service.CleanupOldPredictionsAndMatchDataAsync(),
         "0 1 * * *", // Daily at 1:00 AM
         new RecurringJobOptions
         {

@@ -94,6 +94,10 @@ public partial class WebScraperService : IWebScraperService
             await driver.Navigate().GoToUrlAsync(downloadUrl);
             
             _logger.LogInformation("Commencing scrapping for scores in inner HTML...");
+            
+            // Wait for dynamic content to render
+            await Task.Delay(3000);
+            
             var container = driver.FindElement(By.Id("score-data"));
             var rawHtml = container.GetAttribute("innerHTML");
 
@@ -102,9 +106,12 @@ public partial class WebScraperService : IWebScraperService
 
             var currentLeague = "";
 
-            var nodes = doc.DocumentNode.ChildNodes.Nodes().ToList();
+            // Use direct ChildNodes — NOT recursive Nodes() which flattens the tree
+            var nodes = doc.DocumentNode.FirstChild.ChildNodes.ToList();
             
-            var matchScores = new List<MatchScore>();
+            _logger.LogInformation("Found {Count} child nodes in score-data", nodes.Count);
+            
+          var matchScores = new List<MatchScore>();
 
             for (var i = 0; i < nodes.Count; i++)
             {
@@ -118,27 +125,32 @@ public partial class WebScraperService : IWebScraperService
                     case "span":
                     {
                         var currentTime = node.InnerText.Trim();
+                        
+                        // Skip live matches — only process finished games
+                        if (node.GetAttributeValue("class", "") == "live") break;
 
-                        // Next node is the teams (text)
-                        var teamsNode = nodes[i + 1];
-                        var currentTeams = teamsNode.InnerText.Trim();
-
-                        // Next node may be <a class="fin"> with score
+                        // Look ahead for teams (text node) and score (a.fin)
+                        string? teams = null;
                         string? score = null;
 
-                        for (var j = 2; j <= 3; j++)
+                        for (var j = 1; j <= 4 && i + j < nodes.Count; j++)
                         {
-                            if (i + j < nodes.Count && nodes[i + j].Name == "a" && nodes[i + j].GetAttributeValue("class", "") == "fin")
+                            var next = nodes[i + j];
+                            
+                            if (next.Name == "#text" && next.InnerText.Contains(" - "))
                             {
-                                var rawString = nodes[i + j].InnerText.Trim();
+                                teams = next.InnerText.Trim();
+                            }
+                            else if (next.Name == "a" && next.GetAttributeValue("class", "") == "fin")
+                            {
+                                var rawString = next.InnerText.Trim();
                                 score = MyRegex().Match(rawString).Value;
-                                break;
                             }
                         }
 
-                        if (!string.IsNullOrWhiteSpace(score) && currentTeams.Contains(" - "))
+                        if (!string.IsNullOrWhiteSpace(score) && !string.IsNullOrWhiteSpace(teams) && teams.Contains(" - "))
                         {
-                            var split = currentTeams.Split(" - ");
+                            var split = teams.Split(" - ");
                             var home = split[0].Trim();
                             var away = split[1].Trim();
                             
@@ -254,7 +266,7 @@ public partial class WebScraperService : IWebScraperService
         return DateTime.ParseExact($"{today:dd-MM-yyyy} {time}", "dd-MM-yyyy HH:mm", CultureInfo.InvariantCulture);
     }
 
-    [GeneratedRegex(@"^\d{1,2}:\d{2}")]
+    [GeneratedRegex(@"^\d{1,2}:\d{1,2}")]
     private static partial Regex MyRegex();
     
     private static void SetHeadlessViewport(ChromeOptions options)

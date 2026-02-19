@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using MatchPredictor.Application.Helpers;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Utils;
@@ -30,7 +31,7 @@ public class BTTS : PageModel
         var today = DateTimeProvider.GetLocalTime();
         Matches = await _cache.GetOrCreateAsync($"btts_{today}", async entry =>
         {
-            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(12);
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30);
             return await _context.Predictions
                 .Where(p => p.Date == dateString &&
                             p.PredictionCategory == "BothTeamsScore")
@@ -43,6 +44,16 @@ public class BTTS : PageModel
         Matches = Matches?
             .DistinctBy(p => new { p.League, p.HomeTeam, p.AwayTeam, p.Date, p.Time })
             .ToList();
+
+        // Fallback: patch any predictions missing scores by matching against MatchScores
+        if (Matches?.Any(m => string.IsNullOrEmpty(m.ActualScore)) == true)
+        {
+            var todayScores = await _context.MatchScores
+                .Where(s => s.MatchTime.Date == today.Date)
+                .ToListAsync();
+
+            ScoreMatchingHelper.PatchMissingScores(Matches, todayScores);
+        }
         
         return Page();
     }

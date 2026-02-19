@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using MatchPredictor.Application.Helpers;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
@@ -25,11 +27,11 @@ public class StraightWin : PageModel
     
     public async Task<IActionResult> OnGet()
     {
-        var dateString = DateTime.UtcNow.Date.ToString("dd-MM-yyyy");
-        var today = DateTime.UtcNow.Date;
+        var dateString = DateTimeProvider.GetLocalTimeString();
+        var today = DateTimeProvider.GetLocalTime();
         Matches = await _cache.GetOrCreateAsync($"straightwin_{today}", async entry =>
         {
-            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(12);
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30);
             return await _context.Predictions
                 .Where(p => p.Date == dateString && 
                             p.PredictionCategory == "StraightWin")
@@ -42,6 +44,15 @@ public class StraightWin : PageModel
         Matches = Matches?
             .DistinctBy(p => new { p.League, p.HomeTeam, p.AwayTeam, p.Date, p.Time })
             .ToList();
+
+        if (Matches?.Any(m => string.IsNullOrEmpty(m.ActualScore)) == true)
+        {
+            var todayScores = await _context.MatchScores
+                .Where(s => s.MatchTime.Date == today.Date)
+                .ToListAsync();
+
+            ScoreMatchingHelper.PatchMissingScores(Matches, todayScores);
+        }
         
         return Page();
     }

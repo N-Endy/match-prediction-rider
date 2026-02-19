@@ -17,19 +17,12 @@ public class RegressionPredictorService : IRegressionPredictorService
         _db = db;
     }
 
-    public IEnumerable<Prediction> GeneratePredictions(IEnumerable<MatchData> upcomingMatches)
+    public IEnumerable<RegressionPrediction> GeneratePredictions(IEnumerable<MatchData> upcomingMatches)
     {
         // Load historical scores
         var scores = _db.MatchScores.ToList();
         if (scores.Count == 0)
             return [];
-
-        // Compute team-level averages (Goals For and Against per game)
-        var teamStats = scores
-            .GroupBy(s => s.HomeTeam)
-            .ToDictionary(
-                g => g.Key,
-                g => new TeamGoalStats());
 
         // We'll compute GF/GA by iterating over all scores and filling both home and away teams
         var played = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -52,7 +45,7 @@ public class RegressionPredictorService : IRegressionPredictorService
             played.TryGetValue(s.AwayTeam, out var ap); played[s.AwayTeam] = ap + 1;
         }
 
-        // Averages with smoothing to avoid division by zero and overly aggressive values
+        // Averages with smoothing to avoid division by zero
         var globalAvgGoals = scores
             .Where(s => TryParseScore(s.Score, out _, out _))
             .Select(s => (double)SumScore(s.Score))
@@ -66,7 +59,7 @@ public class RegressionPredictorService : IRegressionPredictorService
                 : fallback;
         }
 
-        var predictions = new List<Prediction>();
+        var predictions = new List<RegressionPrediction>();
 
         foreach (var m in upcomingMatches)
         {
@@ -81,7 +74,7 @@ public class RegressionPredictorService : IRegressionPredictorService
             var awayGF = GetAvg(gf, away, globalAvgGoals / 2.0);
             var awayGA = GetAvg(ga, away, globalAvgGoals / 2.0);
 
-            // Simple expected goals using a linear blend (a lightweight regression proxy)
+            // Expected goals using a linear blend
             var lambdaHome = 0.55 * homeGF + 0.45 * awayGA;
             var lambdaAway = 0.55 * awayGF + 0.45 * homeGA;
 
@@ -92,57 +85,59 @@ public class RegressionPredictorService : IRegressionPredictorService
             var over25 = ProbabilityOverTotal(lambdaHome + lambdaAway, threshold: 2.5);
             var btts = ProbabilityBothTeamsScore(lambdaHome, lambdaAway);
 
-            // Winner confidence: use difference in expected goals and squash to [0.5, 1]
             var diff = lambdaHome - lambdaAway;
-            var homeWinProb = Sigmoid(diff);    // > 0.5 favors home
-            var awayWinProb = 1 - homeWinProb;  // symmetric
+            var homeWinProb = Sigmoid(diff);
+            var awayWinProb = 1 - homeWinProb;
 
             var (date, time) = DateTimeProvider.ParseProperDateAndTime(m.Date, m.Time);
 
-            // Regression.Over2.5Goals
             if (over25 >= 0.5)
             {
-                predictions.Add(new Prediction
+                predictions.Add(new RegressionPrediction
                 {
                     HomeTeam = home,
                     AwayTeam = away,
                     League = m.League ?? string.Empty,
-                    PredictionCategory = "Regression.Over2.5Goals",
+                    PredictionCategory = "Over2.5Goals",
                     PredictedOutcome = "Over 2.5",
                     ConfidenceScore = (decimal)Math.Round(over25, 3),
+                    ExpectedHomeGoals = Math.Round(lambdaHome, 2),
+                    ExpectedAwayGoals = Math.Round(lambdaAway, 2),
                     Date = date,
                     Time = time
                 });
             }
 
-            // Regression.BTTS
             if (btts >= 0.5)
             {
-                predictions.Add(new Prediction
+                predictions.Add(new RegressionPrediction
                 {
                     HomeTeam = home,
                     AwayTeam = away,
                     League = m.League ?? string.Empty,
-                    PredictionCategory = "Regression.BTTS",
+                    PredictionCategory = "BTTS",
                     PredictedOutcome = "BTTS",
                     ConfidenceScore = (decimal)Math.Round(btts, 3),
+                    ExpectedHomeGoals = Math.Round(lambdaHome, 2),
+                    ExpectedAwayGoals = Math.Round(lambdaAway, 2),
                     Date = date,
                     Time = time
                 });
             }
 
-            // Regression.StraightWin (pick the higher expected goals side)
             if (homeWinProb >= 0.55 || awayWinProb >= 0.55)
             {
                 var homeFavored = homeWinProb >= awayWinProb;
-                predictions.Add(new Prediction
+                predictions.Add(new RegressionPrediction
                 {
                     HomeTeam = home,
                     AwayTeam = away,
                     League = m.League ?? string.Empty,
-                    PredictionCategory = "Regression.StraightWin",
+                    PredictionCategory = "StraightWin",
                     PredictedOutcome = homeFavored ? "Home Win" : "Away Win",
                     ConfidenceScore = (decimal)Math.Round(Math.Max(homeWinProb, awayWinProb), 3),
+                    ExpectedHomeGoals = Math.Round(lambdaHome, 2),
+                    ExpectedAwayGoals = Math.Round(lambdaAway, 2),
                     Date = date,
                     Time = time
                 });
@@ -168,21 +163,15 @@ public class RegressionPredictorService : IRegressionPredictorService
 
     private static double ProbabilityOverTotal(double lambdaTotal, double threshold)
     {
-        // For k ~ Poisson(lambdaTotal), P(Total > 2.5) ~ 1 - P(Total <= 2)
-        // Sum P(k) for k = 0..2
         var limit = (int)Math.Floor(threshold);
         double cdf = 0;
         for (int k = 0; k <= limit; k++)
-        {
             cdf += PoissonPmf(lambdaTotal, k);
-        }
         return 1 - cdf;
     }
 
     private static double ProbabilityBothTeamsScore(double lambdaHome, double lambdaAway)
     {
-        // Approximation assuming independence:
-        // P(BTTS) = 1 - P(H=0) - P(A=0) + P(H=0, A=0)
         var pH0 = PoissonPmf(lambdaHome, 0);
         var pA0 = PoissonPmf(lambdaAway, 0);
         return 1 - pH0 - pA0 + pH0 * pA0;
@@ -203,14 +192,6 @@ public class RegressionPredictorService : IRegressionPredictorService
 
     private static double Sigmoid(double x)
     {
-        // classic logistic; then shift to [0,1]
         return 1.0 / (1.0 + Math.Exp(-x));
-    }
-
-    private class TeamGoalStats
-    {
-        public double GF;
-        public double GA;
-        public int Played;
     }
 }

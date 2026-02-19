@@ -7,10 +7,10 @@ public interface IRegressionPredictorService
 {
     /// <summary>
     /// Generate regression-based predictions for upcoming matches using historical MatchScores.
-    /// Returns a set of Prediction objects with categories like
-    /// - "Regression.BTTS"
-    /// - "Regression.Over2.5Goals"
-    /// - "Regression.StraightWin"
+    /// Returns RegressionPrediction objects with categories:
+    /// - "Over2.5Goals"
+    /// - "BTTS"
+    /// - "StraightWin"
     /// </summary>
-    IEnumerable<Prediction> GeneratePredictions(IEnumerable<MatchData> upcomingMatches);
+    IEnumerable<RegressionPrediction> GeneratePredictions(IEnumerable<MatchData> upcomingMatches);
 }

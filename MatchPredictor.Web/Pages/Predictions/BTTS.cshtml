@@ -38,7 +38,16 @@
                             @match.AwayTeam
                         </div>
                     </div>
-                    <span class="mp-prediction-badge mp-badge-btts">BTTS ✓</span>
+                    <div class="mp-card-badges">
+                        @if (!string.IsNullOrEmpty(match.ActualScore))
+                        {
+                            var isCorrect = match.PredictedOutcome == match.ActualOutcome;
+                            <span class="mp-score @(isCorrect ? "mp-score-correct" : "mp-score-incorrect")">
+                                @match.ActualScore
+                            </span>
+                        }
+                        <span class="mp-prediction-badge mp-badge-btts">BTTS ✓</span>
+                    </div>
                 </div>
             }
         </div>
