@@ -270,7 +270,7 @@ public class AnalyzerService  : IAnalyzerService
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
     public async Task CleanupOldPredictionsAndMatchDataAsync()
     {
-        var cutoff = DateTimeProvider.GetLocalTime().AddDays(-2);
+        var cutoff = DateTimeProvider.GetLocalTime().AddDays(-7);
 
         var oldPredictions = (await _dbContext.Predictions.ToListAsync())
             .Where(p => DateTime.Parse(p.Date) < cutoff)
