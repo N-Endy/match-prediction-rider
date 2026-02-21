@@ -41,10 +41,17 @@
                     <div class="mp-card-badges">
                         @if (!string.IsNullOrEmpty(match.ActualScore))
                         {
-                            var isCorrect = match.PredictedOutcome == match.ActualOutcome;
-                            <span class="mp-score @(isCorrect ? "mp-score-correct" : "mp-score-incorrect")">
-                                @match.ActualScore
-                            </span>
+                            if (match.IsLive)
+                            {
+                                <span class="mp-score mp-score-live">🔴 @match.ActualScore</span>
+                            }
+                            else
+                            {
+                                var isCorrect = match.PredictedOutcome == match.ActualOutcome;
+                                <span class="mp-score @(isCorrect ? "mp-score-correct" : "mp-score-incorrect")">
+                                    @match.ActualScore
+                                </span>
+                            }
                         }
                         <span class="mp-prediction-badge mp-badge-win">
                             @(match.PredictedOutcome ?? "Win") ✓

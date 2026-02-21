@@ -30,13 +30,10 @@ public class Combined : PageModel
         var dateString = DateTimeProvider.GetLocalTimeString();
         var today = DateTimeProvider.GetLocalTime();
         var random = new Random();
-        Matches = await _cache.GetOrCreateAsync($"combined_{today}", async entry =>
-        {
-            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30);
-            return await _context.Predictions
+        
+        Matches = await _context.Predictions
                 .Where(p => p.Date == dateString)
                 .ToListAsync();
-        });
             
         Matches = Matches?
             .OrderBy(_ => random.Next())
@@ -47,14 +44,14 @@ public class Combined : PageModel
             .ThenBy(p => p.HomeTeam)
             .ToList();
 
-        if (Matches?.Any(m => string.IsNullOrEmpty(m.ActualScore)) == true)
-        {
-            var todayScores = await _context.MatchScores
-                .Where(s => s.MatchTime.Date == today.Date)
-                .ToListAsync();
-
-            ScoreMatchingHelper.PatchMissingScores(Matches, todayScores);
-        }
+        // if (Matches?.Any(m => string.IsNullOrEmpty(m.ActualScore)) == true)
+        // {
+        //     var todayScores = await _context.MatchScores
+        //         .Where(s => s.MatchTime.Date == today.Date)
+        //         .ToListAsync();
+        //
+        //     ScoreMatchingHelper.PatchMissingScores(Matches, todayScores);
+        // }
         
         return Page();
     }

@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace MatchPredictor.Infrastructure.Migrations
 {
     /// <inheritdoc />
-    public partial class InitialCreate : Migration
+    public partial class AddIsLive : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -74,7 +74,8 @@ namespace MatchPredictor.Infrastructure.Migrations
                     AwayTeam = table.Column<string>(type: "TEXT", nullable: false),
                     Score = table.Column<string>(type: "TEXT", nullable: false),
                     MatchTime = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    BTTSLabel = table.Column<bool>(type: "INTEGER", nullable: false)
+                    BTTSLabel = table.Column<bool>(type: "INTEGER", nullable: false),
+                    IsLive = table.Column<bool>(type: "INTEGER", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -97,6 +98,7 @@ namespace MatchPredictor.Infrastructure.Migrations
                     ConfidenceScore = table.Column<decimal>(type: "TEXT", nullable: true),
                     ActualOutcome = table.Column<string>(type: "TEXT", nullable: true),
                     ActualScore = table.Column<string>(type: "TEXT", nullable: true),
+                    IsLive = table.Column<bool>(type: "INTEGER", nullable: false),
                     CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
                 },
                 constraints: table =>

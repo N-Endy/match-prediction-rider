@@ -125,11 +125,9 @@ public partial class WebScraperService : IWebScraperService
                     case "span":
                     {
                         var currentTime = node.InnerText.Trim();
-                        
-                        // Skip live matches — only process finished games
-                        if (node.GetAttributeValue("class", "") == "live") break;
+                        var isLive = node.GetAttributeValue("class", "") == "live";
 
-                        // Look ahead for teams (text node) and score (a.fin)
+                        // Look ahead for teams (text node) and score (a.fin or live score link)
                         string? teams = null;
                         string? score = null;
 
@@ -141,10 +139,17 @@ public partial class WebScraperService : IWebScraperService
                             {
                                 teams = next.InnerText.Trim();
                             }
-                            else if (next.Name == "a" && next.GetAttributeValue("class", "") == "fin")
+                            else if (next.Name == "a")
                             {
-                                var rawString = next.InnerText.Trim();
-                                score = MyRegex().Match(rawString).Value;
+                                var cls = next.GetAttributeValue("class", "");
+                                // Accept both finished ("fin") and live scores
+                                if (cls == "fin" || isLive || cls == "")
+                                {
+                                    var rawString = next.InnerText.Trim();
+                                    var m = MyRegex().Match(rawString);
+                                    if (m.Success)
+                                        score = m.Value;
+                                }
                             }
                         }
 
@@ -153,6 +158,10 @@ public partial class WebScraperService : IWebScraperService
                             var split = teams.Split(" - ");
                             var home = split[0].Trim();
                             var away = split[1].Trim();
+
+                            DateTime matchTime;
+                            try { matchTime = ParseTime(currentTime); }
+                            catch { matchTime = DateTime.UtcNow; } // Live matches may not have a parseable time
                             
                             matchScores.Add(new MatchScore
                             {
@@ -160,8 +169,9 @@ public partial class WebScraperService : IWebScraperService
                                 HomeTeam = home,
                                 AwayTeam = away,
                                 Score = score,
-                                MatchTime = ParseTime(currentTime),
-                                BTTSLabel = IsBtts(score)
+                                MatchTime = matchTime,
+                                BTTSLabel = IsBtts(score),
+                                IsLive = isLive
                             });
                         }
 

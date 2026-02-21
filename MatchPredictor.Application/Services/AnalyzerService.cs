@@ -59,7 +59,7 @@ public class AnalyzerService  : IAnalyzerService
             var scraped = _excelExtract.ExtractMatchDatasetFromFile().ToList();
             try
             {
-                // Check if they exist on database first and only put those not existing.
+                // Check if they exist in the database first, and only put those not existing.
                 foreach (var match in scraped)
                 {
                     var properDateTime = DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time);
@@ -73,7 +73,6 @@ public class AnalyzerService  : IAnalyzerService
                     
                     if (!exists) await _dbContext.MatchDatas.AddAsync(match);
                 }
-                await _dbContext.SaveChangesAsync();
             }
             catch (Exception e)
             {
@@ -81,11 +80,13 @@ public class AnalyzerService  : IAnalyzerService
                 throw;
             }
             _logger.LogInformation($"Extracted {scraped.Count} matches from Excel file.");
+            
+            var matches = await _dbContext.MatchDatas.ToListAsync();
 
-            await SavePredictions("BothTeamsScore", _dataAnalyzerService.BothTeamsScore(scraped));
-            await SavePredictions("Draw", _dataAnalyzerService.Draw(scraped));
-            await SavePredictions("Over2.5Goals", _dataAnalyzerService.OverTwoGoals(scraped));
-            await SavePredictions("StraightWin", _dataAnalyzerService.StraightWin(scraped));
+            await SavePredictions("BothTeamsScore", _dataAnalyzerService.BothTeamsScore(matches));
+            await SavePredictions("Draw", _dataAnalyzerService.Draw(matches));
+            await SavePredictions("Over2.5Goals", _dataAnalyzerService.OverTwoGoals(matches));
+            await SavePredictions("StraightWin", _dataAnalyzerService.StraightWin(matches));
             
             _logger.LogInformation("Predictions saved successfully.");
 
@@ -126,106 +127,231 @@ public class AnalyzerService  : IAnalyzerService
         }
     }
 
+    // private async Task UpdatePredictionsWithActualResults()
+    // {
+    //     var today = DateTimeProvider.GetLocalTime().Date;
+    //     var scores = await _dbContext.MatchScores
+    //         .Where(s => s.MatchTime.Date == today)
+    //         .ToListAsync();
+    //
+    //     _logger.LogInformation("Score matching: {ScoreCount} scores for date {Date} (UTC: {Utc})",
+    //         scores.Count, today.ToString("dd-MM-yyyy"), DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm"));
+    //
+    //     foreach (var score in scores)
+    //     {
+    //         var dateStr = score.MatchTime.ToString("dd-MM-yyyy");
+    //
+    //         // Step 1: Query all predictions for the same date (no time constraint)
+    //         var candidates = await _dbContext.Predictions
+    //             .Where(p => p.Date == dateStr)
+    //             .ToListAsync();
+    //
+    //         _logger.LogInformation(
+    //             "Score: {Home} vs {Away} (date={DateStr}) → {CandidateCount} prediction candidates",
+    //             score.HomeTeam, score.AwayTeam, dateStr, candidates.Count);
+    //
+    //         // Step 2: Match by word-overlap on team names
+    //         var matched = candidates
+    //             .Where(p =>
+    //                 ScoreMatchingHelper.TeamsMatch(score.HomeTeam, p.HomeTeam) &&
+    //                 ScoreMatchingHelper.TeamsMatch(score.AwayTeam, p.AwayTeam))
+    //             .ToList();
+    //
+    //         // Step 3: If multiple candidates, prefer those whose league partially matches
+    //         if (matched.Count > 1 && !string.IsNullOrWhiteSpace(score.League))
+    //         {
+    //             var leagueFiltered = matched
+    //                 .Where(p => ScoreMatchingHelper.LeaguesMatch(score.League, p.League))
+    //                 .ToList();
+    //
+    //             if (leagueFiltered.Count > 0)
+    //                 matched = leagueFiltered;
+    //         }
+    //
+    //         if (matched.Count == 0)
+    //         {
+    //             _logger.LogInformation("  → NO MATCH. Score teams: [{Home}] vs [{Away}]",
+    //                 score.HomeTeam, score.AwayTeam);
+    //         }
+    //         else
+    //         {
+    //             _logger.LogInformation("MATCH FOUND: {Home} vs {Away} ({League}) → {MatchCount} prediction(s)",
+    //                 score.HomeTeam, score.AwayTeam, score.League, matched.Count);
+    //         }
+    //
+    //         foreach (var prediction in matched)
+    //         {
+    //             prediction.ActualOutcome = prediction.PredictionCategory switch
+    //             {
+    //                 "BothTeamsScore" => score.BTTSLabel ? "BTTS" : "No BTTS",
+    //                 "Draw" => DetermineDrawOutcome(score.Score),
+    //                 "Over2.5Goals" => DetermineOver25Outcome(score.Score),
+    //                 "StraightWin" => DetermineStraightWinOutcome(score.Score),
+    //                 _ => prediction.ActualOutcome
+    //             };
+    //             prediction.ActualScore = score.Score;
+    //             prediction.IsLive = score.IsLive;
+    //             
+    //             _logger.LogDebug("Updated prediction for score: {Home} vs {Away} ({League}, {Date}): {Outcome} (Live: {IsLive})",
+    //                 score.HomeTeam, score.AwayTeam, score.League, dateStr, prediction.ActualOutcome, score.IsLive);
+    //         }
+    //     }
+    //     
+    //     _logger.LogInformation("Predictions updated successfully.");
+    //     await _dbContext.SaveChangesAsync();
+    // }
+
     private async Task UpdatePredictionsWithActualResults()
     {
         var today = DateTimeProvider.GetLocalTime().Date;
+        var dateStr = today.ToString("dd-MM-yyyy");
+
         var scores = await _dbContext.MatchScores
             .Where(s => s.MatchTime.Date == today)
             .ToListAsync();
 
+        var predictionsForToday = await _dbContext.Predictions
+            .Where(p => p.Date == dateStr)
+            .ToListAsync();
+
+        static string Norm(string s) =>
+            (s ?? "").Trim().ToLowerInvariant();
+
+        // Key = date + normalized teams (you can also include league if needed)
+        var predLookup = predictionsForToday
+            .GroupBy(p => (p.Date, Home: Norm(p.HomeTeam), Away: Norm(p.AwayTeam)))
+            .ToDictionary(g => g.Key, g => g.ToList());
+
         foreach (var score in scores)
         {
-            var dateStr = score.MatchTime.ToString("dd-MM-yyyy");
+            var key = (dateStr, Home: Norm(score.HomeTeam), Away: Norm(score.AwayTeam));
 
-            // Step 1: Query all predictions for the same date (no time constraint)
-            var candidates = await _dbContext.Predictions
-                .Where(p => p.Date == dateStr)
-                .ToListAsync();
-
-            // Step 2: Match by word-overlap on team names
-            var matched = candidates
-                .Where(p =>
-                    ScoreMatchingHelper.TeamsMatch(score.HomeTeam, p.HomeTeam) &&
-                    ScoreMatchingHelper.TeamsMatch(score.AwayTeam, p.AwayTeam))
-                .ToList();
-
-            // Step 3: If multiple candidates, prefer those whose league partially matches
-            if (matched.Count > 1 && !string.IsNullOrWhiteSpace(score.League))
+            // if you need fuzzy matching, you can fall back to your TeamsMatch logic here
+            if (!predLookup.TryGetValue(key, out var matched))
             {
-                var leagueFiltered = matched
-                    .Where(p => ScoreMatchingHelper.LeaguesMatch(score.League, p.League))
+                // fallback fuzzy match (optional)
+                matched = predictionsForToday
+                    .Where(p =>
+                        ScoreMatchingHelper.TeamsMatch(score.HomeTeam, p.HomeTeam) &&
+                        ScoreMatchingHelper.TeamsMatch(score.AwayTeam, p.AwayTeam))
                     .ToList();
-
-                if (leagueFiltered.Count > 0)
-                    matched = leagueFiltered;
             }
 
-            if (matched.Count == 0)
+            switch (matched.Count)
             {
-                _logger.LogDebug("No prediction match for score: {Home} vs {Away} ({League}, {Date})",
-                    score.HomeTeam, score.AwayTeam, score.League, dateStr);
+                case 0:
+                    continue;
+                // optionally filter by league if multiple
+                case > 1 when !string.IsNullOrWhiteSpace(score.League):
+                {
+                    var leagueFiltered = matched
+                        .Where(p => ScoreMatchingHelper.LeaguesMatch(score.League, p.League))
+                        .ToList();
+
+                    if (leagueFiltered.Count > 0)
+                        matched = leagueFiltered;
+                    break;
+                }
             }
 
             foreach (var prediction in matched)
             {
-                switch (prediction.PredictionCategory)
+                prediction.ActualOutcome = prediction.PredictionCategory switch
                 {
-                    case "BothTeamsScore":
-                        prediction.ActualOutcome = score.BTTSLabel ? "BTTS" : "No BTTS";
-                        break;
-                    case "Draw":
-                        prediction.ActualOutcome = DetermineDrawOutcome(score.Score);
-                        break;
-                    case "Over2.5Goals":
-                        prediction.ActualOutcome = DetermineOver25Outcome(score.Score);
-                        break;
-                    case "StraightWin":
-                        prediction.ActualOutcome = DetermineStraightWinOutcome(score.Score);
-                        break;
-                }
+                    "BothTeamsScore" => score.BTTSLabel ? "BTTS" : "No BTTS",
+                    "Draw"           => DetermineDrawOutcome(score.Score),
+                    "Over2.5Goals"   => DetermineOver25Outcome(score.Score),
+                    "StraightWin"    => DetermineStraightWinOutcome(score.Score),
+                    _                => prediction.ActualOutcome
+                };
+
                 prediction.ActualScore = score.Score;
+                prediction.IsLive = score.IsLive;
             }
         }
+        
+        _logger.LogInformation("Predictions updated successfully.");
+
         await _dbContext.SaveChangesAsync();
+    }
+    
+    // private string DetermineDrawOutcome(string score)
+    // {
+    //     var parts = score.Split(':');
+    //     if (parts.Length != 2) return "Unknown";
+    //     
+    //     if (int.TryParse(parts[0], out var home) && int.TryParse(parts[1], out var away))
+    //     {
+    //         return home == away ? "Draw" : "Not Draw";
+    //     }
+    //     return "Unknown";
+    // }
+    //
+    // private string DetermineOver25Outcome(string score)
+    // {
+    //     var parts = score.Split(':');
+    //     if (parts.Length != 2) return "Unknown";
+    //     
+    //     if (int.TryParse(parts[0], out var home) && int.TryParse(parts[1], out var away))
+    //     {
+    //         return (home + away) > 2 ? "Over 2.5" : "Under 2.5";
+    //     }
+    //     return "Unknown";
+    // }
+    //
+    // private string DetermineStraightWinOutcome(string score)
+    // {
+    //     var parts = score.Split(':');
+    //     if (parts.Length != 2) return "Unknown";
+    //     
+    //     if (int.TryParse(parts[0], out var home) && int.TryParse(parts[1], out var away))
+    //     {
+    //         if (home > away) return "Home Win";
+    //         return home < away ? "Away Win" : "Draw";
+    //     }
+    //     return "Unknown";
+    // }
+
+    private static bool TryParseScore(string score, out int home, out int away)
+    {
+        home = away = 0;
+        if (string.IsNullOrWhiteSpace(score)) return false;
+
+        // supports "1:0", "1 - 0", "1–0", "1—0", and spaces
+        var normalized = score.Replace("–", "-").Replace("—", "-").Trim();
+
+        var parts = normalized.Contains(':')
+            ? normalized.Split(':', StringSplitOptions.TrimEntries)
+            : normalized.Split('-', StringSplitOptions.TrimEntries);
+
+        if (parts.Length != 2) return false;
+
+        return int.TryParse(parts[0].Trim(), out home) && int.TryParse(parts[1].Trim(), out away);
     }
 
     private string DetermineDrawOutcome(string score)
     {
-        var parts = score.Split(':');
-        if (parts.Length != 2) return "Unknown";
-        
-        if (int.TryParse(parts[0], out var home) && int.TryParse(parts[1], out var away))
-        {
-            return home == away ? "Draw" : "Not Draw";
-        }
-        return "Unknown";
+        return TryParseScore(score, out var h, out var a)
+            ? (h == a ? "Draw" : "Not Draw")
+            : "Unknown";
     }
 
     private string DetermineOver25Outcome(string score)
     {
-        var parts = score.Split(':');
-        if (parts.Length != 2) return "Unknown";
-        
-        if (int.TryParse(parts[0], out var home) && int.TryParse(parts[1], out var away))
-        {
-            return (home + away) > 2 ? "Over 2.5" : "Under 2.5";
-        }
-        return "Unknown";
+        return TryParseScore(score, out var h, out var a)
+            ? ((h + a) > 2 ? "Over 2.5" : "Under 2.5")
+            : "Unknown";
     }
 
     private string DetermineStraightWinOutcome(string score)
     {
-        var parts = score.Split(':');
-        if (parts.Length != 2) return "Unknown";
-        
-        if (int.TryParse(parts[0], out var home) && int.TryParse(parts[1], out var away))
-        {
-            if (home > away) return "Home Win";
-            return home < away ? "Away Win" : "Draw";
-        }
-        return "Unknown";
+        if (!TryParseScore(score, out var h, out var a)) return "Unknown";
+        if (h > a) return "Home Win";
+        if (h < a) return "Away Win";
+        return "Draw";
     }
 
+    
     private async Task AnalyzePatterns()
     {
         var allPredictions = await _dbContext.Predictions

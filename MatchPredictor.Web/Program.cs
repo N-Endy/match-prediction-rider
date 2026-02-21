@@ -97,7 +97,7 @@ using (var scope = app.Services.CreateScope())
 {
     var recurringJobs = scope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
 
-    recurringJobs.AddOrUpdate<AnalyzerService>(
+    recurringJobs.AddOrUpdate<IAnalyzerService>(
         "daily-prediction-job",
         service => service.RunScraperAndAnalyzerAsync(),
         Cron.Hourly(5),   // Every hour at minute 5
@@ -107,7 +107,7 @@ using (var scope = app.Services.CreateScope())
         }
     );
 
-    recurringJobs.AddOrUpdate<AnalyzerService>(
+    recurringJobs.AddOrUpdate<IAnalyzerService>(
         "cleanup-old-predictions",
         service => service.CleanupOldPredictionsAndMatchDataAsync(),
         "0 1 * * *", // Daily at 1:00 AM
@@ -133,7 +133,7 @@ using (var scope = app.Services.CreateScope())
         {
             logger.LogInformation("No predictions found for today. Triggering initial data scraping...");
             var backgroundJobs = scope.ServiceProvider.GetRequiredService<IBackgroundJobClient>();
-            backgroundJobs.Enqueue<AnalyzerService>(service => service.RunScraperAndAnalyzerAsync());
+            backgroundJobs.Enqueue<IAnalyzerService>(service => service.RunScraperAndAnalyzerAsync());
             logger.LogInformation("Initial scraping job queued successfully.");
         }
         else

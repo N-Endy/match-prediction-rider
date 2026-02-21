@@ -11,8 +11,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace MatchPredictor.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20260219094055_InitialCreate")]
-    partial class InitialCreate
+    [Migration("20260221081304_AddIsLive")]
+    partial class AddIsLive
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -126,6 +126,9 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("IsLive")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("League")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -171,6 +174,9 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<string>("HomeTeam")
                         .IsRequired()
                         .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsLive")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("League")
                         .IsRequired()

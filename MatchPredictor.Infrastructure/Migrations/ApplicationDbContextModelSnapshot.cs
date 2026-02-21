@@ -123,6 +123,9 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("IsLive")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("League")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -168,6 +171,9 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<string>("HomeTeam")
                         .IsRequired()
                         .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsLive")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("League")
                         .IsRequired()

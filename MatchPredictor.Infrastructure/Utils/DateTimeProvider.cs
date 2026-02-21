@@ -2,10 +2,23 @@ namespace MatchPredictor.Infrastructure.Utils;
 
 public static class DateTimeProvider
 {
-    private const string WestCentralAfricaTimeZoneId = "W. Central Africa Standard Time";
+    private static readonly TimeZoneInfo WatZone = GetWatTimeZone();
+
+    private static TimeZoneInfo GetWatTimeZone()
+    {
+        // Try Windows ID first, then IANA (macOS/Linux)
+        try { return TimeZoneInfo.FindSystemTimeZoneById("W. Central Africa Standard Time"); }
+        catch (TimeZoneNotFoundException) { }
+        
+        try { return TimeZoneInfo.FindSystemTimeZoneById("Africa/Lagos"); }
+        catch (TimeZoneNotFoundException) { }
+        
+        // Last resort: UTC+1
+        return TimeZoneInfo.CreateCustomTimeZone("WAT", TimeSpan.FromHours(1), "West Africa Time", "West Africa Time");
+    }
 
     // All known date+time formats the system might encounter
-    private static readonly string[] DateTimeFormats = new[]
+    private static readonly string[] DateTimeFormats =
     {
         "dd-MM-yyyy HH:mm",
         "dd-MM-yyyy H:mm",
@@ -18,7 +31,7 @@ public static class DateTimeProvider
         "MM-dd-yyyy HH:mm",
     };
 
-    private static readonly string[] DateOnlyFormats = new[]
+    private static readonly string[] DateOnlyFormats =
     {
         "dd-MM-yyyy",
         "d-M-yyyy",
@@ -28,28 +41,25 @@ public static class DateTimeProvider
     };
 
     /// <summary>
-    /// Gets the current local time formatted as "dd-MM-yyyy" in West Central Africa Standard Time.
+    /// Gets the current local time formatted as "dd-MM-yyyy" in West Africa Time.
     /// </summary>
     public static string GetLocalTimeString()
     {
-        var watZone = TimeZoneInfo.FindSystemTimeZoneById(WestCentralAfricaTimeZoneId);
-        var localTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, watZone);
+        var localTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, WatZone);
         return localTime.ToString("dd-MM-yyyy");
     }
 
     /// <summary>
-    /// Gets the current local time in West Central Africa Standard Time.
+    /// Gets the current local time in West Africa Time.
     /// </summary>
     public static DateTime GetLocalTime()
     {
-        var watZone = TimeZoneInfo.FindSystemTimeZoneById(WestCentralAfricaTimeZoneId);
-        return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, watZone);
+        return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, WatZone);
     }
 
     private static DateTime GetLocalTimeFromUtc(DateTime utcDateTime)
     {
-        var watZone = TimeZoneInfo.FindSystemTimeZoneById(WestCentralAfricaTimeZoneId);
-        return TimeZoneInfo.ConvertTimeFromUtc(utcDateTime, watZone);
+        return TimeZoneInfo.ConvertTimeFromUtc(utcDateTime, WatZone);
     }
     
     public static DateTime ConvertDateFromString(string dateTimeString)

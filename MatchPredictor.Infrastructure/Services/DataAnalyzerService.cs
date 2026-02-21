@@ -24,7 +24,7 @@ public class DataAnalyzerService : IDataAnalyzerService
     
     public IEnumerable<MatchData> Draw(IEnumerable<MatchData> matches)=>
         matches.Where(m => 
-            _probabilityCalculator.CalculateDrawProbability(m) >= 0.85);
+            _probabilityCalculator.CalculateDrawProbability(m) >= 0.30);
     
     public IEnumerable<MatchData> StraightWin(IEnumerable<MatchData> matches) =>
         matches.Where(m => 

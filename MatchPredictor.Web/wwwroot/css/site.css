@@ -553,6 +553,25 @@ a:hover {
   border: 1px solid rgba(239, 68, 68, 0.25);
 }
 
+.mp-score-live {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  animation: live-blink 1.5s ease-in-out infinite;
+}
+
+@keyframes live-blink {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
+}
+
 .mp-card-badges {
   display: flex;
   align-items: center;

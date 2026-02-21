@@ -26,7 +26,7 @@ public static class ScoreMatchingHelper
     {
         if (scores.Count == 0) return;
 
-        foreach (var prediction in predictions.Where(p => string.IsNullOrEmpty(p.ActualScore)))
+        foreach (var prediction in predictions)
         {
             var match = scores.FirstOrDefault(s =>
                 TeamsMatch(s.HomeTeam, prediction.HomeTeam) &&
@@ -34,15 +34,25 @@ public static class ScoreMatchingHelper
 
             if (match == null) continue;
 
-            prediction.ActualScore = match.Score;
-            prediction.ActualOutcome = prediction.PredictionCategory switch
+            // Update score if missing OR if the match is live (score changes during play)
+            if (string.IsNullOrEmpty(prediction.ActualScore) || match.IsLive)
             {
-                "BothTeamsScore" => match.BTTSLabel ? "BTTS" : "No BTTS",
-                "Draw" => DetermineDrawOutcome(match.Score),
-                "Over2.5Goals" => DetermineOver25Outcome(match.Score),
-                "StraightWin" => DetermineStraightWinOutcome(match.Score),
-                _ => null
-            };
+                prediction.ActualScore = match.Score;
+                prediction.IsLive = match.IsLive;
+                prediction.ActualOutcome = prediction.PredictionCategory switch
+                {
+                    "BothTeamsScore" => match.BTTSLabel ? "BTTS" : "No BTTS",
+                    "Draw" => DetermineDrawOutcome(match.Score),
+                    "Over2.5Goals" => DetermineOver25Outcome(match.Score),
+                    "StraightWin" => DetermineStraightWinOutcome(match.Score),
+                    _ => null
+                };
+            }
+            // If score already set and match is NOT live, mark as final
+            else if (!match.IsLive)
+            {
+                prediction.IsLive = false;
+            }
         }
     }
 
@@ -67,7 +77,7 @@ public static class ScoreMatchingHelper
         var ratio = (double)matchCount / shorter.Count;
 
         // Require at least 70% word overlap (allows for minor differences like "FC", "CF")
-        return ratio >= 0.7;
+        return ratio >= 0.5;
     }
 
     /// <summary>
@@ -88,7 +98,7 @@ public static class ScoreMatchingHelper
         var matchCount = shorter.Count(w => longer.Contains(w));
         var ratio = (double)matchCount / shorter.Count;
 
-        return ratio >= 0.6;
+        return ratio >= 0.4;
     }
 
     /// <summary>

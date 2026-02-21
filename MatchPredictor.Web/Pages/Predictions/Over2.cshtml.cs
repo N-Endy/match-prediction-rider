@@ -29,30 +29,27 @@ public class Over2 : PageModel
     {
         var dateString = DateTimeProvider.GetLocalTimeString();
         var today = DateTimeProvider.GetLocalTime();
-        Matches = await _cache.GetOrCreateAsync($"over2_{today}", async entry =>
-        {
-            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30);
-            return await _context.Predictions
+        
+        Matches = await _context.Predictions
                 .Where(p => p.Date == dateString && 
                             p.PredictionCategory == "Over2.5Goals")
                 .OrderBy(p => p.Time)
                 .ThenBy(p => p.League)
                 .ThenBy(p => p.HomeTeam)
                 .ToListAsync();
-        });
         
         Matches = Matches?
             .DistinctBy(p => new { p.League, p.HomeTeam, p.AwayTeam, p.Date, p.Time })
             .ToList();
 
-        if (Matches?.Any(m => string.IsNullOrEmpty(m.ActualScore)) == true)
-        {
-            var todayScores = await _context.MatchScores
-                .Where(s => s.MatchTime.Date == today.Date)
-                .ToListAsync();
-
-            ScoreMatchingHelper.PatchMissingScores(Matches, todayScores);
-        }
+        // if (Matches?.Any(m => string.IsNullOrEmpty(m.ActualScore)) == true)
+        // {
+        //     var todayScores = await _context.MatchScores
+        //         .Where(s => s.MatchTime.Date == today.Date)
+        //         .ToListAsync();
+        //
+        //     ScoreMatchingHelper.PatchMissingScores(Matches, todayScores);
+        // }
         
         return Page();
     }
