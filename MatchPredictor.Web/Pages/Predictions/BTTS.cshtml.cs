@@ -1,8 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using MatchPredictor.Application.Helpers;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Utils;
@@ -28,7 +23,6 @@ public class BTTS : PageModel
     public async Task<IActionResult> OnGet()
     {
         var dateString = DateTimeProvider.GetLocalTimeString();
-        var today = DateTimeProvider.GetLocalTime();
         
         Matches = await _context.Predictions
                 .Where(p => p.Date == dateString &&

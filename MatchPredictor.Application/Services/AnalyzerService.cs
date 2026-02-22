@@ -214,9 +214,6 @@ public class AnalyzerService  : IAnalyzerService
             .Where(p => p.Date == dateStr)
             .ToListAsync();
 
-        static string Norm(string s) =>
-            (s ?? "").Trim().ToLowerInvariant();
-
         // Key = date + normalized teams (you can also include league if needed)
         var predLookup = predictionsForToday
             .GroupBy(p => (p.Date, Home: Norm(p.HomeTeam), Away: Norm(p.AwayTeam)))
@@ -273,6 +270,10 @@ public class AnalyzerService  : IAnalyzerService
         _logger.LogInformation("Predictions updated successfully.");
 
         await _dbContext.SaveChangesAsync();
+        return;
+
+        static string Norm(string? s) =>
+            (s ?? "").Trim().ToLowerInvariant();
     }
     
     // private string DetermineDrawOutcome(string score)
@@ -332,14 +333,14 @@ public class AnalyzerService  : IAnalyzerService
     private string DetermineDrawOutcome(string score)
     {
         return TryParseScore(score, out var h, out var a)
-            ? (h == a ? "Draw" : "Not Draw")
+            ? h == a ? "Draw" : "Not Draw"
             : "Unknown";
     }
 
     private string DetermineOver25Outcome(string score)
     {
         return TryParseScore(score, out var h, out var a)
-            ? ((h + a) > 2 ? "Over 2.5" : "Under 2.5")
+            ? h + a > 2 ? "Over 2.5" : "Under 2.5"
             : "Unknown";
     }
 
@@ -347,8 +348,7 @@ public class AnalyzerService  : IAnalyzerService
     {
         if (!TryParseScore(score, out var h, out var a)) return "Unknown";
         if (h > a) return "Home Win";
-        if (h < a) return "Away Win";
-        return "Draw";
+        return h < a ? "Away Win" : "Draw";
     }
 
     
@@ -396,7 +396,7 @@ public class AnalyzerService  : IAnalyzerService
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
     public async Task CleanupOldPredictionsAndMatchDataAsync()
     {
-        var cutoff = DateTimeProvider.GetLocalTime().AddDays(-7);
+        var cutoff = DateTimeProvider.GetLocalTime().AddDays(-1);
 
         var oldPredictions = (await _dbContext.Predictions.ToListAsync())
             .Where(p => DateTime.Parse(p.Date) < cutoff)
@@ -442,10 +442,7 @@ public class AnalyzerService  : IAnalyzerService
                 p.HomeTeam == prediction.HomeTeam &&
                 p.AwayTeam == prediction.AwayTeam &&
                 p.League == prediction.League &&
-                p.Date == prediction.Date &&
-                p.Time == prediction.Time &&
-                p.PredictedOutcome == prediction.PredictedOutcome &&
-                p.PredictionCategory == prediction.PredictionCategory);
+                p.Date == prediction.Date);
 
             if (!exists)
             {

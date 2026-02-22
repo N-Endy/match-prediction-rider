@@ -25,6 +25,7 @@
   --accent-amber: #f59e0b;
   --accent-rose: #f43f5e;
   --accent-violet: #8b5cf6;
+  --accent-pink: #fd0299;
 
   --gradient-primary: linear-gradient(135deg, #3b82f6, #06b6d4);
   --gradient-emerald: linear-gradient(135deg, #10b981, #06b6d4);
@@ -521,6 +522,18 @@ a:hover {
 .mp-badge-win {
   background: rgba(139, 92, 246, 0.12);
   color: var(--accent-violet);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+.mp-badge-win-home {
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--accent-violet);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+.mp-badge-win-away {
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--accent-pink);
   border: 1px solid rgba(139, 92, 246, 0.2);
 }
 

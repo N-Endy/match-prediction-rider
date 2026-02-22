@@ -53,9 +53,18 @@
                                 </span>
                             }
                         }
-                        <span class="mp-prediction-badge mp-badge-win">
-                            @(match.PredictedOutcome ?? "Win") ✓
-                        </span>
+                        @if (match.PredictedOutcome == "Home Win")
+                        {
+                            <span class="mp-prediction-badge mp-badge-win-home">
+                                @(match.PredictedOutcome ?? "Win")
+                            </span>
+                        }
+                        else
+                        {
+                            <span class="mp-prediction-badge mp-badge-win-away">
+                                @(match.PredictedOutcome ?? "Win")
+                            </span>
+                        }
                     </div>
                 </div>
             }

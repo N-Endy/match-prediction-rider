@@ -100,10 +100,10 @@ using (var scope = app.Services.CreateScope())
     recurringJobs.AddOrUpdate<IAnalyzerService>(
         "daily-prediction-job",
         service => service.RunScraperAndAnalyzerAsync(),
-        Cron.Hourly(5),   // Every hour at minute 5
+        "*/15 * * * *", // Every 15 minutes
         new RecurringJobOptions
         {
-            TimeZone = TimeZoneInfo.Utc
+            TimeZone = TimeZoneInfo.Local
         }
     );
 
@@ -113,7 +113,7 @@ using (var scope = app.Services.CreateScope())
         "0 1 * * *", // Daily at 1:00 AM
         new RecurringJobOptions
         {
-            TimeZone = TimeZoneInfo.Utc
+            TimeZone = TimeZoneInfo.Local
         }
     );
 }
