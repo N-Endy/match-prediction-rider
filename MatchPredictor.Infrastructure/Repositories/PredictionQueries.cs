@@ -53,18 +53,22 @@ public class PredictionQueries : IPredictionQueries
         var dateOnly = date.Date;
         var dateString = dateOnly.ToString("dd-MM-yyyy");
 
-        var list = await _context.Predictions
+        var filteredPredictions = await _context.Predictions
             .Where(p =>
                 p.PredictionCategory == category &&
                 (
                     (p.MatchDateTime.HasValue && p.MatchDateTime.Value.Date == dateOnly) ||
                     (!p.MatchDateTime.HasValue && p.Date == dateString)
                 ))
-            .OrderBy(p => p.MatchDateTime ?? DateTime.Parse(p.Date))
+            .ToListAsync();
+
+        // 2. Sort the data in-memory (Client-side evaluation)
+        var list = filteredPredictions
+            .OrderBy(p => p.MatchDateTime ?? DateTime.Parse(p.Date)) // DateTime.Parse works fine in memory
             .ThenBy(p => p.Time)
             .ThenBy(p => p.League)
             .ThenBy(p => p.HomeTeam)
-            .ToListAsync();
+            .ToList();
 
         return list
             .DistinctBy(p => new { p.League, p.HomeTeam, p.AwayTeam, p.Date, p.Time })

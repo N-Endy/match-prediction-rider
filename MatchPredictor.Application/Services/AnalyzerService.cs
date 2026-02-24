@@ -411,9 +411,10 @@ public class AnalyzerService  : IAnalyzerService
         var cutoffDate = DateTimeProvider.GetLocalTime().AddDays(-8).Date;
     
         // Delete old predictions directly in the database using CreatedAt (proper DateTime)
-        await RelationalQueryableExtensions.ExecuteDeleteAsync(
-            _dbContext.Predictions.Where(p => p.CreatedAt.Date < cutoffDate)
-        );
+        
+        await _dbContext.Predictions
+            .Where(p => p.CreatedAt.Date < cutoffDate)
+            .ExecuteDeleteAsync();
     
         // MatchData stores Date as a string, so we filter in memory but only once
         var allMatchData = await _dbContext.MatchDatas.ToListAsync();

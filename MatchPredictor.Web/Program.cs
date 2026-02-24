@@ -28,9 +28,7 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
     ?? throw new InvalidOperationException("Connection string 'DefaultConnection' is not configured.");
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(connectionString)
-           .ConfigureWarnings(warnings => 
-               warnings.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
+    options.UseNpgsql(connectionString));
 
 // Register application services
 builder.Services.AddScoped<IMatchDataRepository, MatchDataRepository>();
@@ -62,12 +60,21 @@ builder.Services.AddSingleton<IJobFilterProvider, DependencyInjectionFilterProvi
 builder.Services.AddHangfire((_, config) =>
 {
     config.UseSimpleAssemblyNameTypeSerializer()
-          .UseRecommendedSerializerSettings()
-          .UsePostgreSqlStorage(connectionString, new PostgreSqlStorageOptions
-          {
-              SchemaName = "hangfire",
-              QueuePollInterval = TimeSpan.FromSeconds(15)
-          });
+        .UseRecommendedSerializerSettings()
+        .UsePostgreSqlStorage(
+            // ✅ NEW: Wrap the connection string in the bootstrapper action
+            c => c.UseNpgsqlConnection(connectionString), 
+
+            // KEEP: Your options remain exactly the same
+            new PostgreSqlStorageOptions
+            {
+                SchemaName = "hangfire",
+                QueuePollInterval = TimeSpan.FromSeconds(15),
+                PrepareSchemaIfNecessary = true, 
+                DistributedLockTimeout = TimeSpan.FromMinutes(1),
+                TransactionSynchronisationTimeout = TimeSpan.FromMinutes(1)
+            }
+        );
 
     config.UseFilter(new AutomaticRetryAttribute { Attempts = 3 });
 });
@@ -84,16 +91,45 @@ builder.WebHost.ConfigureKestrel(serverOptions =>
 var app = builder.Build();
 
 // Apply EF migrations (Postgres) — no local file/directory creation needed for Postgres
+// using (var scope = app.Services.CreateScope())
+// {
+//     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+//     db.Database.Migrate();
+// }
+
 using (var scope = app.Services.CreateScope())
 {
-    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-    db.Database.Migrate();
+    var services = scope.ServiceProvider;
+    var logger = services.GetRequiredService<ILogger<Program>>();
+    
+    try
+    {
+        // Step 1: Migrate application database
+        var context = services.GetRequiredService<ApplicationDbContext>();
+        await context.Database.MigrateAsync();
+        logger.LogInformation("Database initialized successfully.");
+        
+        // Step 2: Initialize Hangfire storage
+        var storage = services.GetRequiredService<JobStorage>();
+        
+        // Force Hangfire to create its tables by accessing monitoring API
+        var monitoringApi = storage.GetMonitoringApi();
+        var stats = monitoringApi.GetStatistics();
+        
+        logger.LogInformation("✅ Hangfire initialized - Servers: {StatsServers}, Jobs: {StatsRecurring}", stats.Servers, stats.Recurring);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "❌ Database initialization error: {ExMessage}", ex.Message);
+        // Don't throw - allow app to continue but log error
+    }
 }
 
 // Register recurring Hangfire jobs properly
 using (var scope = app.Services.CreateScope())
 {
     var recurringJobs = scope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
 
     recurringJobs.AddOrUpdate<IAnalyzerService>(
         "daily-prediction-job",
@@ -114,6 +150,7 @@ using (var scope = app.Services.CreateScope())
             TimeZone = TimeZoneInfo.Local
         }
     );
+    logger.LogInformation("Recurring jobs registered successfully.");
 }
 
 // Auto-trigger initial data scraping if no predictions exist for today
@@ -132,7 +169,7 @@ using (var scope = app.Services.CreateScope())
             logger.LogInformation("No predictions found for today. Triggering initial data scraping...");
             var backgroundJobs = scope.ServiceProvider.GetRequiredService<IBackgroundJobClient>();
             backgroundJobs.Enqueue<IAnalyzerService>(service => service.RunScraperAndAnalyzerAsync());
-            logger.LogInformation("Initial scraping job queued successfully.");
+            logger.LogInformation("✅ Initial scraping job queued successfully.");
         }
         else
         {
@@ -161,7 +198,8 @@ app.UseAuthorization();
 // Start Hangfire Server and Dashboard
 app.UseHangfireDashboard("/hangfire", new DashboardOptions
 {
-    DashboardTitle = "Match Predictor Jobs"
+    DashboardTitle = "Match Predictor Jobs",
+    StatsPollingInterval = 5000
 });
 
 app.MapRazorPages();
