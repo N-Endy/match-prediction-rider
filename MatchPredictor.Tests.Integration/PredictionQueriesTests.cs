@@ -35,7 +35,7 @@ public class PredictionQueriesTests
     public async Task GetBTTSAsync_ReturnsInsertedPredictionForGivenDate()
     {
         // Arrange
-        using var context = CreateContext();
+        await using var context = CreateContext();
 
         // Ensure database is up to date
         await context.Database.MigrateAsync();
@@ -73,10 +73,7 @@ public class PredictionQueriesTests
 
         // Assert
         Assert.Contains(results, p =>
-            p.League == "TestLeague" &&
-            p.HomeTeam == "Home" &&
-            p.AwayTeam == "Away" &&
-            p.PredictionCategory == "BothTeamsScore");
+            p is { League: "TestLeague", HomeTeam: "Home", AwayTeam: "Away", PredictionCategory: "BothTeamsScore" });
     }
 }
 

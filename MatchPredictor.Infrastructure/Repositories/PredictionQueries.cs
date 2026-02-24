@@ -28,20 +28,27 @@ public class PredictionQueries : IPredictionQueries
 
     public async Task<IReadOnlyList<Prediction>> GetCombinedSampleAsync(DateTime date, int count)
     {
-        var dateOnly = date.Date;
+        // 1. Force the date to UTC and set up the start/end bounds
+        var startOfDayUtc = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
+        var endOfDayUtc = startOfDayUtc.AddDays(1);
+    
+        // 2. Evaluate the string outside the LINQ query for better EF Core translation
+        var dateString = date.ToString("dd-MM-yyyy");
 
-        var list = await _context.Predictions
+        // 3. Fetch data using the index-friendly UTC range
+        var predictionsForDay = await _context.Predictions
             .Where(p =>
-                (p.MatchDateTime.HasValue && p.MatchDateTime.Value.Date == dateOnly) ||
-                (!p.MatchDateTime.HasValue && p.Date == dateOnly.ToString("dd-MM-yyyy")))
-            .ToListAsync();
+                (p.MatchDateTime >= startOfDayUtc && p.MatchDateTime < endOfDayUtc) ||
+                (!p.MatchDateTime.HasValue && p.Date == dateString))
+            .ToListAsync(); // Pulls the day's records into memory
 
         var random = new Random();
 
-        return list
-            .OrderBy(_ => random.Next())
-            .Take(count)
+        // 4. Process the in-memory list safely
+        return predictionsForDay
             .DistinctBy(p => new { p.League, p.HomeTeam, p.AwayTeam, p.Date, p.Time })
+            .OrderBy(_ => random.Next())                 
+            .Take(count)
             .OrderBy(p => p.Time)
             .ThenBy(p => p.League)
             .ThenBy(p => p.HomeTeam)
@@ -50,21 +57,26 @@ public class PredictionQueries : IPredictionQueries
 
     private async Task<IReadOnlyList<Prediction>> GetByCategoryAsync(DateTime date, string category)
     {
-        var dateOnly = date.Date;
-        var dateString = dateOnly.ToString("dd-MM-yyyy");
+        // 1. Force the date to UTC to prevent Npgsql exceptions
+        var startOfDayUtc = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
+        var endOfDayUtc = startOfDayUtc.AddDays(1);
+    
+        // String matching remains the same
+        var dateString = date.ToString("dd-MM-yyyy");
 
+        // 2. Use a range query (>= and <) so PostgreSQL can use indexes
         var filteredPredictions = await _context.Predictions
             .Where(p =>
                 p.PredictionCategory == category &&
                 (
-                    (p.MatchDateTime.HasValue && p.MatchDateTime.Value.Date == dateOnly) ||
+                    (p.MatchDateTime >= startOfDayUtc && p.MatchDateTime < endOfDayUtc) ||
                     (!p.MatchDateTime.HasValue && p.Date == dateString)
                 ))
             .ToListAsync();
 
-        // 2. Sort the data in-memory (Client-side evaluation)
+        // 3. Sort the data in-memory 
         var list = filteredPredictions
-            .OrderBy(p => p.MatchDateTime ?? DateTime.Parse(p.Date)) // DateTime.Parse works fine in memory
+            .OrderBy(p => p.MatchDateTime ?? DateTime.Parse(p.Date)) 
             .ThenBy(p => p.Time)
             .ThenBy(p => p.League)
             .ThenBy(p => p.HomeTeam)

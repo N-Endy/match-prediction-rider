@@ -100,7 +100,7 @@ public static class DateTimeProvider
         throw new FormatException($"Invalid time format: '{timeString}'. Expected HH:mm.");
     }
 
-    public static (string date, string time) ParseProperDateAndTime(string dateString, string timeString)
+    public static (string date, string time) ParseProperDateAndTime(string? dateString, string? timeString)
     {
         var combined = $"{dateString} {timeString}";
         

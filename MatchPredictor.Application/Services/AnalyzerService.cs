@@ -447,9 +447,9 @@ public class AnalyzerService  : IAnalyzerService
             }
             var prediction = new Prediction
             {
-                HomeTeam = match.HomeTeam,
-                AwayTeam = match.AwayTeam,
-                League = match.League,
+                HomeTeam = match.HomeTeam ?? "N/A",
+                AwayTeam = match.AwayTeam ?? "N/A",
+                League = match.League ?? "N/A",
                 PredictionCategory = category,
                 PredictedOutcome = category switch
                 {
