@@ -408,25 +408,26 @@ public class AnalyzerService  : IAnalyzerService
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
     public async Task CleanupOldPredictionsAndMatchDataAsync()
     {
-        var cutoffDate = DateTimeProvider.GetLocalTime().AddDays(-1).Date;
-
+        var cutoffDate = DateTimeProvider.GetLocalTime().AddDays(-8).Date;
+    
         // Delete old predictions directly in the database using CreatedAt (proper DateTime)
-        await _dbContext.Predictions
-            .Where(p => p.CreatedAt.Date < cutoffDate)
-            .ExecuteDeleteAsync();
-
+        await RelationalQueryableExtensions.ExecuteDeleteAsync(
+            _dbContext.Predictions.Where(p => p.CreatedAt.Date < cutoffDate)
+        );
+    
         // MatchData stores Date as a string, so we filter in memory but only once
         var allMatchData = await _dbContext.MatchDatas.ToListAsync();
         var oldMatchData = allMatchData
             .Where(m => DateTime.TryParse(m.Date, out var d) && d.Date < cutoffDate)
             .ToList();
-
+    
         if (oldMatchData.Count > 0)
         {
             _dbContext.MatchDatas.RemoveRange(oldMatchData);
             await _dbContext.SaveChangesAsync();
         }
     }
+    
 
     private async Task SavePredictions(string category, IEnumerable<MatchData> matches)
     {
