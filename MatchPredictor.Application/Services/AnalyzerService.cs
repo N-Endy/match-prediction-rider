@@ -63,13 +63,25 @@ public class AnalyzerService  : IAnalyzerService
                 foreach (var match in scraped)
                 {
                     var properDateTime = DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time);
+                    match.Date = properDateTime.date;
+                    match.Time = properDateTime.time;
+
+                    if (DateTime.TryParseExact(
+                            $"{properDateTime.date} {properDateTime.time}",
+                            "dd-MM-yyyy HH:mm",
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.None,
+                            out var parsed))
+                    {
+                        match.MatchDateTime = parsed;
+                    }
 
                     var exists = await _dbContext.MatchDatas.AnyAsync(m =>
                         m.HomeTeam == match.HomeTeam &&
                         m.AwayTeam == match.AwayTeam &&
                         m.League == match.League &&
-                        m.Date == properDateTime.date &&
-                        m.Time == properDateTime.time);
+                        m.Date == match.Date &&
+                        m.Time == match.Time);
                     
                     if (!exists) await _dbContext.MatchDatas.AddAsync(match);
                 }
@@ -396,23 +408,24 @@ public class AnalyzerService  : IAnalyzerService
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
     public async Task CleanupOldPredictionsAndMatchDataAsync()
     {
-        var cutoff = DateTimeProvider.GetLocalTime().AddDays(-1);
+        var cutoffDate = DateTimeProvider.GetLocalTime().AddDays(-1).Date;
 
-        var oldPredictions = (await _dbContext.Predictions.ToListAsync())
-            .Where(p => DateTime.Parse(p.Date) < cutoff)
-            .ToList();
-        
-        var oldMatchData = (await _dbContext.MatchDatas.ToListAsync())
-            .Where(m => DateTime.Parse(m.Date) < cutoff)
+        // Delete old predictions directly in the database using CreatedAt (proper DateTime)
+        await _dbContext.Predictions
+            .Where(p => p.CreatedAt.Date < cutoffDate)
+            .ExecuteDeleteAsync();
+
+        // MatchData stores Date as a string, so we filter in memory but only once
+        var allMatchData = await _dbContext.MatchDatas.ToListAsync();
+        var oldMatchData = allMatchData
+            .Where(m => DateTime.TryParse(m.Date, out var d) && d.Date < cutoffDate)
             .ToList();
 
-        if (oldPredictions.Count > 0)
-            _dbContext.Predictions.RemoveRange(oldPredictions);
-        
         if (oldMatchData.Count > 0)
-            _dbContext.Predictions.RemoveRange(oldPredictions);
-        
-        await _dbContext.SaveChangesAsync();
+        {
+            _dbContext.MatchDatas.RemoveRange(oldMatchData);
+            await _dbContext.SaveChangesAsync();
+        }
     }
 
     private async Task SavePredictions(string category, IEnumerable<MatchData> matches)
@@ -420,6 +433,16 @@ public class AnalyzerService  : IAnalyzerService
         foreach (var match in matches)
         {
             var properDateTime = DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time);
+            DateTime? matchDateTime = null;
+            if (DateTime.TryParseExact(
+                    $"{properDateTime.date} {properDateTime.time}",
+                    "dd-MM-yyyy HH:mm",
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None,
+                    out var parsed))
+            {
+                matchDateTime = parsed;
+            }
             var prediction = new Prediction
             {
                 HomeTeam = match.HomeTeam,
@@ -436,6 +459,7 @@ public class AnalyzerService  : IAnalyzerService
                 },
                 Date = properDateTime.date,
                 Time = properDateTime.time,
+                MatchDateTime = matchDateTime
             };
 
             var exists = await _dbContext.Predictions.AnyAsync(p =>

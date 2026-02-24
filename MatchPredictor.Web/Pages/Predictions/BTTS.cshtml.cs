@@ -1,5 +1,5 @@
+using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
-using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
@@ -10,41 +10,21 @@ namespace MatchPredictor.Web.Pages.Predictions;
 
 public class BTTS : PageModel
 {
-    private readonly ApplicationDbContext _context;
+    private readonly IPredictionQueries _predictionQueries;
     private readonly IMemoryCache _cache;
     public List<Prediction>? Matches { get; set; } = [];
     
-    public BTTS(ApplicationDbContext context, IMemoryCache cache)
+    public BTTS(IPredictionQueries predictionQueries, IMemoryCache cache)
     {
         _cache = cache;
-        _context = context;
+        _predictionQueries = predictionQueries;
     }
     
     public async Task<IActionResult> OnGet()
     {
-        var dateString = DateTimeProvider.GetLocalTimeString();
-        
-        Matches = await _context.Predictions
-                .Where(p => p.Date == dateString &&
-                            p.PredictionCategory == "BothTeamsScore")
-                .OrderBy(p => p.Time)
-                .ThenBy(p => p.League)
-                .ThenBy(p => p.HomeTeam)
-                .ToListAsync();
-
-        // Fallback: patch any predictions missing scores by matching against MatchScores
-        // if (Matches?.Any(m => string.IsNullOrEmpty(m.ActualScore)) == true)
-        // {
-        //     var todayScores = await _context.MatchScores
-        //         .Where(s => s.MatchTime.Date == today.Date)
-        //         .ToListAsync();
-        //
-        //     ScoreMatchingHelper.PatchMissingScores(Matches, todayScores);
-        // }
-        
-        Matches = Matches?
-            .DistinctBy(p => new { p.League, p.HomeTeam, p.AwayTeam, p.Date, p.Time })
-            .ToList();
+        var today = DateTimeProvider.GetLocalTime();
+        var results = await _predictionQueries.GetBTTSAsync(today);
+        Matches = results.ToList();
         
         return Page();
     }

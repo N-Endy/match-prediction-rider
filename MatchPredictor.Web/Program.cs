@@ -1,6 +1,6 @@
 using Hangfire;
 using Hangfire.Common;
-using Hangfire.MemoryStorage;
+using Hangfire.PostgreSql;
 using MatchPredictor.Application.Services;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Infrastructure;
@@ -28,12 +28,13 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
     ?? throw new InvalidOperationException("Connection string 'DefaultConnection' is not configured.");
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseSqlite(connectionString)
+    options.UseNpgsql(connectionString)
            .ConfigureWarnings(warnings => 
                warnings.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
 
 // Register application services
 builder.Services.AddScoped<IMatchDataRepository, MatchDataRepository>();
+builder.Services.AddScoped<IPredictionQueries, PredictionQueries>();
 builder.Services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
 builder.Services.AddScoped<IWebScraperService, WebScraperService>();
 builder.Services.AddScoped<IExtractFromExcel, ExtractFromExcel>();
@@ -62,7 +63,11 @@ builder.Services.AddHangfire((_, config) =>
 {
     config.UseSimpleAssemblyNameTypeSerializer()
           .UseRecommendedSerializerSettings()
-          .UseMemoryStorage();  // Using memory storage for development
+          .UsePostgreSqlStorage(connectionString, new PostgreSqlStorageOptions
+          {
+              SchemaName = "hangfire",
+              QueuePollInterval = TimeSpan.FromSeconds(15)
+          });
 
     config.UseFilter(new AutomaticRetryAttribute { Attempts = 3 });
 });
@@ -78,17 +83,10 @@ builder.WebHost.ConfigureKestrel(serverOptions =>
 
 var app = builder.Build();
 
-// Ensure database directory and file exist
+// Apply EF migrations (Postgres) — no local file/directory creation needed for Postgres
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-    var dbPath = db.Database.GetConnectionString()?.Replace("Data Source=", "");
-    if (!string.IsNullOrEmpty(dbPath))
-    {
-        var dir = Path.GetDirectoryName(dbPath);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
-    }
     db.Database.Migrate();
 }
 
@@ -170,3 +168,5 @@ app.MapRazorPages();
 app.MapHealthChecks("/health");
 
 app.Run();
+
+

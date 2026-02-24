@@ -24,8 +24,10 @@ public class MatchDataRepository : IMatchDataRepository
         var matchDateString = matchDate.ToString("dd-MM-yyyy");
 
         return await _context.MatchDatas
-            .Where(m => m.Date == matchDateString)
-            .OrderBy(m => m.Date)
+            .Where(m =>
+                (m.MatchDateTime.HasValue && m.MatchDateTime.Value.Date == matchDate) ||
+                (!m.MatchDateTime.HasValue && m.Date == matchDateString))
+            .OrderBy(m => m.MatchDateTime ?? DateTime.Parse(m.Date ?? matchDateString))
             .ThenBy(m => m.Time)
             .ThenBy(m => m.HomeTeam)
             .ToListAsync();

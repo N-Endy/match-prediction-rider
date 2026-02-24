@@ -6,6 +6,7 @@ public class Prediction
     public int Id { get; set; }
     public string Date { get; set; } = null!;
     public string Time { get; set; } = null!;
+    public DateTime? MatchDateTime { get; set; }
     public string League { get; set; } = null!;
     public string HomeTeam { get; set; } = null!;
     public string AwayTeam { get; set; } = null!;
