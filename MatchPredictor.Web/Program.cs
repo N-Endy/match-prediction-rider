@@ -7,6 +7,7 @@ using MatchPredictor.Infrastructure;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Repositories;
 using MatchPredictor.Infrastructure.Services;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
@@ -90,13 +91,6 @@ builder.WebHost.ConfigureKestrel(serverOptions =>
 
 var app = builder.Build();
 
-// Apply EF migrations (Postgres) — no local file/directory creation needed for Postgres
-// using (var scope = app.Services.CreateScope())
-// {
-//     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-//     db.Database.Migrate();
-// }
-
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
@@ -112,7 +106,7 @@ using (var scope = app.Services.CreateScope())
         // Step 2: Initialize Hangfire storage
         var storage = services.GetRequiredService<JobStorage>();
         
-        // Force Hangfire to create its tables by accessing monitoring API
+        // Force Hangfire to create its tables by accessing monitoring the API
         var monitoringApi = storage.GetMonitoringApi();
         var stats = monitoringApi.GetStatistics();
         
@@ -150,7 +144,7 @@ using (var scope = app.Services.CreateScope())
             TimeZone = TimeZoneInfo.Local
         }
     );
-    logger.LogInformation("Recurring jobs registered successfully.");
+    logger.LogInformation("✅ Recurring jobs registered successfully.");
 }
 
 // Auto-trigger initial data scraping if no predictions exist for today
@@ -161,10 +155,10 @@ using (var scope = app.Services.CreateScope())
     
     try
     {
-        var today = DateTime.Now.ToString("yyyy-MM-dd");
-        var hasTodaysPredictions = await db.Predictions.AnyAsync(p => p.Date == today);
+        var today = DateTimeProvider.GetLocalTime().ToString("dd-MM-yyyy"); 
+        var hasTodayPredictions = await db.Predictions.AnyAsync(p => p.Date == today);
         
-        if (!hasTodaysPredictions)
+        if (!hasTodayPredictions)
         {
             logger.LogInformation("No predictions found for today. Triggering initial data scraping...");
             var backgroundJobs = scope.ServiceProvider.GetRequiredService<IBackgroundJobClient>();

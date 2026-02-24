@@ -1,6 +1,8 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Extensions;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 
 namespace MatchPredictor.Infrastructure.Repositories;
@@ -29,8 +31,10 @@ public class PredictionQueries : IPredictionQueries
     public async Task<IReadOnlyList<Prediction>> GetCombinedSampleAsync(DateTime date, int count)
     {
         // 1. Force the date to UTC and set up the start/end bounds
-        var startOfDayUtc = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
-        var endOfDayUtc = startOfDayUtc.AddDays(1);
+        var today = DateTimeProvider.GetLocalTime().Date;
+        var (startOfDayUtc, endOfDayUtc) = today.GetUtcDayBounds();
+        // var startOfDayUtc = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
+        // var endOfDayUtc = startOfDayUtc.AddDays(1);
     
         // 2. Evaluate the string outside the LINQ query for better EF Core translation
         var dateString = date.ToString("dd-MM-yyyy");
@@ -58,8 +62,10 @@ public class PredictionQueries : IPredictionQueries
     private async Task<IReadOnlyList<Prediction>> GetByCategoryAsync(DateTime date, string category)
     {
         // 1. Force the date to UTC to prevent Npgsql exceptions
-        var startOfDayUtc = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
-        var endOfDayUtc = startOfDayUtc.AddDays(1);
+        var today = DateTimeProvider.GetLocalTime().Date;
+        var (startOfDayUtc, endOfDayUtc) = today.GetUtcDayBounds();
+        // var startOfDayUtc = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
+        // var endOfDayUtc = startOfDayUtc.AddDays(1);
     
         // String matching remains the same
         var dateString = date.ToString("dd-MM-yyyy");

@@ -1,6 +1,3 @@
-using System;
-using System.Linq;
-using System.Threading.Tasks;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Repositories;

@@ -32,7 +32,7 @@
                     "BothTeamsScore" => "mp-badge-btts",
                     "Over2.5Goals" => "mp-badge-over",
                     "Draw" => "mp-badge-draw",
-                    "StraightWin" => "mp-badge-win",
+                    "StraightWin" => "mp-badge-win-home",
                     _ => "mp-badge-combined"
                 };
                 var badgeText = category switch
@@ -43,6 +43,12 @@
                     "StraightWin" => match.PredictedOutcome ?? "Win",
                     _ => match.PredictedOutcome ?? category
                 };
+                
+                @if (badgeText == "Away Win")
+                {
+                    badgeClass = "mp-badge-win-away";
+                }
+                
                 <div class="mp-prediction-card">
                     <div class="mp-match-info">
                         <div class="mp-match-league">

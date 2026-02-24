@@ -1,30 +1,41 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using MatchPredictor.Domain.Models;
 
 namespace MatchPredictor.Application.Helpers;
 
 public static class ScoreMatchingHelper
 {
-    // Noise words that appear in league names but don't help matching
-    private static readonly HashSet<string> StopWords = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly char[] Separators = { '-', '.', ':', ',', '/', '(', ')', ' ' };
+
+    // Common league noise words
+    private static readonly HashSet<string> LeagueStopWords = new(StringComparer.OrdinalIgnoreCase)
     {
         "standings", "qualification", "play", "offs", "round",
-        "group", "stage", "phase", "preliminary"
+        "group", "stage", "phase", "preliminary", "league", "championship"
     };
 
-    /// <summary>
-    /// Patches missing ActualScore/ActualOutcome on predictions by matching
-    /// them to scraped MatchScores using word-overlap on team names.
-    /// Call this at display-time so scores appear even if the background
-    /// job hasn't re-run yet.
-    /// </summary>
-    public static void PatchMissingScores(
-        List<Prediction> predictions,
-        List<MatchScore> scores)
+    // Generic team suffixes that artificially inflate match ratios
+    private static readonly HashSet<string> TeamStopWords = new(StringComparer.OrdinalIgnoreCase)
     {
-        if (scores.Count == 0) return;
+        "fc", "cf", "sc", "afc", "fcv", "fsv", "balompie", "esporte", "clube"
+    };
+
+    // Map common abbreviations to their full words so they match perfectly
+    private static readonly Dictionary<string, string> CommonSynonyms = new(StringComparer.OrdinalIgnoreCase)
+    {
+        { "man", "manchester" },
+        { "utd", "united" },
+        { "st", "saint" },
+        { "intl", "international" },
+        { "sp", "sporting" },
+        { "atl", "atletico" }
+    };
+
+    public static void PatchMissingScores(List<Prediction> predictions, List<MatchScore> scores)
+    {
+        if (scores.Count == 0 || predictions.Count == 0) return;
 
         foreach (var prediction in predictions)
         {
@@ -34,7 +45,6 @@ public static class ScoreMatchingHelper
 
             if (match == null) continue;
 
-            // Update score if missing OR if the match is live (score changes during play)
             if (string.IsNullOrEmpty(prediction.ActualScore) || match.IsLive)
             {
                 prediction.ActualScore = match.Score;
@@ -42,13 +52,12 @@ public static class ScoreMatchingHelper
                 prediction.ActualOutcome = prediction.PredictionCategory switch
                 {
                     "BothTeamsScore" => match.BTTSLabel ? "BTTS" : "No BTTS",
-                    "Draw" => DetermineDrawOutcome(match.Score),
-                    "Over2.5Goals" => DetermineOver25Outcome(match.Score),
-                    "StraightWin" => DetermineStraightWinOutcome(match.Score),
-                    _ => null
+                    "Draw"           => DetermineDrawOutcome(match.Score),
+                    "Over2.5Goals"   => DetermineOver25Outcome(match.Score),
+                    "StraightWin"    => DetermineStraightWinOutcome(match.Score),
+                    _                => null
                 };
             }
-            // If score already set and match is NOT live, mark as final
             else if (!match.IsLive)
             {
                 prediction.IsLive = false;
@@ -56,100 +65,154 @@ public static class ScoreMatchingHelper
         }
     }
 
-    /// <summary>
-    /// Checks if two team names refer to the same team using word-overlap.
-    /// Returns true if the shorter name's significant words are mostly found
-    /// in the longer name. E.g. "Al-Nassr" ↔ "Al Nassr" → both have {al, nassr} → match.
-    /// </summary>
     public static bool TeamsMatch(string nameA, string nameB)
     {
-        var wordsA = ExtractWords(nameA);
-        var wordsB = ExtractWords(nameB);
+        var wordsA = ExtractTeamWords(nameA);
+        var wordsB = ExtractTeamWords(nameB);
 
-        if (wordsA.Count == 0 || wordsB.Count == 0)
-            return false;
+        if (wordsA.Count == 0 || wordsB.Count == 0) return false;
 
-        // The shorter set's words should mostly appear in the longer set
         var shorter = wordsA.Count <= wordsB.Count ? wordsA : wordsB;
         var longer = wordsA.Count <= wordsB.Count ? wordsB : wordsA;
 
-        var matchCount = shorter.Count(w => longer.Contains(w));
-        var ratio = (double)matchCount / shorter.Count;
+        var matchCount = 0;
 
-        // Require at least 70% word overlap (allows for minor differences like "FC", "CF")
-        return ratio >= 0.5;
+        foreach (var shortWord in shorter)
+        {
+            // 1. Check for an exact match first (Fastest)
+            if (longer.Contains(shortWord))
+            {
+                matchCount++;
+                continue;
+            }
+
+            // 2. Fallback to Levenshtein Fuzzy Match
+            bool isFuzzyMatch = false;
+        
+            // Dynamic typo tolerance based on word length
+            // - Less than 5 chars: 0 typos allowed (exact match only)
+            // - 5 to 7 chars: 1 typo allowed
+            // - 8+ chars: 2 typos allowed
+            int allowedTypos = shortWord.Length >= 8 ? 2 : (shortWord.Length >= 5 ? 1 : 0);
+
+            if (allowedTypos > 0)
+            {
+                foreach (var longWord in longer)
+                {
+                    int distance = ComputeLevenshteinDistance(shortWord, longWord);
+                    if (distance <= allowedTypos)
+                    {
+                        isFuzzyMatch = true;
+                        break;
+                    }
+                }
+            }
+
+            if (isFuzzyMatch) matchCount++;
+        }
+
+        var ratio = (double)matchCount / shorter.Count;
+        return ratio >= 0.6;
     }
 
-    /// <summary>
-    /// Checks if two league names refer to the same league using word-overlap,
-    /// ignoring common noise words like "Standings", "Qualification", etc.
-    /// </summary>
     public static bool LeaguesMatch(string leagueA, string leagueB)
     {
-        var wordsA = ExtractWords(leagueA).Except(StopWords).ToHashSet();
-        var wordsB = ExtractWords(leagueB).Except(StopWords).ToHashSet();
+        var wordsA = ExtractWords(leagueA, LeagueStopWords);
+        var wordsB = ExtractWords(leagueB, LeagueStopWords);
 
-        if (wordsA.Count == 0 || wordsB.Count == 0)
-            return false;
+        if (wordsA.Count == 0 || wordsB.Count == 0) return false;
 
         var shorter = wordsA.Count <= wordsB.Count ? wordsA : wordsB;
         var longer = wordsA.Count <= wordsB.Count ? wordsB : wordsA;
 
         var matchCount = shorter.Count(w => longer.Contains(w));
-        var ratio = (double)matchCount / shorter.Count;
-
-        return ratio >= 0.4;
+        return ((double)matchCount / shorter.Count) >= 0.4;
     }
 
-    /// <summary>
-    /// Extracts significant words from a name.
-    /// "Al-Nassr" → {"al", "nassr"}
-    /// "ASIA: AFC Champions League 2" → {"asia", "afc", "champions", "league", "2"}
-    /// </summary>
-    private static HashSet<string> ExtractWords(string name)
+    private static HashSet<string> ExtractTeamWords(string name)
     {
-        // Replace separators (hyphens, dots, colons, commas) with spaces, then split
-        var cleaned = Regex.Replace(name.Trim().ToLowerInvariant(), @"[-.:,/()]+", " ");
-        var words = Regex.Split(cleaned, @"\s+")
-            .Where(w => w.Length > 0)
-            .ToHashSet();
+        var words = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        
+        // string.Split is much faster than Regex here
+        var parts = name.Split(Separators, StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var part in parts)
+        {
+            if (TeamStopWords.Contains(part)) continue;
+
+            // Normalize abbreviations instantly
+            var finalWord = CommonSynonyms.TryGetValue(part, out var synonym) ? synonym : part;
+            words.Add(finalWord);
+        }
+
         return words;
+    }
+
+    private static HashSet<string> ExtractWords(string name, HashSet<string> stopWords)
+    {
+        var parts = name.Split(Separators, StringSplitOptions.RemoveEmptyEntries);
+        return parts.Where(p => !stopWords.Contains(p))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    // Combined parsing logic to avoid duplicating string splits
+    private static (int Home, int Away, bool IsValid) ParseScore(string score)
+    {
+        var parts = score.Split(':');
+        if (parts.Length == 2 && 
+            int.TryParse(parts[0], out var h) && 
+            int.TryParse(parts[1], out var a))
+        {
+            return (h, a, true);
+        }
+        return (0, 0, false);
     }
 
     private static string DetermineDrawOutcome(string score)
     {
-        var parts = score.Split(':');
-        if (parts.Length == 2 &&
-            int.TryParse(parts[0], out var h) &&
-            int.TryParse(parts[1], out var a))
-        {
-            return h == a ? "Draw" : "Not Draw";
-        }
-        return "Unknown";
+        var (h, a, isValid) = ParseScore(score);
+        return isValid ? (h == a ? "Draw" : "Not Draw") : "Unknown";
     }
 
     private static string DetermineOver25Outcome(string score)
     {
-        var parts = score.Split(':');
-        if (parts.Length == 2 &&
-            int.TryParse(parts[0], out var h) &&
-            int.TryParse(parts[1], out var a))
-        {
-            return (h + a) > 2 ? "Over 2.5" : "Under 2.5";
-        }
-        return "Unknown";
+        var (h, a, isValid) = ParseScore(score);
+        return isValid ? ((h + a) > 2 ? "Over 2.5" : "Under 2.5") : "Unknown";
     }
 
     private static string DetermineStraightWinOutcome(string score)
     {
-        var parts = score.Split(':');
-        if (parts.Length == 2 &&
-            int.TryParse(parts[0], out var h) &&
-            int.TryParse(parts[1], out var a))
+        var (h, a, isValid) = ParseScore(score);
+        if (!isValid) return "Unknown";
+        
+        if (h > a) return "Home Win";
+        return h < a ? "Away Win" : "Draw";
+    }
+    
+    /// <summary>
+    /// Calculates the minimum number of character edits required to change one string into another.
+    /// Uses an optimized memory footprint (two 1D arrays instead of a full 2D matrix).
+    /// </summary>
+    private static int ComputeLevenshteinDistance(string source, string target)
+    {
+        if (source.Length == 0) return target.Length;
+        if (target.Length == 0) return source.Length;
+
+        var v0 = new int[target.Length + 1];
+        var v1 = new int[target.Length + 1];
+
+        for (int i = 0; i < v0.Length; i++) v0[i] = i;
+
+        for (int i = 0; i < source.Length; i++)
         {
-            if (h > a) return "Home Win";
-            return h < a ? "Away Win" : "Draw";
+            v1[0] = i + 1;
+            for (int j = 0; j < target.Length; j++)
+            {
+                var cost = source[i] == target[j] ? 0 : 1;
+                v1[j + 1] = Math.Min(Math.Min(v1[j] + 1, v0[j + 1] + 1), v0[j] + cost);
+            }
+            for (int j = 0; j < v0.Length; j++) v0[j] = v1[j];
         }
-        return "Unknown";
+        return v1[target.Length];
     }
 }

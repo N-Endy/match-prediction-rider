@@ -1,9 +1,6 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using Microsoft.Extensions.Logging;
 using OfficeOpenXml;
 
 namespace MatchPredictor.Infrastructure;
@@ -11,9 +8,11 @@ namespace MatchPredictor.Infrastructure;
 public class ExtractFromExcel : IExtractFromExcel
 {
     private readonly string _filePath;
+    private readonly ILogger<ExtractFromExcel> _logger;
 
-    public ExtractFromExcel()
+    public ExtractFromExcel(ILogger<ExtractFromExcel> logger)
     {
+        _logger = logger;
         var projectDirectory = Directory.GetParent(Directory.GetCurrentDirectory())?.FullName ?? string.Empty;
         _filePath = Path.Combine(projectDirectory, "Resources/predictions.xlsx");
     }
@@ -22,7 +21,7 @@ public class ExtractFromExcel : IExtractFromExcel
     {
         //ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
         ExcelPackage.License.SetNonCommercialPersonal("My Name"); //This will also set the Author property to the name provided in the argument.
-        using(var package = new ExcelPackage(new FileInfo("MyWorkbook.xlsx")))
+        using(var _ = new ExcelPackage(new FileInfo("MyWorkbook.xlsx")))
         {
 
         }
@@ -34,14 +33,14 @@ public class ExtractFromExcel : IExtractFromExcel
             // If filePath is not found
             if (!File.Exists(_filePath))
             {
-                Console.WriteLine("Excel file not found at path: " + _filePath);
+                _logger.LogError("❌ Excel file not found at path: {FilePath}", _filePath);
                 throw new FileNotFoundException("Excel file not found at path: " + _filePath);
             }
 
             // If the Excel file is empty, return
             if (new FileInfo(_filePath).Length == 0)
             {
-                Console.WriteLine("Excel file is empty.");
+                _logger.LogWarning("Excel file is empty.");
                 return extractedData;
             }
 
@@ -54,7 +53,7 @@ public class ExtractFromExcel : IExtractFromExcel
 
                 if (worksheet.Dimension == null || worksheet.Cells.Any(cell => cell.Value == null))
                 {
-                    Console.WriteLine("Excel file has no data.");
+                    _logger.LogWarning("❌ Excel file is empty.");
                     return extractedData;
                 }
 
@@ -113,13 +112,13 @@ public class ExtractFromExcel : IExtractFromExcel
             }
             else
             {
-                Console.WriteLine("No worksheets found in the Excel file.");
+                _logger.LogWarning("❌ Excel file does not contain any worksheets.");
                 return extractedData;
             }
         }
         catch (Exception e)
         {
-            Console.WriteLine($"An error occurred while extracting data from the Excel file: {e.Message}");
+            _logger.LogError(e, "❌ An error occurred while extracting data from Excel file.");
             throw; // Re-throw the exception to handle it further up if needed
         }
         return extractedData;

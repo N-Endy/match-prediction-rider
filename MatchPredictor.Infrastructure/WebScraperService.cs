@@ -1,10 +1,5 @@
-using System;
-using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
-using System.Linq;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using HtmlAgilityPack;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
@@ -109,8 +104,6 @@ public partial class WebScraperService : IWebScraperService
             // Use direct ChildNodes — NOT recursive Nodes() which flattens the tree
             var nodes = doc.DocumentNode.FirstChild.ChildNodes.ToList();
             
-            _logger.LogInformation("Found {Count} child nodes in score-data", nodes.Count);
-            
           var matchScores = new List<MatchScore>();
 
             for (var i = 0; i < nodes.Count; i++)
@@ -184,7 +177,7 @@ public partial class WebScraperService : IWebScraperService
         }
         catch (Exception e)
         {
-            _logger.LogError(e, "An error occurred while scraping match score.");
+            _logger.LogError(e, "❌ An error occurred while scraping match score.");
             throw;
         }
     }
@@ -416,7 +409,7 @@ public partial class WebScraperService : IWebScraperService
 
             try
             {
-                return (bool)js.ExecuteScript(script, selector);
+                return (bool)(js.ExecuteScript(script, selector) ?? throw new InvalidOperationException());
             }
             catch
             {

@@ -42,7 +42,7 @@ public class AnalyzerService  : IAnalyzerService
         try
         {
             await _webScraperService.ScrapeMatchDataAsync();
-            _logger.LogInformation("Web scraping completed successfully.");
+            _logger.LogInformation("✅ Web scraping completed successfully.");
 
             // Score scraping is non-blocking — predictions should save even if scores fail
             try
@@ -53,7 +53,7 @@ public class AnalyzerService  : IAnalyzerService
             }
             catch (Exception scoreEx)
             {
-                _logger.LogWarning(scoreEx, "Score scraping failed — continuing with predictions.");
+                _logger.LogWarning(scoreEx, "❌ Score scraping failed — continuing with predictions.");
             }
 
             var scraped = _excelExtract.ExtractMatchDatasetFromFile().ToList();
@@ -88,7 +88,7 @@ public class AnalyzerService  : IAnalyzerService
             }
             catch (Exception e)
             {
-                _logger.LogError(e, "Failed to save match data to database.");
+                _logger.LogError(e, "❌ Failed to save match data to database.");
                 throw;
             }
             _logger.LogInformation($"Extracted {scraped.Count} matches from Excel file.");
@@ -100,24 +100,24 @@ public class AnalyzerService  : IAnalyzerService
             await SavePredictions("Over2.5Goals", _dataAnalyzerService.OverTwoGoals(matches));
             await SavePredictions("StraightWin", _dataAnalyzerService.StraightWin(matches));
             
-            _logger.LogInformation("Predictions saved successfully.");
+            _logger.LogInformation("✅ Predictions saved successfully.");
 
             await UpdatePredictionsWithActualResults();
-            _logger.LogInformation("Predictions updated with actual results.");
+            _logger.LogInformation("✅ Predictions updated with actual results.");
 
             await AnalyzePatterns();
-            _logger.LogInformation("Pattern analysis completed.");
+            _logger.LogInformation("✅ Pattern analysis completed.");
 
             // Regression-based predictions using historical match scores
             var regressionPredictions = _regressionPredictorService.GeneratePredictions(scraped);
             await SaveRegressionPredictions(regressionPredictions);
-            _logger.LogInformation("Regression-based predictions saved successfully.");
+            _logger.LogInformation("✅ Regression-based predictions saved successfully.");
 
             await _dbContext.ScrapingLogs.AddAsync(new ScrapingLog
             {
                 Timestamp = DateTime.UtcNow,
                 Status = "Success",
-                Message = "Scraping and prediction analysis completed successfully."
+                Message = "✅ Scraping and prediction analysis completed successfully."
             });
             await _dbContext.SaveChangesAsync();
             _logger.LogInformation("Scraping log saved successfully.");
@@ -130,7 +130,7 @@ public class AnalyzerService  : IAnalyzerService
                 Status = "Failed",
                 Message = $"{ex.Message}"
             };
-            _logger.LogError(ex, "An error occurred during scraping and analysis.");
+            _logger.LogError(ex, "❌ An error occurred during scraping and analysis.");
 
             await _dbContext.ScrapingLogs.AddAsync(log);
             await _dbContext.SaveChangesAsync();
@@ -139,87 +139,18 @@ public class AnalyzerService  : IAnalyzerService
         }
     }
 
-    // private async Task UpdatePredictionsWithActualResults()
-    // {
-    //     var today = DateTimeProvider.GetLocalTime().Date;
-    //     var scores = await _dbContext.MatchScores
-    //         .Where(s => s.MatchTime.Date == today)
-    //         .ToListAsync();
-    //
-    //     _logger.LogInformation("Score matching: {ScoreCount} scores for date {Date} (UTC: {Utc})",
-    //         scores.Count, today.ToString("dd-MM-yyyy"), DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm"));
-    //
-    //     foreach (var score in scores)
-    //     {
-    //         var dateStr = score.MatchTime.ToString("dd-MM-yyyy");
-    //
-    //         // Step 1: Query all predictions for the same date (no time constraint)
-    //         var candidates = await _dbContext.Predictions
-    //             .Where(p => p.Date == dateStr)
-    //             .ToListAsync();
-    //
-    //         _logger.LogInformation(
-    //             "Score: {Home} vs {Away} (date={DateStr}) → {CandidateCount} prediction candidates",
-    //             score.HomeTeam, score.AwayTeam, dateStr, candidates.Count);
-    //
-    //         // Step 2: Match by word-overlap on team names
-    //         var matched = candidates
-    //             .Where(p =>
-    //                 ScoreMatchingHelper.TeamsMatch(score.HomeTeam, p.HomeTeam) &&
-    //                 ScoreMatchingHelper.TeamsMatch(score.AwayTeam, p.AwayTeam))
-    //             .ToList();
-    //
-    //         // Step 3: If multiple candidates, prefer those whose league partially matches
-    //         if (matched.Count > 1 && !string.IsNullOrWhiteSpace(score.League))
-    //         {
-    //             var leagueFiltered = matched
-    //                 .Where(p => ScoreMatchingHelper.LeaguesMatch(score.League, p.League))
-    //                 .ToList();
-    //
-    //             if (leagueFiltered.Count > 0)
-    //                 matched = leagueFiltered;
-    //         }
-    //
-    //         if (matched.Count == 0)
-    //         {
-    //             _logger.LogInformation("  → NO MATCH. Score teams: [{Home}] vs [{Away}]",
-    //                 score.HomeTeam, score.AwayTeam);
-    //         }
-    //         else
-    //         {
-    //             _logger.LogInformation("MATCH FOUND: {Home} vs {Away} ({League}) → {MatchCount} prediction(s)",
-    //                 score.HomeTeam, score.AwayTeam, score.League, matched.Count);
-    //         }
-    //
-    //         foreach (var prediction in matched)
-    //         {
-    //             prediction.ActualOutcome = prediction.PredictionCategory switch
-    //             {
-    //                 "BothTeamsScore" => score.BTTSLabel ? "BTTS" : "No BTTS",
-    //                 "Draw" => DetermineDrawOutcome(score.Score),
-    //                 "Over2.5Goals" => DetermineOver25Outcome(score.Score),
-    //                 "StraightWin" => DetermineStraightWinOutcome(score.Score),
-    //                 _ => prediction.ActualOutcome
-    //             };
-    //             prediction.ActualScore = score.Score;
-    //             prediction.IsLive = score.IsLive;
-    //             
-    //             _logger.LogDebug("Updated prediction for score: {Home} vs {Away} ({League}, {Date}): {Outcome} (Live: {IsLive})",
-    //                 score.HomeTeam, score.AwayTeam, score.League, dateStr, prediction.ActualOutcome, score.IsLive);
-    //         }
-    //     }
-    //     
-    //     _logger.LogInformation("Predictions updated successfully.");
-    //     await _dbContext.SaveChangesAsync();
-    // }
-
     private async Task UpdatePredictionsWithActualResults()
     {
         var today = DateTimeProvider.GetLocalTime().Date;
         var dateStr = today.ToString("dd-MM-yyyy");
 
+        // 1. Set up the UTC boundaries for the start and end of the day
+        var startOfDayUtc = DateTime.SpecifyKind(today, DateTimeKind.Utc);
+        var endOfDayUtc = startOfDayUtc.AddDays(1);
+
+        // 2. Use the index-friendly range query to fetch scores
         var scores = await _dbContext.MatchScores
-            .Where(s => s.MatchTime.Date == today)
+            .Where(s => s.MatchTime >= startOfDayUtc && s.MatchTime < endOfDayUtc)
             .ToListAsync();
 
         var predictionsForToday = await _dbContext.Predictions
@@ -279,7 +210,7 @@ public class AnalyzerService  : IAnalyzerService
             }
         }
         
-        _logger.LogInformation("Predictions updated successfully.");
+        _logger.LogInformation("✅ Predictions updated successfully.");
 
         await _dbContext.SaveChangesAsync();
         return;
@@ -288,43 +219,6 @@ public class AnalyzerService  : IAnalyzerService
             (s ?? "").Trim().ToLowerInvariant();
     }
     
-    // private string DetermineDrawOutcome(string score)
-    // {
-    //     var parts = score.Split(':');
-    //     if (parts.Length != 2) return "Unknown";
-    //     
-    //     if (int.TryParse(parts[0], out var home) && int.TryParse(parts[1], out var away))
-    //     {
-    //         return home == away ? "Draw" : "Not Draw";
-    //     }
-    //     return "Unknown";
-    // }
-    //
-    // private string DetermineOver25Outcome(string score)
-    // {
-    //     var parts = score.Split(':');
-    //     if (parts.Length != 2) return "Unknown";
-    //     
-    //     if (int.TryParse(parts[0], out var home) && int.TryParse(parts[1], out var away))
-    //     {
-    //         return (home + away) > 2 ? "Over 2.5" : "Under 2.5";
-    //     }
-    //     return "Unknown";
-    // }
-    //
-    // private string DetermineStraightWinOutcome(string score)
-    // {
-    //     var parts = score.Split(':');
-    //     if (parts.Length != 2) return "Unknown";
-    //     
-    //     if (int.TryParse(parts[0], out var home) && int.TryParse(parts[1], out var away))
-    //     {
-    //         if (home > away) return "Home Win";
-    //         return home < away ? "Away Win" : "Draw";
-    //     }
-    //     return "Unknown";
-    // }
-
     private static bool TryParseScore(string score, out int home, out int away)
     {
         home = away = 0;
@@ -386,21 +280,51 @@ public class AnalyzerService  : IAnalyzerService
             _logger.LogInformation($"Category {group.Category}: {accuracy:P2} accuracy ({group.Correct}/{group.Total})");
         }
     }
-
+    
     private async Task SaveMatchScores(List<MatchScore> scores)
     {
-        foreach (var score in scores)
-        {
-            var exists = await _dbContext.MatchScores.AnyAsync(s =>
-                s.HomeTeam == score.HomeTeam &&
-                s.AwayTeam == score.AwayTeam &&
-                s.MatchTime == score.MatchTime);
+        if (scores.Count == 0) return;
 
-            if (!exists)
+        // 1. Find the time range of the incoming scores to pull existing records in bulk
+        var minTime = scores.Min(s => s.MatchTime);
+        var maxTime = scores.Max(s => s.MatchTime);
+
+        // 2. Fetch all potential matches in this time window in ONE query
+        var existingScoresList = await _dbContext.MatchScores
+            .Where(s => s.MatchTime >= minTime && s.MatchTime <= maxTime)
+            .ToListAsync();
+
+        // 3. Create a Dictionary for lighting-fast O(1) memory lookups
+        var existingScoresDict = existingScoresList
+            .GroupBy(s => (s.HomeTeam, s.AwayTeam, s.MatchTime))
+            .ToDictionary(g => g.Key, g => g.First());
+
+        foreach (var incomingScore in scores)
+        {
+            var key = (incomingScore.HomeTeam, incomingScore.AwayTeam, incomingScore.MatchTime);
+
+            if (existingScoresDict.TryGetValue(key, out var existingRecord))
             {
-                _dbContext.MatchScores.Add(score);
+                // UPDATE SCENARIO: The match exists. 
+                // Only update the database if the score or live status actually changed.
+                if (existingRecord.Score != incomingScore.Score || 
+                    existingRecord.IsLive != incomingScore.IsLive)
+                {
+                    existingRecord.Score = incomingScore.Score;
+                    existingRecord.IsLive = incomingScore.IsLive;
+                
+                    // Update any other fields that might change during a match
+                    existingRecord.BTTSLabel = incomingScore.BTTSLabel; 
+                }
+            }
+            else
+            {
+                // INSERT SCENARIO: The match does not exist yet.
+                _dbContext.MatchScores.Add(incomingScore);
             }
         }
+
+        // 4. Save all inserts and updates in a single transaction
         await _dbContext.SaveChangesAsync();
     }
 
@@ -430,12 +354,66 @@ public class AnalyzerService  : IAnalyzerService
     }
     
 
+    // private async Task SavePredictions(string category, IEnumerable<MatchData> matches)
+    // {
+    //     foreach (var match in matches)
+    //     {
+    //         var properDateTime = DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time);
+    //         DateTime? matchDateTime = null;
+    //         if (DateTime.TryParseExact(
+    //                 $"{properDateTime.date} {properDateTime.time}",
+    //                 "dd-MM-yyyy HH:mm",
+    //                 System.Globalization.CultureInfo.InvariantCulture,
+    //                 System.Globalization.DateTimeStyles.None,
+    //                 out var parsed))
+    //         {
+    //             matchDateTime = parsed;
+    //         }
+    //         var prediction = new Prediction
+    //         {
+    //             HomeTeam = match.HomeTeam ?? "N/A",
+    //             AwayTeam = match.AwayTeam ?? "N/A",
+    //             League = match.League ?? "N/A",
+    //             PredictionCategory = category,
+    //             PredictedOutcome = category switch
+    //             {
+    //                 "BothTeamsScore" => "BTTS",
+    //                 "Draw" => "Draw",
+    //                 "Over2.5Goals" => "Over 2.5",
+    //                 "StraightWin" => match.HomeWin > match.AwayWin ? "Home Win" : "Away Win",
+    //                 _ => "Unknown"
+    //             },
+    //             Date = properDateTime.date,
+    //             Time = properDateTime.time,
+    //             MatchDateTime = matchDateTime
+    //         };
+    //
+    //         var exists = await _dbContext.Predictions.AnyAsync(p =>
+    //             p.HomeTeam == prediction.HomeTeam &&
+    //             p.AwayTeam == prediction.AwayTeam &&
+    //             p.League == prediction.League &&
+    //             p.Date == prediction.Date);
+    //
+    //         if (!exists)
+    //         {
+    //             _dbContext.Predictions.Add(prediction);
+    //         }
+    //     }
+    //
+    //     await _dbContext.SaveChangesAsync();
+    // }
+
     private async Task SavePredictions(string category, IEnumerable<MatchData> matches)
     {
-        foreach (var match in matches)
+        var matchList = matches.ToList();
+        if (!matchList.Any()) return;
+
+        // 1. Pre-process the incoming matches to get their parsed dates and times
+        var processedMatches = matchList.Select(match =>
         {
             var properDateTime = DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time);
             DateTime? matchDateTime = null;
+            
             if (DateTime.TryParseExact(
                     $"{properDateTime.date} {properDateTime.time}",
                     "dd-MM-yyyy HH:mm",
@@ -445,56 +423,153 @@ public class AnalyzerService  : IAnalyzerService
             {
                 matchDateTime = parsed;
             }
-            var prediction = new Prediction
+
+            return new 
+            { 
+                Original = match, 
+                DateStr = properDateTime.date, 
+                TimeStr = properDateTime.time, 
+                MatchDateTime = matchDateTime 
+            };
+        }).ToList();
+
+        // 2. Extract unique dates to fetch existing records in ONE bulk query
+        var uniqueDates = processedMatches.Select(m => m.DateStr).Distinct().ToList();
+
+        var existingPredictions = await _dbContext.Predictions
+            .Where(p => uniqueDates.Contains(p.Date))
+            .ToListAsync();
+
+        // 3. Create a Dictionary for O(1) memory lookups
+        var existingDict = existingPredictions
+            .GroupBy(p => (
+                Home: (p.HomeTeam ?? "").Trim().ToLowerInvariant(), 
+                Away: (p.AwayTeam ?? "").Trim().ToLowerInvariant(), 
+                League: (p.League ?? "").Trim().ToLowerInvariant(), 
+                Date: p.Date,
+                Category: p.PredictionCategory))
+            .ToDictionary(g => g.Key, g => g.First());
+
+        // 4. Loop through the memory collection, not the database
+        foreach (var item in processedMatches)
+        {
+            var match = item.Original;
+            var homeTeam = match.HomeTeam ?? "N/A";
+            var awayTeam = match.AwayTeam ?? "N/A";
+            var league = match.League ?? "N/A";
+
+            var predictedOutcome = category switch
             {
-                HomeTeam = match.HomeTeam ?? "N/A",
-                AwayTeam = match.AwayTeam ?? "N/A",
-                League = match.League ?? "N/A",
-                PredictionCategory = category,
-                PredictedOutcome = category switch
-                {
-                    "BothTeamsScore" => "BTTS",
-                    "Draw" => "Draw",
-                    "Over2.5Goals" => "Over 2.5",
-                    "StraightWin" => match.HomeWin > match.AwayWin ? "Home Win" : "Away Win",
-                    _ => "Unknown"
-                },
-                Date = properDateTime.date,
-                Time = properDateTime.time,
-                MatchDateTime = matchDateTime
+                "BothTeamsScore" => "BTTS",
+                "Draw"           => "Draw",
+                "Over2.5Goals"   => "Over 2.5",
+                "StraightWin"    => match.HomeWin > match.AwayWin ? "Home Win" : "Away Win",
+                _                => "Unknown"
             };
 
-            var exists = await _dbContext.Predictions.AnyAsync(p =>
-                p.HomeTeam == prediction.HomeTeam &&
-                p.AwayTeam == prediction.AwayTeam &&
-                p.League == prediction.League &&
-                p.Date == prediction.Date);
+            var key = (
+                Home: homeTeam.Trim().ToLowerInvariant(),
+                Away: awayTeam.Trim().ToLowerInvariant(),
+                League: league.Trim().ToLowerInvariant(),
+                Date: item.DateStr,
+                Category: category);
 
-            if (!exists)
+            if (existingDict.TryGetValue(key, out var existingRecord))
             {
+                // UPDATE SCENARIO
+                bool isUpdated = false;
+
+                if (existingRecord.Time != item.TimeStr)
+                {
+                    existingRecord.Time = item.TimeStr;
+                    existingRecord.MatchDateTime = item.MatchDateTime;
+                    isUpdated = true;
+                }
+
+                if (existingRecord.PredictedOutcome != predictedOutcome)
+                {
+                    existingRecord.PredictedOutcome = predictedOutcome;
+                    isUpdated = true;
+                }
+            }
+            else
+            {
+                // INSERT SCENARIO
+                var prediction = new Prediction
+                {
+                    HomeTeam = homeTeam.Trim(),
+                    AwayTeam = awayTeam.Trim(),
+                    League = league.Trim(),
+                    PredictionCategory = category,
+                    PredictedOutcome = predictedOutcome,
+                    Date = item.DateStr,
+                    Time = item.TimeStr,
+                    MatchDateTime = item.MatchDateTime
+                };
+
                 _dbContext.Predictions.Add(prediction);
+                existingDict[key] = prediction;
             }
         }
 
+        // 5. Save all inserts and updates in a single transaction
         await _dbContext.SaveChangesAsync();
     }
-
+    
     private async Task SaveRegressionPredictions(IEnumerable<RegressionPrediction> predictions)
     {
-        foreach (var prediction in predictions)
-        {
-            var exists = await _dbContext.RegressionPredictions.AnyAsync(p =>
-                p.HomeTeam == prediction.HomeTeam &&
-                p.AwayTeam == prediction.AwayTeam &&
-                p.League == prediction.League &&
-                p.Date == prediction.Date &&
-                p.Time == prediction.Time &&
-                p.PredictionCategory == prediction.PredictionCategory);
+        var predictionList = predictions.ToList();
+        if (!predictionList.Any()) return;
 
-            if (!exists)
+        // 1. Extract unique dates to fetch existing records in ONE bulk query
+        var uniqueDates = predictionList.Select(p => p.Date).Distinct().ToList();
+
+        var existingPredictions = await _dbContext.RegressionPredictions
+            .Where(p => uniqueDates.Contains(p.Date))
+            .ToListAsync();
+
+        // 2. Create a Dictionary for O(1) memory lookups using your 6-part composite key
+        var existingDict = existingPredictions
+            .GroupBy(p => (
+                p.HomeTeam, 
+                p.AwayTeam, 
+                p.League, 
+                p.Date, 
+                p.Time, 
+                p.PredictionCategory))
+            .ToDictionary(g => g.Key, g => g.First());
+
+        // 3. Loop through the memory collection, not the database
+        foreach (var prediction in predictionList)
+        {
+            var key = (
+                prediction.HomeTeam, 
+                prediction.AwayTeam, 
+                prediction.League, 
+                prediction.Date, 
+                prediction.Time, 
+                prediction.PredictionCategory);
+
+            if (existingDict.TryGetValue(key, out var existingRecord))
+            {
+                // UPDATE SCENARIO: The prediction already exists.
+                // If regression models produce updated probabilities or metrics on a second run, 
+                // update those specific fields here. For example:
+                
+                existingRecord.PredictedOutcome = prediction.PredictedOutcome;
+            }
+            else
+            {
+                // INSERT SCENARIO
                 _dbContext.RegressionPredictions.Add(prediction);
+                
+                // Add to dictionary to prevent duplicate inserts if the incoming list 
+                // accidentally contains the exact same prediction twice
+                existingDict[key] = prediction; 
+            }
         }
 
+        // 4. Save all inserts and updates in a single transaction
         await _dbContext.SaveChangesAsync();
     }
 
