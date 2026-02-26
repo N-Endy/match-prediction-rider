@@ -1005,12 +1005,37 @@ a:hover {
 
 /* ─── Booking Result ─── */
 .mp-booking-success {
+  position: relative;
   text-align: center;
   padding: 1.5rem;
   background: rgba(16, 185, 129, 0.08);
   border: 1px solid rgba(16, 185, 129, 0.2);
   border-radius: var(--radius-md);
   margin: 1rem 1.5rem;
+}
+
+.mp-booking-error {
+  position: relative;
+}
+
+.mp-booking-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  font-size: 1.3rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.2s, color 0.2s;
+}
+
+.mp-booking-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
 }
 
 .mp-booking-code-label {

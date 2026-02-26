@@ -184,117 +184,283 @@ public partial class WebScraperService : IWebScraperService
 
     public async Task<List<AiScoreMatchScore>> ScrapeAiScoreMatchScoresAsync()
     {
+        var matchScores = new List<AiScoreMatchScore>();
+
+        // ── Primary: Headless browser → extract window.__NUXT__ state from AiScore ──
         try
         {
-            var apiKey = _configuration["ApiFootball:ApiKey"];
-            if (string.IsNullOrEmpty(apiKey))
+            matchScores = await ScrapeAiScoreViaBrowserAsync();
+            if (matchScores.Count > 0)
             {
-                _logger.LogWarning("API-Football API key not configured. Skipping secondary score source.");
-                return new List<AiScoreMatchScore>();
+                _logger.LogInformation("Scraped {Count} match scores from AiScore (Nuxt state).", matchScores.Count);
+                return matchScores;
             }
+            _logger.LogWarning("AiScore browser extraction returned 0 matches. Falling back to API-Football.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "AiScore browser extraction failed. Falling back to API-Football.");
+        }
 
-            var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
-            var baseUrl = _configuration["ApiFootball:BaseUrl"] ?? "https://v3.football.api-sports.io";
-
-            using var httpClient = new HttpClient();
-            httpClient.DefaultRequestHeaders.Add("x-apisports-key", apiKey);
-            httpClient.Timeout = TimeSpan.FromSeconds(30);
-
-            _logger.LogInformation("Fetching match scores from API-Football for {Date}...", today);
-
-            var response = await httpClient.GetAsync($"{baseUrl}/fixtures?date={today}");
-
-            if (!response.IsSuccessStatusCode)
+        // ── Fallback: API-Football REST API ──
+        try
+        {
+            matchScores = await FetchFromApiFootballAsync();
+            if (matchScores.Count > 0)
             {
-                _logger.LogWarning("API-Football returned {Status}. Response: {Body}",
-                    response.StatusCode, await response.Content.ReadAsStringAsync());
-                return new List<AiScoreMatchScore>();
+                _logger.LogInformation("Fetched {Count} match scores from API-Football (fallback).", matchScores.Count);
+                return matchScores;
             }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "API-Football fallback also failed.");
+        }
 
-            var json = await response.Content.ReadAsStringAsync();
-            var doc = System.Text.Json.JsonDocument.Parse(json);
-            var root = doc.RootElement;
+        return matchScores;
+    }
 
-            // Check remaining API calls
-            if (root.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0)
+    /// <summary>
+    /// Extracts match scores from AiScore by loading the page in a headless browser
+    /// and reading the already-parsed data from window.__NUXT__.state (Vuex store).
+    /// </summary>
+    private async Task<List<AiScoreMatchScore>> ScrapeAiScoreViaBrowserAsync()
+    {
+        var chromeOptions = new ChromeOptions();
+        chromeOptions.AddArgument("--headless=new");
+        chromeOptions.AddArgument("--window-size=1440,900");
+        chromeOptions.AddArgument("--no-sandbox");
+        chromeOptions.AddArgument("--disable-dev-shm-usage");
+        chromeOptions.AddArgument("--disable-blink-features=AutomationControlled");
+        chromeOptions.AddExcludedArgument("enable-automation");
+        chromeOptions.AddAdditionalOption("useAutomationExtension", false);
+        chromeOptions.AddArgument("--user-agent=Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+        chromeOptions.AddArgument("--disable-gpu");
+
+        var aiScoreUrl = _configuration["ScrapingValues:AiScoreWebsite"] ?? "https://m.aiscore.com";
+
+        using var driver = new ChromeDriver(chromeOptions);
+        var js = (IJavaScriptExecutor)driver;
+        js.ExecuteScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
+
+        _logger.LogInformation("Navigating to AiScore...");
+        await driver.Navigate().GoToUrlAsync(aiScoreUrl);
+
+        // Wait for Cloudflare challenge (up to 25s)
+        var maxWait = 25;
+        var elapsed = 0;
+        while (elapsed < maxWait)
+        {
+            await Task.Delay(2000);
+            elapsed += 2;
+            var src = driver.PageSource;
+            if (!src.Contains("security verification", StringComparison.OrdinalIgnoreCase) &&
+                !src.Contains("cf-turnstile", StringComparison.OrdinalIgnoreCase) &&
+                !src.Contains("Just a moment", StringComparison.OrdinalIgnoreCase))
             {
-                _logger.LogWarning("API-Football errors: {Errors}", errors.ToString());
-                return new List<AiScoreMatchScore>();
+                _logger.LogInformation("Cloudflare passed after {Elapsed}s.", elapsed);
+                break;
             }
+        }
 
-            var matchScores = new List<AiScoreMatchScore>();
-            var fixtures = root.GetProperty("response");
+        // Wait for Nuxt to hydrate and fetch data
+        await Task.Delay(5000);
+        WaitForDocumentReady(driver);
 
-            foreach (var fixture in fixtures.EnumerateArray())
-            {
-                try
-                {
-                    var fixtureInfo = fixture.GetProperty("fixture");
-                    var teams = fixture.GetProperty("teams");
-                    var goals = fixture.GetProperty("goals");
-                    var league = fixture.GetProperty("league");
-                    var status = fixtureInfo.GetProperty("status");
+        // Extract match data directly from window.__NUXT__ Vuex state
+        // Key: state['football/home'] (literal slash), props: matchesData_matches (underscored)
+        var extractScript = @"
+            try {
+                var nuxt = window.__NUXT__;
+                if (!nuxt || !nuxt.state) return JSON.stringify({error: 'No __NUXT__ state'});
 
-                    var statusShort = status.GetProperty("short").GetString() ?? "";
+                var fh = nuxt.state['football/home'];
+                if (!fh) return JSON.stringify({error: 'No football/home state', keys: Object.keys(nuxt.state).slice(0, 15)});
 
-                    // Only include completed (FT, AET, PEN) and live matches (1H, 2H, HT, ET, BT, P)
-                    var liveStatuses = new HashSet<string> { "1H", "2H", "HT", "ET", "BT", "P" };
-                    var finishedStatuses = new HashSet<string> { "FT", "AET", "PEN" };
+                var matches = fh.matchesData_matches || fh['matchesData_matches'] || [];
+                var teams = fh.matchesData_teams || fh['matchesData_teams'] || {};
+                var competitions = fh.matchesData_competitions || fh['matchesData_competitions'] || {};
 
-                    if (!liveStatuses.Contains(statusShort) && !finishedStatuses.Contains(statusShort))
-                        continue;
+                var results = [];
+                for (var i = 0; i < matches.length; i++) {
+                    var m = matches[i];
+                    var homeScores = m.homeScores || [];
+                    var awayScores = m.awayScores || [];
 
-                    var homeGoals = goals.GetProperty("home");
-                    var awayGoals = goals.GetProperty("away");
+                    // statusId: 1=Not started, 2=First half, 3=Half-time, 4=Second half, 
+                    //           5=Extra time, 7=Penalties, 8=Finished, 9=Finished AET, 10=Finished Pen
+                    var sid = m.statusId || 0;
+                    var isLive = (sid >= 2 && sid <= 7);
+                    var isFinished = (sid >= 8 && sid <= 10);
 
-                    // Skip if no goals data
-                    if (homeGoals.ValueKind == System.Text.Json.JsonValueKind.Null ||
-                        awayGoals.ValueKind == System.Text.Json.JsonValueKind.Null)
-                        continue;
+                    if (!isLive && !isFinished) continue;
 
-                    var homeScore = homeGoals.GetInt32();
-                    var awayScore = awayGoals.GetInt32();
-                    var score = $"{homeScore}:{awayScore}";
+                    // homeScores[0] = current total goals
+                    var homeGoals = homeScores.length > 0 ? homeScores[0] : null;
+                    var awayGoals = awayScores.length > 0 ? awayScores[0] : null;
 
-                    var homeTeam = teams.GetProperty("home").GetProperty("name").GetString() ?? "";
-                    var awayTeam = teams.GetProperty("away").GetProperty("name").GetString() ?? "";
-                    var leagueName = league.GetProperty("name").GetString() ?? "";
+                    if (homeGoals === null || awayGoals === null) continue;
 
-                    // Parse match time
-                    var dateStr = fixtureInfo.GetProperty("date").GetString();
-                    DateTime matchTime;
-                    if (DateTime.TryParse(dateStr, out var parsed))
-                        matchTime = parsed.ToUniversalTime();
-                    else
-                        matchTime = DateTime.UtcNow;
+                    // Team ID can be m.homeTeamId or m.homeTeam.id (nested object)
+                    var htId = m.homeTeamId || (m.homeTeam && m.homeTeam.id) || '';
+                    var atId = m.awayTeamId || (m.awayTeam && m.awayTeam.id) || '';
+                    var cId = m.competitionId || (m.competition && m.competition.id) || '';
 
-                    var isLive = liveStatuses.Contains(statusShort);
+                    var homeTeamObj = teams[htId] || {};
+                    var awayTeamObj = teams[atId] || {};
+                    var compObj = competitions[cId] || {};
 
-                    matchScores.Add(new AiScoreMatchScore
-                    {
-                        League = leagueName,
-                        HomeTeam = homeTeam,
-                        AwayTeam = awayTeam,
-                        Score = score,
-                        MatchTime = matchTime,
-                        BTTSLabel = IsBtts(score),
-                        IsLive = isLive
+                    results.push({
+                        home: homeTeamObj.name || homeTeamObj.n || '',
+                        away: awayTeamObj.name || awayTeamObj.n || '',
+                        homeGoals: homeGoals,
+                        awayGoals: awayGoals,
+                        league: compObj.name || compObj.n || '',
+                        matchTime: m.matchTime || 0,
+                        isLive: isLive
                     });
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Skipping fixture due to parse error");
-                }
+                return JSON.stringify({count: results.length, matches: results});
+            } catch(e) {
+                return JSON.stringify({error: e.message});
             }
+        ";
 
-            _logger.LogInformation("Fetched {Count} match scores from API-Football.", matchScores.Count);
-            return matchScores;
-        }
-        catch (Exception e)
+        var resultJson = js.ExecuteScript(extractScript)?.ToString();
+        _logger.LogInformation("AiScore Nuxt extraction result: {Result}",
+            resultJson?[..Math.Min(300, resultJson?.Length ?? 0)]);
+
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return new List<AiScoreMatchScore>();
+
+        var result = System.Text.Json.JsonDocument.Parse(resultJson).RootElement;
+
+        if (result.TryGetProperty("error", out var err))
         {
-            _logger.LogError(e, "❌ Error fetching scores from API-Football.");
+            _logger.LogWarning("AiScore extraction error: {Error}", err.GetString());
             return new List<AiScoreMatchScore>();
         }
+
+        var matchScores = new List<AiScoreMatchScore>();
+        if (!result.TryGetProperty("matches", out var matchesArr))
+            return matchScores;
+
+        foreach (var m in matchesArr.EnumerateArray())
+        {
+            try
+            {
+                var homeGoals = m.GetProperty("homeGoals").GetInt32();
+                var awayGoals = m.GetProperty("awayGoals").GetInt32();
+                var score = $"{homeGoals}:{awayGoals}";
+
+                var matchTimeUnix = m.GetProperty("matchTime").GetInt64();
+                var matchTime = matchTimeUnix > 0
+                    ? DateTimeOffset.FromUnixTimeSeconds(matchTimeUnix).UtcDateTime
+                    : DateTime.UtcNow;
+
+                matchScores.Add(new AiScoreMatchScore
+                {
+                    League = m.GetProperty("league").GetString() ?? "",
+                    HomeTeam = m.GetProperty("home").GetString() ?? "",
+                    AwayTeam = m.GetProperty("away").GetString() ?? "",
+                    Score = score,
+                    MatchTime = matchTime,
+                    BTTSLabel = IsBtts(score),
+                    IsLive = m.GetProperty("isLive").GetBoolean()
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Skipping AiScore match due to parse error");
+            }
+        }
+
+        return matchScores;
+    }
+
+    /// <summary>
+    /// Fallback: Fetches scores from API-Football REST API (free tier, 100 req/day).
+    /// </summary>
+    private async Task<List<AiScoreMatchScore>> FetchFromApiFootballAsync()
+    {
+        var apiKey = _configuration["ApiFootball:ApiKey"];
+        if (string.IsNullOrEmpty(apiKey))
+        {
+            _logger.LogWarning("API-Football API key not configured. Skipping fallback.");
+            return new List<AiScoreMatchScore>();
+        }
+
+        var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
+        var baseUrl = _configuration["ApiFootball:BaseUrl"] ?? "https://v3.football.api-sports.io";
+
+        using var httpClient = new HttpClient();
+        httpClient.DefaultRequestHeaders.Add("x-apisports-key", apiKey);
+        httpClient.Timeout = TimeSpan.FromSeconds(30);
+
+        _logger.LogInformation("Fetching match scores from API-Football for {Date}...", today);
+        var response = await httpClient.GetAsync($"{baseUrl}/fixtures?date={today}");
+
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("API-Football returned {Status}.", response.StatusCode);
+            return new List<AiScoreMatchScore>();
+        }
+
+        var json = await response.Content.ReadAsStringAsync();
+        var doc = System.Text.Json.JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        if (root.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0)
+            return new List<AiScoreMatchScore>();
+
+        var matchScores = new List<AiScoreMatchScore>();
+        var fixtures = root.GetProperty("response");
+
+        foreach (var fixture in fixtures.EnumerateArray())
+        {
+            try
+            {
+                var fixtureInfo = fixture.GetProperty("fixture");
+                var teams = fixture.GetProperty("teams");
+                var goals = fixture.GetProperty("goals");
+                var league = fixture.GetProperty("league");
+                var statusShort = fixtureInfo.GetProperty("status").GetProperty("short").GetString() ?? "";
+
+                var liveStatuses = new HashSet<string> { "1H", "2H", "HT", "ET", "BT", "P" };
+                var finishedStatuses = new HashSet<string> { "FT", "AET", "PEN" };
+
+                if (!liveStatuses.Contains(statusShort) && !finishedStatuses.Contains(statusShort))
+                    continue;
+
+                var homeGoals = goals.GetProperty("home");
+                var awayGoals = goals.GetProperty("away");
+                if (homeGoals.ValueKind == System.Text.Json.JsonValueKind.Null ||
+                    awayGoals.ValueKind == System.Text.Json.JsonValueKind.Null)
+                    continue;
+
+                var score = $"{homeGoals.GetInt32()}:{awayGoals.GetInt32()}";
+                var dateStr = fixtureInfo.GetProperty("date").GetString();
+                var matchTime = DateTime.TryParse(dateStr, out var parsed) ? parsed.ToUniversalTime() : DateTime.UtcNow;
+
+                matchScores.Add(new AiScoreMatchScore
+                {
+                    League = league.GetProperty("name").GetString() ?? "",
+                    HomeTeam = teams.GetProperty("home").GetProperty("name").GetString() ?? "",
+                    AwayTeam = teams.GetProperty("away").GetProperty("name").GetString() ?? "",
+                    Score = score,
+                    MatchTime = matchTime,
+                    BTTSLabel = IsBtts(score),
+                    IsLive = liveStatuses.Contains(statusShort)
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Skipping API-Football fixture");
+            }
+        }
+
+        _logger.LogInformation("Fetched {Count} from API-Football.", matchScores.Count);
+        return matchScores;
     }
 
     /// <summary>

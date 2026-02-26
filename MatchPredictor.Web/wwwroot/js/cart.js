@@ -151,6 +151,7 @@ async function bookGames() {
             if (result.success) {
                 resultDiv.innerHTML = `
                     <div class="mp-booking-success">
+                        <button class="mp-booking-close" onclick="this.closest('.mp-booking-success').parentElement.style.display='none'">&times;</button>
                         <div class="mp-booking-code-label">Booking Code</div>
                         <div class="mp-booking-code">${result.bookingCode}</div>
                         <button class="mp-copy-code-btn" onclick="copyBookingCode('${result.bookingCode}')">📋 Copy</button>
@@ -161,6 +162,7 @@ async function bookGames() {
             } else {
                 resultDiv.innerHTML = `
                     <div class="mp-booking-error">
+                        <button class="mp-booking-close" onclick="this.closest('.mp-booking-error').parentElement.style.display='none'">&times;</button>
                         <p>❌ ${result.message}</p>
                     </div>
                 `;
