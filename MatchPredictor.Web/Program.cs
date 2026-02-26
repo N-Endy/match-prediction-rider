@@ -18,6 +18,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorPages();
 builder.Services.AddMemoryCache();
 builder.Services.AddHealthChecks();
+builder.Services.AddHttpClient();
 
 builder.Configuration
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
@@ -40,6 +41,11 @@ builder.Services.AddScoped<IExtractFromExcel, ExtractFromExcel>();
 builder.Services.AddScoped<IProbabilityCalculator, ProbabilityCalculator>();
 builder.Services.AddScoped<IAnalyzerService, AnalyzerService>();
 builder.Services.AddScoped<IRegressionPredictorService, RegressionPredictorService>();
+builder.Services.AddScoped<ISportyBetBookingService, SportyBetBookingService>();
+builder.Services.AddScoped<IAiAdvisorService, AiAdvisorService>();
+
+// Controllers for API endpoints (booking, AI chat)
+builder.Services.AddControllers();
 
 // Configure data protection
 builder.Services.AddDataProtection()
@@ -197,6 +203,7 @@ app.UseHangfireDashboard("/hangfire", new DashboardOptions
 });
 
 app.MapRazorPages();
+app.MapControllers();
 app.MapHealthChecks("/health");
 
 app.Run();

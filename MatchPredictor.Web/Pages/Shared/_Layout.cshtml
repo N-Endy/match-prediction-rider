@@ -56,6 +56,7 @@
             <li><a class="mp-nav-link" href="/predictions/over2">Over 2.5</a></li>
             <li><a class="mp-nav-link" href="/predictions/draw">Draw</a></li>
             <li><a class="mp-nav-link" href="/predictions/combined">Combined</a></li>
+            <li><a class="mp-nav-link" href="/aichat">🤖 AI Chat</a></li>
         </ul>
     </div>
 </nav>
@@ -108,6 +109,35 @@
         window.scrollTo({ top: 0, behavior: 'smooth' });
     });
 </script>
+
+<!-- Floating Cart Button -->
+<button class="mp-cart-fab" id="cartFab" onclick="openCartModal()" aria-label="Open cart">
+    🛒
+    <span class="mp-cart-badge" id="cartBadge" style="display:none;">0</span>
+</button>
+
+<!-- Cart Modal -->
+<div class="mp-cart-modal" id="cartModal">
+    <div class="mp-cart-overlay" onclick="closeCartModal()"></div>
+    <div class="mp-cart-drawer">
+        <div class="mp-cart-header">
+            <h2>🛒 Your Betslip</h2>
+            <button class="mp-cart-close" onclick="closeCartModal()">✕</button>
+        </div>
+        <div class="mp-cart-items" id="cartItemsList"></div>
+        <div class="mp-cart-empty" id="cartEmpty" style="display:none;">
+            <p>No games selected yet.</p>
+            <p style="font-size:0.85rem;">Click "+" on any prediction to add it here.</p>
+        </div>
+        <div id="bookingResult" style="display:none;"></div>
+        <div class="mp-cart-footer" id="cartFooter" style="display:none;">
+            <button class="mp-clear-cart-btn" onclick="clearCart()">Clear All</button>
+            <button class="mp-book-btn" id="bookGamesBtn" onclick="bookGames()">🎫 Book Games</button>
+        </div>
+    </div>
+</div>
+
+<script src="~/js/cart.js" asp-append-version="true"></script>
 
 @await RenderSectionAsync("Scripts", required: false)
 </body>

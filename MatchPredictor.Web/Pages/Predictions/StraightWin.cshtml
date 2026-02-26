@@ -65,6 +65,14 @@
                                 @(match.PredictedOutcome ?? "Win")
                             </span>
                         }
+                        <button class="mp-add-cart-btn" title="Add Bet"
+                                data-home="@match.HomeTeam"
+                                data-away="@match.AwayTeam"
+                                data-league="@match.League"
+                                data-market="1X2"
+                                data-prediction="@(match.PredictedOutcome ?? "Win")">
+                            Add Bet
+                        </button>
                     </div>
                 </div>
             }

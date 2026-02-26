@@ -65,6 +65,37 @@ public static class ScoreMatchingHelper
         }
     }
 
+    /// <summary>
+    /// Fallback: patches predictions that still have no score using AiScore data.
+    /// </summary>
+    public static void PatchMissingScores(List<Prediction> predictions, List<AiScoreMatchScore> aiScores)
+    {
+        if (aiScores.Count == 0 || predictions.Count == 0) return;
+
+        foreach (var prediction in predictions)
+        {
+            // Only patch if still missing a score
+            if (!string.IsNullOrEmpty(prediction.ActualScore)) continue;
+
+            var match = aiScores.FirstOrDefault(s =>
+                TeamsMatch(s.HomeTeam, prediction.HomeTeam) &&
+                TeamsMatch(s.AwayTeam, prediction.AwayTeam));
+
+            if (match == null) continue;
+
+            prediction.ActualScore = match.Score;
+            prediction.IsLive = match.IsLive;
+            prediction.ActualOutcome = prediction.PredictionCategory switch
+            {
+                "BothTeamsScore" => match.BTTSLabel ? "BTTS" : "No BTTS",
+                "Draw"           => DetermineDrawOutcome(match.Score),
+                "Over2.5Goals"   => DetermineOver25Outcome(match.Score),
+                "StraightWin"    => DetermineStraightWinOutcome(match.Score),
+                _                => null
+            };
+        }
+    }
+
     public static bool TeamsMatch(string nameA, string nameB)
     {
         var wordsA = ExtractTeamWords(nameA);

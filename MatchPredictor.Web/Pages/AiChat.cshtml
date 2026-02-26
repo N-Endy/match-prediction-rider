@@ -1,0 +1,147 @@
+@page
+@model MatchPredictor.Web.Pages.AiChatModel
+
+@{
+    ViewData["Title"] = "AI Chat";
+}
+
+<div class="mp-container">
+    <div class="mp-page-header">
+        <div class="mp-page-title">
+            <div class="mp-page-title-icon" style="background: rgba(99, 102, 241, 0.1);">🤖</div>
+            <h1>AI Prediction Advisor</h1>
+        </div>
+    </div>
+
+    <div class="mp-chat-container" id="chatContainer">
+        <div class="mp-chat-messages" id="chatMessages">
+            <div class="mp-chat-message mp-chat-ai">
+                <div class="mp-chat-avatar">🤖</div>
+                <div class="mp-chat-bubble">
+                    <p>Hello! I'm your AI prediction advisor. I can analyse today's predictions and give you picks based on your preferences.</p>
+                    <p style="margin-top: 0.5rem; font-size: 0.85rem; opacity: 0.7;">Try asking:</p>
+                    <ul style="font-size: 0.85rem; opacity: 0.7; margin: 0.25rem 0 0 1rem;">
+                        <li>"Give me 10 of the best BTTS predictions"</li>
+                        <li>"Pick 5 safe straight wins"</li>
+                        <li>"Mix 15 predictions: BTTS, over 2.5, and straight wins"</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="mp-chat-input-area">
+            <input type="text" id="chatInput" class="mp-chat-input"
+                   placeholder="Ask about today's predictions..."
+                   autocomplete="off" />
+            <button id="chatSendBtn" class="mp-chat-send-btn" onclick="sendChatMessage()">
+                Send
+            </button>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    const chatMessages = document.getElementById('chatMessages');
+    const chatInput = document.getElementById('chatInput');
+    const chatSendBtn = document.getElementById('chatSendBtn');
+    let conversationHistory = [];
+
+    chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendChatMessage();
+        }
+    });
+
+    function appendMessage(role, text) {
+        const div = document.createElement('div');
+        div.className = `mp-chat-message mp-chat-${role}`;
+
+        const avatar = document.createElement('div');
+        avatar.className = 'mp-chat-avatar';
+        avatar.textContent = role === 'ai' ? '🤖' : '👤';
+
+        const bubble = document.createElement('div');
+        bubble.className = 'mp-chat-bubble';
+        bubble.innerHTML = formatMessage(text);
+
+        div.appendChild(avatar);
+        div.appendChild(bubble);
+        chatMessages.appendChild(div);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function formatMessage(text) {
+        // Basic markdown-like formatting
+        return text
+            .replace(/\n/g, '<br>')
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/`(.*?)`/g, '<code>$1</code>');
+    }
+
+    function showTypingIndicator() {
+        const div = document.createElement('div');
+        div.className = 'mp-chat-message mp-chat-ai mp-chat-typing';
+        div.id = 'typingIndicator';
+        div.innerHTML = `
+            <div class="mp-chat-avatar">🤖</div>
+            <div class="mp-chat-bubble">
+                <div class="mp-typing-dots">
+                    <span></span><span></span><span></span>
+                </div>
+            </div>
+        `;
+        chatMessages.appendChild(div);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function removeTypingIndicator() {
+        const indicator = document.getElementById('typingIndicator');
+        if (indicator) indicator.remove();
+    }
+
+    async function sendChatMessage() {
+        const message = chatInput.value.trim();
+        if (!message) return;
+
+        // Show user message
+        appendMessage('user', message);
+        chatInput.value = '';
+        chatSendBtn.disabled = true;
+
+        // Add to conversation history
+        conversationHistory.push({ role: 'user', content: message });
+
+        showTypingIndicator();
+
+        try {
+            const response = await fetch('/api/ai/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: message,
+                    history: conversationHistory
+                })
+            });
+
+            removeTypingIndicator();
+
+            if (response.ok) {
+                const data = await response.json();
+                appendMessage('ai', data.response);
+                conversationHistory.push({ role: 'assistant', content: data.response });
+            } else {
+                appendMessage('ai', '❌ Sorry, something went wrong. Please try again.');
+            }
+        } catch (err) {
+            removeTypingIndicator();
+            appendMessage('ai', '❌ Network error. Please check your connection and try again.');
+        } finally {
+            chatSendBtn.disabled = false;
+            chatInput.focus();
+        }
+    }
+</script>
+}

@@ -6,4 +6,5 @@ public interface IWebScraperService
 {
     Task ScrapeMatchDataAsync();
     Task<List<MatchScore>> ScrapeMatchScoresAsync();
+    Task<List<AiScoreMatchScore>> ScrapeAiScoreMatchScoresAsync();
 }

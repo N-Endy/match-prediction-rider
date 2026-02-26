@@ -48,12 +48,24 @@ public class AnalyzerService  : IAnalyzerService
             try
             {
                 var scores = await _webScraperService.ScrapeMatchScoresAsync();
-                _logger.LogInformation("Scraped {Count} match scores from website.", scores.Count);
+                _logger.LogInformation("Scraped {Count} match scores from primary source.", scores.Count);
                 await SaveMatchScores(scores);
             }
             catch (Exception scoreEx)
             {
-                _logger.LogWarning(scoreEx, "❌ Score scraping failed — continuing with predictions.");
+                _logger.LogWarning(scoreEx, "❌ Primary score scraping failed — continuing with predictions.");
+            }
+
+            // Secondary score source (AiScore) — non-blocking fallback
+            try
+            {
+                var aiScores = await _webScraperService.ScrapeAiScoreMatchScoresAsync();
+                _logger.LogInformation("Scraped {Count} match scores from AiScore.", aiScores.Count);
+                await SaveAiScoreMatchScores(aiScores);
+            }
+            catch (Exception aiScoreEx)
+            {
+                _logger.LogWarning(aiScoreEx, "❌ AiScore scraping failed — continuing with predictions.");
             }
 
             var scraped = _excelExtract.ExtractMatchDatasetFromFile().ToList();
@@ -209,7 +221,47 @@ public class AnalyzerService  : IAnalyzerService
                 prediction.IsLive = score.IsLive;
             }
         }
-        
+
+        // Fallback: check AiScore table for any predictions still missing a score
+        var missingScorePredictions = predictionsForToday
+            .Where(p => string.IsNullOrEmpty(p.ActualScore))
+            .ToList();
+
+        if (missingScorePredictions.Count > 0)
+        {
+            var aiScores = await _dbContext.AiScoreMatchScores
+                .Where(s => s.MatchTime >= startOfDayUtc && s.MatchTime < endOfDayUtc)
+                .ToListAsync();
+
+            if (aiScores.Count > 0)
+            {
+                _logger.LogInformation(
+                    "Attempting fallback score match from AiScore for {Count} predictions.",
+                    missingScorePredictions.Count);
+
+                foreach (var prediction in missingScorePredictions)
+                {
+                    var aiMatch = aiScores.FirstOrDefault(s =>
+                        ScoreMatchingHelper.TeamsMatch(s.HomeTeam, prediction.HomeTeam) &&
+                        ScoreMatchingHelper.TeamsMatch(s.AwayTeam, prediction.AwayTeam));
+
+                    if (aiMatch == null) continue;
+
+                    prediction.ActualOutcome = prediction.PredictionCategory switch
+                    {
+                        "BothTeamsScore" => aiMatch.BTTSLabel ? "BTTS" : "No BTTS",
+                        "Draw"           => DetermineDrawOutcome(aiMatch.Score),
+                        "Over2.5Goals"   => DetermineOver25Outcome(aiMatch.Score),
+                        "StraightWin"    => DetermineStraightWinOutcome(aiMatch.Score),
+                        _                => prediction.ActualOutcome
+                    };
+
+                    prediction.ActualScore = aiMatch.Score;
+                    prediction.IsLive = aiMatch.IsLive;
+                }
+            }
+        }
+
         _logger.LogInformation("✅ Predictions updated successfully.");
 
         await _dbContext.SaveChangesAsync();
@@ -328,6 +380,44 @@ public class AnalyzerService  : IAnalyzerService
         await _dbContext.SaveChangesAsync();
     }
 
+    private async Task SaveAiScoreMatchScores(List<AiScoreMatchScore> scores)
+    {
+        if (scores.Count == 0) return;
+
+        var minTime = scores.Min(s => s.MatchTime);
+        var maxTime = scores.Max(s => s.MatchTime);
+
+        var existingScoresList = await _dbContext.AiScoreMatchScores
+            .Where(s => s.MatchTime >= minTime && s.MatchTime <= maxTime)
+            .ToListAsync();
+
+        var existingScoresDict = existingScoresList
+            .GroupBy(s => (s.HomeTeam, s.AwayTeam, s.MatchTime))
+            .ToDictionary(g => g.Key, g => g.First());
+
+        foreach (var incomingScore in scores)
+        {
+            var key = (incomingScore.HomeTeam, incomingScore.AwayTeam, incomingScore.MatchTime);
+
+            if (existingScoresDict.TryGetValue(key, out var existingRecord))
+            {
+                if (existingRecord.Score != incomingScore.Score ||
+                    existingRecord.IsLive != incomingScore.IsLive)
+                {
+                    existingRecord.Score = incomingScore.Score;
+                    existingRecord.IsLive = incomingScore.IsLive;
+                    existingRecord.BTTSLabel = incomingScore.BTTSLabel;
+                }
+            }
+            else
+            {
+                _dbContext.AiScoreMatchScores.Add(incomingScore);
+            }
+        }
+
+        await _dbContext.SaveChangesAsync();
+    }
+
     
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
     public async Task CleanupOldPredictionsAndMatchDataAsync()
@@ -351,6 +441,12 @@ public class AnalyzerService  : IAnalyzerService
             _dbContext.MatchDatas.RemoveRange(oldMatchData);
             await _dbContext.SaveChangesAsync();
         }
+
+        // Cleanup old AiScore match scores
+        var cutoffUtc = DateTime.SpecifyKind(cutoffDate, DateTimeKind.Utc);
+        await _dbContext.AiScoreMatchScores
+            .Where(s => s.MatchTime < cutoffUtc)
+            .ExecuteDeleteAsync();
     }
     
     private async Task SavePredictions(string category, IEnumerable<MatchData> matches)

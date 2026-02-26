@@ -77,6 +77,14 @@
                             }
                         }
                         <span class="mp-prediction-badge @badgeClass">@badgeText </span>
+                        <button class="mp-add-cart-btn" title="Add Bet"
+                                data-home="@match.HomeTeam"
+                                data-away="@match.AwayTeam"
+                                data-league="@match.League"
+                                data-market="@(match.PredictionCategory ?? "")"
+                                data-prediction="@badgeText">
+                            Add Bet
+                        </button>
                     </div>
                 </div>
             }

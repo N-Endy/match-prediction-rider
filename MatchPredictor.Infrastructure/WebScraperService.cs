@@ -181,7 +181,155 @@ public partial class WebScraperService : IWebScraperService
             throw;
         }
     }
-    
+
+    public async Task<List<AiScoreMatchScore>> ScrapeAiScoreMatchScoresAsync()
+    {
+        try
+        {
+            var apiKey = _configuration["ApiFootball:ApiKey"];
+            if (string.IsNullOrEmpty(apiKey))
+            {
+                _logger.LogWarning("API-Football API key not configured. Skipping secondary score source.");
+                return new List<AiScoreMatchScore>();
+            }
+
+            var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
+            var baseUrl = _configuration["ApiFootball:BaseUrl"] ?? "https://v3.football.api-sports.io";
+
+            using var httpClient = new HttpClient();
+            httpClient.DefaultRequestHeaders.Add("x-apisports-key", apiKey);
+            httpClient.Timeout = TimeSpan.FromSeconds(30);
+
+            _logger.LogInformation("Fetching match scores from API-Football for {Date}...", today);
+
+            var response = await httpClient.GetAsync($"{baseUrl}/fixtures?date={today}");
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("API-Football returned {Status}. Response: {Body}",
+                    response.StatusCode, await response.Content.ReadAsStringAsync());
+                return new List<AiScoreMatchScore>();
+            }
+
+            var json = await response.Content.ReadAsStringAsync();
+            var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            // Check remaining API calls
+            if (root.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0)
+            {
+                _logger.LogWarning("API-Football errors: {Errors}", errors.ToString());
+                return new List<AiScoreMatchScore>();
+            }
+
+            var matchScores = new List<AiScoreMatchScore>();
+            var fixtures = root.GetProperty("response");
+
+            foreach (var fixture in fixtures.EnumerateArray())
+            {
+                try
+                {
+                    var fixtureInfo = fixture.GetProperty("fixture");
+                    var teams = fixture.GetProperty("teams");
+                    var goals = fixture.GetProperty("goals");
+                    var league = fixture.GetProperty("league");
+                    var status = fixtureInfo.GetProperty("status");
+
+                    var statusShort = status.GetProperty("short").GetString() ?? "";
+
+                    // Only include completed (FT, AET, PEN) and live matches (1H, 2H, HT, ET, BT, P)
+                    var liveStatuses = new HashSet<string> { "1H", "2H", "HT", "ET", "BT", "P" };
+                    var finishedStatuses = new HashSet<string> { "FT", "AET", "PEN" };
+
+                    if (!liveStatuses.Contains(statusShort) && !finishedStatuses.Contains(statusShort))
+                        continue;
+
+                    var homeGoals = goals.GetProperty("home");
+                    var awayGoals = goals.GetProperty("away");
+
+                    // Skip if no goals data
+                    if (homeGoals.ValueKind == System.Text.Json.JsonValueKind.Null ||
+                        awayGoals.ValueKind == System.Text.Json.JsonValueKind.Null)
+                        continue;
+
+                    var homeScore = homeGoals.GetInt32();
+                    var awayScore = awayGoals.GetInt32();
+                    var score = $"{homeScore}:{awayScore}";
+
+                    var homeTeam = teams.GetProperty("home").GetProperty("name").GetString() ?? "";
+                    var awayTeam = teams.GetProperty("away").GetProperty("name").GetString() ?? "";
+                    var leagueName = league.GetProperty("name").GetString() ?? "";
+
+                    // Parse match time
+                    var dateStr = fixtureInfo.GetProperty("date").GetString();
+                    DateTime matchTime;
+                    if (DateTime.TryParse(dateStr, out var parsed))
+                        matchTime = parsed.ToUniversalTime();
+                    else
+                        matchTime = DateTime.UtcNow;
+
+                    var isLive = liveStatuses.Contains(statusShort);
+
+                    matchScores.Add(new AiScoreMatchScore
+                    {
+                        League = leagueName,
+                        HomeTeam = homeTeam,
+                        AwayTeam = awayTeam,
+                        Score = score,
+                        MatchTime = matchTime,
+                        BTTSLabel = IsBtts(score),
+                        IsLive = isLive
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Skipping fixture due to parse error");
+                }
+            }
+
+            _logger.LogInformation("Fetched {Count} match scores from API-Football.", matchScores.Count);
+            return matchScores;
+        }
+        catch (Exception e)
+        {
+            _logger.LogError(e, "❌ Error fetching scores from API-Football.");
+            return new List<AiScoreMatchScore>();
+        }
+    }
+
+    /// <summary>
+    /// Normalizes various score formats ("1 - 0", "1-0", "1 : 0", "1:0") to "H:A" format.
+    /// </summary>
+    private static string? NormalizeScore(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        
+        // Remove extra whitespace
+        var cleaned = raw.Trim();
+        
+        // Try to extract two numbers from the score string
+        var scoreMatch = Regex.Match(cleaned, @"(\d+)\s*[-:–—]\s*(\d+)");
+        if (scoreMatch.Success)
+        {
+            return $"{scoreMatch.Groups[1].Value}:{scoreMatch.Groups[2].Value}";
+        }
+        
+        return null;
+    }
+
+    /// <summary>
+    /// Internal DTO for deserializing JS extraction results
+    /// </summary>
+    private sealed class AiScoreRawMatch
+    {
+        public string? Home { get; set; }
+        public string? Away { get; set; }
+        public string? Score { get; set; }
+        public string? Time { get; set; }
+        public string? League { get; set; }
+        public bool IsLive { get; set; }
+    }
+
     private async Task CheckFileIsDownloaded()
     {
         var fileName = _configuration["ScrapingValues:PredictionsFileName"]
