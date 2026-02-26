@@ -160,104 +160,106 @@ public class AnalyzerService  : IAnalyzerService
         var startOfDayUtc = DateTime.SpecifyKind(today, DateTimeKind.Utc);
         var endOfDayUtc = startOfDayUtc.AddDays(1);
 
-        // 2. Use the index-friendly range query to fetch scores
-        var scores = await _dbContext.MatchScores
-            .Where(s => s.MatchTime >= startOfDayUtc && s.MatchTime < endOfDayUtc)
-            .ToListAsync();
-
+        // ── Primary: AiScore (broader league coverage) ──
         var predictionsForToday = await _dbContext.Predictions
             .Where(p => p.Date == dateStr)
             .ToListAsync();
 
-        // Key = date + normalized teams (you can also include league if needed)
-        var predLookup = predictionsForToday
-            .GroupBy(p => (p.Date, Home: Norm(p.HomeTeam), Away: Norm(p.AwayTeam)))
-            .ToDictionary(g => g.Key, g => g.ToList());
+        var aiScores = await _dbContext.AiScoreMatchScores
+            .Where(s => s.MatchTime >= startOfDayUtc && s.MatchTime < endOfDayUtc)
+            .ToListAsync();
 
-        foreach (var score in scores)
+        if (aiScores.Count > 0)
         {
-            var key = (dateStr, Home: Norm(score.HomeTeam), Away: Norm(score.AwayTeam));
+            _logger.LogInformation("Matching scores from AiScore ({Count} scores) against {PredCount} predictions.",
+                aiScores.Count, predictionsForToday.Count);
 
-            // if you need fuzzy matching, you can fall back to your TeamsMatch logic here
-            if (!predLookup.TryGetValue(key, out var matched))
+            foreach (var prediction in predictionsForToday)
             {
-                // fallback fuzzy match (optional)
-                matched = predictionsForToday
-                    .Where(p =>
-                        ScoreMatchingHelper.TeamsMatch(score.HomeTeam, p.HomeTeam) &&
-                        ScoreMatchingHelper.TeamsMatch(score.AwayTeam, p.AwayTeam))
-                    .ToList();
-            }
+                var aiMatch = aiScores.FirstOrDefault(s =>
+                    ScoreMatchingHelper.TeamsMatch(s.HomeTeam, prediction.HomeTeam) &&
+                    ScoreMatchingHelper.TeamsMatch(s.AwayTeam, prediction.AwayTeam));
 
-            switch (matched.Count)
-            {
-                case 0:
-                    continue;
-                // optionally filter by league if multiple
-                case > 1 when !string.IsNullOrWhiteSpace(score.League):
-                {
-                    var leagueFiltered = matched
-                        .Where(p => ScoreMatchingHelper.LeaguesMatch(score.League, p.League))
-                        .ToList();
+                if (aiMatch == null) continue;
 
-                    if (leagueFiltered.Count > 0)
-                        matched = leagueFiltered;
-                    break;
-                }
-            }
-
-            foreach (var prediction in matched)
-            {
                 prediction.ActualOutcome = prediction.PredictionCategory switch
                 {
-                    "BothTeamsScore" => score.BTTSLabel ? "BTTS" : "No BTTS",
-                    "Draw"           => DetermineDrawOutcome(score.Score),
-                    "Over2.5Goals"   => DetermineOver25Outcome(score.Score),
-                    "StraightWin"    => DetermineStraightWinOutcome(score.Score),
+                    "BothTeamsScore" => aiMatch.BTTSLabel ? "BTTS" : "No BTTS",
+                    "Draw"           => DetermineDrawOutcome(aiMatch.Score),
+                    "Over2.5Goals"   => DetermineOver25Outcome(aiMatch.Score),
+                    "StraightWin"    => DetermineStraightWinOutcome(aiMatch.Score),
                     _                => prediction.ActualOutcome
                 };
 
-                prediction.ActualScore = score.Score;
-                prediction.IsLive = score.IsLive;
+                prediction.ActualScore = aiMatch.Score;
+                prediction.IsLive = aiMatch.IsLive;
             }
         }
 
-        // Fallback: check AiScore table for any predictions still missing a score
+        // ── Fallback: FlashScore for any predictions still missing a score ──
+        var scores = await _dbContext.MatchScores
+            .Where(s => s.MatchTime >= startOfDayUtc && s.MatchTime < endOfDayUtc)
+            .ToListAsync();
+
         var missingScorePredictions = predictionsForToday
             .Where(p => string.IsNullOrEmpty(p.ActualScore))
             .ToList();
 
-        if (missingScorePredictions.Count > 0)
+        var predLookup = missingScorePredictions
+            .GroupBy(p => (p.Date, Home: Norm(p.HomeTeam), Away: Norm(p.AwayTeam)))
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        if (missingScorePredictions.Count > 0 && scores.Count > 0)
         {
-            var aiScores = await _dbContext.AiScoreMatchScores
-                .Where(s => s.MatchTime >= startOfDayUtc && s.MatchTime < endOfDayUtc)
-                .ToListAsync();
+            _logger.LogInformation(
+                "Attempting fallback score match from FlashScore for {Count} predictions.",
+                missingScorePredictions.Count);
 
-            if (aiScores.Count > 0)
+            foreach (var score in scores)
             {
-                _logger.LogInformation(
-                    "Attempting fallback score match from AiScore for {Count} predictions.",
-                    missingScorePredictions.Count);
+                var key = (dateStr, Home: Norm(score.HomeTeam), Away: Norm(score.AwayTeam));
 
-                foreach (var prediction in missingScorePredictions)
+                if (!predLookup.TryGetValue(key, out var matched))
                 {
-                    var aiMatch = aiScores.FirstOrDefault(s =>
-                        ScoreMatchingHelper.TeamsMatch(s.HomeTeam, prediction.HomeTeam) &&
-                        ScoreMatchingHelper.TeamsMatch(s.AwayTeam, prediction.AwayTeam));
+                    matched = missingScorePredictions
+                        .Where(p =>
+                            ScoreMatchingHelper.TeamsMatch(score.HomeTeam, p.HomeTeam) &&
+                            ScoreMatchingHelper.TeamsMatch(score.AwayTeam, p.AwayTeam))
+                        .ToList();
+                }
 
-                    if (aiMatch == null) continue;
+                // Only update predictions that don't already have a score (from AiScore)
+                matched = matched.Where(p => string.IsNullOrEmpty(p.ActualScore)).ToList();
 
+                switch (matched.Count)
+                {
+                    case 0:
+                        continue;
+                    case > 1 when !string.IsNullOrWhiteSpace(score.League):
+                    {
+                        var leagueFiltered = matched
+                            .Where(p => ScoreMatchingHelper.LeaguesMatch(score.League, p.League))
+                            .ToList();
+
+                        if (leagueFiltered.Count > 0)
+                            matched = leagueFiltered;
+                        break;
+                    }
+                }
+
+                foreach (var prediction in matched)
+                {
                     prediction.ActualOutcome = prediction.PredictionCategory switch
                     {
-                        "BothTeamsScore" => aiMatch.BTTSLabel ? "BTTS" : "No BTTS",
-                        "Draw"           => DetermineDrawOutcome(aiMatch.Score),
-                        "Over2.5Goals"   => DetermineOver25Outcome(aiMatch.Score),
-                        "StraightWin"    => DetermineStraightWinOutcome(aiMatch.Score),
+                        "BothTeamsScore" => score.BTTSLabel ? "BTTS" : "No BTTS",
+                        "Draw"           => DetermineDrawOutcome(score.Score),
+                        "Over2.5Goals"   => DetermineOver25Outcome(score.Score),
+                        "StraightWin"    => DetermineStraightWinOutcome(score.Score),
                         _                => prediction.ActualOutcome
                     };
 
-                    prediction.ActualScore = aiMatch.Score;
-                    prediction.IsLive = aiMatch.IsLive;
+                    prediction.ActualScore = score.Score;
+                    prediction.IsLive = score.IsLive;
                 }
             }
         }
