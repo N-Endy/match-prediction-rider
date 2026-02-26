@@ -353,56 +353,6 @@ public class AnalyzerService  : IAnalyzerService
         }
     }
     
-
-    // private async Task SavePredictions(string category, IEnumerable<MatchData> matches)
-    // {
-    //     foreach (var match in matches)
-    //     {
-    //         var properDateTime = DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time);
-    //         DateTime? matchDateTime = null;
-    //         if (DateTime.TryParseExact(
-    //                 $"{properDateTime.date} {properDateTime.time}",
-    //                 "dd-MM-yyyy HH:mm",
-    //                 System.Globalization.CultureInfo.InvariantCulture,
-    //                 System.Globalization.DateTimeStyles.None,
-    //                 out var parsed))
-    //         {
-    //             matchDateTime = parsed;
-    //         }
-    //         var prediction = new Prediction
-    //         {
-    //             HomeTeam = match.HomeTeam ?? "N/A",
-    //             AwayTeam = match.AwayTeam ?? "N/A",
-    //             League = match.League ?? "N/A",
-    //             PredictionCategory = category,
-    //             PredictedOutcome = category switch
-    //             {
-    //                 "BothTeamsScore" => "BTTS",
-    //                 "Draw" => "Draw",
-    //                 "Over2.5Goals" => "Over 2.5",
-    //                 "StraightWin" => match.HomeWin > match.AwayWin ? "Home Win" : "Away Win",
-    //                 _ => "Unknown"
-    //             },
-    //             Date = properDateTime.date,
-    //             Time = properDateTime.time,
-    //             MatchDateTime = matchDateTime
-    //         };
-    //
-    //         var exists = await _dbContext.Predictions.AnyAsync(p =>
-    //             p.HomeTeam == prediction.HomeTeam &&
-    //             p.AwayTeam == prediction.AwayTeam &&
-    //             p.League == prediction.League &&
-    //             p.Date == prediction.Date);
-    //
-    //         if (!exists)
-    //         {
-    //             _dbContext.Predictions.Add(prediction);
-    //         }
-    //     }
-    //
-    //     await _dbContext.SaveChangesAsync();
-    // }
-
     private async Task SavePredictions(string category, IEnumerable<MatchData> matches)
     {
         var matchList = matches.ToList();
@@ -477,19 +427,16 @@ public class AnalyzerService  : IAnalyzerService
             if (existingDict.TryGetValue(key, out var existingRecord))
             {
                 // UPDATE SCENARIO
-                bool isUpdated = false;
 
                 if (existingRecord.Time != item.TimeStr)
                 {
                     existingRecord.Time = item.TimeStr;
                     existingRecord.MatchDateTime = item.MatchDateTime;
-                    isUpdated = true;
                 }
 
                 if (existingRecord.PredictedOutcome != predictedOutcome)
                 {
                     existingRecord.PredictedOutcome = predictedOutcome;
-                    isUpdated = true;
                 }
             }
             else

@@ -14,7 +14,7 @@ public class DataAnalyzerService : IDataAnalyzerService
 
     public IEnumerable<MatchData> BothTeamsScore(IEnumerable<MatchData> matches) =>
         matches.Where(m =>
-            _probabilityCalculator.CalculateBttsProbability(m) >= PredictionThresholds.BTTSScoreThreshold);
+            _probabilityCalculator.CalculateBttsProbability(m) >= PredictionThresholds.BttsScoreThreshold);
 
     public IEnumerable<MatchData> OverTwoGoals(IEnumerable<MatchData> matches) =>
         matches.Where(m =>

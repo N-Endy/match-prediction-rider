@@ -108,9 +108,9 @@ public static class DateTimeProvider
                 System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.None, out var parsedDateTime))
         {
-            // var newDateTime = parsedDateTime.AddHours(1);
-            // return (newDateTime.ToString("dd-MM-yyyy"), newDateTime.ToString("HH:mm"));
-            return (parsedDateTime.ToString("dd-MM-yyyy"), parsedDateTime.ToString("HH:mm"));
+            var newDateTime = parsedDateTime.AddHours(1);
+            return (newDateTime.ToString("dd-MM-yyyy"), newDateTime.ToString("HH:mm"));
+            //return (parsedDateTime.ToString("dd-MM-yyyy"), parsedDateTime.ToString("HH:mm"));
 
         }
         
@@ -118,9 +118,9 @@ public static class DateTimeProvider
         if (DateTime.TryParse(combined, System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.None, out parsedDateTime))
         {
-            // var newDateTime = parsedDateTime.AddHours(1);
-            // return (newDateTime.ToString("dd-MM-yyyy"), newDateTime.ToString("HH:mm"));
-            return (parsedDateTime.ToString("dd-MM-yyyy"), parsedDateTime.ToString("HH:mm"));
+            var newDateTime = parsedDateTime.AddHours(1);
+            return (newDateTime.ToString("dd-MM-yyyy"), newDateTime.ToString("HH:mm"));
+            //return (parsedDateTime.ToString("dd-MM-yyyy"), parsedDateTime.ToString("HH:mm"));
 
         }
         
