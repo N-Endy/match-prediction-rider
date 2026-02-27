@@ -17,6 +17,11 @@ public class AiChatController : ControllerBase
     [HttpPost("chat")]
     public async Task<IActionResult> Chat([FromBody] ChatRequest request, CancellationToken ct)
     {
+        if (!Request.Cookies.ContainsKey("MP_AI_AUTH"))
+        {
+            return Unauthorized(new { response = "Unauthorized. Please authenticate on the AI Chat page." });
+        }
+
         if (string.IsNullOrWhiteSpace(request.Message))
         {
             return BadRequest(new { response = "Please enter a message." });
