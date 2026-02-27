@@ -11,6 +11,7 @@ using MatchPredictor.Infrastructure.Utils;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
+using MatchPredictor.Web.Filters;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -199,7 +200,15 @@ app.UseAuthorization();
 app.UseHangfireDashboard("/hangfire", new DashboardOptions
 {
     DashboardTitle = "Match Predictor Jobs",
-    StatsPollingInterval = 5000
+    StatsPollingInterval = 5000,
+    Authorization = app.Environment.IsDevelopment()
+        ? new Hangfire.Dashboard.IDashboardAuthorizationFilter[] { new HangfireAllowAllFilter() }
+        : new Hangfire.Dashboard.IDashboardAuthorizationFilter[]
+        {
+            new HangfireBasicAuthFilter(
+                builder.Configuration["Hangfire:Username"] ?? "admin",
+                builder.Configuration["Hangfire:Password"] ?? "changeme")
+        }
 });
 
 app.MapRazorPages();
