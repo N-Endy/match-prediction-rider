@@ -149,12 +149,19 @@ async function bookGames() {
 
         if (resultDiv) {
             if (result.success) {
+                const urlHtml = result.bookingUrl
+                    ? `<a href="${result.bookingUrl}" target="_blank" class="mp-booking-url-btn">🔗 Open in SportyBet</a>`
+                    : '';
+
                 resultDiv.innerHTML = `
                     <div class="mp-booking-success">
                         <button class="mp-booking-close" onclick="this.closest('.mp-booking-success').parentElement.style.display='none'">&times;</button>
                         <div class="mp-booking-code-label">Booking Code</div>
                         <div class="mp-booking-code">${result.bookingCode}</div>
-                        <button class="mp-copy-code-btn" onclick="copyBookingCode('${result.bookingCode}')">📋 Copy</button>
+                        <div style="display:flex; gap:10px; justify-content:center; margin-bottom:15px;">
+                            <button class="mp-copy-code-btn" onclick="copyBookingCode('${result.bookingCode}')">📋 Copy</button>
+                            ${urlHtml}
+                        </div>
                         <p class="mp-booking-msg">${result.message}</p>
                     </div>
                 `;

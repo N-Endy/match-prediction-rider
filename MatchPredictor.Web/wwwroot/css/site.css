@@ -1084,6 +1084,25 @@ a:hover {
   background: rgba(16, 185, 129, 0.25);
 }
 
+.mp-booking-url-btn {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(59, 130, 246, 0.15);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  color: var(--accent-blue);
+  padding: 6px 16px;
+  border-radius: var(--radius-full);
+  text-decoration: none;
+  font-size: 0.8rem;
+  font-weight: 600;
+  transition: var(--transition);
+}
+
+.mp-booking-url-btn:hover {
+  background: rgba(59, 130, 246, 0.25);
+  color: var(--accent-blue);
+}
+
 .mp-booking-msg {
   font-size: 0.8rem;
   color: var(--text-secondary);

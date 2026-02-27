@@ -278,8 +278,19 @@ public partial class WebScraperService : IWebScraperService
                 if (!fh) return JSON.stringify({error: 'No football/home state', keys: Object.keys(nuxt.state).slice(0, 15)});
 
                 var matches = fh.matchesData_matches || fh['matchesData_matches'] || [];
-                var teams = fh.matchesData_teams || fh['matchesData_teams'] || {};
-                var competitions = fh.matchesData_competitions || fh['matchesData_competitions'] || {};
+                var teams = fh.matchesData_teams || fh['matchesData_teams'] || [];
+                var competitions = fh.matchesData_competitions || fh['matchesData_competitions'] || [];
+
+                var getObjInfo = function(src, id) {
+                    if (!src || !id) return {};
+                    if (Array.isArray(src)) {
+                        for (var k = 0; k < src.length; k++) {
+                            if (src[k].id === id || src[k]._id === id) return src[k];
+                        }
+                        return {};
+                    }
+                    return src[id] || {};
+                };
 
                 var results = [];
                 for (var i = 0; i < matches.length; i++) {
@@ -304,11 +315,12 @@ public partial class WebScraperService : IWebScraperService
                     // Team ID can be m.homeTeamId or m.homeTeam.id (nested object)
                     var htId = m.homeTeamId || (m.homeTeam && m.homeTeam.id) || '';
                     var atId = m.awayTeamId || (m.awayTeam && m.awayTeam.id) || '';
-                    var cId = m.competitionId || (m.competition && m.competition.id) || '';
+                    // Competition ID
+                    var cId = m.competitionId || (m.competition && m.competition.id) || (m.competition && m.competition.competitionId) || '';
 
-                    var homeTeamObj = teams[htId] || {};
-                    var awayTeamObj = teams[atId] || {};
-                    var compObj = competitions[cId] || {};
+                    var homeTeamObj = getObjInfo(teams, htId);
+                    var awayTeamObj = getObjInfo(teams, atId);
+                    var compObj = getObjInfo(competitions, cId);
 
                     results.push({
                         home: homeTeamObj.name || homeTeamObj.n || '',

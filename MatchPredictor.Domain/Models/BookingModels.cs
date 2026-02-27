@@ -18,5 +18,6 @@ public class BookingResult
 {
     public bool Success { get; set; }
     public string BookingCode { get; set; } = string.Empty;
+    public string BookingUrl { get; set; } = string.Empty;
     public string Message { get; set; } = string.Empty;
 }

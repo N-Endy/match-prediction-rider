@@ -86,7 +86,7 @@ public class SportyBetBookingService : ISportyBetBookingService
             }
 
             // Step 3: Create booking code via API
-            var bookingCode = await CreateBookingCodeAsync(selectedOutcomes, baseUrl);
+            var (bookingCode, bookingUrl) = await CreateBookingCodeAsync(selectedOutcomes, baseUrl);
 
             if (!string.IsNullOrEmpty(bookingCode))
             {
@@ -94,7 +94,8 @@ public class SportyBetBookingService : ISportyBetBookingService
                 {
                     Success = true,
                     BookingCode = bookingCode,
-                    Message = $"Booked {selectedOutcomes.Count}/{selections.Count} games. Use code on SportyBet to load your betslip."
+                    BookingUrl = bookingUrl ?? "",
+                    Message = $"Booked {selectedOutcomes.Count}/{selections.Count} games."
                 };
             }
 
@@ -313,7 +314,7 @@ public class SportyBetBookingService : ISportyBetBookingService
     /// Calls POST /api/ng/orders/share to generate a booking code.
     /// Payload format reverse-engineered from SportyBet network traffic.
     /// </summary>
-    private async Task<string?> CreateBookingCodeAsync(List<SportyBetOutcome> outcomes, string baseUrl)
+    private async Task<(string? Code, string? Url)> CreateBookingCodeAsync(List<SportyBetOutcome> outcomes, string baseUrl)
     {
         var client = CreateHttpClient();
 
@@ -342,7 +343,7 @@ public class SportyBetBookingService : ISportyBetBookingService
         if (!response.IsSuccessStatusCode)
         {
             _logger.LogWarning("BookCode API returned {Status}", response.StatusCode);
-            return null;
+            return (null, null);
         }
 
         var doc = JsonDocument.Parse(responseBody);
@@ -351,13 +352,20 @@ public class SportyBetBookingService : ISportyBetBookingService
         // SportyBet returns { bizCode: 10000, data: { shareCode: "ABCDE", shareURL: "..." } }
         if (root.TryGetProperty("data", out var data))
         {
-            if (data.TryGetProperty("shareCode", out var share)) return share.GetString();
-            if (data.TryGetProperty("bookCode", out var code)) return code.GetString();
-            if (data.TryGetProperty("code", out var c)) return c.GetString();
-            if (data.ValueKind == JsonValueKind.String) return data.GetString();
+            string? code = null;
+            string? url = null;
+
+            if (data.TryGetProperty("shareCode", out var share)) code = share.GetString();
+            else if (data.TryGetProperty("bookCode", out var bc)) code = bc.GetString();
+            else if (data.TryGetProperty("code", out var c)) code = c.GetString();
+            else if (data.ValueKind == JsonValueKind.String) code = data.GetString();
+
+            if (data.TryGetProperty("shareURL", out var su)) url = su.GetString();
+
+            return (code, url);
         }
 
-        return null;
+        return (null, null);
     }
 
     private HttpClient CreateHttpClient()
