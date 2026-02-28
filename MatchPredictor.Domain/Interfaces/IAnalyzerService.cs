@@ -2,6 +2,8 @@ namespace MatchPredictor.Domain.Interfaces;
 
 public interface IAnalyzerService
 {
-    Task RunScraperAndAnalyzerAsync();
+    Task RunPredictionGenerationAsync();
+    Task RunScoreUpdaterAsync();
+    Task RunDailyAnalysisAsync();
     Task CleanupOldPredictionsAndMatchDataAsync();
 }

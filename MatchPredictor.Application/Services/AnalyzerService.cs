@@ -35,38 +35,13 @@ public class AnalyzerService  : IAnalyzerService
     }
 
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
-    public async Task RunScraperAndAnalyzerAsync()
+    public async Task RunPredictionGenerationAsync()
     {
-        _logger.LogInformation("Starting scraping and analysis process...");
-
+        _logger.LogInformation("Starting prediction generation process (every 3h)...");
         try
         {
             await _webScraperService.ScrapeMatchDataAsync();
             _logger.LogInformation("✅ Web scraping completed successfully.");
-
-            // Score scraping is non-blocking — predictions should save even if scores fail
-            try
-            {
-                var scores = await _webScraperService.ScrapeMatchScoresAsync();
-                _logger.LogInformation("Scraped {Count} match scores from primary source.", scores.Count);
-                await SaveMatchScores(scores);
-            }
-            catch (Exception scoreEx)
-            {
-                _logger.LogWarning(scoreEx, "❌ Primary score scraping failed — continuing with predictions.");
-            }
-
-            // Secondary score source (AiScore) — non-blocking fallback
-            try
-            {
-                var aiScores = await _webScraperService.ScrapeAiScoreMatchScoresAsync();
-                _logger.LogInformation("Scraped {Count} match scores from AiScore.", aiScores.Count);
-                await SaveAiScoreMatchScores(aiScores);
-            }
-            catch (Exception aiScoreEx)
-            {
-                _logger.LogWarning(aiScoreEx, "❌ AiScore scraping failed — continuing with predictions.");
-            }
 
             var scraped = _excelExtract.ExtractMatchDatasetFromFile().ToList();
             try
@@ -114,40 +89,98 @@ public class AnalyzerService  : IAnalyzerService
             
             _logger.LogInformation("✅ Predictions saved successfully.");
 
+            await LogScrapingStatus("Success", "✅ Prediction generation completed successfully.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ An error occurred during prediction generation.");
+            await LogScrapingStatus("Failed", $"Prediction Gen Error: {ex.Message}");
+            throw;
+        }
+    }
+
+    [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
+    public async Task RunScoreUpdaterAsync()
+    {
+        _logger.LogInformation("Starting score updating process (every 15m)...");
+        try
+        {
+            // Score scraping is non-blocking
+            try
+            {
+                var scores = await _webScraperService.ScrapeMatchScoresAsync();
+                _logger.LogInformation("Scraped {Count} match scores from primary source.", scores.Count);
+                await SaveMatchScores(scores);
+            }
+            catch (Exception scoreEx)
+            {
+                _logger.LogWarning(scoreEx, "❌ Primary score scraping failed.");
+            }
+
+            // Secondary score source (AiScore)
+            try
+            {
+                var aiScores = await _webScraperService.ScrapeAiScoreMatchScoresAsync();
+                await SaveAiScoreMatchScores(aiScores);
+            }
+            catch (Exception aiScoreEx)
+            {
+                _logger.LogWarning(aiScoreEx, "❌ AiScore scraping failed.");
+            }
+
             await UpdatePredictionsWithActualResults();
             _logger.LogInformation("✅ Predictions updated with actual results.");
 
+            await LogScrapingStatus("Success", "✅ Score updating completed successfully.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ An error occurred during score updating.");
+            await LogScrapingStatus("Failed", $"Score Update Error: {ex.Message}");
+            throw;
+        }
+    }
+
+    [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
+    public async Task RunDailyAnalysisAsync()
+    {
+        _logger.LogInformation("Starting daily analysis process (midnight)...");
+        try
+        {
             await AnalyzePatterns();
             _logger.LogInformation("✅ Pattern analysis completed.");
 
-            // Regression-based predictions using historical match scores
+            var scraped = _excelExtract.ExtractMatchDatasetFromFile().ToList();
             var regressionPredictions = _regressionPredictorService.GeneratePredictions(scraped);
             await SaveRegressionPredictions(regressionPredictions);
             _logger.LogInformation("✅ Regression-based predictions saved successfully.");
 
-            await _dbContext.ScrapingLogs.AddAsync(new ScrapingLog
-            {
-                Timestamp = DateTime.UtcNow,
-                Status = "Success",
-                Message = "✅ Scraping and prediction analysis completed successfully."
-            });
-            await _dbContext.SaveChangesAsync();
-            _logger.LogInformation("Scraping log saved successfully.");
+            await LogScrapingStatus("Success", "✅ Daily analysis completed successfully.");
         }
         catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ An error occurred during daily analysis.");
+            await LogScrapingStatus("Failed", $"Daily Analysis Error: {ex.Message}");
+            throw;
+        }
+    }
+
+    private async Task LogScrapingStatus(string status, string message)
+    {
+        try
         {
             var log = new ScrapingLog
             {
                 Timestamp = DateTime.UtcNow,
-                Status = "Failed",
-                Message = $"{ex.Message}"
+                Status = status,
+                Message = message
             };
-            _logger.LogError(ex, "❌ An error occurred during scraping and analysis.");
-
             await _dbContext.ScrapingLogs.AddAsync(log);
             await _dbContext.SaveChangesAsync();
-            _logger.LogInformation("Scraping log saved with error status.");
-            throw; // Re-throw the exception to ensure Hangfire marks the job as failed
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to write scraping log.");
         }
     }
 

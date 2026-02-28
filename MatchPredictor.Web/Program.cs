@@ -133,9 +133,29 @@ using (var scope = app.Services.CreateScope())
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
 
     recurringJobs.AddOrUpdate<IAnalyzerService>(
-        "daily-prediction-job",
-        service => service.RunScraperAndAnalyzerAsync(),
+        "prediction-generation-job",
+        service => service.RunPredictionGenerationAsync(),
+        "0 */3 * * *", // Every 3 hours
+        new RecurringJobOptions
+        {
+            TimeZone = TimeZoneInfo.Local
+        }
+    );
+
+    recurringJobs.AddOrUpdate<IAnalyzerService>(
+        "score-update-job",
+        service => service.RunScoreUpdaterAsync(),
         "*/15 * * * *", // Every 15 minutes
+        new RecurringJobOptions
+        {
+            TimeZone = TimeZoneInfo.Local
+        }
+    );
+
+    recurringJobs.AddOrUpdate<IAnalyzerService>(
+        "daily-analysis-job",
+        service => service.RunDailyAnalysisAsync(),
+        "0 0 * * *", // Daily at midnight
         new RecurringJobOptions
         {
             TimeZone = TimeZoneInfo.Local
@@ -169,7 +189,7 @@ using (var scope = app.Services.CreateScope())
         {
             logger.LogInformation("No predictions found for today. Triggering initial data scraping...");
             var backgroundJobs = scope.ServiceProvider.GetRequiredService<IBackgroundJobClient>();
-            backgroundJobs.Enqueue<IAnalyzerService>(service => service.RunScraperAndAnalyzerAsync());
+            backgroundJobs.Enqueue<IAnalyzerService>(service => service.RunPredictionGenerationAsync());
             logger.LogInformation("✅ Initial scraping job queued successfully.");
         }
         else
