@@ -23,9 +23,9 @@ public class AiChatModel : PageModel
 
     public IActionResult OnPost()
     {
-        var validPassword = _config["AiChatPassword"] ?? "Match2026!";
+        var validPassword = _config["AiChatPassword"];
         
-        if (Password == validPassword)
+        if (!string.IsNullOrEmpty(validPassword) && Password == validPassword)
         {
             Response.Cookies.Append("MP_AI_AUTH", "true", new CookieOptions
             {
