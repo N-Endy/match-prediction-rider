@@ -132,6 +132,9 @@ using (var scope = app.Services.CreateScope())
     var recurringJobs = scope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
 
+    // Remove the old combined job if it still exists in the Hangfire database
+    recurringJobs.RemoveIfExists("daily-prediction-job");
+
     recurringJobs.AddOrUpdate<IAnalyzerService>(
         "prediction-generation-job",
         service => service.RunPredictionGenerationAsync(),

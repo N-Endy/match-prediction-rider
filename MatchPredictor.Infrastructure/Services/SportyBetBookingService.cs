@@ -318,14 +318,12 @@ public class SportyBetBookingService : ISportyBetBookingService
         {
             outcomeId = best.BttsYesOutcomeId;
             marketId = "29";
-            if (string.IsNullOrEmpty(outcomeId)) { outcomeId = best.HomeOutcomeId; marketId = "1"; }
         }
         else if (prediction.Contains("over 2.5") || prediction.Contains("over2.5"))
         {
             outcomeId = best.Over25OutcomeId;
             marketId = "18";
             specifier = "total=2.5";
-            if (string.IsNullOrEmpty(outcomeId)) { outcomeId = best.HomeOutcomeId; marketId = "1"; specifier = null; }
         }
         else if (prediction.Contains("draw") || prediction == "x")
             outcomeId = best.DrawOutcomeId;
