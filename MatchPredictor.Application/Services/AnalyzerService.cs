@@ -52,16 +52,7 @@ public class AnalyzerService  : IAnalyzerService
                     var properDateTime = DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time);
                     match.Date = properDateTime.date;
                     match.Time = properDateTime.time;
-
-                    if (DateTime.TryParseExact(
-                            $"{properDateTime.date} {properDateTime.time}",
-                            "dd-MM-yyyy HH:mm",
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            System.Globalization.DateTimeStyles.None,
-                            out var parsed))
-                    {
-                        match.MatchDateTime = parsed;
-                    }
+                    match.MatchDateTime = properDateTime.utcDateTime;
 
                     var exists = await _dbContext.MatchDatas.AnyAsync(m =>
                         m.HomeTeam == match.HomeTeam &&

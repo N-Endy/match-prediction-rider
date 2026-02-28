@@ -100,7 +100,7 @@ public static class DateTimeProvider
         throw new FormatException($"Invalid time format: '{timeString}'. Expected HH:mm.");
     }
 
-    public static (string date, string time) ParseProperDateAndTime(string? dateString, string? timeString)
+    public static (string date, string time, DateTime utcDateTime) ParseProperDateAndTime(string? dateString, string? timeString)
     {
         var combined = $"{dateString} {timeString}";
         
@@ -108,20 +108,18 @@ public static class DateTimeProvider
                 System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.None, out var parsedDateTime))
         {
-            // var newDateTime = parsedDateTime.AddHours(1);
-            // return (newDateTime.ToString("dd-MM-yyyy"), newDateTime.ToString("HH:mm"));
-            return (parsedDateTime.ToString("dd-MM-yyyy"), parsedDateTime.ToString("HH:mm"));
-
+            var utcDateTime = DateTime.SpecifyKind(parsedDateTime, DateTimeKind.Utc);
+            var watDateTime = TimeZoneInfo.ConvertTimeFromUtc(utcDateTime, WatZone);
+            return (watDateTime.ToString("dd-MM-yyyy"), watDateTime.ToString("HH:mm"), utcDateTime);
         }
         
         // Last resort fallback
         if (DateTime.TryParse(combined, System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.None, out parsedDateTime))
         {
-            // var newDateTime = parsedDateTime.AddHours(1);
-            // return (newDateTime.ToString("dd-MM-yyyy"), newDateTime.ToString("HH:mm"));
-            return (parsedDateTime.ToString("dd-MM-yyyy"), parsedDateTime.ToString("HH:mm"));
-
+            var utcDateTime = DateTime.SpecifyKind(parsedDateTime, DateTimeKind.Utc);
+            var watDateTime = TimeZoneInfo.ConvertTimeFromUtc(utcDateTime, WatZone);
+            return (watDateTime.ToString("dd-MM-yyyy"), watDateTime.ToString("HH:mm"), utcDateTime);
         }
         
         throw new FormatException($"Unable to parse date/time: '{dateString}' + '{timeString}'");

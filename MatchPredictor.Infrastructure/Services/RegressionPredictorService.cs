@@ -86,7 +86,7 @@ public class RegressionPredictorService : IRegressionPredictorService
             var homeWinProb = Sigmoid(diff);
             var awayWinProb = 1 - homeWinProb;
 
-            var (date, time) = DateTimeProvider.ParseProperDateAndTime(m.Date, m.Time);
+            var (date, time, _) = DateTimeProvider.ParseProperDateAndTime(m.Date, m.Time);
 
             if (over25 >= 0.5)
             {

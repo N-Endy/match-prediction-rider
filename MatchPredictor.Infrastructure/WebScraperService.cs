@@ -591,8 +591,9 @@ public partial class WebScraperService : IWebScraperService
     
     private DateTime ParseTime(string time)
     {
-        var today = DateTime.Today;
-        return DateTime.ParseExact($"{today:dd-MM-yyyy} {time}", "dd-MM-yyyy HH:mm", CultureInfo.InvariantCulture);
+        var today = DateTime.UtcNow.Date;
+        var parsed = DateTime.ParseExact($"{today:dd-MM-yyyy} {time}", "dd-MM-yyyy HH:mm", CultureInfo.InvariantCulture);
+        return DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
     }
 
     [GeneratedRegex(@"^\d{1,2}:\d{1,2}")]

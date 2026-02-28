@@ -53,7 +53,7 @@
                     <div class="mp-match-info">
                         <div class="mp-match-league">
                             @match.League
-                            <span class="mp-time">@match.Time</span>
+                            <span class="mp-time">@(DateTime.TryParse(match.Time, out var t) ? t.ToString("h:mm tt") : match.Time)</span>
                         </div>
                         <div class="mp-match-teams">
                             @match.HomeTeam
