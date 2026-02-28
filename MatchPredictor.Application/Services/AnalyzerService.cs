@@ -41,7 +41,7 @@ public class AnalyzerService  : IAnalyzerService
         try
         {
             await _webScraperService.ScrapeMatchDataAsync();
-            _logger.LogInformation("✅ Web scraping completed successfully.");
+            _logger.LogInformation("✅ Web scraping for match data completed successfully.");
 
             var scraped = _excelExtract.ExtractMatchDatasetFromFile().ToList();
             try
