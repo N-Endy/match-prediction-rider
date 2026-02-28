@@ -126,10 +126,10 @@ public class SportyBetBookingService : ISportyBetBookingService
         {
             try
             {
-                // Correct URL from reverse-engineered network traffic
+                // Request multiple markets: 1 (1X2), 18 (Over/Under), 29 (GG/NG / BTTS)
                 var url = $"{baseUrl}/api/ng/factsCenter/pcUpcomingEvents" +
                            $"?sportId={Uri.EscapeDataString(soccerSportId)}" +
-                           $"&marketId={Uri.EscapeDataString(market1X2)}" +
+                           $"&marketId={Uri.EscapeDataString(market1X2)},18,29" +
                            $"&pageSize=100&pageNum={page}" +
                            $"&todayGames=true&timeline=2.9&_t={timestamp}";
 
@@ -209,6 +209,36 @@ public class SportyBetBookingService : ISportyBetBookingService
                                             }
                                         }
                                     }
+                                    else if (marketId == "18") // Over/Under
+                                    {
+                                        var specifier = market.TryGetProperty("specifier", out var spec) ? spec.GetString() : "";
+                                        if (specifier == "total=2.5")
+                                        {
+                                            if (market.TryGetProperty("outcomes", out var outcomes))
+                                            {
+                                                foreach (var o in outcomes.EnumerateArray())
+                                                {
+                                                    var oid = o.GetProperty("id").GetString() ?? "";
+                                                    var desc = o.TryGetProperty("desc", out var d) ? d.GetString() ?? "" : "";
+                                                    if (oid == "12" || desc.Contains("Over", StringComparison.OrdinalIgnoreCase))
+                                                        over25OutcomeId = oid;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else if (marketId == "29") // GG/NG (Both Teams to Score)
+                                    {
+                                        if (market.TryGetProperty("outcomes", out var outcomes))
+                                        {
+                                            foreach (var o in outcomes.EnumerateArray())
+                                            {
+                                                var oid = o.GetProperty("id").GetString() ?? "";
+                                                var desc = o.TryGetProperty("desc", out var d) ? d.GetString() ?? "" : "";
+                                                if (oid == "74" || desc.Equals("Yes", StringComparison.OrdinalIgnoreCase))
+                                                    bttsOutcomeId = oid;
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
@@ -282,14 +312,20 @@ public class SportyBetBookingService : ISportyBetBookingService
         var prediction = selection.Prediction?.ToLowerInvariant() ?? "";
         string outcomeId;
         string marketId = "1"; // Default to 1X2 market
+        string? specifier = null;
 
         if (prediction.Contains("btts") || prediction.Contains("both teams"))
         {
-            outcomeId = !string.IsNullOrEmpty(best.BttsYesOutcomeId) ? best.BttsYesOutcomeId : best.HomeOutcomeId;
+            outcomeId = best.BttsYesOutcomeId;
+            marketId = "29";
+            if (string.IsNullOrEmpty(outcomeId)) { outcomeId = best.HomeOutcomeId; marketId = "1"; }
         }
         else if (prediction.Contains("over 2.5") || prediction.Contains("over2.5"))
         {
-            outcomeId = !string.IsNullOrEmpty(best.Over25OutcomeId) ? best.Over25OutcomeId : best.HomeOutcomeId;
+            outcomeId = best.Over25OutcomeId;
+            marketId = "18";
+            specifier = "total=2.5";
+            if (string.IsNullOrEmpty(outcomeId)) { outcomeId = best.HomeOutcomeId; marketId = "1"; specifier = null; }
         }
         else if (prediction.Contains("draw") || prediction == "x")
             outcomeId = best.DrawOutcomeId;
@@ -305,6 +341,7 @@ public class SportyBetBookingService : ISportyBetBookingService
             EventId = best.EventId,
             OutcomeId = outcomeId,
             MarketId = marketId,
+            Specifier = specifier,
             HomeTeam = best.HomeTeam,
             AwayTeam = best.AwayTeam
         };
@@ -323,7 +360,7 @@ public class SportyBetBookingService : ISportyBetBookingService
         {
             eventId = o.EventId,
             marketId = o.MarketId,
-            specifier = (string?)null,
+            specifier = o.Specifier,
             outcomeId = o.OutcomeId
         }).ToArray();
 
@@ -410,6 +447,7 @@ public record SportyBetOutcome
     public string EventId { get; init; } = "";
     public string OutcomeId { get; init; } = "";
     public string MarketId { get; init; } = "1";
+    public string? Specifier { get; init; }
     public string HomeTeam { get; init; } = "";
     public string AwayTeam { get; init; } = "";
 }
