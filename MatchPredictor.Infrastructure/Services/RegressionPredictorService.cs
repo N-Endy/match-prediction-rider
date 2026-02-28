@@ -14,7 +14,7 @@ public class RegressionPredictorService : IRegressionPredictorService
         _db = db;
     }
 
-    public IEnumerable<RegressionPrediction> GeneratePredictions(IEnumerable<MatchData> upcomingMatches)
+    public IEnumerable<RegressionPrediction> GeneratePredictions(IEnumerable<MatchData> upcomingMatches, List<ModelAccuracy> accuracies)
     {
         // Load historical scores
         var scores = _db.MatchScores.ToList();
@@ -58,6 +58,31 @@ public class RegressionPredictorService : IRegressionPredictorService
 
         var predictions = new List<RegressionPrediction>();
 
+        double GetHistoricalWeight(string category, params (string MetricName, double MetricValue)[] fallbacks)
+        {
+            if (accuracies == null || accuracies.Count == 0 || fallbacks == null || fallbacks.Length == 0) return 1.0;
+
+            foreach (var (metricName, metricValue) in fallbacks)
+            {
+                // Skip missing data point
+                if (metricValue <= 0) continue;
+
+                var profile = accuracies.FirstOrDefault(a => 
+                    a.Category == category && 
+                    a.MetricName == metricName && 
+                    metricValue >= a.MetricRangeStart && 
+                    metricValue < a.MetricRangeEnd);
+
+                if (profile != null && profile.TotalPredictions >= 5)
+                {
+                    var weight = 1.0 + (profile.AccuracyPercentage - 0.50);
+                    return Math.Clamp(weight, 0.7, 1.3);
+                }
+            }
+
+            return 1.0;
+        }
+
         foreach (var m in upcomingMatches)
         {
             if (string.IsNullOrWhiteSpace(m.HomeTeam) || string.IsNullOrWhiteSpace(m.AwayTeam))
@@ -85,6 +110,39 @@ public class RegressionPredictorService : IRegressionPredictorService
             var diff = lambdaHome - lambdaAway;
             var homeWinProb = Sigmoid(diff);
             var awayWinProb = 1 - homeWinProb;
+
+            // --- Apply Self-Learning Weights to Statistical Projections with Fallbacks ---
+            var over25Weight = GetHistoricalWeight("Over2.5Goals", 
+                                   ("OverTwoGoals", m.OverTwoGoals),
+                                   ("OverThreeGoals", m.OverThreeGoals),
+                                   ("OverOnePointFive", m.OverOnePointFive)) +
+                               GetHistoricalWeight("Over2.5Goals", 
+                                   ("AhMinusHalfHome", m.AhMinusHalfHome),
+                                   ("AhMinusOneHome", m.AhMinusOneHome),
+                                   ("HomeWin", m.HomeWin));
+            over25 = Math.Clamp(over25 * (over25Weight / 2.0), 0.0, 1.0);
+
+            var bttsWeight = GetHistoricalWeight("BothTeamsScore", 
+                                 ("AhMinusHalfHome", m.AhMinusHalfHome),
+                                 ("AhMinusOneHome", m.AhMinusOneHome),
+                                 ("HomeWin", m.HomeWin)) +
+                             GetHistoricalWeight("BothTeamsScore", 
+                                 ("OverTwoGoals", m.OverTwoGoals),
+                                 ("OverThreeGoals", m.OverThreeGoals),
+                                 ("OverOnePointFive", m.OverOnePointFive));
+            btts = Math.Clamp(btts * (bttsWeight / 2.0), 0.0, 1.0);
+
+            var hwWeight = GetHistoricalWeight("StraightWin", 
+                ("AhMinusHalfHome", m.AhMinusHalfHome),
+                ("AhMinusOneHome", m.AhMinusOneHome),
+                ("HomeWin", m.HomeWin));
+            homeWinProb = Math.Clamp(homeWinProb * hwWeight, 0.0, 1.0);
+
+            var awWeight = GetHistoricalWeight("StraightWin", 
+                ("AhPlusHalfAway", m.AhPlusHalfAway),
+                ("AhPlusHalfHome", m.AhPlusHalfHome),
+                ("AwayWin", m.AwayWin));
+            awayWinProb = Math.Clamp(awayWinProb * awWeight, 0.0, 1.0);
 
             var (date, time, _) = DateTimeProvider.ParseProperDateAndTime(m.Date, m.Time);
 

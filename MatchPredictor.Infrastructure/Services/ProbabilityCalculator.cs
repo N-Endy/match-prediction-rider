@@ -278,12 +278,41 @@ namespace MatchPredictor.Infrastructure.Services;
 /// </summary>
 public class ProbabilityCalculator : IProbabilityCalculator
 {
-    public double CalculateBttsProbability(MatchData match)
+    private double GetHistoricalWeight(List<ModelAccuracy> accuracies, string category, params (string MetricName, double MetricValue)[] fallbacks)
+    {
+        if (accuracies == null || accuracies.Count == 0 || fallbacks == null || fallbacks.Length == 0) return 1.0;
+
+        foreach (var (metricName, metricValue) in fallbacks)
+        {
+            // Skip missing data point
+            if (metricValue <= 0) continue;
+
+            var profile = accuracies.FirstOrDefault(a => 
+                a.Category == category && 
+                a.MetricName == metricName && 
+                metricValue >= a.MetricRangeStart && 
+                metricValue < a.MetricRangeEnd);
+
+            // If we have statistical significance, use it and break the fallback chain
+            if (profile != null && profile.TotalPredictions >= 5)
+            {
+                // If historical accuracy is very poor (< 40%), penalize the probability. 
+                // If it's exceptionally good (> 60%), boost the probability.
+                var weight = 1.0 + (profile.AccuracyPercentage - 0.50);
+                return Math.Clamp(weight, 0.7, 1.3); // Safe guardrails 
+            }
+        }
+
+        // If all fallbacks were missing or lacked statistical significance, return neutral weight
+        return 1.0;
+    }
+
+    public double CalculateBttsProbability(MatchData match, List<ModelAccuracy> accuracies)
     {
         var trueOver25 = GetTrueOver25(match);
 
         // Missing critical data to form a baseline
-        if (trueOver25 <= 0 || match.HomeWin <= 0) return 0.0; 
+        if (trueOver25 <= 0 || match.HomeWin <= 0) return 0.0;  
 
         // 1. Derive Implied Expected Goals (Total xG)
         var totalXg = EstimateTotalXg(trueOver25, match.OverOnePointFive);
@@ -309,10 +338,25 @@ public class ProbabilityCalculator : IProbabilityCalculator
         var balance = 1.0 - Math.Abs(homeShare - awayShare);
         var btts = rawBtts * (0.95 + (0.10 * balance)); // Slight boost for highly balanced matches
 
-        return Calibrate(btts, center: 0.50, steepness: 4.5);
+        var finalProb = Calibrate(btts, center: 0.50, steepness: 4.5);
+        
+        // --- Apply Self-Learning Weights with Fallbacks ---
+        var ahWeight = GetHistoricalWeight(accuracies, "BothTeamsScore", 
+            ("AhMinusHalfHome", match.AhMinusHalfHome), 
+            ("AhMinusOneHome", match.AhMinusOneHome),
+            ("HomeWin", match.HomeWin)); // Correlated fallback chain
+            
+        var overTwoWeight = GetHistoricalWeight(accuracies, "BothTeamsScore", 
+            ("OverTwoGoals", match.OverTwoGoals),
+            ("OverThreeGoals", match.OverThreeGoals),
+            ("OverOnePointFive", match.OverOnePointFive));
+        
+        finalProb *= (ahWeight + overTwoWeight) / 2.0;
+
+        return Math.Clamp(finalProb, 0.0, 1.0);
     }
 
-    public double CalculateOverTwoGoalsProbability(MatchData match)
+    public double CalculateOverTwoGoalsProbability(MatchData match, List<ModelAccuracy> accuracies)
     {
         var trueOver25 = GetTrueOver25(match);
         if (trueOver25 <= 0) return 0;
@@ -329,10 +373,25 @@ public class ProbabilityCalculator : IProbabilityCalculator
         // If the market is heavily skewed, Poisson acts as a mathematical anchor to prevent overconfidence.
         var blended = (trueOver25 * 0.7) + (poissonOver25 * 0.3);
 
-        return Calibrate(blended, center: 0.55, steepness: 4.5);
+        var finalProb = Calibrate(blended, center: 0.55, steepness: 4.5);
+        
+        // --- Apply Self-Learning Weights with Fallbacks ---
+        var overTwoWeight = GetHistoricalWeight(accuracies, "Over2.5Goals", 
+            ("OverTwoGoals", match.OverTwoGoals),
+            ("OverThreeGoals", match.OverThreeGoals),
+            ("OverOnePointFive", match.OverOnePointFive));
+            
+        var ahHomeWeight = GetHistoricalWeight(accuracies, "Over2.5Goals", 
+            ("AhMinusHalfHome", match.AhMinusHalfHome),
+            ("AhMinusOneHome", match.AhMinusOneHome),
+            ("HomeWin", match.HomeWin));
+        
+        finalProb *= (overTwoWeight + ahHomeWeight) / 2.0;
+        
+        return Math.Clamp(finalProb, 0.0, 1.0);
     }
 
-    public double CalculateDrawProbability(MatchData match)
+    public double CalculateDrawProbability(MatchData match, List<ModelAccuracy> accuracies)
     {
         if (match.Draw <= 0) return 0;
 
@@ -358,10 +417,23 @@ public class ProbabilityCalculator : IProbabilityCalculator
         // Blend bookie implied true draw with our derived poisson draw
         var blended = (match.Draw * 0.6) + (poissonDraw * 0.4);
 
-        return Calibrate(blended, center: 0.25, steepness: 5.0);
+        var finalProb = Calibrate(blended, center: 0.25, steepness: 5.0);
+        
+        // --- Apply Self-Learning Weights with Fallbacks ---
+        var impliedDrawWeight = GetHistoricalWeight(accuracies, "Draw", 
+            ("DrawOdds", match.Draw), // Try actual draw odds first
+            ("HomeWin", match.HomeWin)); // Fallback
+            
+        var ahHomeWeight = GetHistoricalWeight(accuracies, "Draw", 
+            ("AhMinusHalfHome", match.AhMinusHalfHome),
+            ("AhPlusHalfAway", match.AhPlusHalfAway));
+        
+        finalProb *= (impliedDrawWeight + ahHomeWeight) / 2.0;
+
+        return Math.Clamp(finalProb, 0.0, 1.0);
     }
 
-    public bool IsStrongHomeWin(MatchData match)
+    public bool IsStrongHomeWin(MatchData match, List<ModelAccuracy> accuracies)
     {
         if (match.HomeWin < PredictionThresholds.HomeWinStrong) return false;
 
@@ -378,10 +450,18 @@ public class ProbabilityCalculator : IProbabilityCalculator
         if (match.AhMinusOneHome > 0.45)
             confidence *= 1.05; // Modest boost, avoiding heavy double-counting
 
+        // --- Apply Self-Learning Weights with Fallbacks ---
+        var historyWeight = GetHistoricalWeight(accuracies, "StraightWin", 
+            ("AhMinusHalfHome", match.AhMinusHalfHome),
+            ("AhMinusOneHome", match.AhMinusOneHome),
+            ("HomeWin", match.HomeWin));
+            
+        confidence *= historyWeight;
+
         return confidence >= 0.68; // Matches your empirical 80th percentile
     }
 
-    public bool IsStrongAwayWin(MatchData match)
+    public bool IsStrongAwayWin(MatchData match, List<ModelAccuracy> accuracies)
     {
         if (match.AwayWin < PredictionThresholds.AwayWinStrong) return false;
 
@@ -395,6 +475,14 @@ public class ProbabilityCalculator : IProbabilityCalculator
 
         if (match.AhMinusOneAway > 0.45)
             confidence *= 1.05;
+            
+        // --- Apply Self-Learning Weights with Fallbacks ---
+        var historyWeight = GetHistoricalWeight(accuracies, "StraightWin", 
+            ("AhPlusHalfAway", match.AhPlusHalfAway),
+            ("AhPlusHalfHome", match.AhPlusHalfHome),
+            ("AwayWin", match.AwayWin));
+            
+        confidence *= historyWeight;
 
         return confidence >= 0.70; // Higher threshold for away teams
     }

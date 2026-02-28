@@ -72,11 +72,12 @@ public class AnalyzerService  : IAnalyzerService
             _logger.LogInformation($"Extracted {scraped.Count} matches from Excel file.");
             
             var matches = await _dbContext.MatchDatas.ToListAsync();
+            var accuracies = await _dbContext.ModelAccuracies.ToListAsync();
 
-            await SavePredictions("BothTeamsScore", _dataAnalyzerService.BothTeamsScore(matches));
-            await SavePredictions("Draw", _dataAnalyzerService.Draw(matches));
-            await SavePredictions("Over2.5Goals", _dataAnalyzerService.OverTwoGoals(matches));
-            await SavePredictions("StraightWin", _dataAnalyzerService.StraightWin(matches));
+            await SavePredictions("BothTeamsScore", _dataAnalyzerService.BothTeamsScore(matches, accuracies));
+            await SavePredictions("Draw", _dataAnalyzerService.Draw(matches, accuracies));
+            await SavePredictions("Over2.5Goals", _dataAnalyzerService.OverTwoGoals(matches, accuracies));
+            await SavePredictions("StraightWin", _dataAnalyzerService.StraightWin(matches, accuracies));
             
             _logger.LogInformation("✅ Predictions saved successfully.");
 
@@ -142,7 +143,8 @@ public class AnalyzerService  : IAnalyzerService
             _logger.LogInformation("✅ Pattern analysis completed.");
 
             var scraped = _excelExtract.ExtractMatchDatasetFromFile().ToList();
-            var regressionPredictions = _regressionPredictorService.GeneratePredictions(scraped);
+            var accuracies = await _dbContext.ModelAccuracies.ToListAsync();
+            var regressionPredictions = _regressionPredictorService.GeneratePredictions(scraped, accuracies);
             await SaveRegressionPredictions(regressionPredictions);
             _logger.LogInformation("✅ Regression-based predictions saved successfully.");
 
@@ -338,25 +340,99 @@ public class AnalyzerService  : IAnalyzerService
     
     private async Task AnalyzePatterns()
     {
-        var allPredictions = await _dbContext.Predictions
+        _logger.LogInformation("Starting detailed pattern analysis for self-learning...");
+        
+        // 1. Fetch completed predictions with their matching MatchData
+        var completedPredictions = await _dbContext.Predictions
             .Where(p => p.ActualOutcome != null)
             .ToListAsync();
+            
+        var allMatchData = await _dbContext.MatchDatas.ToListAsync();
         
-        var categoryGroups = allPredictions
-            .GroupBy(p => p.PredictionCategory)
-            .Select(g => new 
-            {
-                Category = g.Key,
-                Total = g.Count(),
-                Correct = g.Count(p => p.PredictedOutcome == p.ActualOutcome)
-            })
+        var predictionDataPairs = completedPredictions
+            .Join(allMatchData,
+                p => new { p.Date, p.HomeTeam, p.AwayTeam },
+                m => new { m.Date, m.HomeTeam, m.AwayTeam },
+                (p, m) => new { Prediction = p, Match = m })
             .ToList();
-        
-        foreach (var group in categoryGroups)
+
+        if (predictionDataPairs.Count == 0)
         {
-            var accuracy = group.Total > 0 ? (double)group.Correct / group.Total : 0;
-            _logger.LogInformation($"Category {group.Category}: {accuracy:P2} accuracy ({group.Correct}/{group.Total})");
+            _logger.LogInformation("No completed predictions with match data found to analyze.");
+            return;
         }
+
+        var newAccuracies = new List<ModelAccuracy>();
+        var now = DateTime.UtcNow;
+
+        // 2. Define the metrics we want to track (including secondary fallbacks)
+        var metricsToTrack = new List<(string Name, Func<MatchData, double> Selector)>
+        {
+            // Primary Signals
+            ("AhMinusHalfHome", m => m.AhMinusHalfHome),
+            ("AhPlusHalfAway", m => m.AhPlusHalfAway),
+            ("OverTwoGoals", m => m.OverTwoGoals),
+            ("HomeWin", m => m.HomeWin),
+            ("AwayWin", m => m.AwayWin),
+            
+            // Secondary/Fallback Signals (for when primary is 0)
+            ("AhMinusOneHome", m => m.AhMinusOneHome),
+            ("AhPlusHalfHome", m => m.AhPlusHalfHome), // Away win fallback correlation
+            ("OverOnePointFive", m => m.OverOnePointFive),
+            ("OverThreeGoals", m => m.OverThreeGoals),
+            ("DrawOdds", m => m.Draw)
+        };
+
+        // 3. Bucketize & Aggregate
+        foreach (var categoryGroup in predictionDataPairs.GroupBy(x => x.Prediction.PredictionCategory))
+        {
+            var category = categoryGroup.Key;
+
+            foreach (var metric in metricsToTrack)
+            {
+                // Create buckets of 0.10 ranges (e.g., 0.50 to 0.59)
+                // Filter out 0 values as they typically represent missing data in MatchData
+                var bucketed = categoryGroup
+                    .Where(x => metric.Selector(x.Match) > 0)
+                    .GroupBy(x => 
+                    {
+                        var val = metric.Selector(x.Match);
+                        return Math.Floor(val * 10) / 10.0; 
+                    });
+
+                foreach (var bucket in bucketed)
+                {
+                    var rangeStart = bucket.Key;
+                    var rangeEnd = rangeStart + 0.10;
+                    
+                    var total = bucket.Count();
+                    // Don't save noise. Require at least slightly significant data points.
+                    if (total < 5) continue; 
+
+                    var correct = bucket.Count(x => x.Prediction.PredictedOutcome == x.Prediction.ActualOutcome);
+                    var accuracy = (double)correct / total;
+
+                    newAccuracies.Add(new ModelAccuracy
+                    {
+                        Category = category,
+                        MetricName = metric.Name,
+                        MetricRangeStart = rangeStart,
+                        MetricRangeEnd = rangeEnd,
+                        TotalPredictions = total,
+                        CorrectPredictions = correct,
+                        AccuracyPercentage = accuracy,
+                        LastUpdated = now
+                    });
+                }
+            }
+        }
+
+        // 4. Update the database (Wipe & Replace strategy for simplicity)
+        await _dbContext.ModelAccuracies.ExecuteDeleteAsync();
+        await _dbContext.ModelAccuracies.AddRangeAsync(newAccuracies);
+        await _dbContext.SaveChangesAsync();
+
+        _logger.LogInformation($"Saved {newAccuracies.Count} granular accuracy metrics to the database.");
     }
     
     private async Task SaveMatchScores(List<MatchScore> scores)

@@ -4,9 +4,9 @@ namespace MatchPredictor.Domain.Interfaces;
 
 public interface IProbabilityCalculator
 {
-    double CalculateBttsProbability(MatchData match);
-    double CalculateOverTwoGoalsProbability(MatchData match);
-    double CalculateDrawProbability(MatchData match);
-    bool IsStrongHomeWin(MatchData match);
-    bool IsStrongAwayWin(MatchData match);
+    double CalculateBttsProbability(MatchData match, List<ModelAccuracy> accuracies);
+    double CalculateOverTwoGoalsProbability(MatchData match, List<ModelAccuracy> accuracies);
+    double CalculateDrawProbability(MatchData match, List<ModelAccuracy> accuracies);
+    bool IsStrongHomeWin(MatchData match, List<ModelAccuracy> accuracies);
+    bool IsStrongAwayWin(MatchData match, List<ModelAccuracy> accuracies);
 }
