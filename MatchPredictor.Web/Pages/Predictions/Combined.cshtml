@@ -64,13 +64,22 @@
                     <div class="mp-card-badges">
                         @if (!string.IsNullOrEmpty(match.ActualScore))
                         {
+                            var isCorrect = match.PredictedOutcome == match.ActualOutcome;
+                            var isPermanentlyCorrect = isCorrect && (match.PredictionCategory == "BothTeamsScore" || match.PredictionCategory == "Over2.5Goals");
+
                             if (match.IsLive)
                             {
-                                <span class="mp-score mp-score-live">🔴 @match.ActualScore</span>
+                                if (isPermanentlyCorrect)
+                                {
+                                    <span class="mp-score mp-score-correct">🔴 @match.ActualScore</span>
+                                }
+                                else
+                                {
+                                    <span class="mp-score mp-score-live">🔴 @match.ActualScore</span>
+                                }
                             }
                             else
                             {
-                                var isCorrect = match.PredictedOutcome == match.ActualOutcome;
                                 <span class="mp-score @(isCorrect ? "mp-score-correct" : "mp-score-incorrect")">
                                     @match.ActualScore
                                 </span>

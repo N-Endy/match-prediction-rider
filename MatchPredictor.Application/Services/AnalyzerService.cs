@@ -225,19 +225,19 @@ public class AnalyzerService  : IAnalyzerService
             .Where(s => s.MatchTime >= startOfDayUtc && s.MatchTime < endOfDayUtc)
             .ToListAsync();
 
-        var missingScorePredictions = predictionsForToday
-            .Where(p => string.IsNullOrEmpty(p.ActualScore))
+        var incompletePredictions = predictionsForToday
+            .Where(p => string.IsNullOrEmpty(p.ActualScore) || p.IsLive)
             .ToList();
 
-        var predLookup = missingScorePredictions
+        var predLookup = incompletePredictions
             .GroupBy(p => (p.Date, Home: Norm(p.HomeTeam), Away: Norm(p.AwayTeam)))
             .ToDictionary(g => g.Key, g => g.ToList());
 
-        if (missingScorePredictions.Count > 0 && scores.Count > 0)
+        if (incompletePredictions.Count > 0 && scores.Count > 0)
         {
             _logger.LogInformation(
-                "Attempting fallback score match from FlashScore for {Count} predictions.",
-                missingScorePredictions.Count);
+                "Attempting fallback score match from FlashScore for {Count} incomplete predictions.",
+                incompletePredictions.Count);
 
             foreach (var score in scores)
             {
@@ -245,15 +245,15 @@ public class AnalyzerService  : IAnalyzerService
 
                 if (!predLookup.TryGetValue(key, out var matched))
                 {
-                    matched = missingScorePredictions
+                    matched = incompletePredictions
                         .Where(p =>
                             ScoreMatchingHelper.TeamsMatch(score.HomeTeam, p.HomeTeam) &&
                             ScoreMatchingHelper.TeamsMatch(score.AwayTeam, p.AwayTeam))
                         .ToList();
                 }
 
-                // Only update predictions that don't already have a score (from AiScore)
-                matched = matched.Where(p => string.IsNullOrEmpty(p.ActualScore)).ToList();
+                // Only update predictions that don't already have a score or are still live (from AiScore)
+                matched = matched.Where(p => string.IsNullOrEmpty(p.ActualScore) || p.IsLive).ToList();
 
                 switch (matched.Count)
                 {
