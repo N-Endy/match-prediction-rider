@@ -1,0 +1,53 @@
+@model MatchPredictor.Web.Pages.AnalyticsStats
+
+@{
+    var accClass = Model.OverallAccuracy >= 0.70 ? "acc-high" :
+                   Model.OverallAccuracy >= 0.50 ? "acc-med" : "acc-low";
+}
+
+<div class="mp-stat-grid">
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Total Predictions</div>
+        <div class="mp-stat-value">@Model.TotalPredictions</div>
+    </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Matched & Completed</div>
+        <div class="mp-stat-value">@Model.CompletedPredictions</div>
+    </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Correct Picks</div>
+        <div class="mp-stat-value">@Model.CorrectPredictions</div>
+    </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Win Rate</div>
+        <div class="mp-stat-value @accClass">
+            @(Model.CompletedPredictions > 0 ? (Model.OverallAccuracy * 100).ToString("F1") + "%" : "0.0%")
+        </div>
+    </div>
+</div>
+
+@if (Model.CategoryStats.Any())
+{
+    <div class="mp-category-stats">
+        <h3 style="margin-bottom: 1.5rem; font-size: 1.1rem; color: white;">Performance by Concept</h3>
+        
+        @foreach (var cat in Model.CategoryStats.Values.OrderByDescending(c => c.Total))
+        {
+            var catAccClass = cat.Accuracy >= 0.70 ? "acc-high" :
+                              cat.Accuracy >= 0.50 ? "acc-med" : "acc-low";
+            var fillWidth = cat.Total > 0 ? (cat.Accuracy * 100).ToString("F1") + "%" : "0%";
+                              
+            <div class="mp-category-row">
+                <div class="mp-cat-header">
+                    <span class="mp-cat-name">@cat.Category</span>
+                    <span class="mp-cat-details @catAccClass">
+                        <strong>@fillWidth</strong> (@cat.Correct / @cat.Total)
+                    </span>
+                </div>
+                <div class="mp-progress-track">
+                    <div class="mp-progress-fill" style="width: @fillWidth"></div>
+                </div>
+            </div>
+        }
+    </div>
+}
