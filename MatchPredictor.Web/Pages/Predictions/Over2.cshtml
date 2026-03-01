@@ -39,10 +39,20 @@
                         </div>
                     </div>
                     <div class="mp-card-badges">
+                        @{
+                            var hasMatchStarted = !string.IsNullOrEmpty(match.ActualScore);
+                            var isActuallyLive = match.IsLive;
+                            if (DateTime.TryParse(match.Time, out var parsedTime))
+                            {
+                                var utcMatchTime = parsedTime.AddHours(-1);
+                                if (DateTime.UtcNow >= utcMatchTime) hasMatchStarted = true;
+                                if (DateTime.UtcNow > utcMatchTime.AddMinutes(200)) isActuallyLive = false;
+                            }
+                        }
                         @if (!string.IsNullOrEmpty(match.ActualScore))
                         {
                             var isCorrect = match.PredictedOutcome == match.ActualOutcome;
-                            if (match.IsLive)
+                            if (isActuallyLive)
                             {
                                 if (isCorrect) 
                                 {
