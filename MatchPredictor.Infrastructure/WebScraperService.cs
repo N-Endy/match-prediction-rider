@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using HtmlAgilityPack;
+using Jint;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using Microsoft.Extensions.Configuration;
@@ -186,20 +187,20 @@ public partial class WebScraperService : IWebScraperService
     {
         var matchScores = new List<AiScoreMatchScore>();
 
-        // ── Primary: Headless browser → extract window.__NUXT__ state from AiScore ──
+        // ── Primary: HttpClient → extract window.__NUXT__ state from AiScore ──
         try
         {
-            matchScores = await ScrapeAiScoreViaBrowserAsync();
+            matchScores = await ScrapeAiScoreViaHttpAsync();
             if (matchScores.Count > 0)
             {
                 _logger.LogInformation("Scraped {Count} match scores from AiScore (Nuxt state).", matchScores.Count);
                 return matchScores;
             }
-            _logger.LogWarning("AiScore browser extraction returned 0 matches. Falling back to API-Football.");
+            _logger.LogWarning("AiScore HTTP extraction returned 0 matches. Falling back to API-Football.");
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "AiScore browser extraction failed. Falling back to API-Football.");
+            _logger.LogWarning(ex, "AiScore HTTP extraction failed. Falling back to API-Football.");
         }
 
         // ── Fallback: API-Football REST API ──
@@ -221,170 +222,132 @@ public partial class WebScraperService : IWebScraperService
     }
 
     /// <summary>
-    /// Extracts match scores from AiScore by loading the page in a headless browser
-    /// and reading the already-parsed data from window.__NUXT__.state (Vuex store).
+    /// Extracts match scores from AiScore by downloading the HTML via HttpClient
+    /// and extracting JSON data injected in window.__NUXT__.
     /// </summary>
-    private async Task<List<AiScoreMatchScore>> ScrapeAiScoreViaBrowserAsync()
+    private async Task<List<AiScoreMatchScore>> ScrapeAiScoreViaHttpAsync()
     {
-        var chromeOptions = new ChromeOptions();
-        chromeOptions.AddArgument("--headless=new");
-        chromeOptions.AddArgument("--window-size=1440,900");
-        chromeOptions.AddArgument("--no-sandbox");
-        chromeOptions.AddArgument("--disable-dev-shm-usage");
-        chromeOptions.AddArgument("--disable-blink-features=AutomationControlled");
-        chromeOptions.AddExcludedArgument("enable-automation");
-        chromeOptions.AddAdditionalOption("useAutomationExtension", false);
-        chromeOptions.AddArgument("--user-agent=Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
-        chromeOptions.AddArgument("--disable-gpu");
-
         var aiScoreUrl = _configuration["ScrapingValues:AiScoreWebsite"] ?? "https://m.aiscore.com";
+        var matchScores = new List<AiScoreMatchScore>();
 
-        using var driver = new ChromeDriver(chromeOptions);
-        var js = (IJavaScriptExecutor)driver;
-        js.ExecuteScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
+        using var client = new HttpClient();
+        // Use a generic mobile user agent
+        client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        client.Timeout = TimeSpan.FromSeconds(30);
 
-        _logger.LogInformation("Navigating to AiScore...");
-        await driver.Navigate().GoToUrlAsync(aiScoreUrl);
+        _logger.LogInformation("Fetching AiScore SSR HTML via HTTP...");
+        var response = await client.GetAsync(aiScoreUrl);
 
-        // Wait for Cloudflare challenge (up to 25s)
-        var maxWait = 25;
-        var elapsed = 0;
-        while (elapsed < maxWait)
+        if (!response.IsSuccessStatusCode)
         {
-            await Task.Delay(2000);
-            elapsed += 2;
-            var src = driver.PageSource;
-            if (!src.Contains("security verification", StringComparison.OrdinalIgnoreCase) &&
-                !src.Contains("cf-turnstile", StringComparison.OrdinalIgnoreCase) &&
-                !src.Contains("Just a moment", StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogInformation("Cloudflare passed after {Elapsed}s.", elapsed);
-                break;
-            }
+            _logger.LogWarning("AiScore HTTP returned {StatusCode}.", response.StatusCode);
+            return matchScores;
         }
 
-        // Wait for Nuxt to hydrate and fetch data
-        await Task.Delay(5000);
-        WaitForDocumentReady(driver);
+        var html = await response.Content.ReadAsStringAsync();
+        
+        // Nuxt data injection: window.__NUXT__=(...);</script>
+        var match = Regex.Match(html, @"window\.__NUXT__=(.*?);</script>");
+        if (!match.Success)
+        {
+            _logger.LogWarning("AiScore HTTP extraction error: No __NUXT__ match in HTML.");
+            return matchScores;
+        }
 
-        // Extract match data directly from window.__NUXT__ Vuex state
-        // Key: state['football/home'] (literal slash), props: matchesData_matches (underscored)
-        var extractScript = @"
-            try {
-                var nuxt = window.__NUXT__;
-                if (!nuxt || !nuxt.state) return JSON.stringify({error: 'No __NUXT__ state'});
+        var jsonStr = match.Groups[1].Value;
+        
+        try
+        {
+            var engine = new Engine();
+            engine.Execute("var nuxt = " + jsonStr);
+            var extractedJson = engine.Evaluate(@"
+                JSON.stringify({ 
+                    matches: (nuxt.state['football/home'] || {}).matchesData_matches || [], 
+                    teams: (nuxt.state['football/home'] || {}).matchesData_teams || [], 
+                    comps: (nuxt.state['football/home'] || {}).matchesData_competitions || [] 
+                })
+            ").AsString();
 
-                var fh = nuxt.state['football/home'];
-                if (!fh) return JSON.stringify({error: 'No football/home state', keys: Object.keys(nuxt.state).slice(0, 15)});
+            using var doc = System.Text.Json.JsonDocument.Parse(extractedJson);
+            var root = doc.RootElement;
+            var matchesArr = root.GetProperty("matches");
+            var teamsArr = root.GetProperty("teams");
+            var compsArr = root.GetProperty("comps");
 
-                var matches = fh.matchesData_matches || fh['matchesData_matches'] || [];
-                var teams = fh.matchesData_teams || fh['matchesData_teams'] || [];
-                var competitions = fh.matchesData_competitions || fh['matchesData_competitions'] || [];
+            // Build dictionaries for constant O(1) lookups
+            var teamsDict = new Dictionary<string, string>();
+            foreach (var t in teamsArr.EnumerateArray())
+            {
+                var id = t.GetProperty("id").GetString();
+                var name = t.TryGetProperty("name", out var n) ? n.GetString() : t.TryGetProperty("n", out var nn) ? nn.GetString() : "";
+                if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name)) teamsDict[id] = name;
+            }
 
-                var getObjInfo = function(src, id) {
-                    if (!src || !id) return {};
-                    if (Array.isArray(src)) {
-                        for (var k = 0; k < src.length; k++) {
-                            if (src[k].id === id || src[k]._id === id) return src[k];
-                        }
-                        return {};
-                    }
-                    return src[id] || {};
-                };
+            var compsDict = new Dictionary<string, string>();
+            foreach (var c in compsArr.EnumerateArray())
+            {
+                var id = c.GetProperty("id").GetString();
+                var name = c.TryGetProperty("name", out var n) ? n.GetString() : c.TryGetProperty("n", out var nn) ? nn.GetString() : "";
+                if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name)) compsDict[id] = name;
+            }
 
-                var results = [];
-                for (var i = 0; i < matches.length; i++) {
-                    var m = matches[i];
-                    var homeScores = m.homeScores || [];
-                    var awayScores = m.awayScores || [];
-
-                    // statusId: 1=Not started, 2=First half, 3=Half-time, 4=Second half, 
-                    //           5=Extra time, 7=Penalties, 8=Finished, 9=Finished AET, 10=Finished Pen
-                    var sid = m.statusId || 0;
+            foreach (var m in matchesArr.EnumerateArray())
+            {
+                try
+                {
+                    var sid = m.TryGetProperty("statusId", out var sidProp) ? sidProp.GetInt32() : 0;
                     var isLive = (sid >= 2 && sid <= 7);
                     var isFinished = (sid >= 8 && sid <= 10);
 
                     if (!isLive && !isFinished) continue;
 
-                    // homeScores[0] = current total goals
-                    var homeGoals = homeScores.length > 0 ? homeScores[0] : null;
-                    var awayGoals = awayScores.length > 0 ? awayScores[0] : null;
+                    var homeScores = m.TryGetProperty("homeScores", out var hs) ? hs : default;
+                    var awayScores = m.TryGetProperty("awayScores", out var ascv) ? ascv : default;
 
-                    if (homeGoals === null || awayGoals === null) continue;
+                    if (homeScores.ValueKind != System.Text.Json.JsonValueKind.Array || 
+                        awayScores.ValueKind != System.Text.Json.JsonValueKind.Array ||
+                        homeScores.GetArrayLength() == 0 ||
+                        awayScores.GetArrayLength() == 0) 
+                        continue;
 
-                    // Team ID can be m.homeTeamId or m.homeTeam.id (nested object)
-                    var htId = m.homeTeamId || (m.homeTeam && m.homeTeam.id) || '';
-                    var atId = m.awayTeamId || (m.awayTeam && m.awayTeam.id) || '';
-                    // Competition ID
-                    var cId = m.competitionId || (m.competition && m.competition.id) || (m.competition && m.competition.competitionId) || '';
+                    var homeGoals = homeScores[0].GetInt32();
+                    var awayGoals = awayScores[0].GetInt32();
+                    
+                    var htId = m.TryGetProperty("homeTeam", out var ht) ? ht.GetProperty("id").GetString() : m.TryGetProperty("homeTeamId", out var hti) ? hti.GetString() : "";
+                    var atId = m.TryGetProperty("awayTeam", out var at) ? at.GetProperty("id").GetString() : m.TryGetProperty("awayTeamId", out var ati) ? ati.GetString() : "";
+                    var cId = m.TryGetProperty("competition", out var comp) ? comp.GetProperty("id").GetString() : m.TryGetProperty("competitionId", out var ci) ? ci.GetString() : "";
 
-                    var homeTeamObj = getObjInfo(teams, htId);
-                    var awayTeamObj = getObjInfo(teams, atId);
-                    var compObj = getObjInfo(competitions, cId);
+                    var homeName = !string.IsNullOrEmpty(htId) && teamsDict.TryGetValue(htId, out var hn) ? hn : "";
+                    var awayName = !string.IsNullOrEmpty(atId) && teamsDict.TryGetValue(atId, out var an) ? an : "";
+                    var leagueName = !string.IsNullOrEmpty(cId) && compsDict.TryGetValue(cId, out var ln) ? ln : "";
 
-                    results.push({
-                        home: homeTeamObj.name || homeTeamObj.n || '',
-                        away: awayTeamObj.name || awayTeamObj.n || '',
-                        homeGoals: homeGoals,
-                        awayGoals: awayGoals,
-                        league: compObj.name || compObj.n || '',
-                        matchTime: m.matchTime || 0,
-                        isLive: isLive
+                    var matchTimeUnix = m.TryGetProperty("matchTime", out var mt) ? mt.GetInt64() : 0;
+                    var matchTime = matchTimeUnix > 0
+                        ? DateTimeOffset.FromUnixTimeSeconds(matchTimeUnix).UtcDateTime
+                        : DateTime.UtcNow;
+
+                    var score = $"{homeGoals}:{awayGoals}";
+
+                    matchScores.Add(new AiScoreMatchScore
+                    {
+                        League = leagueName,
+                        HomeTeam = homeName,
+                        AwayTeam = awayName,
+                        Score = score,
+                        MatchTime = matchTime,
+                        BTTSLabel = IsBtts(score),
+                        IsLive = isLive
                     });
                 }
-                return JSON.stringify({count: results.length, matches: results});
-            } catch(e) {
-                return JSON.stringify({error: e.message});
-            }
-        ";
-
-        var resultJson = js.ExecuteScript(extractScript)?.ToString();
-        _logger.LogInformation("AiScore Nuxt extraction result: {Result}",
-            resultJson?[..Math.Min(300, resultJson?.Length ?? 0)]);
-
-        if (string.IsNullOrWhiteSpace(resultJson))
-            return new List<AiScoreMatchScore>();
-
-        var result = System.Text.Json.JsonDocument.Parse(resultJson).RootElement;
-
-        if (result.TryGetProperty("error", out var err))
-        {
-            _logger.LogWarning("AiScore extraction error: {Error}", err.GetString());
-            return new List<AiScoreMatchScore>();
-        }
-
-        var matchScores = new List<AiScoreMatchScore>();
-        if (!result.TryGetProperty("matches", out var matchesArr))
-            return matchScores;
-
-        foreach (var m in matchesArr.EnumerateArray())
-        {
-            try
-            {
-                var homeGoals = m.GetProperty("homeGoals").GetInt32();
-                var awayGoals = m.GetProperty("awayGoals").GetInt32();
-                var score = $"{homeGoals}:{awayGoals}";
-
-                var matchTimeUnix = m.GetProperty("matchTime").GetInt64();
-                var matchTime = matchTimeUnix > 0
-                    ? DateTimeOffset.FromUnixTimeSeconds(matchTimeUnix).UtcDateTime
-                    : DateTime.UtcNow;
-
-                matchScores.Add(new AiScoreMatchScore
+                catch (Exception ex)
                 {
-                    League = m.GetProperty("league").GetString() ?? "",
-                    HomeTeam = m.GetProperty("home").GetString() ?? "",
-                    AwayTeam = m.GetProperty("away").GetString() ?? "",
-                    Score = score,
-                    MatchTime = matchTime,
-                    BTTSLabel = IsBtts(score),
-                    IsLive = m.GetProperty("isLive").GetBoolean()
-                });
+                    _logger.LogDebug(ex, "Skipping AiScore HTTP match due to parse error.");
+                }
             }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Skipping AiScore match due to parse error");
-            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Jint extraction/parsing failed for AiScore Nuxt state.");
         }
 
         return matchScores;
@@ -422,8 +385,13 @@ public partial class WebScraperService : IWebScraperService
         var doc = System.Text.Json.JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        if (root.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0)
-            return new List<AiScoreMatchScore>();
+        if (root.TryGetProperty("errors", out var errors))
+        {
+            if (errors.ValueKind == System.Text.Json.JsonValueKind.Array && errors.GetArrayLength() > 0)
+                return new List<AiScoreMatchScore>();
+            if (errors.ValueKind == System.Text.Json.JsonValueKind.Object && errors.EnumerateObject().Any())
+                return new List<AiScoreMatchScore>();
+        }
 
         var matchScores = new List<AiScoreMatchScore>();
         var fixtures = root.GetProperty("response");
