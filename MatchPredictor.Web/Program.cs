@@ -138,7 +138,8 @@ using (var scope = app.Services.CreateScope())
     recurringJobs.AddOrUpdate<IAnalyzerService>(
         "prediction-generation-job",
         service => service.RunPredictionGenerationAsync(),
-        "0 */3 * * *", // Every 3 hours
+        "0 2,10,16 * * *", // 2:00 AM, 10:00 AM, 4:00 PM
+
         new RecurringJobOptions
         {
             TimeZone = TimeZoneInfo.Local
@@ -148,7 +149,7 @@ using (var scope = app.Services.CreateScope())
     recurringJobs.AddOrUpdate<IAnalyzerService>(
         "score-update-job",
         service => service.RunScoreUpdaterAsync(),
-        "*/15 * * * *", // Every 15 minutes
+        "*/5 * * * *", // Every 5 minutes
         new RecurringJobOptions
         {
             TimeZone = TimeZoneInfo.Local
