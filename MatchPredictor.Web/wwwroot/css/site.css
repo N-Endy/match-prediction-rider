@@ -570,7 +570,18 @@ a:hover {
   color: #f59e0b;
   background: rgba(245, 158, 11, 0.1);
   border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.mp-live-indicator {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #ef4444;
+  margin-right: 6px;
+  margin-bottom: 2px;
   animation: live-blink 1.5s ease-in-out infinite;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.8);
 }
 
 @keyframes live-blink {
@@ -581,7 +592,7 @@ a:hover {
   }
 
   50% {
-    opacity: 0.4;
+    opacity: 0.3;
   }
 }
 

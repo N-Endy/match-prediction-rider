@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Text;
 using MatchPredictor.Domain.Models;
 
 namespace MatchPredictor.Application.Helpers;
@@ -16,13 +18,19 @@ public static class ScoreMatchingHelper
         "group", "stage", "phase", "preliminary", "league", "championship"
     };
 
-    // Generic team suffixes that artificially inflate match ratios
+    // Generic team suffixes/noise words that differ across sources
     private static readonly HashSet<string> TeamStopWords = new(StringComparer.OrdinalIgnoreCase)
     {
-        "fc", "cf", "sc", "afc", "fcv", "fsv", "balompie", "esporte", "clube"
+        // Club type suffixes
+        "fc", "cf", "sc", "afc", "fcv", "fsv", "balompie", "esporte", "clube",
+        "cd", "ud", "rcd", "fk", "sk", "nk", "bk", "if", "bsc", "tsv",
+        "vfb", "vfl", "ssc", "as", "us", "og", "1fc", "ac", "rc", "se",
+        "ssd", "srl", "sad", "sag", "spa",
+        // Prepositions / articles common in team names
+        "de", "da", "do", "la", "le", "los", "del", "al", "el", "di", "il", "des", "den", "het"
     };
 
-    // Map common abbreviations to their full words so they match perfectly
+    // Map common abbreviations to their full words
     private static readonly Dictionary<string, string> CommonSynonyms = new(StringComparer.OrdinalIgnoreCase)
     {
         { "man", "manchester" },
@@ -30,7 +38,35 @@ public static class ScoreMatchingHelper
         { "st", "saint" },
         { "intl", "international" },
         { "sp", "sporting" },
-        { "atl", "atletico" }
+        { "atl", "atletico" },
+        { "cty", "city" },
+        { "cit", "city" },
+        { "weds", "wednesday" },
+        { "ath", "athletic" },
+        { "bor", "borough" },
+        { "rov", "rovers" },
+        { "int", "inter" },
+        { "par", "partizan" },
+        { "jun", "juniors" },
+        { "snr", "seniors" },
+        { "yth", "youth" },
+        { "wand", "wanderers" },
+        { "oly", "olympique" },
+        { "dep", "deportivo" },
+        { "dyn", "dynamo" },
+        { "real", "real" },
+        { "benf", "benfica" },
+        { "ars", "arsenal" },
+        { "bar", "barcelona" },
+        { "tot", "tottenham" },
+        { "chel", "chelsea" },
+        { "liv", "liverpool" },
+        { "new", "newcastle" },
+        { "lei", "leicester" },
+        { "wolv", "wolves" },
+        { "sheff", "sheffield" },
+        { "nott", "nottingham" },
+        { "bri", "brighton" }
     };
 
     public static void PatchMissingScores(List<Prediction> predictions, List<MatchScore> scores)
@@ -110,24 +146,43 @@ public static class ScoreMatchingHelper
 
         foreach (var shortWord in shorter)
         {
-            // 1. Check for an exact match first (Fastest)
+            // 1. Exact match (fastest)
             if (longer.Contains(shortWord))
             {
                 matchCount++;
                 continue;
             }
 
-            // 2. Fallback to Levenshtein Fuzzy Match
-            bool isFuzzyMatch = false;
-        
-            // Dynamic typo tolerance based on word length
-            // - Less than 5 chars: 0 typos allowed (exact match only)
-            // - 5 to 7 chars: 1 typo allowed
-            // - 8+ chars: 2 typos allowed
-            int allowedTypos = shortWord.Length >= 8 ? 2 : (shortWord.Length >= 5 ? 1 : 0);
+            // 2. Substring / prefix match for short words (≥3 chars)
+            //    e.g., "lyon" matches "lyonnais", "glad" matches "gladbach"
+            if (shortWord.Length >= 3)
+            {
+                bool prefixMatch = false;
+                foreach (var longWord in longer)
+                {
+                    if (longWord.StartsWith(shortWord, StringComparison.OrdinalIgnoreCase) ||
+                        shortWord.StartsWith(longWord, StringComparison.OrdinalIgnoreCase))
+                    {
+                        prefixMatch = true;
+                        break;
+                    }
+                }
+                if (prefixMatch)
+                {
+                    matchCount++;
+                    continue;
+                }
+            }
+
+            // 3. Levenshtein fuzzy match with dynamic tolerance
+            //    - Less than 4 chars: 0 typos (exact only — already checked above)
+            //    - 4 to 6 chars: 1 typo allowed
+            //    - 7+ chars: 2 typos allowed
+            int allowedTypos = shortWord.Length >= 7 ? 2 : (shortWord.Length >= 4 ? 1 : 0);
 
             if (allowedTypos > 0)
             {
+                bool isFuzzyMatch = false;
                 foreach (var longWord in longer)
                 {
                     int distance = ComputeLevenshteinDistance(shortWord, longWord);
@@ -137,13 +192,12 @@ public static class ScoreMatchingHelper
                         break;
                     }
                 }
+                if (isFuzzyMatch) matchCount++;
             }
-
-            if (isFuzzyMatch) matchCount++;
         }
 
         var ratio = (double)matchCount / shorter.Count;
-        return ratio >= 0.6;
+        return ratio >= 0.5;
     }
 
     public static bool LeaguesMatch(string leagueA, string leagueB)
@@ -164,14 +218,16 @@ public static class ScoreMatchingHelper
     {
         var words = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         
-        // string.Split is much faster than Regex here
-        var parts = name.Split(Separators, StringSplitOptions.RemoveEmptyEntries);
+        // Normalize diacritics first (São → Sao, Zürich → Zurich, etc.)
+        var normalized = RemoveDiacritics(name);
+        
+        var parts = normalized.Split(Separators, StringSplitOptions.RemoveEmptyEntries);
 
         foreach (var part in parts)
         {
             if (TeamStopWords.Contains(part)) continue;
 
-            // Normalize abbreviations instantly
+            // Normalize abbreviations
             var finalWord = CommonSynonyms.TryGetValue(part, out var synonym) ? synonym : part;
             words.Add(finalWord);
         }
@@ -181,9 +237,33 @@ public static class ScoreMatchingHelper
 
     private static HashSet<string> ExtractWords(string name, HashSet<string> stopWords)
     {
-        var parts = name.Split(Separators, StringSplitOptions.RemoveEmptyEntries);
+        var normalized = RemoveDiacritics(name);
+        var parts = normalized.Split(Separators, StringSplitOptions.RemoveEmptyEntries);
         return parts.Where(p => !stopWords.Contains(p))
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Strips diacritical marks so accented characters match their plain equivalents.
+    /// e.g., "São Paulo" → "Sao Paulo", "Malmö FF" → "Malmo FF"
+    /// </summary>
+    private static string RemoveDiacritics(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return text;
+        
+        var normalized = text.Normalize(NormalizationForm.FormD);
+        var sb = new StringBuilder(normalized.Length);
+        
+        foreach (var c in normalized)
+        {
+            var category = CharUnicodeInfo.GetUnicodeCategory(c);
+            if (category != UnicodeCategory.NonSpacingMark)
+            {
+                sb.Append(c);
+            }
+        }
+        
+        return sb.ToString().Normalize(NormalizationForm.FormC);
     }
 
     // Combined parsing logic to avoid duplicating string splits
@@ -222,10 +302,14 @@ public static class ScoreMatchingHelper
     
     /// <summary>
     /// Calculates the minimum number of character edits required to change one string into another.
-    /// Uses an optimized memory footprint (two 1D arrays instead of a full 2D matrix).
+    /// Case-insensitive comparison. Uses optimized memory footprint (two 1D arrays).
     /// </summary>
     private static int ComputeLevenshteinDistance(string source, string target)
     {
+        // Lowercase both for case-insensitive comparison
+        source = source.ToLowerInvariant();
+        target = target.ToLowerInvariant();
+        
         if (source.Length == 0) return target.Length;
         if (target.Length == 0) return source.Length;
 

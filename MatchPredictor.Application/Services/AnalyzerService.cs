@@ -94,7 +94,7 @@ public class AnalyzerService  : IAnalyzerService
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
     public async Task RunScoreUpdaterAsync()
     {
-        _logger.LogInformation("Starting score updating process (every 15m)...");
+        _logger.LogInformation("Starting score updating process (every 5m)...");
         try
         {
             // Score scraping is non-blocking
@@ -287,6 +287,35 @@ public class AnalyzerService  : IAnalyzerService
                     prediction.ActualScore = score.Score;
                     prediction.IsLive = score.IsLive;
                 }
+            }
+        }
+
+        // ── Matching Statistics & Diagnostics ──
+        var matchedCount = predictionsForToday.Count(p => !string.IsNullOrEmpty(p.ActualScore));
+        var unmatchedPredictions = predictionsForToday
+            .Where(p => string.IsNullOrEmpty(p.ActualScore))
+            .ToList();
+
+        _logger.LogInformation(
+            "📊 Score matching summary: {Matched}/{Total} predictions matched ({Percentage}%), {Unmatched} unmatched.",
+            matchedCount, predictionsForToday.Count,
+            predictionsForToday.Count > 0 ? (matchedCount * 100 / predictionsForToday.Count) : 0,
+            unmatchedPredictions.Count);
+
+        if (unmatchedPredictions.Count > 0)
+        {
+            var topUnmatched = unmatchedPredictions.Take(15);
+            foreach (var p in topUnmatched)
+            {
+                _logger.LogWarning(
+                    "⚠️ Unmatched prediction: [{Category}] {Home} vs {Away} ({League}, {Time})",
+                    p.PredictionCategory, p.HomeTeam, p.AwayTeam, p.League, p.Time);
+            }
+
+            if (unmatchedPredictions.Count > 15)
+            {
+                _logger.LogWarning("⚠️ ...and {More} more unmatched predictions.",
+                    unmatchedPredictions.Count - 15);
             }
         }
 
