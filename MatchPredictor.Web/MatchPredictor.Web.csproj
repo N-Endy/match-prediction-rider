@@ -33,4 +33,11 @@
       <Folder Include="Chrome\" />
     </ItemGroup>
 
+    <ItemGroup>
+        <Content Include="..\Resources\**\*">
+            <Link>Resources\%(RecursiveDir)%(Filename)%(Extension)</Link>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+    </ItemGroup>
+
 </Project>

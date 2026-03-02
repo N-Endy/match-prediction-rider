@@ -22,8 +22,18 @@ public partial class WebScraperService : IWebScraperService
     {
         _logger = logger;
         _configuration = configuration;
-        var projectDirectory = Directory.GetParent(Directory.GetCurrentDirectory())?.FullName ?? string.Empty;
-        _downloadFolder = Path.Combine(projectDirectory, "Resources");
+        
+        var baseDirFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources");
+        var currentDirFolder = Path.Combine(Directory.GetCurrentDirectory(), "Resources");
+        var parentDirFolder = Path.Combine(Directory.GetParent(Directory.GetCurrentDirectory())?.FullName ?? string.Empty, "Resources");
+
+        if (Directory.Exists(baseDirFolder) || AppDomain.CurrentDomain.BaseDirectory.Contains("publish") || AppDomain.CurrentDomain.BaseDirectory.Contains("bin"))
+            _downloadFolder = baseDirFolder;
+        else if (Directory.Exists(currentDirFolder))
+            _downloadFolder = currentDirFolder;
+        else
+            _downloadFolder = parentDirFolder;
+
         Directory.CreateDirectory(_downloadFolder); // Ensure the directory exists
     }
     
@@ -230,9 +240,16 @@ public partial class WebScraperService : IWebScraperService
         var aiScoreUrl = _configuration["ScrapingValues:AiScoreWebsite"] ?? "https://m.aiscore.com";
         var matchScores = new List<AiScoreMatchScore>();
 
-        using var client = new HttpClient();
-        // Use a generic mobile user agent
-        client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        using var handler = new HttpClientHandler
+        {
+            AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate | System.Net.DecompressionMethods.Brotli
+        };
+        using var client = new HttpClient(handler);
+        
+        client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+        client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.5");
+        
         client.Timeout = TimeSpan.FromSeconds(30);
 
         _logger.LogInformation("Fetching AiScore SSR HTML via HTTP...");
@@ -240,7 +257,7 @@ public partial class WebScraperService : IWebScraperService
 
         if (!response.IsSuccessStatusCode)
         {
-            _logger.LogWarning("AiScore HTTP returned {StatusCode}.", response.StatusCode);
+            _logger.LogWarning("AiScore HTTP returned {StatusCode} {ReasonPhrase}.", response.StatusCode, response.ReasonPhrase);
             return matchScores;
         }
 

@@ -13,8 +13,14 @@ public class ExtractFromExcel : IExtractFromExcel
     public ExtractFromExcel(ILogger<ExtractFromExcel> logger)
     {
         _logger = logger;
-        var projectDirectory = Directory.GetParent(Directory.GetCurrentDirectory())?.FullName ?? string.Empty;
-        _filePath = Path.Combine(projectDirectory, "Resources/predictions.xlsx");
+        
+        var baseDirFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "predictions.xlsx");
+        var currentDirFile = Path.Combine(Directory.GetCurrentDirectory(), "Resources", "predictions.xlsx");
+        var parentDirFile = Path.Combine(Directory.GetParent(Directory.GetCurrentDirectory())?.FullName ?? string.Empty, "Resources", "predictions.xlsx");
+
+        if (File.Exists(baseDirFile)) _filePath = baseDirFile;
+        else if (File.Exists(currentDirFile)) _filePath = currentDirFile;
+        else _filePath = parentDirFile;
     }
     
     public IEnumerable<MatchData> ExtractMatchDatasetFromFile()

@@ -380,7 +380,7 @@ public class AnalyzerService  : IAnalyzerService
         
         var predictionDataPairs = completedPredictions
             .Join(allMatchData,
-                p => new { p.Date, p.HomeTeam, p.AwayTeam },
+                p => new { p.Date, p.HomeTeam, p.AwayTeam }!,
                 m => new { m.Date, m.HomeTeam, m.AwayTeam },
                 (p, m) => new { Prediction = p, Match = m })
             .ToList();
