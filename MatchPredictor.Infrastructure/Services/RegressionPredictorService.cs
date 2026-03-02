@@ -139,10 +139,21 @@ public class RegressionPredictorService : IRegressionPredictorService
             homeWinProb = Math.Clamp(homeWinProb * hwWeight, 0.0, 1.0);
 
             var awWeight = GetHistoricalWeight("StraightWin", 
-                ("AhPlusHalfAway", m.AhPlusHalfAway),
-                ("AhPlusHalfHome", m.AhPlusHalfHome),
+                ("AhMinusHalfAway", m.AhMinusHalfAway),
+                ("AhMinusOneAway", m.AhMinusOneAway),
                 ("AwayWin", m.AwayWin));
             awayWinProb = Math.Clamp(awayWinProb * awWeight, 0.0, 1.0);
+            
+            var drawWeight = GetHistoricalWeight("Draw", 
+                ("AhZeroHome", m.AhZeroHome),
+                ("AhZeroAway", m.AhZeroAway),
+                ("Draw", m.Draw));
+                
+            // Approximate draw probability mathematically (e.g. using difference in expected goals)
+            // A common baseline is roughly 25-30% for closely contested matches.
+            // Using a basic heuristic that if the gap between lambda is small, draw is more likely.
+            var rawDrawProb = Math.Exp(-Math.Pow(diff, 2) / 2.0) * 0.30;
+            var drawProb = Math.Clamp(rawDrawProb * drawWeight, 0.0, 1.0);
 
             var (date, time, _) = DateTimeProvider.ParseProperDateAndTime(m.Date, m.Time);
 
@@ -191,6 +202,24 @@ public class RegressionPredictorService : IRegressionPredictorService
                     PredictionCategory = "StraightWin",
                     PredictedOutcome = homeFavored ? "Home Win" : "Away Win",
                     ConfidenceScore = (decimal)Math.Round(Math.Max(homeWinProb, awayWinProb), 3),
+                    ExpectedHomeGoals = Math.Round(lambdaHome, 2),
+                    ExpectedAwayGoals = Math.Round(lambdaAway, 2),
+                    Date = date,
+                    Time = time
+                });
+            }
+            
+            if (drawProb >= 0.35)
+            {
+                predictions.Add(new RegressionPrediction
+                {
+                    HomeTeam = home,
+                    AwayTeam = away,
+                    League = m.League ?? string.Empty,
+                    PredictionCategory = "Draw",
+                    PredictedOutcome = "Draw",
+                    // Scale it so it displays nicely if needed, draw probabilities are generally artificially lower
+                    ConfidenceScore = (decimal)Math.Round(Math.Min(drawProb * 1.5, 0.99), 3),
                     ExpectedHomeGoals = Math.Round(lambdaHome, 2),
                     ExpectedAwayGoals = Math.Round(lambdaAway, 2),
                     Date = date,
