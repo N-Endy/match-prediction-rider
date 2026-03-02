@@ -135,10 +135,13 @@ using (var scope = app.Services.CreateScope())
     // Remove the old combined job if it still exists in the Hangfire database
     recurringJobs.RemoveIfExists("daily-prediction-job");
 
+    // Remove the temporary noon job if it exists
+    recurringJobs.RemoveIfExists("prediction-generation-job-noon");
+
     recurringJobs.AddOrUpdate<IAnalyzerService>(
         "prediction-generation-job",
         service => service.RunPredictionGenerationAsync(),
-        "0 2,10,16 * * *", // 2:00 AM, 10:00 AM, 4:00 PM
+        "30 2,4,12,16 * * *", // 2:30 AM, 4:30 AM, 12:30 PM, 4:30 PM
 
         new RecurringJobOptions
         {
