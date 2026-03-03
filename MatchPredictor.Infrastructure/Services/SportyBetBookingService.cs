@@ -122,7 +122,16 @@ public class SportyBetBookingService : ISportyBetBookingService
     private async Task<List<SportyBetFixture>> FetchTodayFixturesAsync(string baseUrl, string soccerSportId, string market1X2)
     {
         var cacheKey = $"sportybet_fixtures_{DateTime.UtcNow:yyyyMMdd}";
-        var cachedData = await _cache.GetStringAsync(cacheKey);
+        string? cachedData = null;
+
+        try
+        {
+            cachedData = await _cache.GetStringAsync(cacheKey);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to read from Redis cache. Proceeding to fetch from API.");
+        }
 
         if (!string.IsNullOrEmpty(cachedData))
         {
@@ -289,13 +298,20 @@ public class SportyBetBookingService : ISportyBetBookingService
 
         if (fixtures.Count > 0)
         {
-            var serialized = JsonSerializer.Serialize(fixtures);
-            var cacheOptions = new DistributedCacheEntryOptions
+            try
             {
-                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15) // Cache for 15 mins
-            };
-            await _cache.SetStringAsync(cacheKey, serialized, cacheOptions);
-            _logger.LogInformation("Cached {Count} SportyBet fixtures in Redis.", fixtures.Count);
+                var serialized = JsonSerializer.Serialize(fixtures);
+                var cacheOptions = new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15) // Cache for 15 mins
+                };
+                await _cache.SetStringAsync(cacheKey, serialized, cacheOptions);
+                _logger.LogInformation("Cached {Count} SportyBet fixtures in Redis.", fixtures.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to write to Redis cache. Continuing without caching.");
+            }
         }
 
         return fixtures;
