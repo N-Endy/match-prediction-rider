@@ -197,20 +197,20 @@ public partial class WebScraperService : IWebScraperService
     {
         var matchScores = new List<AiScoreMatchScore>();
 
-        // ── Primary: HttpClient → extract window.__NUXT__ state from AiScore ──
+        // ── Primary: Headless Browser → extract window.__NUXT__ state from AiScore ──
         try
         {
-            matchScores = await ScrapeAiScoreViaHttpAsync();
+            matchScores = await ScrapeAiScoreViaBrowserAsync();
             if (matchScores.Count > 0)
             {
                 _logger.LogInformation("Scraped {Count} match scores from AiScore (Nuxt state).", matchScores.Count);
                 return matchScores;
             }
-            _logger.LogWarning("AiScore HTTP extraction returned 0 matches. Falling back to API-Football.");
+            _logger.LogWarning("AiScore Browser extraction returned 0 matches. Falling back to API-Football.");
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "AiScore HTTP extraction failed. Falling back to API-Football.");
+            _logger.LogWarning(ex, "AiScore Browser extraction failed. Falling back to API-Football.");
         }
 
         // ── Fallback: API-Football REST API ──
@@ -232,42 +232,39 @@ public partial class WebScraperService : IWebScraperService
     }
 
     /// <summary>
-    /// Extracts match scores from AiScore by downloading the HTML via HttpClient
+    /// Extracts match scores from AiScore by downloading the HTML via Headless Browser
     /// and extracting JSON data injected in window.__NUXT__.
     /// </summary>
-    private async Task<List<AiScoreMatchScore>> ScrapeAiScoreViaHttpAsync()
+    private async Task<List<AiScoreMatchScore>> ScrapeAiScoreViaBrowserAsync()
     {
         var aiScoreUrl = _configuration["ScrapingValues:AiScoreWebsite"] ?? "https://m.aiscore.com";
         var matchScores = new List<AiScoreMatchScore>();
 
-        using var handler = new HttpClientHandler
-        {
-            AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate | System.Net.DecompressionMethods.Brotli
-        };
-        using var client = new HttpClient(handler);
-        
-        client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-        client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
-        client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.5");
-        
-        client.Timeout = TimeSpan.FromSeconds(30);
+        _logger.LogInformation("Fetching AiScore SSR HTML via Headless Browser...");
 
-        _logger.LogInformation("Fetching AiScore SSR HTML via HTTP...");
-        var response = await client.GetAsync(aiScoreUrl);
-
-        if (!response.IsSuccessStatusCode)
+        string html;
+        try
         {
-            _logger.LogWarning("AiScore HTTP returned {StatusCode} {ReasonPhrase}.", response.StatusCode, response.ReasonPhrase);
+            var chromeOptions = GetChromeOptions();
+            using var driver = new ChromeDriver(chromeOptions);
+            await driver.Navigate().GoToUrlAsync(aiScoreUrl);
+
+            // Wait 5 seconds to ensure any Cloudflare challenge passes and JavaScript fully executes
+            await Task.Delay(5000);
+
+            html = driver.PageSource;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load AiScore via Headless Chrome.");
             return matchScores;
         }
-
-        var html = await response.Content.ReadAsStringAsync();
-        
+            
         // Nuxt data injection: window.__NUXT__=(...);</script>
         var match = Regex.Match(html, @"window\.__NUXT__=(.*?);</script>");
         if (!match.Success)
         {
-            _logger.LogWarning("AiScore HTTP extraction error: No __NUXT__ match in HTML.");
+            _logger.LogWarning("AiScore Browser extraction error: No __NUXT__ match in HTML.");
             return matchScores;
         }
 
@@ -358,7 +355,7 @@ public partial class WebScraperService : IWebScraperService
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogDebug(ex, "Skipping AiScore HTTP match due to parse error.");
+                    _logger.LogDebug(ex, "Skipping AiScore Browser match due to parse error.");
                 }
             }
         }
