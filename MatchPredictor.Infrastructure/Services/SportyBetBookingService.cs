@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Caching.Distributed;
 
 namespace MatchPredictor.Infrastructure.Services;
 
@@ -22,17 +23,20 @@ public class SportyBetBookingService : ISportyBetBookingService
     private readonly IConfiguration _configuration;
     private readonly ILogger<SportyBetBookingService> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IDistributedCache _cache;
 
     // Values read from appsettings SportyBet section
 
     public SportyBetBookingService(
         IConfiguration configuration,
         ILogger<SportyBetBookingService> logger,
-        IHttpClientFactory httpClientFactory)
+        IHttpClientFactory httpClientFactory,
+        IDistributedCache cache)
     {
         _configuration = configuration;
         _logger = logger;
         _httpClientFactory = httpClientFactory;
+        _cache = cache;
     }
 
     public async Task<BookingResult> BookGamesAsync(List<BookingSelection> selections)
@@ -117,6 +121,15 @@ public class SportyBetBookingService : ISportyBetBookingService
     /// </summary>
     private async Task<List<SportyBetFixture>> FetchTodayFixturesAsync(string baseUrl, string soccerSportId, string market1X2)
     {
+        var cacheKey = $"sportybet_fixtures_{DateTime.UtcNow:yyyyMMdd}";
+        var cachedData = await _cache.GetStringAsync(cacheKey);
+
+        if (!string.IsNullOrEmpty(cachedData))
+        {
+            _logger.LogInformation("Returning SportyBet fixtures from Redis cache.");
+            return JsonSerializer.Deserialize<List<SportyBetFixture>>(cachedData) ?? new List<SportyBetFixture>();
+        }
+
         var fixtures = new List<SportyBetFixture>();
         var client = CreateHttpClient();
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -272,6 +285,17 @@ public class SportyBetBookingService : ISportyBetBookingService
                 _logger.LogWarning(ex, "Error fetching SportyBet fixtures page {Page}", page);
                 break;
             }
+        }
+
+        if (fixtures.Count > 0)
+        {
+            var serialized = JsonSerializer.Serialize(fixtures);
+            var cacheOptions = new DistributedCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15) // Cache for 15 mins
+            };
+            await _cache.SetStringAsync(cacheKey, serialized, cacheOptions);
+            _logger.LogInformation("Cached {Count} SportyBet fixtures in Redis.", fixtures.Count);
         }
 
         return fixtures;

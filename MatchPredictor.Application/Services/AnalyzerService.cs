@@ -35,9 +35,9 @@ public class AnalyzerService  : IAnalyzerService
     }
 
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
-    public async Task RunPredictionGenerationAsync()
+    public async Task ExtractDataAndSyncDatabaseAsync()
     {
-        _logger.LogInformation("Starting prediction generation process (every 3h)...");
+        _logger.LogInformation("Starting data extraction process...");
         try
         {
             await _webScraperService.ScrapeMatchDataAsync();
@@ -63,14 +63,34 @@ public class AnalyzerService  : IAnalyzerService
                     
                     if (!exists) await _dbContext.MatchDatas.AddAsync(match);
                 }
+                
+                await _dbContext.SaveChangesAsync();
             }
             catch (Exception e)
             {
                 _logger.LogError(e, "❌ Failed to save match data to database.");
                 throw;
             }
-            _logger.LogInformation($"Extracted {scraped.Count} matches from Excel file.");
-            
+            _logger.LogInformation($"Extracted and saved {scraped.Count} matches to DB.");
+
+            // Chain the next job: Generate predictions only after data is successfully synced
+            BackgroundJob.Enqueue<IAnalyzerService>(service => service.GeneratePredictionsAsync());
+            _logger.LogInformation("Queued GeneratePredictionsAsync background job.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ An error occurred during data scraping and sync.");
+            await LogScrapingStatus("Failed", $"Sync Error: {ex.Message}");
+            throw;
+        }
+    }
+
+    [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
+    public async Task GeneratePredictionsAsync()
+    {
+        _logger.LogInformation("Starting prediction generation process...");
+        try
+        {
             var matches = await _dbContext.MatchDatas.ToListAsync();
             var accuracies = await _dbContext.ModelAccuracies.ToListAsync();
 
@@ -79,13 +99,12 @@ public class AnalyzerService  : IAnalyzerService
             await SavePredictions("Over2.5Goals", _dataAnalyzerService.OverTwoGoals(matches, accuracies));
             await SavePredictions("StraightWin", _dataAnalyzerService.StraightWin(matches, accuracies));
             
-            _logger.LogInformation("✅ Predictions saved successfully.");
-
+            _logger.LogInformation("✅ Predictions calculated and saved successfully.");
             await LogScrapingStatus("Success", "✅ Prediction generation completed successfully.");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ An error occurred during prediction generation.");
+            _logger.LogError(ex, "❌ An error occurred during prediction calculations.");
             await LogScrapingStatus("Failed", $"Prediction Gen Error: {ex.Message}");
             throw;
         }

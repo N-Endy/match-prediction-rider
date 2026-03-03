@@ -11,6 +11,8 @@ using MatchPredictor.Infrastructure.Utils;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
+using Polly;
+using Polly.Extensions.Http;
 using MatchPredictor.Web.Filters;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -20,6 +22,37 @@ builder.Services.AddRazorPages();
 builder.Services.AddMemoryCache();
 builder.Services.AddHealthChecks();
 builder.Services.AddHttpClient();
+
+builder.Services.AddHttpClient("Gemini", client => 
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+})
+.AddPolicyHandler(HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .OrResult(msg => msg.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+    .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt) * 5)))
+.AddPolicyHandler(HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+
+builder.Services.AddHttpClient("SportyBet", client => 
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+})
+.AddPolicyHandler(HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .OrResult(msg => msg.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+    .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))))
+.AddPolicyHandler(HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    var redisConn = builder.Configuration.GetConnectionString("RedisConnection") ?? "localhost:6379";
+    options.Configuration = redisConn;
+    options.InstanceName = "MatchPredictor_";
+});
 
 builder.Configuration
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
@@ -59,6 +92,10 @@ builder.Host.UseSerilog((context, services, configuration) =>
         .ReadFrom.Services(services)
         .Enrich.FromLogContext()
 );
+
+// Register configuration settings
+builder.Services.Configure<MatchPredictor.Domain.Models.PredictionSettings>(
+    builder.Configuration.GetSection("PredictionSettings"));
 
 // Configure Hangfire
 builder.Services.AddLogging();
@@ -140,7 +177,7 @@ using (var scope = app.Services.CreateScope())
 
     recurringJobs.AddOrUpdate<IAnalyzerService>(
         "prediction-generation-job",
-        service => service.RunPredictionGenerationAsync(),
+        service => service.ExtractDataAndSyncDatabaseAsync(),
         "30 2,4,12,16 * * *", // 2:30 AM, 4:30 AM, 12:30 PM, 4:30 PM
 
         new RecurringJobOptions
@@ -196,7 +233,7 @@ using (var scope = app.Services.CreateScope())
         {
             logger.LogInformation("No predictions found for today. Triggering initial data scraping...");
             var backgroundJobs = scope.ServiceProvider.GetRequiredService<IBackgroundJobClient>();
-            backgroundJobs.Enqueue<IAnalyzerService>(service => service.RunPredictionGenerationAsync());
+            backgroundJobs.Enqueue<IAnalyzerService>(service => service.ExtractDataAndSyncDatabaseAsync());
             logger.LogInformation("✅ Initial scraping job queued successfully.");
         }
         else

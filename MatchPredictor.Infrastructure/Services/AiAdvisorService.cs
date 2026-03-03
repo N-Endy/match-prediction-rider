@@ -19,6 +19,7 @@ public class AiAdvisorService : IAiAdvisorService
     private readonly ApplicationDbContext _dbContext;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AiAdvisorService> _logger;
+    private readonly IHttpClientFactory _httpClientFactory;
 
     // Cache the prediction summary per day to avoid rebuilding it every call
     private static string _cachedSummary = "";
@@ -28,11 +29,13 @@ public class AiAdvisorService : IAiAdvisorService
     public AiAdvisorService(
         ApplicationDbContext dbContext,
         IConfiguration configuration,
-        ILogger<AiAdvisorService> logger)
+        ILogger<AiAdvisorService> logger,
+        IHttpClientFactory httpClientFactory)
     {
         _dbContext = dbContext;
         _configuration = configuration;
         _logger = logger;
+        _httpClientFactory = httpClientFactory;
     }
 
     public async Task<string> GetAdviceAsync(string userPrompt, CancellationToken ct = default)
@@ -147,83 +150,67 @@ public class AiAdvisorService : IAiAdvisorService
     }
 
     /// <summary>
-    /// Calls Gemini API with exponential backoff retry on 429 errors.
+    /// Calls Gemini API using Polly policies configured in Program.cs.
     /// Uses gemini-2.0-flash-lite for higher free-tier rate limits.
     /// </summary>
     private async Task<string> CallGeminiWithRetryAsync(string apiKey, string prompt, CancellationToken ct)
     {
         var model = _configuration["GeminiModel"] ?? "gemini-1.5-flash";
         _logger.LogInformation("Calling Gemini model: {Model}", model);
-        var maxRetries = 3;
 
-        using var httpClient = new HttpClient();
-        httpClient.Timeout = TimeSpan.FromSeconds(30);
-
-        for (int attempt = 0; attempt <= maxRetries; attempt++)
+        try
         {
-            try
+            using var httpClient = _httpClientFactory.CreateClient("Gemini");
+
+            var requestBody = new
             {
-                var requestBody = new
+                contents = new[]
                 {
-                    contents = new[]
-                    {
-                        new { parts = new[] { new { text = prompt } } }
-                    }
-                };
+                    new { parts = new[] { new { text = prompt } } }
+                }
+            };
 
-                var json = JsonSerializer.Serialize(requestBody);
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
+            var json = JsonSerializer.Serialize(requestBody);
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-                var response = await httpClient.PostAsync(
-                    $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}",
-                    content, ct);
+            var response = await httpClient.PostAsync(
+                $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}",
+                content, ct);
 
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorBody = await response.Content.ReadAsStringAsync(ct);
+                _logger.LogError("Gemini API error: {Status} {Body}", response.StatusCode,
+                    errorBody[..Math.Min(300, errorBody.Length)]);
+                
                 if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                 {
-                    if (attempt < maxRetries)
-                    {
-                        var waitSeconds = (int)Math.Pow(2, attempt + 1) * 5; // 10s, 20s, 40s
-                        _logger.LogWarning("Gemini 429 rate limit. Retrying in {Wait}s (attempt {Attempt}/{Max})...",
-                            waitSeconds, attempt + 1, maxRetries);
-                        await Task.Delay(waitSeconds * 1000, ct);
-                        continue;
-                    }
-
                     return "⏳ The AI service is currently busy (rate limit). Please wait a minute and try again.";
                 }
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    var errorBody = await response.Content.ReadAsStringAsync(ct);
-                    _logger.LogError("Gemini API error: {Status} {Body}", response.StatusCode,
-                        errorBody[..Math.Min(300, errorBody.Length)]);
-                    return $"❌ AI service error ({response.StatusCode}). Please try again later.";
-                }
-
-                var responseJson = await response.Content.ReadAsStringAsync(ct);
-                var doc = JsonDocument.Parse(responseJson);
-
-                var text = doc.RootElement
-                    .GetProperty("candidates")[0]
-                    .GetProperty("content")
-                    .GetProperty("parts")[0]
-                    .GetProperty("text")
-                    .GetString();
-
-                return text ?? "No response generated.";
+                
+                return $"❌ AI service error ({response.StatusCode}). Please try again later.";
             }
-            catch (TaskCanceledException)
-            {
-                return "⏳ Request timed out. Please try again.";
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error calling Gemini API (attempt {Attempt})", attempt + 1);
-                if (attempt == maxRetries)
-                    return $"❌ Error communicating with AI: {ex.Message}";
-            }
+
+            var responseJson = await response.Content.ReadAsStringAsync(ct);
+            var doc = JsonDocument.Parse(responseJson);
+
+            var text = doc.RootElement
+                .GetProperty("candidates")[0]
+                .GetProperty("content")
+                .GetProperty("parts")[0]
+                .GetProperty("text")
+                .GetString();
+
+            return text ?? "No response generated.";
         }
-
-        return "❌ Failed after multiple retries. Please try again later.";
+        catch (TaskCanceledException)
+        {
+            return "⏳ Request timed out. Please try again.";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error calling Gemini API");
+            return $"❌ Error communicating with AI: {ex.Message}";
+        }
     }
 }

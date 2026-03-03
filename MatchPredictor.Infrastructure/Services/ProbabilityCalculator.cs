@@ -278,6 +278,13 @@ namespace MatchPredictor.Infrastructure.Services;
 /// </summary>
 public class ProbabilityCalculator : IProbabilityCalculator
 {
+    private readonly PredictionSettings _settings;
+
+    public ProbabilityCalculator(Microsoft.Extensions.Options.IOptions<PredictionSettings> options)
+    {
+        _settings = options.Value;
+    }
+
     private double GetHistoricalWeight(List<ModelAccuracy> accuracies, string category, params (string MetricName, double MetricValue)[] fallbacks)
     {
         if (accuracies == null || accuracies.Count == 0 || fallbacks == null || fallbacks.Length == 0) return 1.0;
@@ -435,14 +442,14 @@ public class ProbabilityCalculator : IProbabilityCalculator
 
     public bool IsStrongHomeWin(MatchData match, List<ModelAccuracy> accuracies)
     {
-        if (match.HomeWin < PredictionThresholds.HomeWinStrong) return false;
+        if (match.HomeWin < _settings.HomeWinStrong) return false;
 
         var trueOver25 = GetTrueOver25(match);
         var totalXg = EstimateTotalXg(trueOver25, match.OverOnePointFive);
 
         // Expected goals acts as a variance filter.
         // If a match has low xG (e.g., 1.8), even heavy favorites are at massive risk of a lucky 1-1 draw.
-        if (totalXg < 2.0) return false; 
+        if (totalXg < _settings.MinTotalXgRequiredForWin) return false; 
 
         var confidence = match.HomeWin;
 
@@ -463,13 +470,13 @@ public class ProbabilityCalculator : IProbabilityCalculator
 
     public bool IsStrongAwayWin(MatchData match, List<ModelAccuracy> accuracies)
     {
-        if (match.AwayWin < PredictionThresholds.AwayWinStrong) return false;
+        if (match.AwayWin < _settings.AwayWinStrong) return false;
 
         var trueOver25 = GetTrueOver25(match);
         var totalXg = EstimateTotalXg(trueOver25, match.OverOnePointFive);
 
         // Variance filter: Away favorites in low-scoring games are highly dangerous to bet on
-        if (totalXg < 2.0) return false;
+        if (totalXg < _settings.MinTotalXgRequiredForWin) return false;
 
         var confidence = match.AwayWin;
 
