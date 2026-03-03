@@ -197,13 +197,29 @@ public partial class WebScraperService : IWebScraperService
     {
         var matchScores = new List<AiScoreMatchScore>();
 
-        // ── Primary: Headless Browser → extract window.__NUXT__ state from AiScore ──
+        // ── Primary: HttpClient → extract window.__NUXT__ state from AiScore ──
+        try
+        {
+            matchScores = await ScrapeAiScoreViaHttpAsync();
+            if (matchScores.Count > 0)
+            {
+                _logger.LogInformation("Scraped {Count} match scores from AiScore (HTTP).", matchScores.Count);
+                return matchScores;
+            }
+            _logger.LogWarning("AiScore HTTP extraction returned 0 matches. Falling back to Headless Browser.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "AiScore HTTP extraction failed. Falling back to Headless Browser.");
+        }
+
+        // ── Secondary: Headless Browser → extract window.__NUXT__ state from AiScore ──
         try
         {
             matchScores = await ScrapeAiScoreViaBrowserAsync();
             if (matchScores.Count > 0)
             {
-                _logger.LogInformation("Scraped {Count} match scores from AiScore (Nuxt state).", matchScores.Count);
+                _logger.LogInformation("Scraped {Count} match scores from AiScore (Browser).", matchScores.Count);
                 return matchScores;
             }
             _logger.LogWarning("AiScore Browser extraction returned 0 matches. Falling back to API-Football.");
@@ -213,7 +229,7 @@ public partial class WebScraperService : IWebScraperService
             _logger.LogWarning(ex, "AiScore Browser extraction failed. Falling back to API-Football.");
         }
 
-        // ── Fallback: API-Football REST API ──
+        // ── Tertiary: Fallback API-Football REST API ──
         try
         {
             matchScores = await FetchFromApiFootballAsync();
@@ -232,13 +248,44 @@ public partial class WebScraperService : IWebScraperService
     }
 
     /// <summary>
+    /// Extracts match scores from AiScore by downloading the HTML via HttpClient.
+    /// Fast, but might get blocked by Cloudflare (403 Forbidden).
+    /// </summary>
+    private async Task<List<AiScoreMatchScore>> ScrapeAiScoreViaHttpAsync()
+    {
+        var aiScoreUrl = _configuration["ScrapingValues:AiScoreWebsite"] ?? "https://m.aiscore.com";
+
+        _logger.LogInformation("Fetching AiScore SSR HTML via HTTP...");
+
+        using var handler = new HttpClientHandler
+        {
+            AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate | System.Net.DecompressionMethods.Brotli
+        };
+        using var client = new HttpClient(handler);
+        
+        client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+        client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.5");
+        client.Timeout = TimeSpan.FromSeconds(30);
+
+        var response = await client.GetAsync(aiScoreUrl);
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("AiScore HTTP returned {StatusCode} {ReasonPhrase}.", response.StatusCode, response.ReasonPhrase);
+            return new List<AiScoreMatchScore>();
+        }
+
+        var html = await response.Content.ReadAsStringAsync();
+        return ParseAiScoreNuxtState(html);
+    }
+
+    /// <summary>
     /// Extracts match scores from AiScore by downloading the HTML via Headless Browser
     /// and extracting JSON data injected in window.__NUXT__.
     /// </summary>
     private async Task<List<AiScoreMatchScore>> ScrapeAiScoreViaBrowserAsync()
     {
         var aiScoreUrl = _configuration["ScrapingValues:AiScoreWebsite"] ?? "https://m.aiscore.com";
-        var matchScores = new List<AiScoreMatchScore>();
 
         _logger.LogInformation("Fetching AiScore SSR HTML via Headless Browser...");
 
@@ -257,14 +304,21 @@ public partial class WebScraperService : IWebScraperService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to load AiScore via Headless Chrome.");
-            return matchScores;
+            return new List<AiScoreMatchScore>();
         }
             
+        return ParseAiScoreNuxtState(html);
+    }
+
+    private List<AiScoreMatchScore> ParseAiScoreNuxtState(string html)
+    {
+        var matchScores = new List<AiScoreMatchScore>();
+
         // Nuxt data injection: window.__NUXT__=(...);</script>
         var match = Regex.Match(html, @"window\.__NUXT__=(.*?);</script>");
         if (!match.Success)
         {
-            _logger.LogWarning("AiScore Browser extraction error: No __NUXT__ match in HTML.");
+            _logger.LogWarning("AiScore Nuxt extraction error: No __NUXT__ match in HTML.");
             return matchScores;
         }
 
