@@ -1,26 +1,39 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
 using OfficeOpenXml;
 
 namespace MatchPredictor.Infrastructure;
 
 public class ExtractFromExcel : IExtractFromExcel
 {
-    private readonly string _filePath;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<ExtractFromExcel> _logger;
 
-    public ExtractFromExcel(ILogger<ExtractFromExcel> logger)
+    public ExtractFromExcel(IConfiguration configuration, ILogger<ExtractFromExcel> logger)
     {
+        _configuration = configuration;
         _logger = logger;
-        
-        var baseDirFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "predictions.xlsx");
-        var currentDirFile = Path.Combine(Directory.GetCurrentDirectory(), "Resources", "predictions.xlsx");
-        var parentDirFile = Path.Combine(Directory.GetParent(Directory.GetCurrentDirectory())?.FullName ?? string.Empty, "Resources", "predictions.xlsx");
+    }
 
-        if (File.Exists(baseDirFile)) _filePath = baseDirFile;
-        else if (File.Exists(currentDirFile)) _filePath = currentDirFile;
-        else _filePath = parentDirFile;
+    private string GetFilePath()
+    {
+        var fileName = _configuration["ScrapingValues:PredictionsFileName"] ?? "predictions.xlsx";
+        
+        var baseDirFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources");
+        var currentDirFolder = Path.Combine(Directory.GetCurrentDirectory(), "Resources");
+        var parentDirFolder = Path.Combine(Directory.GetParent(Directory.GetCurrentDirectory())?.FullName ?? string.Empty, "Resources");
+
+        string downloadFolder;
+        if (Directory.Exists(baseDirFolder) || AppDomain.CurrentDomain.BaseDirectory.Contains("publish") || AppDomain.CurrentDomain.BaseDirectory.Contains("bin"))
+            downloadFolder = baseDirFolder;
+        else if (Directory.Exists(currentDirFolder))
+            downloadFolder = currentDirFolder;
+        else
+            downloadFolder = parentDirFolder;
+
+        return Path.Combine(downloadFolder, fileName);
     }
     
     public IEnumerable<MatchData> ExtractMatchDatasetFromFile()
@@ -33,25 +46,26 @@ public class ExtractFromExcel : IExtractFromExcel
         }
         
         var extractedData = new List<MatchData>();
+        var filePath = GetFilePath();
 
         try
         {
             // If filePath is not found
-            if (!File.Exists(_filePath))
+            if (!File.Exists(filePath))
             {
-                _logger.LogError("❌ Excel file not found at path: {FilePath}", _filePath);
-                throw new FileNotFoundException("Excel file not found at path: " + _filePath);
+                _logger.LogError("❌ Excel file not found at path: {FilePath}", filePath);
+                throw new FileNotFoundException("Excel file not found at path: " + filePath);
             }
 
             // If the Excel file is empty, return
-            if (new FileInfo(_filePath).Length == 0)
+            if (new FileInfo(filePath).Length == 0)
             {
                 _logger.LogWarning("Excel file is empty.");
                 return extractedData;
             }
 
             // Read data from the downloaded Excel file and extract relevant information
-            using var package = new ExcelPackage(new FileInfo(_filePath));
+            using var package = new ExcelPackage(new FileInfo(filePath));
 
             if (package.Workbook.Worksheets.Count > 0)
             {
