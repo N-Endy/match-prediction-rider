@@ -1,5 +1,6 @@
 using Hangfire;
 using MatchPredictor.Application.Helpers;
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
@@ -91,7 +92,10 @@ public class AnalyzerService  : IAnalyzerService
         _logger.LogInformation("Starting prediction generation process...");
         try
         {
-            var matches = await _dbContext.MatchDatas.ToListAsync();
+            var todayString = DateTimeProvider.GetLocalTime().ToString("dd-MM-yyyy");
+            var matches = await _dbContext.MatchDatas
+                .Where(m => m.Date == todayString || (m.MatchDateTime.HasValue && m.MatchDateTime.Value.Date == DateTime.UtcNow.Date))
+                .ToListAsync();
             var accuracies = await _dbContext.ModelAccuracies.ToListAsync();
 
             await SavePredictions("BothTeamsScore", _dataAnalyzerService.BothTeamsScore(matches, accuracies));
@@ -378,40 +382,23 @@ public class AnalyzerService  : IAnalyzerService
             (s ?? "").Trim().ToLowerInvariant();
     }
     
-    private static bool TryParseScore(string score, out int home, out int away)
+    private static string DetermineDrawOutcome(string score)
     {
-        home = away = 0;
-        if (string.IsNullOrWhiteSpace(score)) return false;
-
-        // supports "1:0", "1 - 0", "1–0", "1—0", and spaces
-        var normalized = score.Replace("–", "-").Replace("—", "-").Trim();
-
-        var parts = normalized.Contains(':')
-            ? normalized.Split(':', StringSplitOptions.TrimEntries)
-            : normalized.Split('-', StringSplitOptions.TrimEntries);
-
-        if (parts.Length != 2) return false;
-
-        return int.TryParse(parts[0].Trim(), out home) && int.TryParse(parts[1].Trim(), out away);
-    }
-
-    private string DetermineDrawOutcome(string score)
-    {
-        return TryParseScore(score, out var h, out var a)
+        return ScoreParser.TryParse(score, out var h, out var a)
             ? h == a ? "Draw" : "Not Draw"
             : "Unknown";
     }
 
-    private string DetermineOver25Outcome(string score)
+    private static string DetermineOver25Outcome(string score)
     {
-        return TryParseScore(score, out var h, out var a)
+        return ScoreParser.TryParse(score, out var h, out var a)
             ? h + a > 2 ? "Over 2.5" : "Under 2.5"
             : "Unknown";
     }
 
-    private string DetermineStraightWinOutcome(string score)
+    private static string DetermineStraightWinOutcome(string score)
     {
-        if (!TryParseScore(score, out var h, out var a)) return "Unknown";
+        if (!ScoreParser.TryParse(score, out var h, out var a)) return "Unknown";
         if (h > a) return "Home Win";
         return h < a ? "Away Win" : "Draw";
     }
@@ -516,59 +503,22 @@ public class AnalyzerService  : IAnalyzerService
     
     private async Task SaveMatchScores(List<MatchScore> scores)
     {
-        if (scores.Count == 0) return;
-
-        // 1. Find the time range of the incoming scores to pull existing records in bulk
-        var minTime = scores.Min(s => s.MatchTime);
-        var maxTime = scores.Max(s => s.MatchTime);
-
-        // 2. Fetch all potential matches in this time window in ONE query
-        var existingScoresList = await _dbContext.MatchScores
-            .Where(s => s.MatchTime >= minTime && s.MatchTime <= maxTime)
-            .ToListAsync();
-
-        // 3. Create a Dictionary for lighting-fast O(1) memory lookups
-        var existingScoresDict = existingScoresList
-            .GroupBy(s => (s.HomeTeam, s.AwayTeam, s.MatchTime))
-            .ToDictionary(g => g.Key, g => g.First());
-
-        foreach (var incomingScore in scores)
-        {
-            var key = (incomingScore.HomeTeam, incomingScore.AwayTeam, incomingScore.MatchTime);
-
-            if (existingScoresDict.TryGetValue(key, out var existingRecord))
-            {
-                // UPDATE SCENARIO: The match exists. 
-                // Only update the database if the score or live status actually changed.
-                if (existingRecord.Score != incomingScore.Score || 
-                    existingRecord.IsLive != incomingScore.IsLive)
-                {
-                    existingRecord.Score = incomingScore.Score;
-                    existingRecord.IsLive = incomingScore.IsLive;
-                
-                    // Update any other fields that might change during a match
-                    existingRecord.BTTSLabel = incomingScore.BTTSLabel; 
-                }
-            }
-            else
-            {
-                // INSERT SCENARIO: The match does not exist yet.
-                _dbContext.MatchScores.Add(incomingScore);
-            }
-        }
-
-        // 4. Save all inserts and updates in a single transaction
-        await _dbContext.SaveChangesAsync();
+        await SaveMatchScoresGeneric(scores, _dbContext.MatchScores);
     }
 
     private async Task SaveAiScoreMatchScores(List<AiScoreMatchScore> scores)
+    {
+        await SaveMatchScoresGeneric(scores, _dbContext.AiScoreMatchScores);
+    }
+
+    private async Task SaveMatchScoresGeneric<T>(List<T> scores, DbSet<T> dbSet) where T : MatchScoreBase
     {
         if (scores.Count == 0) return;
 
         var minTime = scores.Min(s => s.MatchTime);
         var maxTime = scores.Max(s => s.MatchTime);
 
-        var existingScoresList = await _dbContext.AiScoreMatchScores
+        var existingScoresList = await dbSet
             .Where(s => s.MatchTime >= minTime && s.MatchTime <= maxTime)
             .ToListAsync();
 
@@ -592,7 +542,7 @@ public class AnalyzerService  : IAnalyzerService
             }
             else
             {
-                _dbContext.AiScoreMatchScores.Add(incomingScore);
+                dbSet.Add(incomingScore);
             }
         }
 

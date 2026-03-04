@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Net.Http;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -18,6 +19,11 @@ namespace MatchPredictor.Tests.Integration
             _output = output;
         }
 
+        private class SimpleHttpClientFactory : IHttpClientFactory
+        {
+            public HttpClient CreateClient(string name) => new();
+        }
+
         [Fact]
         public async Task TestAiScoreHttpExtraction()
         {
@@ -28,7 +34,7 @@ namespace MatchPredictor.Tests.Integration
             });
             var config = configBuilder.Build();
 
-            var scraper = new WebScraperService(config, NullLogger<WebScraperService>.Instance);
+            var scraper = new WebScraperService(config, NullLogger<WebScraperService>.Instance, new SimpleHttpClientFactory());
 
             var scores = await scraper.ScrapeAiScoreMatchScoresAsync();
 

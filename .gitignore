@@ -405,3 +405,6 @@ FodyWeavers.xsd
 .obj/
 
 Resources/
+
+# Debug dumps
+debug.html

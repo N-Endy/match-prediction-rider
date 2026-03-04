@@ -2,10 +2,12 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using HtmlAgilityPack;
 using Jint;
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using MatchPredictor.Infrastructure.Utils;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Support.UI;
@@ -17,24 +19,14 @@ public partial class WebScraperService : IWebScraperService
     private readonly string _downloadFolder;
     private readonly IConfiguration _configuration;
     private readonly ILogger<WebScraperService> _logger;
+    private readonly IHttpClientFactory _httpClientFactory;
 
-    public WebScraperService(IConfiguration configuration, ILogger<WebScraperService> logger)
+    public WebScraperService(IConfiguration configuration, ILogger<WebScraperService> logger, IHttpClientFactory httpClientFactory)
     {
         _logger = logger;
         _configuration = configuration;
-        
-        var baseDirFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources");
-        var currentDirFolder = Path.Combine(Directory.GetCurrentDirectory(), "Resources");
-        var parentDirFolder = Path.Combine(Directory.GetParent(Directory.GetCurrentDirectory())?.FullName ?? string.Empty, "Resources");
-
-        if (Directory.Exists(baseDirFolder) || AppDomain.CurrentDomain.BaseDirectory.Contains("publish") || AppDomain.CurrentDomain.BaseDirectory.Contains("bin"))
-            _downloadFolder = baseDirFolder;
-        else if (Directory.Exists(currentDirFolder))
-            _downloadFolder = currentDirFolder;
-        else
-            _downloadFolder = parentDirFolder;
-
-        Directory.CreateDirectory(_downloadFolder); // Ensure the directory exists
+        _httpClientFactory = httpClientFactory;
+        _downloadFolder = ResourcePathResolver.GetResourcesDirectory();
     }
     
     public async Task ScrapeMatchDataAsync()
@@ -43,8 +35,7 @@ public partial class WebScraperService : IWebScraperService
         {
             var chromeOptions = GetChromeOptions();
 
-            // var service = ChromeDriverService.CreateDefaultService();
-            // service.HideCommandPromptWindow = true;
+
 
             DeletePreviousFile();
 
@@ -70,7 +61,7 @@ public partial class WebScraperService : IWebScraperService
             {
                 // Dump for debugging and fail fast
                 await File.WriteAllTextAsync("debug.html", driver.PageSource);
-                //((ITakesScreenshot)driver).GetScreenshot().SaveAsFile("debug.png", ScreenshotImageFormat.Png);
+
                 throw new WebDriverTimeoutException($"Could not locate/click element by {(isXPath ? "XPath" : "CSS")}: {selector}");
             }
 
@@ -99,7 +90,7 @@ public partial class WebScraperService : IWebScraperService
             _logger.LogInformation("Checking URL for scores...");
             await driver.Navigate().GoToUrlAsync(downloadUrl);
             
-            _logger.LogInformation("Commencing scrapping for scores in inner HTML...");
+            _logger.LogInformation("Commencing scraping for scores in inner HTML...");
             
             // Wait for dynamic content to render
             await Task.Delay(3000);
@@ -165,7 +156,11 @@ public partial class WebScraperService : IWebScraperService
 
                             DateTime matchTime;
                             try { matchTime = ParseTime(currentTime); }
-                            catch { matchTime = DateTime.UtcNow; } // Live matches may not have a parseable time
+                            catch (Exception ex)
+                            {
+                                _logger.LogDebug(ex, "Could not parse match time '{Time}', using UTC now as fallback.", currentTime);
+                                matchTime = DateTime.UtcNow;
+                            }
                             
                             matchScores.Add(new MatchScore
                             {
@@ -174,7 +169,7 @@ public partial class WebScraperService : IWebScraperService
                                 AwayTeam = away,
                                 Score = score,
                                 MatchTime = matchTime,
-                                BTTSLabel = IsBtts(score),
+                                BTTSLabel = ScoreParser.IsBtts(score),
                                 IsLive = isLive
                             });
                         }
@@ -444,7 +439,7 @@ public partial class WebScraperService : IWebScraperService
                         AwayTeam = awayName,
                         Score = score,
                         MatchTime = matchTime,
-                        BTTSLabel = IsBtts(score),
+                        BTTSLabel = ScoreParser.IsBtts(score),
                         IsLive = isLive
                     });
                 }
@@ -555,7 +550,7 @@ public partial class WebScraperService : IWebScraperService
                         AwayTeam = awayName,
                         Score = score,
                         MatchTime = matchTime,
-                        BTTSLabel = IsBtts(score),
+                        BTTSLabel = ScoreParser.IsBtts(score),
                         IsLive = isLive
                     });
                 }
@@ -588,7 +583,7 @@ public partial class WebScraperService : IWebScraperService
         var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
         var baseUrl = _configuration["ApiFootball:BaseUrl"] ?? "https://v3.football.api-sports.io";
 
-        using var httpClient = new HttpClient();
+        using var httpClient = _httpClientFactory.CreateClient();
         httpClient.DefaultRequestHeaders.Add("x-apisports-key", apiKey);
         httpClient.Timeout = TimeSpan.FromSeconds(30);
 
@@ -649,7 +644,7 @@ public partial class WebScraperService : IWebScraperService
                     AwayTeam = teams.GetProperty("away").GetProperty("name").GetString() ?? "",
                     Score = score,
                     MatchTime = matchTime,
-                    BTTSLabel = IsBtts(score),
+                    BTTSLabel = ScoreParser.IsBtts(score),
                     IsLive = liveStatuses.Contains(statusShort)
                 });
             }
@@ -663,38 +658,6 @@ public partial class WebScraperService : IWebScraperService
         return matchScores;
     }
 
-    /// <summary>
-    /// Normalizes various score formats ("1 - 0", "1-0", "1 : 0", "1:0") to "H:A" format.
-    /// </summary>
-    private static string? NormalizeScore(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return null;
-        
-        // Remove extra whitespace
-        var cleaned = raw.Trim();
-        
-        // Try to extract two numbers from the score string
-        var scoreMatch = Regex.Match(cleaned, @"(\d+)\s*[-:–—]\s*(\d+)");
-        if (scoreMatch.Success)
-        {
-            return $"{scoreMatch.Groups[1].Value}:{scoreMatch.Groups[2].Value}";
-        }
-        
-        return null;
-    }
-
-    /// <summary>
-    /// Internal DTO for deserializing JS extraction results
-    /// </summary>
-    private sealed class AiScoreRawMatch
-    {
-        public string? Home { get; set; }
-        public string? Away { get; set; }
-        public string? Score { get; set; }
-        public string? Time { get; set; }
-        public string? League { get; set; }
-        public bool IsLive { get; set; }
-    }
 
     private async Task CheckFileIsDownloaded()
     {
@@ -767,15 +730,7 @@ public partial class WebScraperService : IWebScraperService
         return chromeOptions;
     }
 
-    
-    private static bool IsBtts(string score)
-    {
-        var parts = score.Split(":"); // Split "2:1" into ["2", "1"]
-        return parts.Length == 2 &&
-               int.TryParse(parts[0], out var h) && // Convert "2" to integer h = 2
-               int.TryParse(parts[1], out var a) && // Convert "1" to integer a = 1
-               h > 0 && a > 0; // Check that both teams scored
-    }
+
     
     private DateTime ParseTime(string time)
     {

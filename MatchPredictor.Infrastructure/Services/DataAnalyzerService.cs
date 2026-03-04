@@ -1,6 +1,5 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
-using MatchPredictor.Domain.Models;
 using Microsoft.Extensions.Options;
 
 namespace MatchPredictor.Infrastructure.Services;

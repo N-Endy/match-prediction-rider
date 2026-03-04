@@ -1,3 +1,4 @@
+using System.Globalization;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Extensions;
@@ -30,11 +31,8 @@ public class PredictionQueries : IPredictionQueries
 
     public async Task<IReadOnlyList<Prediction>> GetCombinedSampleAsync(DateTime date, int count)
     {
-        // 1. Force the date to UTC and set up the start/end bounds
-        var today = DateTimeProvider.GetLocalTime().Date;
-        var (startOfDayUtc, endOfDayUtc) = today.GetUtcDayBounds();
-        // var startOfDayUtc = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
-        // var endOfDayUtc = startOfDayUtc.AddDays(1);
+        var (startOfDayUtc, endOfDayUtc) = date.Date.GetUtcDayBounds();
+
     
         // 2. Evaluate the string outside the LINQ query for better EF Core translation
         var dateString = date.ToString("dd-MM-yyyy");
@@ -61,11 +59,8 @@ public class PredictionQueries : IPredictionQueries
 
     private async Task<IReadOnlyList<Prediction>> GetByCategoryAsync(DateTime date, string category)
     {
-        // 1. Force the date to UTC to prevent Npgsql exceptions
-        var today = DateTimeProvider.GetLocalTime().Date;
-        var (startOfDayUtc, endOfDayUtc) = today.GetUtcDayBounds();
-        // var startOfDayUtc = DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
-        // var endOfDayUtc = startOfDayUtc.AddDays(1);
+        var (startOfDayUtc, endOfDayUtc) = date.Date.GetUtcDayBounds();
+
     
         // String matching remains the same
         var dateString = date.ToString("dd-MM-yyyy");
@@ -82,7 +77,7 @@ public class PredictionQueries : IPredictionQueries
 
         // 3. Sort the data in-memory 
         var list = filteredPredictions
-            .OrderBy(p => p.MatchDateTime ?? DateTime.Parse(p.Date)) 
+            .OrderBy(p => p.MatchDateTime ?? DateTime.ParseExact(p.Date ?? dateString, "dd-MM-yyyy", CultureInfo.InvariantCulture)) 
             .ThenBy(p => p.Time)
             .ThenBy(p => p.League)
             .ThenBy(p => p.HomeTeam)

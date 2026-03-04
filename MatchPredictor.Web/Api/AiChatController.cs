@@ -30,12 +30,7 @@ public class AiChatController : ControllerBase
 
         try
         {
-            // Map web DTOs to domain DTOs and forward history
-            var domainHistory = request.History?
-                .Select(h => new ChatHistoryItem { Role = h.Role, Content = h.Content })
-                .ToList();
-
-            var response = await _aiService.GetAdviceAsync(request.Message, domainHistory, ct);
+            var response = await _aiService.GetAdviceAsync(request.Message, request.History, ct);
             return Ok(new { response });
         }
         catch (Exception ex)
@@ -48,11 +43,5 @@ public class AiChatController : ControllerBase
 public class ChatRequest
 {
     public string Message { get; set; } = string.Empty;
-    public List<ChatHistoryEntry>? History { get; set; }
-}
-
-public class ChatHistoryEntry
-{
-    public string Role { get; set; } = string.Empty;
-    public string Content { get; set; } = string.Empty;
+    public List<ChatHistoryItem>? History { get; set; }
 }

@@ -1,6 +1,6 @@
 using Hangfire.Dashboard;
 using Microsoft.AspNetCore.Http;
-using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace MatchPredictor.Web.Filters;
@@ -47,8 +47,12 @@ public class HangfireBasicAuthFilter : IDashboardAuthorizationFilter
             var credentials = Encoding.UTF8.GetString(decodedBytes).Split(':', 2);
 
             if (credentials.Length == 2 &&
-                credentials[0] == _username &&
-                credentials[1] == _password)
+                CryptographicOperations.FixedTimeEquals(
+                    Encoding.UTF8.GetBytes(credentials[0]),
+                    Encoding.UTF8.GetBytes(_username)) &&
+                CryptographicOperations.FixedTimeEquals(
+                    Encoding.UTF8.GetBytes(credentials[1]),
+                    Encoding.UTF8.GetBytes(_password)))
             {
                 return true;
             }

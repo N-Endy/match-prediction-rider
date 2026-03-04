@@ -23,10 +23,7 @@ public class AiAdvisorService : IAiAdvisorService
     private readonly ILogger<AiAdvisorService> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
 
-    // Cache the prediction summary per day to avoid rebuilding it every call
-    private static string _cachedSummary = "";
-    private static string _cachedDate = "";
-    private static readonly object _cacheLock = new();
+
 
     public AiAdvisorService(
         ApplicationDbContext dbContext,
@@ -157,10 +154,11 @@ public class AiAdvisorService : IAiAdvisorService
                 new { role = "system", content = systemPrompt }
             };
 
-            // Add conversation history
+            // Add conversation history (cap at 20 most recent to prevent token overflow)
             if (history is { Count: > 0 })
             {
-                foreach (var item in history)
+                var recentHistory = history.TakeLast(20);
+                foreach (var item in recentHistory)
                 {
                     messages.Add(new { role = item.Role, content = item.Content });
                 }

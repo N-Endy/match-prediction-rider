@@ -1,3 +1,4 @@
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
@@ -28,7 +29,7 @@ public class RegressionPredictorService : IRegressionPredictorService
 
         foreach (var s in scores)
         {
-            if (!TryParseScore(s.Score, out var h, out var a))
+            if (!ScoreParser.TryParse(s.Score, out var h, out var a))
                 continue;
 
             // Home team
@@ -44,7 +45,7 @@ public class RegressionPredictorService : IRegressionPredictorService
 
         // Averages with smoothing to avoid division by zero
         var globalAvgGoals = scores
-            .Where(s => TryParseScore(s.Score, out _, out _))
+            .Where(s => ScoreParser.TryParse(s.Score, out _, out _))
             .Select(s => (double)SumScore(s.Score))
             .DefaultIfEmpty(2.5)
             .Average();
@@ -58,30 +59,8 @@ public class RegressionPredictorService : IRegressionPredictorService
 
         var predictions = new List<RegressionPrediction>();
 
-        double GetHistoricalWeight(string category, params (string MetricName, double MetricValue)[] fallbacks)
-        {
-            if (accuracies == null || accuracies.Count == 0 || fallbacks == null || fallbacks.Length == 0) return 1.0;
-
-            foreach (var (metricName, metricValue) in fallbacks)
-            {
-                // Skip missing data point
-                if (metricValue <= 0) continue;
-
-                var profile = accuracies.FirstOrDefault(a => 
-                    a.Category == category && 
-                    a.MetricName == metricName && 
-                    metricValue >= a.MetricRangeStart && 
-                    metricValue < a.MetricRangeEnd);
-
-                if (profile != null && profile.TotalPredictions >= 5)
-                {
-                    var weight = 1.0 + (profile.AccuracyPercentage - 0.50);
-                    return Math.Clamp(weight, 0.7, 1.3);
-                }
-            }
-
-            return 1.0;
-        }
+        double GetWeight(string category, params (string MetricName, double MetricValue)[] fallbacks)
+            => HistoricalWeightCalculator.GetHistoricalWeight(accuracies, category, fallbacks);
 
         foreach (var m in upcomingMatches)
         {
@@ -112,39 +91,39 @@ public class RegressionPredictorService : IRegressionPredictorService
             var awayWinProb = 1 - homeWinProb;
 
             // --- Apply Self-Learning Weights to Statistical Projections with Fallbacks ---
-            var over25Weight = GetHistoricalWeight("Over2.5Goals", 
+            var over25Weight = GetWeight("Over2.5Goals", 
                                    ("OverTwoGoals", m.OverTwoGoals),
                                    ("OverThreeGoals", m.OverThreeGoals),
                                    ("OverOnePointFive", m.OverOnePointFive)) +
-                               GetHistoricalWeight("Over2.5Goals", 
+                               GetWeight("Over2.5Goals", 
                                    ("AhMinusHalfHome", m.AhMinusHalfHome),
                                    ("AhMinusOneHome", m.AhMinusOneHome),
                                    ("HomeWin", m.HomeWin));
             over25 = Math.Clamp(over25 * (over25Weight / 2.0), 0.0, 1.0);
 
-            var bttsWeight = GetHistoricalWeight("BothTeamsScore", 
+            var bttsWeight = GetWeight("BothTeamsScore", 
                                  ("AhMinusHalfHome", m.AhMinusHalfHome),
                                  ("AhMinusOneHome", m.AhMinusOneHome),
                                  ("HomeWin", m.HomeWin)) +
-                             GetHistoricalWeight("BothTeamsScore", 
+                             GetWeight("BothTeamsScore", 
                                  ("OverTwoGoals", m.OverTwoGoals),
                                  ("OverThreeGoals", m.OverThreeGoals),
                                  ("OverOnePointFive", m.OverOnePointFive));
             btts = Math.Clamp(btts * (bttsWeight / 2.0), 0.0, 1.0);
 
-            var hwWeight = GetHistoricalWeight("StraightWin", 
+            var hwWeight = GetWeight("StraightWin", 
                 ("AhMinusHalfHome", m.AhMinusHalfHome),
                 ("AhMinusOneHome", m.AhMinusOneHome),
                 ("HomeWin", m.HomeWin));
             homeWinProb = Math.Clamp(homeWinProb * hwWeight, 0.0, 1.0);
 
-            var awWeight = GetHistoricalWeight("StraightWin", 
+            var awWeight = GetWeight("StraightWin", 
                 ("AhMinusHalfAway", m.AhMinusHalfAway),
                 ("AhMinusOneAway", m.AhMinusOneAway),
                 ("AwayWin", m.AwayWin));
             awayWinProb = Math.Clamp(awayWinProb * awWeight, 0.0, 1.0);
             
-            var drawWeight = GetHistoricalWeight("Draw", 
+            var drawWeight = GetWeight("Draw", 
                 ("AhZeroHome", m.AhZeroHome),
                 ("AhZeroAway", m.AhZeroAway),
                 ("Draw", m.Draw));
@@ -231,18 +210,9 @@ public class RegressionPredictorService : IRegressionPredictorService
         return predictions;
     }
 
-    private static bool TryParseScore(string score, out int home, out int away)
-    {
-        home = 0; away = 0;
-        if (string.IsNullOrWhiteSpace(score)) return false;
-        var parts = score.Split(':');
-        if (parts.Length != 2) return false;
-        return int.TryParse(parts[0], out home) && int.TryParse(parts[1], out away);
-    }
-
     private static int SumScore(string score)
     {
-        return TryParseScore(score, out var h, out var a) ? h + a : 0;
+        return ScoreParser.TryParse(score, out var h, out var a) ? h + a : 0;
     }
 
     private static double ProbabilityOverTotal(double lambdaTotal, double threshold)

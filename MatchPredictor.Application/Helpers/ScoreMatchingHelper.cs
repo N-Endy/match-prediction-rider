@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Models;
 
 namespace MatchPredictor.Application.Helpers;
@@ -266,36 +267,21 @@ public static class ScoreMatchingHelper
         return sb.ToString().Normalize(NormalizationForm.FormC);
     }
 
-    // Combined parsing logic to avoid duplicating string splits
-    private static (int Home, int Away, bool IsValid) ParseScore(string score)
+    public static string DetermineDrawOutcome(string score)
     {
-        var parts = score.Split(':');
-        if (parts.Length == 2 && 
-            int.TryParse(parts[0], out var h) && 
-            int.TryParse(parts[1], out var a))
-        {
-            return (h, a, true);
-        }
-        return (0, 0, false);
+        return ScoreParser.TryParse(score, out var h, out var a)
+            ? (h == a ? "Draw" : "Not Draw") : "Unknown";
     }
 
-    private static string DetermineDrawOutcome(string score)
+    public static string DetermineOver25Outcome(string score)
     {
-        var (h, a, isValid) = ParseScore(score);
-        return isValid ? (h == a ? "Draw" : "Not Draw") : "Unknown";
+        return ScoreParser.TryParse(score, out var h, out var a)
+            ? ((h + a) > 2 ? "Over 2.5" : "Under 2.5") : "Unknown";
     }
 
-    private static string DetermineOver25Outcome(string score)
+    public static string DetermineStraightWinOutcome(string score)
     {
-        var (h, a, isValid) = ParseScore(score);
-        return isValid ? ((h + a) > 2 ? "Over 2.5" : "Under 2.5") : "Unknown";
-    }
-
-    private static string DetermineStraightWinOutcome(string score)
-    {
-        var (h, a, isValid) = ParseScore(score);
-        if (!isValid) return "Unknown";
-        
+        if (!ScoreParser.TryParse(score, out var h, out var a)) return "Unknown";
         if (h > a) return "Home Win";
         return h < a ? "Away Win" : "Draw";
     }

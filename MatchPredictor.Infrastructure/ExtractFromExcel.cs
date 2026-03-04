@@ -1,5 +1,6 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using OfficeOpenXml;
@@ -49,25 +50,12 @@ public class ExtractFromExcel : IExtractFromExcel
         _logger.LogWarning("⚠️ Excel file not found in any probed location. Searched: {Paths}", string.Join(", ", searchPaths));
 
         // If file not found in any probed location, fallback to what WebScraperService ideally evaluates to
-        string downloadFolder;
-        if (Directory.Exists(baseDirFolder) || AppDomain.CurrentDomain.BaseDirectory.Contains("publish") || AppDomain.CurrentDomain.BaseDirectory.Contains("bin"))
-            downloadFolder = baseDirFolder;
-        else if (Directory.Exists(currentDirFolder))
-            downloadFolder = currentDirFolder;
-        else
-            downloadFolder = parentDirFolder;
-
-        return Path.Combine(downloadFolder, fileName);
+        return Path.Combine(ResourcePathResolver.GetResourcesDirectory(), fileName);
     }
     
     public IEnumerable<MatchData> ExtractMatchDatasetFromFile()
     {
-        //ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
-        ExcelPackage.License.SetNonCommercialPersonal("My Name"); //This will also set the Author property to the name provided in the argument.
-        using(var _ = new ExcelPackage(new FileInfo("MyWorkbook.xlsx")))
-        {
-
-        }
+        ExcelPackage.License.SetNonCommercialPersonal("MatchPredictor");
         
         var extractedData = new List<MatchData>();
         var filePath = GetFilePath();
