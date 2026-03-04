@@ -578,6 +578,17 @@ public class AnalyzerService  : IAnalyzerService
         await _dbContext.AiScoreMatchScores
             .Where(s => s.MatchTime < cutoffUtc)
             .ExecuteDeleteAsync();
+
+        // Cleanup scraping logs older than 2 days
+        var logCutoff = DateTimeProvider.GetLocalTime().AddDays(-2);
+        var deletedLogs = await _dbContext.ScrapingLogs
+            .Where(l => l.Timestamp < logCutoff)
+            .ExecuteDeleteAsync();
+
+        if (deletedLogs > 0)
+        {
+            _logger.LogInformation("🧹 Deleted {Count} scraping logs older than 2 days.", deletedLogs);
+        }
     }
     
     private async Task SavePredictions(string category, IEnumerable<MatchData> matches)
