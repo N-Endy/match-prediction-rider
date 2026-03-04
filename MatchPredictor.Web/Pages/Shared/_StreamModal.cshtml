@@ -1,0 +1,24 @@
+<!-- Custom Watch Stream Modal Partial -->
+<div class="mp-stream-modal" id="streamModal" style="display: none;">
+    <div class="mp-stream-overlay" onclick="closeStreamModal()"></div>
+    <div class="mp-stream-content">
+        <div class="mp-stream-header">
+            <h5 class="mp-stream-title" id="streamModalLabel">
+                <i class="fas fa-satellite-dish" style="color: #ef4444; margin-right: 8px;"></i> Live Stream
+            </h5>
+            <button type="button" class="mp-stream-close" onclick="closeStreamModal()" aria-label="Close">✕</button>
+        </div>
+        <div class="mp-stream-body">
+            <div class="mp-stream-ratio" id="streamIframeContainer">
+                <div class="mp-stream-loading" id="streamLoadingIndicator">
+                    <i class="fas fa-spinner fa-spin" style="font-size: 2rem; color: #3b82f6;"></i>
+                    <p style="margin-top: 10px; color: #94a3b8; font-size: 0.9rem;">Loading Video...</p>
+                </div>
+            </div>
+        </div>
+        <div class="mp-stream-footer">
+            <small style="color: #64748b;"><i class="fas fa-info-circle me-1"></i> Stream provided by external source (sportsrc.org). MatchPredictor does not host this content.</small>
+            <button type="button" class="mp-stream-btn-secondary" onclick="closeStreamModal()">Close Player</button>
+        </div>
+    </div>
+</div>

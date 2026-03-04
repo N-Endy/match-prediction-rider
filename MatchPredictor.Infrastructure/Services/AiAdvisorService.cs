@@ -1,4 +1,5 @@
 using MatchPredictor.Domain.Interfaces;
+using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -12,7 +13,7 @@ namespace MatchPredictor.Infrastructure.Services;
 /// AI Advisor using Google Gemini with optimized token usage.
 /// - Uses gemini-2.0-flash-lite (higher free-tier limits)
 /// - Compresses prediction context into compact table format (~60% fewer tokens)
-/// - Retry with exponential backoff on 429 rate-limit errors
+/// - Retry with exponential backoff via Polly (configured in Program.cs)
 /// </summary>
 public class AiAdvisorService : IAiAdvisorService
 {
@@ -38,7 +39,7 @@ public class AiAdvisorService : IAiAdvisorService
         _httpClientFactory = httpClientFactory;
     }
 
-    public async Task<string> GetAdviceAsync(string userPrompt, CancellationToken ct = default)
+    public async Task<string> GetAdviceAsync(string userPrompt, List<ChatHistoryItem>? history = null, CancellationToken ct = default)
     {
         var apiKey = _configuration["GeminiApiKey"];
         if (string.IsNullOrEmpty(apiKey))
@@ -49,9 +50,8 @@ public class AiAdvisorService : IAiAdvisorService
             return "No predictions available for today yet. Predictions are updated daily — check back soon!";
 
         var systemPrompt = BuildSystemPrompt(predictionContext);
-        var fullPrompt = systemPrompt + "\n\nUser: " + userPrompt;
 
-        return await CallGeminiWithRetryAsync(apiKey, fullPrompt, ct);
+        return await CallGeminiAsync(apiKey, systemPrompt, userPrompt, history, ct);
     }
 
     /// <summary>
@@ -109,21 +109,6 @@ public class AiAdvisorService : IAiAdvisorService
 
     private static string BuildSystemPrompt(string predictionContext)
     {
-        // return $"""
-        //     You are Teddy, Lead Quantitative Football Analyst for MatchPredictor.
-        //     You have today's algorithmic predictions (Poisson/xG models).
-
-        //     {predictionContext}
-
-        //     RULES:
-        //     1. Only discuss matches from the data above. Never invent matches.
-        //     2. Analytical tone — use terms like variance, xG, implied probability.
-        //     3. "Best picks" = low variance, high-confidence predictions.
-        //     4. Structure: 🟢 Bankers / 🟡 Value / 🔴 High Risk.
-        //     5. Never guarantee wins. Acknowledge variance.
-        //     6. Keep responses concise and scannable with markdown.
-        //     """;
-
         return $"""
             You are Nelson, the Lead Quantitative Football Analyst for MatchPredictor. 
     
@@ -150,24 +135,56 @@ public class AiAdvisorService : IAiAdvisorService
     }
 
     /// <summary>
-    /// Calls Gemini API using Polly policies configured in Program.cs.
-    /// Uses gemini-2.0-flash-lite for higher free-tier rate limits.
+    /// Calls Gemini API with multi-turn conversation support.
+    /// Uses system_instruction for the system prompt and contents[] for conversation history.
     /// </summary>
-    private async Task<string> CallGeminiWithRetryAsync(string apiKey, string prompt, CancellationToken ct)
+    private async Task<string> CallGeminiAsync(string apiKey, string systemPrompt, string userPrompt, List<ChatHistoryItem>? history, CancellationToken ct)
     {
-        var model = _configuration["GeminiModel"] ?? "gemini-1.5-flash";
+        var model = _configuration["GeminiModel"] ?? "gemini-2.0-flash-lite";
         _logger.LogInformation("Calling Gemini model: {Model}", model);
 
         try
         {
             using var httpClient = _httpClientFactory.CreateClient("Gemini");
 
+            // Build multi-turn contents array
+            var contents = new List<object>();
+
+            // Add conversation history (if any)
+            if (history is { Count: > 0 })
+            {
+                foreach (var item in history)
+                {
+                    // Gemini uses "user" and "model" as role names
+                    var geminiRole = item.Role?.ToLowerInvariant() switch
+                    {
+                        "assistant" => "model",
+                        "user" => "user",
+                        _ => "user"
+                    };
+
+                    contents.Add(new
+                    {
+                        role = geminiRole,
+                        parts = new[] { new { text = item.Content } }
+                    });
+                }
+            }
+
+            // Add current user message
+            contents.Add(new
+            {
+                role = "user",
+                parts = new[] { new { text = userPrompt } }
+            });
+
             var requestBody = new
             {
-                contents = new[]
+                system_instruction = new
                 {
-                    new { parts = new[] { new { text = prompt } } }
-                }
+                    parts = new[] { new { text = systemPrompt } }
+                },
+                contents
             };
 
             var json = JsonSerializer.Serialize(requestBody);

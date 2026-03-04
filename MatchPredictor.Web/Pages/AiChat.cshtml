@@ -148,15 +148,20 @@ else
         showTypingIndicator();
 
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+
             const response = await fetch('/api/ai/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     message: message,
                     history: conversationHistory
-                })
+                }),
+                signal: controller.signal
             });
 
+            clearTimeout(timeoutId);
             removeTypingIndicator();
 
             if (response.ok) {
@@ -164,11 +169,17 @@ else
                 appendMessage('ai', data.response);
                 conversationHistory.push({ role: 'assistant', content: data.response });
             } else {
-                appendMessage('ai', '❌ Sorry, something went wrong. Please try again.');
+                const errorData = await response.json().catch(() => null);
+                const errorMsg = errorData?.response || 'Something went wrong. Please try again.';
+                appendMessage('ai', `❌ ${errorMsg}`);
             }
         } catch (err) {
             removeTypingIndicator();
-            appendMessage('ai', '❌ Network error. Please check your connection and try again.');
+            if (err.name === 'AbortError') {
+                appendMessage('ai', '⏳ Request timed out. The AI service may be busy — please try again in a moment.');
+            } else {
+                appendMessage('ai', '❌ Network error. Please check your connection and try again.');
+            }
         } finally {
             chatSendBtn.disabled = false;
             chatInput.focus();

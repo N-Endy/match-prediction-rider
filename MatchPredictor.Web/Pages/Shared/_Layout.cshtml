@@ -33,6 +33,7 @@
     </script>
 
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
 </head>
 <body>
@@ -139,6 +140,9 @@
 </div>
 
 <script src="~/js/cart.js" asp-append-version="true"></script>
+
+<partial name="_StreamModal" />
+<script src="~/js/livestream.js" asp-append-version="true"></script>
 
 @await RenderSectionAsync("Scripts", required: false)
 </body>

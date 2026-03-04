@@ -79,6 +79,14 @@
                                 data-prediction="BTTS">
                             Add Bet
                         </button>
+                        @if (isActuallyLive)
+                        {
+                            <button class="btn-watch-stream d-none" title="Watch Live Stream"
+                                    data-home="@match.HomeTeam"
+                                    data-away="@match.AwayTeam">
+                                <i class="fas fa-play-circle stream-pulse-icon"></i> Watch Live
+                            </button>
+                        }
                     </div>
                 </div>
             }
