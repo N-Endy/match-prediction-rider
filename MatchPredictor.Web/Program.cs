@@ -169,6 +169,9 @@ using (var scope = app.Services.CreateScope())
     var recurringJobs = scope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
 
+    // WAT (West Africa Time) = UTC+1, IANA timezone ID: Africa/Lagos
+    var watTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Africa/Lagos");
+
     // Remove the old combined job if it still exists in the Hangfire database
     recurringJobs.RemoveIfExists("daily-prediction-job");
 
@@ -178,11 +181,10 @@ using (var scope = app.Services.CreateScope())
     recurringJobs.AddOrUpdate<IAnalyzerService>(
         "prediction-generation-job",
         service => service.ExtractDataAndSyncDatabaseAsync(),
-        "30 2,4,12,16 * * *", // 2:30 AM, 4:30 AM, 12:30 PM, 4:30 PM
-
+        "30 2,4,12,16 * * *", // 2:30 AM, 4:30 AM, 12:30 PM, 4:30 PM WAT
         new RecurringJobOptions
         {
-            TimeZone = TimeZoneInfo.Local
+            TimeZone = watTimeZone
         }
     );
 
@@ -192,30 +194,30 @@ using (var scope = app.Services.CreateScope())
         "*/5 * * * *", // Every 5 minutes
         new RecurringJobOptions
         {
-            TimeZone = TimeZoneInfo.Local
+            TimeZone = watTimeZone
         }
     );
 
     recurringJobs.AddOrUpdate<IAnalyzerService>(
         "daily-analysis-job",
         service => service.RunDailyAnalysisAsync(),
-        "0 0 * * *", // Daily at midnight
+        "0 3 * * *", // Daily at 3:00 AM WAT (after 2:30 AM data sync ensures fresh data)
         new RecurringJobOptions
         {
-            TimeZone = TimeZoneInfo.Local
+            TimeZone = watTimeZone
         }
     );
 
     recurringJobs.AddOrUpdate<IAnalyzerService>(
         "cleanup-old-predictions",
         service => service.CleanupOldPredictionsAndMatchDataAsync(),
-        "0 1 * * *", // Daily at 1:00 AM
+        "0 1 * * *", // Daily at 1:00 AM WAT
         new RecurringJobOptions
         {
-            TimeZone = TimeZoneInfo.Local
+            TimeZone = watTimeZone
         }
     );
-    logger.LogInformation("✅ Recurring jobs registered successfully.");
+    logger.LogInformation("✅ Recurring jobs registered successfully (WAT timezone).");
 }
 
 // Auto-trigger initial data scraping if no predictions exist for today

@@ -39,11 +39,14 @@ public class ExtractFromExcel : IExtractFromExcel
 
         foreach (var path in searchPaths)
         {
+            _logger.LogDebug("Probing for Excel file at: {Path} → {Exists}", path, File.Exists(path));
             if (File.Exists(path))
             {
+                _logger.LogInformation("✅ Excel file found at: {Path}", path);
                 return path;
             }
         }
+        _logger.LogWarning("⚠️ Excel file not found in any probed location. Searched: {Paths}", string.Join(", ", searchPaths));
 
         // If file not found in any probed location, fallback to what WebScraperService ideally evaluates to
         string downloadFolder;

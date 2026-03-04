@@ -155,23 +155,54 @@ public class AnalyzerService  : IAnalyzerService
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
     public async Task RunDailyAnalysisAsync()
     {
-        _logger.LogInformation("Starting daily analysis process (midnight)...");
+        _logger.LogInformation("Starting daily analysis process...");
+
+        // ── Step 1: Pattern Analysis (independent) ──
         try
         {
             await AnalyzePatterns();
             _logger.LogInformation("✅ Pattern analysis completed.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Pattern analysis failed, continuing with regression predictions.");
+        }
 
-            var scraped = _excelExtract.ExtractMatchDatasetFromFile().ToList();
-            var accuracies = await _dbContext.ModelAccuracies.ToListAsync();
-            var regressionPredictions = _regressionPredictorService.GeneratePredictions(scraped, accuracies);
-            await SaveRegressionPredictions(regressionPredictions);
-            _logger.LogInformation("✅ Regression-based predictions saved successfully.");
+        // ── Step 2: Download fresh data and generate regression predictions ──
+        try
+        {
+            List<MatchData> scraped;
+
+            // Try to download fresh Excel with the latest odds
+            try
+            {
+                await _webScraperService.ScrapeMatchDataAsync();
+                scraped = _excelExtract.ExtractMatchDatasetFromFile().ToList();
+                _logger.LogInformation("✅ Fresh Excel downloaded. Extracted {Count} matches for regression.", scraped.Count);
+            }
+            catch (Exception dlEx)
+            {
+                _logger.LogWarning(dlEx, "⚠️ Fresh Excel download failed. Falling back to database data.");
+                scraped = await _dbContext.MatchDatas.ToListAsync();
+            }
+
+            if (scraped.Count == 0)
+            {
+                _logger.LogWarning("⚠️ No match data available for regression predictions. Skipping.");
+            }
+            else
+            {
+                var accuracies = await _dbContext.ModelAccuracies.ToListAsync();
+                var regressionPredictions = _regressionPredictorService.GeneratePredictions(scraped, accuracies);
+                await SaveRegressionPredictions(regressionPredictions);
+                _logger.LogInformation("✅ Regression-based predictions saved ({Count} matches, {PredCount} predictions).", scraped.Count, regressionPredictions.Count());
+            }
 
             await LogScrapingStatus("Success", "✅ Daily analysis completed successfully.");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ An error occurred during daily analysis.");
+            _logger.LogError(ex, "❌ An error occurred during regression prediction generation.");
             await LogScrapingStatus("Failed", $"Daily Analysis Error: {ex.Message}");
             throw;
         }
