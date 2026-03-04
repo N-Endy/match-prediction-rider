@@ -289,15 +289,41 @@ public partial class WebScraperService : IWebScraperService
 
         _logger.LogInformation("Fetching AiScore SSR HTML via Headless Browser...");
 
+
         string html;
         try
         {
             var chromeOptions = GetChromeOptions();
+            chromeOptions.AddArgument("--disable-blink-features=AutomationControlled");
+            chromeOptions.AddExcludedArgument("enable-automation");
+            chromeOptions.AddAdditionalOption("useAutomationExtension", false);
+            chromeOptions.AddArgument("--user-agent=Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+            
             using var driver = new ChromeDriver(chromeOptions);
+            var js = (IJavaScriptExecutor)driver;
+            js.ExecuteScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
+
             await driver.Navigate().GoToUrlAsync(aiScoreUrl);
 
-            // Wait 5 seconds to ensure any Cloudflare challenge passes and JavaScript fully executes
-            await Task.Delay(5000);
+            // Dynamically wait up to 30s for Cloudflare challenges to clear
+            var maxWait = 30;
+            var elapsed = 0;
+            while (elapsed < maxWait)
+            {
+                await Task.Delay(2000);
+                elapsed += 2;
+                var src = driver.PageSource;
+                if (!src.Contains("security verification", StringComparison.OrdinalIgnoreCase) &&
+                    !src.Contains("cf-turnstile", StringComparison.OrdinalIgnoreCase) &&
+                    !src.Contains("Just a moment", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogInformation("Cloudflare passed or not present after {Elapsed}s.", elapsed);
+                    break;
+                }
+            }
+
+            // Extra buffer to ensure Nuxt state finishes hydrating
+            await Task.Delay(3000);
 
             html = driver.PageSource;
         }

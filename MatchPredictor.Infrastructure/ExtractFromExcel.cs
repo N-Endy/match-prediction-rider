@@ -24,7 +24,28 @@ public class ExtractFromExcel : IExtractFromExcel
         var baseDirFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources");
         var currentDirFolder = Path.Combine(Directory.GetCurrentDirectory(), "Resources");
         var parentDirFolder = Path.Combine(Directory.GetParent(Directory.GetCurrentDirectory())?.FullName ?? string.Empty, "Resources");
+        var userProfileDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
 
+        string[] searchPaths = 
+        {
+            Path.Combine(baseDirFolder, fileName),
+            Path.Combine(currentDirFolder, fileName),
+            Path.Combine(parentDirFolder, fileName),
+            Path.Combine(userProfileDir, fileName),
+            Path.Combine("/Resources", fileName),
+            Path.Combine("Resources", fileName),
+            Path.Combine("/app/Resources", fileName) // Common docker structure fallback
+        };
+
+        foreach (var path in searchPaths)
+        {
+            if (File.Exists(path))
+            {
+                return path;
+            }
+        }
+
+        // If file not found in any probed location, fallback to what WebScraperService ideally evaluates to
         string downloadFolder;
         if (Directory.Exists(baseDirFolder) || AppDomain.CurrentDomain.BaseDirectory.Contains("publish") || AppDomain.CurrentDomain.BaseDirectory.Contains("bin"))
             downloadFolder = baseDirFolder;
