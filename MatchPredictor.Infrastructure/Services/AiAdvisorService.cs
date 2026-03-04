@@ -10,8 +10,8 @@ using System.Text.Json;
 namespace MatchPredictor.Infrastructure.Services;
 
 /// <summary>
-/// AI Advisor using Google Gemini with optimized token usage.
-/// - Uses gemini-2.0-flash-lite (higher free-tier limits)
+/// AI Advisor using Groq (Llama 3.3 70B) with optimized token usage.
+/// - Uses OpenAI-compatible chat completions API
 /// - Compresses prediction context into compact table format (~60% fewer tokens)
 /// - Retry with exponential backoff via Polly (configured in Program.cs)
 /// </summary>
@@ -41,9 +41,9 @@ public class AiAdvisorService : IAiAdvisorService
 
     public async Task<string> GetAdviceAsync(string userPrompt, List<ChatHistoryItem>? history = null, CancellationToken ct = default)
     {
-        var apiKey = _configuration["GeminiApiKey"];
+        var apiKey = _configuration["GroqApiKey"];
         if (string.IsNullOrEmpty(apiKey))
-            return "⚠️ Gemini API key is not configured. Please add 'GeminiApiKey' to appsettings.json.";
+            return "⚠️ Groq API key is not configured. Please add 'GroqApiKey' to your configuration.";
 
         var predictionContext = await GetOrBuildPredictionContextAsync(ct);
         if (string.IsNullOrEmpty(predictionContext))
@@ -51,7 +51,7 @@ public class AiAdvisorService : IAiAdvisorService
 
         var systemPrompt = BuildSystemPrompt(predictionContext);
 
-        return await CallGeminiAsync(apiKey, systemPrompt, userPrompt, history, ct);
+        return await CallGroqAsync(apiKey, systemPrompt, userPrompt, history, ct);
     }
 
     /// <summary>
@@ -68,18 +68,15 @@ public class AiAdvisorService : IAiAdvisorService
                 return _cachedSummary;
         }
 
-        // Fetch today's predictions — limit to 25 for token efficiency
         var predictions = await _dbContext.Predictions
             .Where(p => p.Date == todayStr)
             .OrderBy(p => p.League)
             .ThenBy(p => p.Time)
-            .Take(25)
             .ToListAsync(ct);
 
         if (predictions.Count == 0)
             return "";
 
-        // Compact format: one short line per match (saves ~60% tokens vs verbose format)
         var sb = new StringBuilder();
         sb.AppendLine($"Today ({todayStr}), {predictions.Count} predictions:");
 
@@ -89,7 +86,6 @@ public class AiAdvisorService : IAiAdvisorService
             sb.AppendLine($"\n[{group.Key}]");
             foreach (var p in group)
             {
-                // Compact: "EPL 15:00 Arsenal v Chelsea → Home Win | 2:1"
                 var score = string.IsNullOrEmpty(p.ActualScore) ? "" : $" | {p.ActualScore}";
                 sb.AppendLine($"{p.League} {p.Time} {p.HomeTeam} v {p.AwayTeam} → {p.PredictedOutcome}{score}");
             }
@@ -117,7 +113,7 @@ public class AiAdvisorService : IAiAdvisorService
             {predictionContext}
             
             CONVERSATIONAL STYLE & TONE (CRITICAL):
-            1. NO ROBOTIC GREETINGS: Never start your responses with "Hi, I am Teddy", "Welcome to MatchPredictor", or "As an AI...". Assume the user already knows who you are. Jump straight into the analysis.
+            1. NO ROBOTIC GREETINGS: Never start your responses with "Hi, I am Nelson", "Welcome to MatchPredictor", or "As an AI...". Assume the user already knows who you are. Jump straight into the analysis.
             2. BE INTERACTIVE: Talk like a brilliant, analytical colleague. Instead of just dumping data and stopping, occasionally end your response with a highly relevant follow-up question to keep the conversation moving (e.g., "Are you looking to build a safe accumulator today, or hunting for high-value singles?", "Do you want me to break down the xG math on that specific match?").
             3. ACCESSIBLE QUANT TONE: Use data science terms ("variance," "expected goals," "implied probability," "market edge") naturally. Explain the 'why' behind the math, but keep it conversational, not like a textbook.
             
@@ -135,74 +131,63 @@ public class AiAdvisorService : IAiAdvisorService
     }
 
     /// <summary>
-    /// Calls Gemini API with multi-turn conversation support.
-    /// Uses system_instruction for the system prompt and contents[] for conversation history.
+    /// Calls Groq API using the OpenAI-compatible chat completions format.
     /// </summary>
-    private async Task<string> CallGeminiAsync(string apiKey, string systemPrompt, string userPrompt, List<ChatHistoryItem>? history, CancellationToken ct)
+    private async Task<string> CallGroqAsync(string apiKey, string systemPrompt, string userPrompt, List<ChatHistoryItem>? history, CancellationToken ct)
     {
-        var model = _configuration["GeminiModel"] ?? "gemini-2.0-flash-lite";
-        _logger.LogInformation("Calling Gemini model: {Model}", model);
+        var model = _configuration["GroqModel"] ?? "llama-3.3-70b-versatile";
+        _logger.LogInformation("Calling Groq model: {Model}", model);
 
         try
         {
-            using var httpClient = _httpClientFactory.CreateClient("Gemini");
+            using var httpClient = _httpClientFactory.CreateClient("Groq");
 
-            // Build multi-turn contents array
-            var contents = new List<object>();
+            // Build messages array (OpenAI chat completions format)
+            var messages = new List<object>
+            {
+                new { role = "system", content = systemPrompt }
+            };
 
-            // Add conversation history (if any)
+            // Add conversation history
             if (history is { Count: > 0 })
             {
                 foreach (var item in history)
                 {
-                    // Gemini uses "user" and "model" as role names
-                    var geminiRole = item.Role?.ToLowerInvariant() switch
-                    {
-                        "assistant" => "model",
-                        "user" => "user",
-                        _ => "user"
-                    };
-
-                    contents.Add(new
-                    {
-                        role = geminiRole,
-                        parts = new[] { new { text = item.Content } }
-                    });
+                    messages.Add(new { role = item.Role, content = item.Content });
                 }
             }
 
             // Add current user message
-            contents.Add(new
-            {
-                role = "user",
-                parts = new[] { new { text = userPrompt } }
-            });
+            messages.Add(new { role = "user", content = userPrompt });
 
             var requestBody = new
             {
-                system_instruction = new
-                {
-                    parts = new[] { new { text = systemPrompt } }
-                },
-                contents
+                model,
+                messages,
+                temperature = 0.7,
+                max_tokens = 2048
             };
 
             var json = JsonSerializer.Serialize(requestBody);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
+            // Add auth header
+            httpClient.DefaultRequestHeaders.Authorization = 
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+
             var response = await httpClient.PostAsync(
-                $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}",
+                "https://api.groq.com/openai/v1/chat/completions",
                 content, ct);
 
             if (!response.IsSuccessStatusCode)
             {
                 var errorBody = await response.Content.ReadAsStringAsync(ct);
-                _logger.LogError("Gemini API error: {Status} {Body}", response.StatusCode,
+                _logger.LogError("Groq API error: {Status} {Body}", response.StatusCode,
                     errorBody[..Math.Min(300, errorBody.Length)]);
                 
                 if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                 {
-                    return "⏳ The AI service is currently busy (rate limit). Please wait a minute and try again.";
+                    return "⏳ The AI service is currently busy (rate limit). Please wait a moment and try again.";
                 }
                 
                 return $"❌ AI service error ({response.StatusCode}). Please try again later.";
@@ -212,10 +197,9 @@ public class AiAdvisorService : IAiAdvisorService
             var doc = JsonDocument.Parse(responseJson);
 
             var text = doc.RootElement
-                .GetProperty("candidates")[0]
+                .GetProperty("choices")[0]
+                .GetProperty("message")
                 .GetProperty("content")
-                .GetProperty("parts")[0]
-                .GetProperty("text")
                 .GetString();
 
             return text ?? "No response generated.";
@@ -226,7 +210,7 @@ public class AiAdvisorService : IAiAdvisorService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error calling Gemini API");
+            _logger.LogError(ex, "Error calling Groq API");
             return $"❌ Error communicating with AI: {ex.Message}";
         }
     }

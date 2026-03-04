@@ -23,7 +23,7 @@ builder.Services.AddMemoryCache();
 builder.Services.AddHealthChecks();
 builder.Services.AddHttpClient();
 
-builder.Services.AddHttpClient("Gemini", client => 
+builder.Services.AddHttpClient("Groq", client => 
 {
     client.Timeout = TimeSpan.FromSeconds(60);
 })
