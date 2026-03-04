@@ -280,8 +280,8 @@ public partial class WebScraperService : IWebScraperService
     }
 
     /// <summary>
-    /// Extracts match scores from AiScore by downloading the HTML via Headless Browser
-    /// and extracting JSON data injected in window.__NUXT__.
+    /// Extracts match scores from AiScore by loading the page via Headless Browser
+    /// and extracting JSON data from window.__NUXT__ using the JS executor.
     /// </summary>
     private async Task<List<AiScoreMatchScore>> ScrapeAiScoreViaBrowserAsync()
     {
@@ -289,8 +289,6 @@ public partial class WebScraperService : IWebScraperService
 
         _logger.LogInformation("Fetching AiScore SSR HTML via Headless Browser...");
 
-
-        string html;
         try
         {
             var chromeOptions = GetChromeOptions();
@@ -298,6 +296,7 @@ public partial class WebScraperService : IWebScraperService
             chromeOptions.AddExcludedArgument("enable-automation");
             chromeOptions.AddAdditionalOption("useAutomationExtension", false);
             chromeOptions.AddArgument("--user-agent=Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+            chromeOptions.AddArgument("--disable-gpu");
             
             using var driver = new ChromeDriver(chromeOptions);
             var js = (IJavaScriptExecutor)driver;
@@ -320,20 +319,147 @@ public partial class WebScraperService : IWebScraperService
                     _logger.LogInformation("Cloudflare passed or not present after {Elapsed}s.", elapsed);
                     break;
                 }
+                _logger.LogDebug("Still waiting for Cloudflare at {Elapsed}s...", elapsed);
             }
 
-            // Extra buffer to ensure Nuxt state finishes hydrating
-            await Task.Delay(3000);
+            // Extra buffer to ensure Nuxt/Next state finishes hydrating
+            await Task.Delay(5000);
 
-            html = driver.PageSource;
+            // --- Strategy 1: Extract __NUXT__ via JavaScript executor (preferred) ---
+            var hasNuxt = (bool)js.ExecuteScript("return !!window.__NUXT__;");
+            if (hasNuxt)
+            {
+                _logger.LogInformation("Found window.__NUXT__ via JS executor.");
+                var nuxtJson = (string)js.ExecuteScript(@"
+                    var s = window.__NUXT__ && window.__NUXT__.state && window.__NUXT__.state['football/home'];
+                    if (!s) return JSON.stringify({matches:[], teams:[], comps:[]});
+                    return JSON.stringify({ 
+                        matches: s.matchesData_matches || [], 
+                        teams: s.matchesData_teams || [], 
+                        comps: s.matchesData_competitions || [] 
+                    });
+                ");
+                return ParseAiScoreExtractedJson(nuxtJson);
+            }
+
+            // --- Strategy 2: Extract __NEXT_DATA__ via JS executor ---
+            var hasNext = (bool)js.ExecuteScript("return !!window.__NEXT_DATA__;");
+            if (hasNext)
+            {
+                _logger.LogInformation("Found window.__NEXT_DATA__ via JS executor.");
+                var nextJson = (string)js.ExecuteScript("return JSON.stringify(window.__NEXT_DATA__);");
+                _logger.LogDebug("NEXT_DATA preview: {Preview}", nextJson?.Substring(0, Math.Min(nextJson.Length, 300)));
+                // For now, log and fall through — parse if structure is known
+            }
+
+            // --- Strategy 3: Regex on page source (legacy fallback) ---
+            var html = driver.PageSource;
+            var result = ParseAiScoreNuxtState(html);
+            if (result.Count > 0)
+                return result;
+
+            // Debugging: log what the page actually contains
+            var pageTitle = driver.Title;
+            var pageLen = html.Length;
+            _logger.LogWarning("AiScore Browser: No data extracted. Page title: '{Title}', HTML length: {Len}, first 300 chars: {Preview}",
+                pageTitle, pageLen, html.Substring(0, Math.Min(pageLen, 300)));
+
+            return new List<AiScoreMatchScore>();
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to load AiScore via Headless Chrome.");
             return new List<AiScoreMatchScore>();
         }
-            
-        return ParseAiScoreNuxtState(html);
+    }
+
+    /// <summary>
+    /// Parses the pre-extracted JSON from the JS executor (already a clean JSON string).
+    /// </summary>
+    private List<AiScoreMatchScore> ParseAiScoreExtractedJson(string extractedJson)
+    {
+        var matchScores = new List<AiScoreMatchScore>();
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(extractedJson);
+            var root = doc.RootElement;
+            var matchesArr = root.GetProperty("matches");
+            var teamsArr = root.GetProperty("teams");
+            var compsArr = root.GetProperty("comps");
+
+            var teamsDict = new Dictionary<string, string>();
+            foreach (var t in teamsArr.EnumerateArray())
+            {
+                var id = t.GetProperty("id").GetString();
+                var name = t.TryGetProperty("name", out var n) ? n.GetString() : t.TryGetProperty("n", out var nn) ? nn.GetString() : "";
+                if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name)) teamsDict[id] = name;
+            }
+
+            var compsDict = new Dictionary<string, string>();
+            foreach (var c in compsArr.EnumerateArray())
+            {
+                var id = c.GetProperty("id").GetString();
+                var name = c.TryGetProperty("name", out var n) ? n.GetString() : c.TryGetProperty("n", out var nn) ? nn.GetString() : "";
+                if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name)) compsDict[id] = name;
+            }
+
+            foreach (var m in matchesArr.EnumerateArray())
+            {
+                try
+                {
+                    var sid = m.TryGetProperty("statusId", out var sidProp) ? sidProp.GetInt32() : 0;
+                    var isLive = (sid >= 2 && sid <= 7);
+                    var isFinished = (sid >= 8 && sid <= 10);
+                    if (!isLive && !isFinished) continue;
+
+                    var homeScores = m.TryGetProperty("homeScores", out var hs) ? hs : default;
+                    var awayScores = m.TryGetProperty("awayScores", out var ascv) ? ascv : default;
+                    if (homeScores.ValueKind != System.Text.Json.JsonValueKind.Array ||
+                        awayScores.ValueKind != System.Text.Json.JsonValueKind.Array ||
+                        homeScores.GetArrayLength() == 0 || awayScores.GetArrayLength() == 0)
+                        continue;
+
+                    var homeGoals = homeScores[0].GetInt32();
+                    var awayGoals = awayScores[0].GetInt32();
+
+                    var htId = m.TryGetProperty("homeTeam", out var ht) ? ht.GetProperty("id").GetString() : m.TryGetProperty("homeTeamId", out var hti) ? hti.GetString() : "";
+                    var atId = m.TryGetProperty("awayTeam", out var at) ? at.GetProperty("id").GetString() : m.TryGetProperty("awayTeamId", out var ati) ? ati.GetString() : "";
+                    var cId = m.TryGetProperty("competition", out var comp) ? comp.GetProperty("id").GetString() : m.TryGetProperty("competitionId", out var ci) ? ci.GetString() : "";
+
+                    var homeName = !string.IsNullOrEmpty(htId) && teamsDict.TryGetValue(htId, out var hn) ? hn : "";
+                    var awayName = !string.IsNullOrEmpty(atId) && teamsDict.TryGetValue(atId, out var an) ? an : "";
+                    var leagueName = !string.IsNullOrEmpty(cId) && compsDict.TryGetValue(cId, out var ln) ? ln : "";
+
+                    var matchTimeUnix = m.TryGetProperty("matchTime", out var mt) ? mt.GetInt64() : 0;
+                    var matchTime = matchTimeUnix > 0
+                        ? DateTimeOffset.FromUnixTimeSeconds(matchTimeUnix).UtcDateTime
+                        : DateTime.UtcNow;
+
+                    var score = $"{homeGoals}:{awayGoals}";
+                    matchScores.Add(new AiScoreMatchScore
+                    {
+                        League = leagueName,
+                        HomeTeam = homeName,
+                        AwayTeam = awayName,
+                        Score = score,
+                        MatchTime = matchTime,
+                        BTTSLabel = IsBtts(score),
+                        IsLive = isLive
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Skipping AiScore match due to parse error.");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to parse AiScore extracted JSON.");
+        }
+
+        return matchScores;
     }
 
     private List<AiScoreMatchScore> ParseAiScoreNuxtState(string html)
