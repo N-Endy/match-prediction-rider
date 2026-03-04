@@ -45,6 +45,12 @@ public class AiAdvisorService : IAiAdvisorService
         if (string.IsNullOrEmpty(apiKey))
             return "⚠️ Groq API key is not configured. Please add 'GroqApiKey' to your configuration.";
 
+        // Diagnostic: log masked key to verify correct value is loaded
+        var maskedKey = apiKey.Length > 12 
+            ? $"{apiKey[..8]}...{apiKey[^4..]}" 
+            : "***too short***";
+        _logger.LogInformation("GroqApiKey loaded: {MaskedKey} (length: {Length})", maskedKey, apiKey.Length);
+
         var predictionContext = await GetOrBuildPredictionContextAsync(ct);
         if (string.IsNullOrEmpty(predictionContext))
             return "No predictions available for today yet. Predictions are updated daily — check back soon!";
