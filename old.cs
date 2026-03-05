@@ -2,12 +2,10 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using HtmlAgilityPack;
 using Jint;
-using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using MatchPredictor.Infrastructure.Utils;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Support.UI;
@@ -19,14 +17,24 @@ public partial class WebScraperService : IWebScraperService
     private readonly string _downloadFolder;
     private readonly IConfiguration _configuration;
     private readonly ILogger<WebScraperService> _logger;
-    private readonly IHttpClientFactory _httpClientFactory;
 
-    public WebScraperService(IConfiguration configuration, ILogger<WebScraperService> logger, IHttpClientFactory httpClientFactory)
+    public WebScraperService(IConfiguration configuration, ILogger<WebScraperService> logger)
     {
         _logger = logger;
         _configuration = configuration;
-        _httpClientFactory = httpClientFactory;
-        _downloadFolder = ResourcePathResolver.GetResourcesDirectory();
+        
+        var baseDirFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources");
+        var currentDirFolder = Path.Combine(Directory.GetCurrentDirectory(), "Resources");
+        var parentDirFolder = Path.Combine(Directory.GetParent(Directory.GetCurrentDirectory())?.FullName ?? string.Empty, "Resources");
+
+        if (Directory.Exists(baseDirFolder) || AppDomain.CurrentDomain.BaseDirectory.Contains("publish") || AppDomain.CurrentDomain.BaseDirectory.Contains("bin"))
+            _downloadFolder = baseDirFolder;
+        else if (Directory.Exists(currentDirFolder))
+            _downloadFolder = currentDirFolder;
+        else
+            _downloadFolder = parentDirFolder;
+
+        Directory.CreateDirectory(_downloadFolder); // Ensure the directory exists
     }
     
     public async Task ScrapeMatchDataAsync()
@@ -35,7 +43,8 @@ public partial class WebScraperService : IWebScraperService
         {
             var chromeOptions = GetChromeOptions();
 
-
+            // var service = ChromeDriverService.CreateDefaultService();
+            // service.HideCommandPromptWindow = true;
 
             DeletePreviousFile();
 
@@ -61,7 +70,7 @@ public partial class WebScraperService : IWebScraperService
             {
                 // Dump for debugging and fail fast
                 await File.WriteAllTextAsync("debug.html", driver.PageSource);
-
+                //((ITakesScreenshot)driver).GetScreenshot().SaveAsFile("debug.png", ScreenshotImageFormat.Png);
                 throw new WebDriverTimeoutException($"Could not locate/click element by {(isXPath ? "XPath" : "CSS")}: {selector}");
             }
 
@@ -90,7 +99,7 @@ public partial class WebScraperService : IWebScraperService
             _logger.LogInformation("Checking URL for scores...");
             await driver.Navigate().GoToUrlAsync(downloadUrl);
             
-            _logger.LogInformation("Commencing scraping for scores in inner HTML...");
+            _logger.LogInformation("Commencing scrapping for scores in inner HTML...");
             
             // Wait for dynamic content to render
             await Task.Delay(3000);
@@ -156,11 +165,7 @@ public partial class WebScraperService : IWebScraperService
 
                             DateTime matchTime;
                             try { matchTime = ParseTime(currentTime); }
-                            catch (Exception ex)
-                            {
-                                _logger.LogDebug(ex, "Could not parse match time '{Time}', using UTC now as fallback.", currentTime);
-                                matchTime = DateTime.UtcNow;
-                            }
+                            catch { matchTime = DateTime.UtcNow; } // Live matches may not have a parseable time
                             
                             matchScores.Add(new MatchScore
                             {
@@ -169,7 +174,7 @@ public partial class WebScraperService : IWebScraperService
                                 AwayTeam = away,
                                 Score = score,
                                 MatchTime = matchTime,
-                                BTTSLabel = ScoreParser.IsBtts(score),
+                                BTTSLabel = IsBtts(score),
                                 IsLive = isLive
                             });
                         }
@@ -198,33 +203,17 @@ public partial class WebScraperService : IWebScraperService
             matchScores = await ScrapeAiScoreViaHttpAsync();
             if (matchScores.Count > 0)
             {
-                _logger.LogInformation("Scraped {Count} match scores from AiScore (HTTP).", matchScores.Count);
+                _logger.LogInformation("Scraped {Count} match scores from AiScore (Nuxt state).", matchScores.Count);
                 return matchScores;
             }
-            _logger.LogWarning("AiScore HTTP extraction returned 0 matches. Falling back to Headless Browser.");
+            _logger.LogWarning("AiScore HTTP extraction returned 0 matches. Falling back to API-Football.");
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "AiScore HTTP extraction failed. Falling back to Headless Browser.");
+            _logger.LogWarning(ex, "AiScore HTTP extraction failed. Falling back to API-Football.");
         }
 
-        // ── Secondary: Headless Browser → extract window.__NUXT__ state from AiScore ──
-        try
-        {
-            matchScores = await ScrapeAiScoreViaBrowserAsync();
-            if (matchScores.Count > 0)
-            {
-                _logger.LogInformation("Scraped {Count} match scores from AiScore (Browser).", matchScores.Count);
-                return matchScores;
-            }
-            _logger.LogWarning("AiScore Browser extraction returned 0 matches. Falling back to API-Football.");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "AiScore Browser extraction failed. Falling back to API-Football.");
-        }
-
-        // ── Tertiary: Fallback API-Football REST API ──
+        // ── Fallback: API-Football REST API ──
         try
         {
             matchScores = await FetchFromApiFootballAsync();
@@ -243,14 +232,13 @@ public partial class WebScraperService : IWebScraperService
     }
 
     /// <summary>
-    /// Extracts match scores from AiScore by downloading the HTML via HttpClient.
-    /// Fast, but might get blocked by Cloudflare (403 Forbidden).
+    /// Extracts match scores from AiScore by downloading the HTML via HttpClient
+    /// and extracting JSON data injected in window.__NUXT__.
     /// </summary>
     private async Task<List<AiScoreMatchScore>> ScrapeAiScoreViaHttpAsync()
     {
         var aiScoreUrl = _configuration["ScrapingValues:AiScoreWebsite"] ?? "https://m.aiscore.com";
-
-        _logger.LogInformation("Fetching AiScore SSR HTML via HTTP...");
+        var matchScores = new List<AiScoreMatchScore>();
 
         using var handler = new HttpClientHandler
         {
@@ -261,236 +249,25 @@ public partial class WebScraperService : IWebScraperService
         client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
         client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
         client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.5");
+        
         client.Timeout = TimeSpan.FromSeconds(30);
 
+        _logger.LogInformation("Fetching AiScore SSR HTML via HTTP...");
         var response = await client.GetAsync(aiScoreUrl);
+
         if (!response.IsSuccessStatusCode)
         {
             _logger.LogWarning("AiScore HTTP returned {StatusCode} {ReasonPhrase}.", response.StatusCode, response.ReasonPhrase);
-            return new List<AiScoreMatchScore>();
+            return matchScores;
         }
 
         var html = await response.Content.ReadAsStringAsync();
-        return ParseAiScoreNuxtState(html);
-    }
-
-    /// <summary>
-    /// Extracts match scores from AiScore by loading the page via Headless Browser
-    /// and extracting JSON data from window.__NUXT__ using the JS executor.
-    /// </summary>
-    private async Task<List<AiScoreMatchScore>> ScrapeAiScoreViaBrowserAsync()
-    {
-        var aiScoreUrl = _configuration["ScrapingValues:AiScoreWebsite"] ?? "https://m.aiscore.com";
-
-        _logger.LogInformation("Fetching AiScore SSR HTML via Headless Browser...");
-
-        try
-        {
-            var chromeOptions = GetChromeOptions();
-            chromeOptions.PageLoadStrategy = PageLoadStrategy.Eager; // Crucial: prevents hanging on tarpit CSS/JS
-            chromeOptions.AddArgument("--disable-blink-features=AutomationControlled");
-            chromeOptions.AddExcludedArgument("enable-automation");
-            chromeOptions.AddAdditionalOption("useAutomationExtension", false);
-            // Let the browser use its real User-Agent (e.g. Chrome 145) to avoid mismatch detection
-            // We just add standard anti-bot flags.
-            chromeOptions.AddArgument("--disable-gpu");
-            chromeOptions.AddArgument("--window-size=1920,1080");
-            chromeOptions.AddArgument("--ignore-certificate-errors");
-            chromeOptions.AddArgument("--disable-web-security");
-            chromeOptions.AddArgument("--no-sandbox");
-            chromeOptions.AddArgument("--disable-dev-shm-usage");
-            
-            using var driver = new ChromeDriver(chromeOptions);
-            var js = (IJavaScriptExecutor)driver;
-            js.ExecuteScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
-
-            // Set short timeouts so if Cloudflare tarpits, it throws quickly instead of hanging for 60s
-            driver.Manage().Timeouts().AsynchronousJavaScript = TimeSpan.FromSeconds(10);
-            
-            await driver.Navigate().GoToUrlAsync(aiScoreUrl);
-
-            // Instead of aggressively polling driver.PageSource (which deadlocks on Cloudflare tarpits),
-            // we will poll the JS context lightly over 20 seconds to see if __NUXT__ appears.
-            var maxWait = 20;
-            var elapsed = 0;
-            bool nuxtLoaded = false;
-            
-            while (elapsed < maxWait)
-            {
-                await Task.Delay(2000);
-                elapsed += 2;
-                
-                try
-                {
-                    nuxtLoaded = (bool)js.ExecuteScript("return !!window.__NUXT__;");
-                    if (nuxtLoaded)
-                    {
-                        _logger.LogInformation("window.__NUXT__ appeared after {Elapsed}s.", elapsed);
-                        break;
-                    }
-                }
-                catch (Exception)
-                {
-                    // JS executor might fail if navigation is completely stuck or context destroyed, just swallow and wait
-                    _logger.LogDebug("JS execution failed at {Elapsed}s, still waiting...", elapsed);
-                }
-            }
-
-            if (!nuxtLoaded)
-            {
-                _logger.LogWarning("window.__NUXT__ never populated within {MaxWait}s. Cloudflare might have blocked it permanently.", maxWait);
-                // We'll still fall through to the extraction logic below, which will gracefully handle the missing object
-            }
-
-            // --- Strategy 1: Extract __NUXT__ via JavaScript executor (preferred) ---
-            var hasNuxt = (bool)js.ExecuteScript("return !!window.__NUXT__;");
-            if (hasNuxt)
-            {
-                _logger.LogInformation("Found window.__NUXT__ via JS executor.");
-                var nuxtJson = (string)js.ExecuteScript(@"
-                    var s = window.__NUXT__ && window.__NUXT__.state && window.__NUXT__.state['football/home'];
-                    if (!s) return JSON.stringify({matches:[], teams:[], comps:[]});
-                    return JSON.stringify({ 
-                        matches: s.matchesData_matches || [], 
-                        teams: s.matchesData_teams || [], 
-                        comps: s.matchesData_competitions || [] 
-                    });
-                ");
-                return ParseAiScoreExtractedJson(nuxtJson);
-            }
-
-            // --- Strategy 2: Extract __NEXT_DATA__ via JS executor ---
-            var hasNext = (bool)js.ExecuteScript("return !!window.__NEXT_DATA__;");
-            if (hasNext)
-            {
-                _logger.LogInformation("Found window.__NEXT_DATA__ via JS executor.");
-                var nextJson = (string)js.ExecuteScript("return JSON.stringify(window.__NEXT_DATA__);");
-                _logger.LogDebug("NEXT_DATA preview: {Preview}", nextJson?.Substring(0, Math.Min(nextJson.Length, 300)));
-                // For now, log and fall through — parse if structure is known
-            }
-
-            // --- Strategy 3: Regex on page source (legacy fallback) ---
-            var html = driver.PageSource;
-            var result = ParseAiScoreNuxtState(html);
-            if (result.Count > 0)
-                return result;
-
-            // Debugging: log what the page actually contains
-            var pageTitle = driver.Title;
-            var pageLen = html.Length;
-            _logger.LogWarning("AiScore Browser: No data extracted. Page title: '{Title}', HTML length: {Len}, first 300 chars: {Preview}",
-                pageTitle, pageLen, html.Substring(0, Math.Min(pageLen, 300)));
-
-            return new List<AiScoreMatchScore>();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to load AiScore via Headless Chrome.");
-            return new List<AiScoreMatchScore>();
-        }
-    }
-
-    /// <summary>
-    /// Parses the pre-extracted JSON from the JS executor (already a clean JSON string).
-    /// </summary>
-    private List<AiScoreMatchScore> ParseAiScoreExtractedJson(string extractedJson)
-    {
-        var matchScores = new List<AiScoreMatchScore>();
-
-        try
-        {
-            using var doc = System.Text.Json.JsonDocument.Parse(extractedJson);
-            var root = doc.RootElement;
-            var matchesArr = root.GetProperty("matches");
-            var teamsArr = root.GetProperty("teams");
-            var compsArr = root.GetProperty("comps");
-
-            var teamsDict = new Dictionary<string, string>();
-            foreach (var t in teamsArr.EnumerateArray())
-            {
-                var id = t.GetProperty("id").GetString();
-                var name = t.TryGetProperty("name", out var n) ? n.GetString() : t.TryGetProperty("n", out var nn) ? nn.GetString() : "";
-                if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name)) teamsDict[id] = name;
-            }
-
-            var compsDict = new Dictionary<string, string>();
-            foreach (var c in compsArr.EnumerateArray())
-            {
-                var id = c.GetProperty("id").GetString();
-                var name = c.TryGetProperty("name", out var n) ? n.GetString() : c.TryGetProperty("n", out var nn) ? nn.GetString() : "";
-                if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name)) compsDict[id] = name;
-            }
-
-            foreach (var m in matchesArr.EnumerateArray())
-            {
-                try
-                {
-                    var sid = m.TryGetProperty("statusId", out var sidProp) ? sidProp.GetInt32() : 0;
-                    var isLive = (sid >= 2 && sid <= 7);
-                    var isFinished = (sid >= 8 && sid <= 10);
-                    if (!isLive && !isFinished) continue;
-
-                    var homeScores = m.TryGetProperty("homeScores", out var hs) ? hs : default;
-                    var awayScores = m.TryGetProperty("awayScores", out var ascv) ? ascv : default;
-                    if (homeScores.ValueKind != System.Text.Json.JsonValueKind.Array ||
-                        awayScores.ValueKind != System.Text.Json.JsonValueKind.Array ||
-                        homeScores.GetArrayLength() == 0 || awayScores.GetArrayLength() == 0)
-                    {
-                        _logger.LogDebug("Skipping match due to missing or empty home/away scores array.");
-                        continue;
-                    }
-
-                    var homeGoals = homeScores[0].GetInt32();
-                    var awayGoals = awayScores[0].GetInt32();
-
-                    var htId = m.TryGetProperty("homeTeam", out var ht) ? ht.GetProperty("id").GetString() : m.TryGetProperty("homeTeamId", out var hti) ? hti.GetString() : "";
-                    var atId = m.TryGetProperty("awayTeam", out var at) ? at.GetProperty("id").GetString() : m.TryGetProperty("awayTeamId", out var ati) ? ati.GetString() : "";
-                    var cId = m.TryGetProperty("competition", out var comp) ? comp.GetProperty("id").GetString() : m.TryGetProperty("competitionId", out var ci) ? ci.GetString() : "";
-
-                    var homeName = !string.IsNullOrEmpty(htId) && teamsDict.TryGetValue(htId, out var hn) ? hn : "";
-                    var awayName = !string.IsNullOrEmpty(atId) && teamsDict.TryGetValue(atId, out var an) ? an : "";
-                    var leagueName = !string.IsNullOrEmpty(cId) && compsDict.TryGetValue(cId, out var ln) ? ln : "";
-
-                    var matchTimeUnix = m.TryGetProperty("matchTime", out var mt) ? mt.GetInt64() : 0;
-                    var matchTime = matchTimeUnix > 0
-                        ? DateTimeOffset.FromUnixTimeSeconds(matchTimeUnix).UtcDateTime
-                        : DateTime.UtcNow;
-
-                    var score = $"{homeGoals}:{awayGoals}";
-                    matchScores.Add(new AiScoreMatchScore
-                    {
-                        League = leagueName,
-                        HomeTeam = homeName,
-                        AwayTeam = awayName,
-                        Score = score,
-                        MatchTime = matchTime,
-                        BTTSLabel = ScoreParser.IsBtts(score),
-                        IsLive = isLive
-                    });
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Skipping AiScore match due to parse error. Match block: {Data}", m.GetRawText());
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to parse AiScore extracted JSON.");
-        }
-
-        return matchScores;
-    }
-
-    private List<AiScoreMatchScore> ParseAiScoreNuxtState(string html)
-    {
-        var matchScores = new List<AiScoreMatchScore>();
-
+        
         // Nuxt data injection: window.__NUXT__=(...);</script>
         var match = Regex.Match(html, @"window\.__NUXT__=(.*?);</script>");
         if (!match.Success)
         {
-            _logger.LogWarning("AiScore Nuxt extraction error: No __NUXT__ match in HTML.");
+            _logger.LogWarning("AiScore HTTP extraction error: No __NUXT__ match in HTML.");
             return matchScores;
         }
 
@@ -548,10 +325,7 @@ public partial class WebScraperService : IWebScraperService
                         awayScores.ValueKind != System.Text.Json.JsonValueKind.Array ||
                         homeScores.GetArrayLength() == 0 ||
                         awayScores.GetArrayLength() == 0) 
-                    {
-                        _logger.LogDebug("Skipping match due to missing or empty home/away scores array.");
                         continue;
-                    }
 
                     var homeGoals = homeScores[0].GetInt32();
                     var awayGoals = awayScores[0].GetInt32();
@@ -578,13 +352,13 @@ public partial class WebScraperService : IWebScraperService
                         AwayTeam = awayName,
                         Score = score,
                         MatchTime = matchTime,
-                        BTTSLabel = ScoreParser.IsBtts(score),
+                        BTTSLabel = IsBtts(score),
                         IsLive = isLive
                     });
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Skipping AiScore Browser match due to parse error. Match block: {Data}", m.GetRawText());
+                    _logger.LogDebug(ex, "Skipping AiScore HTTP match due to parse error.");
                 }
             }
         }
@@ -611,7 +385,7 @@ public partial class WebScraperService : IWebScraperService
         var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
         var baseUrl = _configuration["ApiFootball:BaseUrl"] ?? "https://v3.football.api-sports.io";
 
-        using var httpClient = _httpClientFactory.CreateClient();
+        using var httpClient = new HttpClient();
         httpClient.DefaultRequestHeaders.Add("x-apisports-key", apiKey);
         httpClient.Timeout = TimeSpan.FromSeconds(30);
 
@@ -672,7 +446,7 @@ public partial class WebScraperService : IWebScraperService
                     AwayTeam = teams.GetProperty("away").GetProperty("name").GetString() ?? "",
                     Score = score,
                     MatchTime = matchTime,
-                    BTTSLabel = ScoreParser.IsBtts(score),
+                    BTTSLabel = IsBtts(score),
                     IsLive = liveStatuses.Contains(statusShort)
                 });
             }
@@ -686,6 +460,38 @@ public partial class WebScraperService : IWebScraperService
         return matchScores;
     }
 
+    /// <summary>
+    /// Normalizes various score formats ("1 - 0", "1-0", "1 : 0", "1:0") to "H:A" format.
+    /// </summary>
+    private static string? NormalizeScore(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        
+        // Remove extra whitespace
+        var cleaned = raw.Trim();
+        
+        // Try to extract two numbers from the score string
+        var scoreMatch = Regex.Match(cleaned, @"(\d+)\s*[-:–—]\s*(\d+)");
+        if (scoreMatch.Success)
+        {
+            return $"{scoreMatch.Groups[1].Value}:{scoreMatch.Groups[2].Value}";
+        }
+        
+        return null;
+    }
+
+    /// <summary>
+    /// Internal DTO for deserializing JS extraction results
+    /// </summary>
+    private sealed class AiScoreRawMatch
+    {
+        public string? Home { get; set; }
+        public string? Away { get; set; }
+        public string? Score { get; set; }
+        public string? Time { get; set; }
+        public string? League { get; set; }
+        public bool IsLive { get; set; }
+    }
 
     private async Task CheckFileIsDownloaded()
     {
@@ -758,7 +564,15 @@ public partial class WebScraperService : IWebScraperService
         return chromeOptions;
     }
 
-
+    
+    private static bool IsBtts(string score)
+    {
+        var parts = score.Split(":"); // Split "2:1" into ["2", "1"]
+        return parts.Length == 2 &&
+               int.TryParse(parts[0], out var h) && // Convert "2" to integer h = 2
+               int.TryParse(parts[1], out var a) && // Convert "1" to integer a = 1
+               h > 0 && a > 0; // Check that both teams scored
+    }
     
     private DateTime ParseTime(string time)
     {
