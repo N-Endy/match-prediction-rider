@@ -297,43 +297,28 @@ public partial class WebScraperService : IWebScraperService
             var js = (IJavaScriptExecutor)driver;
             js.ExecuteScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
 
-            // Set short timeouts so if Cloudflare tarpits, it throws quickly instead of hanging for 60s
-            driver.Manage().Timeouts().AsynchronousJavaScript = TimeSpan.FromSeconds(10);
-            
             await driver.Navigate().GoToUrlAsync(aiScoreUrl);
 
-            // Instead of aggressively polling driver.PageSource (which deadlocks on Cloudflare tarpits),
-            // we will poll the JS context lightly over 30 seconds to see if __NUXT__ appears.
+            // Dynamically wait up to 30s for Cloudflare challenges to clear
             var maxWait = 30;
             var elapsed = 0;
-            bool nuxtLoaded = false;
-            
             while (elapsed < maxWait)
             {
                 await Task.Delay(2000);
                 elapsed += 2;
-                
-                try
+                var src = driver.PageSource;
+                if (!src.Contains("security verification", StringComparison.OrdinalIgnoreCase) &&
+                    !src.Contains("cf-turnstile", StringComparison.OrdinalIgnoreCase) &&
+                    !src.Contains("Just a moment", StringComparison.OrdinalIgnoreCase))
                 {
-                    nuxtLoaded = (bool)js.ExecuteScript("return !!window.__NUXT__;");
-                    if (nuxtLoaded)
-                    {
-                        _logger.LogInformation("window.__NUXT__ appeared after {Elapsed}s.", elapsed);
-                        break;
-                    }
+                    _logger.LogInformation("Cloudflare passed or not present after {Elapsed}s.", elapsed);
+                    break;
                 }
-                catch (Exception)
-                {
-                    // JS executor might fail if navigation is completely stuck or context destroyed, just swallow and wait
-                    _logger.LogDebug("JS execution failed at {Elapsed}s, still waiting...", elapsed);
-                }
+                _logger.LogDebug("Still waiting for Cloudflare at {Elapsed}s...", elapsed);
             }
 
-            if (!nuxtLoaded)
-            {
-                _logger.LogWarning("window.__NUXT__ never populated within {MaxWait}s. Cloudflare might have blocked it permanently.", maxWait);
-                // We'll still fall through to the extraction logic below, which will gracefully handle the missing object
-            }
+            // Extra buffer to ensure Nuxt/Next state finishes hydrating
+            await Task.Delay(5000);
 
             // --- Strategy 1: Extract __NUXT__ via JavaScript executor (preferred) ---
             var hasNuxt = (bool)js.ExecuteScript("return !!window.__NUXT__;");
