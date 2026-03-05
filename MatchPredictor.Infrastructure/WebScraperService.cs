@@ -287,18 +287,11 @@ public partial class WebScraperService : IWebScraperService
         try
         {
             var chromeOptions = GetChromeOptions();
-            chromeOptions.PageLoadStrategy = PageLoadStrategy.Eager; // Crucial: prevents hanging on tarpit CSS/JS
             chromeOptions.AddArgument("--disable-blink-features=AutomationControlled");
             chromeOptions.AddExcludedArgument("enable-automation");
             chromeOptions.AddAdditionalOption("useAutomationExtension", false);
-            // Let the browser use its real User-Agent (e.g. Chrome 145) to avoid mismatch detection
-            // We just add standard anti-bot flags.
+            chromeOptions.AddArgument("--user-agent=Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
             chromeOptions.AddArgument("--disable-gpu");
-            chromeOptions.AddArgument("--window-size=1920,1080");
-            chromeOptions.AddArgument("--ignore-certificate-errors");
-            chromeOptions.AddArgument("--disable-web-security");
-            chromeOptions.AddArgument("--no-sandbox");
-            chromeOptions.AddArgument("--disable-dev-shm-usage");
             
             using var driver = new ChromeDriver(chromeOptions);
             var js = (IJavaScriptExecutor)driver;
@@ -310,8 +303,8 @@ public partial class WebScraperService : IWebScraperService
             await driver.Navigate().GoToUrlAsync(aiScoreUrl);
 
             // Instead of aggressively polling driver.PageSource (which deadlocks on Cloudflare tarpits),
-            // we will poll the JS context lightly over 20 seconds to see if __NUXT__ appears.
-            var maxWait = 20;
+            // we will poll the JS context lightly over 30 seconds to see if __NUXT__ appears.
+            var maxWait = 30;
             var elapsed = 0;
             bool nuxtLoaded = false;
             
