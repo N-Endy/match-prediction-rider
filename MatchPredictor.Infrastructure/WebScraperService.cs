@@ -436,6 +436,11 @@ public partial class WebScraperService : IWebScraperService
                         ? DateTimeOffset.FromUnixTimeSeconds(matchTimeUnix).UtcDateTime
                         : DateTime.UtcNow;
 
+                    var aiScoreMatchId = m.TryGetProperty("id", out var matchIdProp) ? matchIdProp.GetString() : null;
+                    var hasVideo = m.TryGetProperty("hasVideo", out var hv) && hv.GetBoolean();
+                    var lmtMode = m.TryGetProperty("lmtMode", out var lmt) ? lmt.GetInt32() : 0;
+                    var hasStream = hasVideo || lmtMode == 1; // "lmtMode 1" often implies video/animation present
+
                     var score = $"{homeGoals}:{awayGoals}";
                     matchScores.Add(new AiScoreMatchScore
                     {
@@ -445,7 +450,9 @@ public partial class WebScraperService : IWebScraperService
                         Score = score,
                         MatchTime = matchTime,
                         BTTSLabel = IsBtts(score),
-                        IsLive = isLive
+                        IsLive = isLive,
+                        AiScoreMatchId = aiScoreMatchId,
+                        HasStream = hasStream
                     });
                 }
                 catch (Exception ex)
@@ -546,6 +553,11 @@ public partial class WebScraperService : IWebScraperService
                         ? DateTimeOffset.FromUnixTimeSeconds(matchTimeUnix).UtcDateTime
                         : DateTime.UtcNow;
 
+                    var aiScoreMatchId = m.TryGetProperty("id", out var matchIdProp) ? matchIdProp.GetString() : null;
+                    var hasVideo = m.TryGetProperty("hasVideo", out var hv) && hv.GetBoolean();
+                    var lmtMode = m.TryGetProperty("lmtMode", out var lmt) ? lmt.GetInt32() : 0;
+                    var hasStream = hasVideo || lmtMode == 1;
+
                     var score = $"{homeGoals}:{awayGoals}";
 
                     matchScores.Add(new AiScoreMatchScore
@@ -556,7 +568,9 @@ public partial class WebScraperService : IWebScraperService
                         Score = score,
                         MatchTime = matchTime,
                         BTTSLabel = IsBtts(score),
-                        IsLive = isLive
+                        IsLive = isLive,
+                        AiScoreMatchId = aiScoreMatchId,
+                        HasStream = hasStream
                     });
                 }
                 catch (Exception ex)

@@ -16,5 +16,7 @@ public class Prediction
     public string? ActualOutcome { get; set; }
     public string? ActualScore { get; set; }
     public bool IsLive { get; set; }
+    public string? AiScoreMatchId { get; set; }
+    public bool HasStream { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
