@@ -290,8 +290,14 @@ public partial class WebScraperService : IWebScraperService
             chromeOptions.AddArgument("--disable-blink-features=AutomationControlled");
             chromeOptions.AddExcludedArgument("enable-automation");
             chromeOptions.AddAdditionalOption("useAutomationExtension", false);
-            chromeOptions.AddArgument("--user-agent=Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+            // Let the browser use its real User-Agent (e.g. Chrome 145) to avoid mismatch detection
+            // We just add standard anti-bot flags.
             chromeOptions.AddArgument("--disable-gpu");
+            chromeOptions.AddArgument("--window-size=1920,1080");
+            chromeOptions.AddArgument("--ignore-certificate-errors");
+            chromeOptions.AddArgument("--disable-web-security");
+            chromeOptions.AddArgument("--no-sandbox");
+            chromeOptions.AddArgument("--disable-dev-shm-usage");
             
             using var driver = new ChromeDriver(chromeOptions);
             var js = (IJavaScriptExecutor)driver;
@@ -413,7 +419,10 @@ public partial class WebScraperService : IWebScraperService
                     if (homeScores.ValueKind != System.Text.Json.JsonValueKind.Array ||
                         awayScores.ValueKind != System.Text.Json.JsonValueKind.Array ||
                         homeScores.GetArrayLength() == 0 || awayScores.GetArrayLength() == 0)
+                    {
+                        _logger.LogDebug("Skipping match due to missing or empty home/away scores array.");
                         continue;
+                    }
 
                     var homeGoals = homeScores[0].GetInt32();
                     var awayGoals = awayScores[0].GetInt32();
@@ -445,7 +454,7 @@ public partial class WebScraperService : IWebScraperService
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogDebug(ex, "Skipping AiScore match due to parse error.");
+                    _logger.LogWarning(ex, "Skipping AiScore match due to parse error. Match block: {Data}", m.GetRawText());
                 }
             }
         }
@@ -523,7 +532,10 @@ public partial class WebScraperService : IWebScraperService
                         awayScores.ValueKind != System.Text.Json.JsonValueKind.Array ||
                         homeScores.GetArrayLength() == 0 ||
                         awayScores.GetArrayLength() == 0) 
+                    {
+                        _logger.LogDebug("Skipping match due to missing or empty home/away scores array.");
                         continue;
+                    }
 
                     var homeGoals = homeScores[0].GetInt32();
                     var awayGoals = awayScores[0].GetInt32();
@@ -556,7 +568,7 @@ public partial class WebScraperService : IWebScraperService
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogDebug(ex, "Skipping AiScore Browser match due to parse error.");
+                    _logger.LogWarning(ex, "Skipping AiScore Browser match due to parse error. Match block: {Data}", m.GetRawText());
                 }
             }
         }
