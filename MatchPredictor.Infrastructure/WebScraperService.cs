@@ -436,10 +436,29 @@ public partial class WebScraperService : IWebScraperService
                         ? DateTimeOffset.FromUnixTimeSeconds(matchTimeUnix).UtcDateTime
                         : DateTime.UtcNow;
 
-                    var aiScoreMatchId = m.TryGetProperty("id", out var matchIdProp) ? matchIdProp.GetString() : null;
-                    var hasVideo = m.TryGetProperty("hasVideo", out var hv) && hv.GetBoolean();
-                    var lmtMode = m.TryGetProperty("lmtMode", out var lmt) ? lmt.GetInt32() : 0;
-                    var hasStream = hasVideo || lmtMode == 1; // "lmtMode 1" often implies video/animation present
+                    string? aiScoreMatchId = null;
+                    if (m.TryGetProperty("id", out var matchIdProp))
+                    {
+                        if (matchIdProp.ValueKind == System.Text.Json.JsonValueKind.String) aiScoreMatchId = matchIdProp.GetString();
+                        else if (matchIdProp.ValueKind == System.Text.Json.JsonValueKind.Number) aiScoreMatchId = matchIdProp.GetRawText();
+                    }
+
+                    bool hasVideo = false;
+                    if (m.TryGetProperty("hasVideo", out var hv))
+                    {
+                        if (hv.ValueKind == System.Text.Json.JsonValueKind.True || hv.ValueKind == System.Text.Json.JsonValueKind.False) 
+                            hasVideo = hv.GetBoolean();
+                        else if (hv.ValueKind == System.Text.Json.JsonValueKind.Number) 
+                            hasVideo = hv.GetInt32() == 1;
+                    }
+
+                    int lmtMode = 0;
+                    if (m.TryGetProperty("lmtMode", out var lmt) && lmt.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    {
+                        lmtMode = lmt.GetInt32();
+                    }
+
+                    bool hasStream = hasVideo || lmtMode == 1;
 
                     var score = $"{homeGoals}:{awayGoals}";
                     matchScores.Add(new AiScoreMatchScore
@@ -553,10 +572,29 @@ public partial class WebScraperService : IWebScraperService
                         ? DateTimeOffset.FromUnixTimeSeconds(matchTimeUnix).UtcDateTime
                         : DateTime.UtcNow;
 
-                    var aiScoreMatchId = m.TryGetProperty("id", out var matchIdProp) ? matchIdProp.GetString() : null;
-                    var hasVideo = m.TryGetProperty("hasVideo", out var hv) && hv.GetBoolean();
-                    var lmtMode = m.TryGetProperty("lmtMode", out var lmt) ? lmt.GetInt32() : 0;
-                    var hasStream = hasVideo || lmtMode == 1;
+                    string? aiScoreMatchId = null;
+                    if (m.TryGetProperty("id", out var matchIdProp))
+                    {
+                        if (matchIdProp.ValueKind == System.Text.Json.JsonValueKind.String) aiScoreMatchId = matchIdProp.GetString();
+                        else if (matchIdProp.ValueKind == System.Text.Json.JsonValueKind.Number) aiScoreMatchId = matchIdProp.GetRawText();
+                    }
+
+                    bool hasVideo = false;
+                    if (m.TryGetProperty("hasVideo", out var hv))
+                    {
+                        if (hv.ValueKind == System.Text.Json.JsonValueKind.True || hv.ValueKind == System.Text.Json.JsonValueKind.False) 
+                            hasVideo = hv.GetBoolean();
+                        else if (hv.ValueKind == System.Text.Json.JsonValueKind.Number) 
+                            hasVideo = hv.GetInt32() == 1;
+                    }
+
+                    int lmtMode = 0;
+                    if (m.TryGetProperty("lmtMode", out var lmt) && lmt.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    {
+                        lmtMode = lmt.GetInt32();
+                    }
+
+                    bool hasStream = hasVideo || lmtMode == 1;
 
                     var score = $"{homeGoals}:{awayGoals}";
 

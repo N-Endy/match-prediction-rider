@@ -550,7 +550,7 @@ public class AnalyzerService  : IAnalyzerService
                 {
                     existingRecord.Score = incomingScore.Score;
                     existingRecord.IsLive = incomingScore.IsLive;
-                    existingRecord.HasStream = incomingScore.HasStream;
+                    existingRecord.HasStream= incomingScore.HasStream;
                     existingRecord.AiScoreMatchId = incomingScore.AiScoreMatchId;
                 
                     // Update any other fields that might change during a match
@@ -595,7 +595,7 @@ public class AnalyzerService  : IAnalyzerService
                 {
                     existingRecord.Score = incomingScore.Score;
                     existingRecord.IsLive = incomingScore.IsLive;
-                    existingRecord.HasStream = incomingScore.HasStream;
+                    existingRecord.HasStream= incomingScore.HasStream;
                     existingRecord.AiScoreMatchId = incomingScore.AiScoreMatchId;
                     existingRecord.BTTSLabel = incomingScore.BTTSLabel;
                 }
