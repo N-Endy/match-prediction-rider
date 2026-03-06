@@ -630,7 +630,6 @@ public class AnalyzerService  : IAnalyzerService
             .ExecuteDeleteAsync();
     
         // Cleanup old MatchScores (primary source)
-        var cutoffUtc = DateTime.SpecifyKind(cutoffDate, DateTimeKind.Utc);
         await _dbContext.MatchScores
             .Where(s => s.MatchTime < cutoffUtc)
             .ExecuteDeleteAsync();
