@@ -24,8 +24,13 @@
         </div>
 
         <div class="mp-predictions-list">
+            @{ int adIndex = 0; }
             @foreach (var match in Model.Matches!)
             {
+                if (adIndex > 0 && adIndex % 5 == 0)
+                {
+                    <partial name="_AdBanner" />
+                }
                 <div class="mp-prediction-card">
                     <div class="mp-match-info">
                         <div class="mp-match-league">
@@ -89,6 +94,7 @@
                         }
                     </div>
                 </div>
+                adIndex++;
             }
         </div>
     }

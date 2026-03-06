@@ -1,30 +1,22 @@
-@page
-@model MatchPredictor.Web.Pages.Shared._AdBanner
+@using Microsoft.Extensions.Configuration
+@inject IConfiguration Configuration
 
 @{
-    Layout = null;
+    var adClientId = Configuration["AdSense:ClientId"] ?? "ca-pub-123456789";
 }
 
-<!DOCTYPE html>
-
-<html>
-<head>
-    <title></title>
-</head>
-<body>
-<div>
-    @* Pages/Shared/_AdBanner.cshtml *@
-    <div class="ad-banner my-6 text-center">
-        <ins class="adsbygoogle"
-             style="display:block"
-             data-ad-client="ca-pub-XXXXXXXXXXXX"
-             data-ad-slot="YYYYYYYYYY"
-             data-ad-format="auto"
-             data-full-width-responsive="true"></ins>
-        <script>
-         (adsbygoogle = window.adsbygoogle || []).push({});
+<div class="mp-ad-wrapper">
+    <!-- Placeholder for AdSense or actual AdSense Tag -->
+    <ins class="adsbygoogle mp-ad-ins"
+         style="display:block; text-align:center;"
+         data-ad-layout="in-article"
+         data-ad-format="fluid"
+         data-ad-client="@adClientId"
+         data-ad-slot="6144424563"></ins>
+    <script>
+        (adsbygoogle = window.adsbygoogle || []).push({});
     </script>
+    <div class="mp-ad-fallback">
+        <span>Advertisement</span>
     </div>
 </div>
-</body>
-</html>

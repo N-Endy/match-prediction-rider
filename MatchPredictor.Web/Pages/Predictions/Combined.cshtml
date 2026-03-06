@@ -24,8 +24,13 @@
         </div>
 
         <div class="mp-predictions-list">
+            @{ int adIndex = 0; }
             @foreach (var match in Model.Matches!)
             {
+                if (adIndex > 0 && adIndex % 5 == 0)
+                {
+                    <partial name="_AdBanner" />
+                }
                 var category = match.PredictionCategory ?? "";
                 var badgeClass = category switch
                 {
@@ -114,6 +119,7 @@
                         }
                     </div>
                 </div>
+                adIndex++;
             }
         </div>
     }

@@ -1,4 +1,6 @@
-﻿<!DOCTYPE html>
+﻿@using Microsoft.Extensions.Configuration
+@inject IConfiguration Configuration
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
@@ -35,6 +37,10 @@
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
+
+    <!-- Google AdSense -->
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=@(Configuration["AdSense:ClientId"] ?? "ca-pub-123456789")"
+         crossorigin="anonymous"></script>
 </head>
 <body>
 
@@ -67,6 +73,10 @@
 <main>
     @RenderBody()
 </main>
+
+<div class="mp-container" style="padding-top: 0; padding-bottom: 0; margin-top: 2rem;">
+    <partial name="_AdBanner" />
+</div>
 
 <!-- Footer -->
 <footer class="mp-footer">
@@ -143,6 +153,49 @@
 
 <partial name="_StreamModal" />
 <script src="~/js/livestream.js" asp-append-version="true"></script>
+
+<!-- Cookie Consent Banner -->
+<div id="cookieConsentBanner" class="mp-cookie-banner" style="display: none;">
+    <div class="mp-cookie-content">
+        <p>
+            We use cookies to personalize content, serve targeted ads, and analyze our traffic. 
+            By clicking "Accept", you consent to our use of cookies in accordance with our Privacy Policy.
+        </p>
+        <div class="mp-cookie-actions">
+            <button id="acceptCookiesBtn" class="mp-cookie-btn mp-cookie-accept">Accept</button>
+            <button id="declineCookiesBtn" class="mp-cookie-btn mp-cookie-decline">Decline</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const consentBanner = document.getElementById("cookieConsentBanner");
+        const acceptBtn = document.getElementById("acceptCookiesBtn");
+        const declineBtn = document.getElementById("declineCookiesBtn");
+
+        // Check if user has already made a choice
+        const hasConsent = localStorage.getItem("cookieConsent");
+
+        if (!hasConsent) {
+            // Show banner if no choice was made
+            consentBanner.style.display = "flex";
+        }
+
+        acceptBtn.addEventListener("click", function () {
+            localStorage.setItem("cookieConsent", "true");
+            consentBanner.style.display = "none";
+            // In a real scenario, you can initialize AdSense here dynamically, 
+            // but typical setup allows the scripts to load while respecting browser ad blocker configs.
+        });
+
+        declineBtn.addEventListener("click", function () {
+            localStorage.setItem("cookieConsent", "false");
+            consentBanner.style.display = "none";
+            // Optional: You could reload the page or strip ad elements
+        });
+    });
+</script>
 
 @await RenderSectionAsync("Scripts", required: false)
 </body>
