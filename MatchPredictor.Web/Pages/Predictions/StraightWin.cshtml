@@ -26,7 +26,7 @@
         <div class="mp-predictions-list">
             @foreach (var match in Model.Matches!)
             {
-                <div class="mp-prediction-card" data-has-stream="@(match.HasStream.ToString().ToLower())" data-aiscore-id="@match.AiScoreMatchId">
+                <div class="mp-prediction-card">
                     <div class="mp-match-info">
                         <div class="mp-match-league">
                             @match.League

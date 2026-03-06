@@ -436,30 +436,6 @@ public partial class WebScraperService : IWebScraperService
                         ? DateTimeOffset.FromUnixTimeSeconds(matchTimeUnix).UtcDateTime
                         : DateTime.UtcNow;
 
-                    string? aiScoreMatchId = null;
-                    if (m.TryGetProperty("id", out var matchIdProp))
-                    {
-                        if (matchIdProp.ValueKind == System.Text.Json.JsonValueKind.String) aiScoreMatchId = matchIdProp.GetString();
-                        else if (matchIdProp.ValueKind == System.Text.Json.JsonValueKind.Number) aiScoreMatchId = matchIdProp.GetRawText();
-                    }
-
-                    bool hasVideo = false;
-                    if (m.TryGetProperty("hasVideo", out var hv))
-                    {
-                        if (hv.ValueKind == System.Text.Json.JsonValueKind.True || hv.ValueKind == System.Text.Json.JsonValueKind.False) 
-                            hasVideo = hv.GetBoolean();
-                        else if (hv.ValueKind == System.Text.Json.JsonValueKind.Number) 
-                            hasVideo = hv.GetInt32() == 1;
-                    }
-
-                    int lmtMode = 0;
-                    if (m.TryGetProperty("lmtMode", out var lmt) && lmt.ValueKind == System.Text.Json.JsonValueKind.Number)
-                    {
-                        lmtMode = lmt.GetInt32();
-                    }
-
-                    bool hasStream = hasVideo || lmtMode == 1;
-
                     var score = $"{homeGoals}:{awayGoals}";
                     matchScores.Add(new AiScoreMatchScore
                     {
@@ -469,9 +445,7 @@ public partial class WebScraperService : IWebScraperService
                         Score = score,
                         MatchTime = matchTime,
                         BTTSLabel = IsBtts(score),
-                        IsLive = isLive,
-                        AiScoreMatchId = aiScoreMatchId,
-                        HasStream = hasStream
+                        IsLive = isLive
                     });
                 }
                 catch (Exception ex)
@@ -572,30 +546,6 @@ public partial class WebScraperService : IWebScraperService
                         ? DateTimeOffset.FromUnixTimeSeconds(matchTimeUnix).UtcDateTime
                         : DateTime.UtcNow;
 
-                    string? aiScoreMatchId = null;
-                    if (m.TryGetProperty("id", out var matchIdProp))
-                    {
-                        if (matchIdProp.ValueKind == System.Text.Json.JsonValueKind.String) aiScoreMatchId = matchIdProp.GetString();
-                        else if (matchIdProp.ValueKind == System.Text.Json.JsonValueKind.Number) aiScoreMatchId = matchIdProp.GetRawText();
-                    }
-
-                    bool hasVideo = false;
-                    if (m.TryGetProperty("hasVideo", out var hv))
-                    {
-                        if (hv.ValueKind == System.Text.Json.JsonValueKind.True || hv.ValueKind == System.Text.Json.JsonValueKind.False) 
-                            hasVideo = hv.GetBoolean();
-                        else if (hv.ValueKind == System.Text.Json.JsonValueKind.Number) 
-                            hasVideo = hv.GetInt32() == 1;
-                    }
-
-                    int lmtMode = 0;
-                    if (m.TryGetProperty("lmtMode", out var lmt) && lmt.ValueKind == System.Text.Json.JsonValueKind.Number)
-                    {
-                        lmtMode = lmt.GetInt32();
-                    }
-
-                    bool hasStream = hasVideo || lmtMode == 1;
-
                     var score = $"{homeGoals}:{awayGoals}";
 
                     matchScores.Add(new AiScoreMatchScore
@@ -606,9 +556,7 @@ public partial class WebScraperService : IWebScraperService
                         Score = score,
                         MatchTime = matchTime,
                         BTTSLabel = IsBtts(score),
-                        IsLive = isLive,
-                        AiScoreMatchId = aiScoreMatchId,
-                        HasStream = hasStream
+                        IsLive = isLive
                     });
                 }
                 catch (Exception ex)

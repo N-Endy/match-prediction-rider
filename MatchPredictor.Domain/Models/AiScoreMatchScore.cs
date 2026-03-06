@@ -10,6 +10,4 @@ public class AiScoreMatchScore
     public DateTime MatchTime { get; set; }
     public bool BTTSLabel { get; set; }
     public bool IsLive { get; set; }
-    public string? AiScoreMatchId { get; set; }
-    public bool HasStream { get; set; }
 }

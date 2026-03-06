@@ -78,6 +78,9 @@ builder.Services.AddScoped<IRegressionPredictorService, RegressionPredictorServi
 builder.Services.AddScoped<ISportyBetBookingService, SportyBetBookingService>();
 builder.Services.AddScoped<IAiAdvisorService, AiAdvisorService>();
 
+// Register standalone background services
+builder.Services.AddHostedService<LiveStreamService>();
+
 // Controllers for API endpoints (booking, AI chat)
 builder.Services.AddControllers();
 

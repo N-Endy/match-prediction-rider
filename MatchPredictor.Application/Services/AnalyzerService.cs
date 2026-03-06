@@ -269,8 +269,6 @@ public class AnalyzerService  : IAnalyzerService
 
                 prediction.ActualScore = aiMatch.Score;
                 prediction.IsLive = aiMatch.IsLive;
-                prediction.HasStream = aiMatch.HasStream;
-                prediction.AiScoreMatchId = aiMatch.AiScoreMatchId;
             }
         }
 
@@ -338,8 +336,6 @@ public class AnalyzerService  : IAnalyzerService
 
                     prediction.ActualScore = score.Score;
                     prediction.IsLive = score.IsLive;
-                    prediction.HasStream = score.HasStream;
-                    prediction.AiScoreMatchId = score.AiScoreMatchId;
                 }
             }
         }
@@ -545,13 +541,10 @@ public class AnalyzerService  : IAnalyzerService
                 // UPDATE SCENARIO: The match exists. 
                 // Only update the database if the score or live status actually changed.
                 if (existingRecord.Score != incomingScore.Score || 
-                    existingRecord.IsLive != incomingScore.IsLive ||
-                    existingRecord.HasStream != incomingScore.HasStream)
+                    existingRecord.IsLive != incomingScore.IsLive)
                 {
                     existingRecord.Score = incomingScore.Score;
                     existingRecord.IsLive = incomingScore.IsLive;
-                    existingRecord.HasStream= incomingScore.HasStream;
-                    existingRecord.AiScoreMatchId = incomingScore.AiScoreMatchId;
                 
                     // Update any other fields that might change during a match
                     existingRecord.BTTSLabel = incomingScore.BTTSLabel; 
@@ -590,13 +583,10 @@ public class AnalyzerService  : IAnalyzerService
             if (existingScoresDict.TryGetValue(key, out var existingRecord))
             {
                 if (existingRecord.Score != incomingScore.Score ||
-                    existingRecord.IsLive != incomingScore.IsLive ||
-                    existingRecord.HasStream != incomingScore.HasStream)
+                    existingRecord.IsLive != incomingScore.IsLive)
                 {
                     existingRecord.Score = incomingScore.Score;
                     existingRecord.IsLive = incomingScore.IsLive;
-                    existingRecord.HasStream= incomingScore.HasStream;
-                    existingRecord.AiScoreMatchId = incomingScore.AiScoreMatchId;
                     existingRecord.BTTSLabel = incomingScore.BTTSLabel;
                 }
             }
