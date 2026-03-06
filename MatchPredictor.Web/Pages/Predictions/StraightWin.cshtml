@@ -26,7 +26,7 @@
         <div class="mp-predictions-list">
             @foreach (var match in Model.Matches!)
             {
-                <div class="mp-prediction-card">
+                <div class="mp-prediction-card" data-has-stream="@(match.HasStream.ToString().ToLower())" data-aiscore-id="@match.AiScoreMatchId">
                     <div class="mp-match-info">
                         <div class="mp-match-league">
                             @match.League
@@ -83,14 +83,16 @@
                                 data-prediction="@(match.PredictedOutcome ?? "Win")">
                             Add Bet
                         </button>
-                        @if (isActuallyLive)
+                        @if (match.IsLive)
                         {
-                            <button class="btn-watch-stream d-none" title="Watch Live Stream"
-                                    data-home="@match.HomeTeam"
-                                    data-away="@match.AwayTeam">
-                                <i class="fas fa-play-circle stream-pulse-icon"></i> Watch Live
-                            </button>
+                            <span class="mp-prediction-badge mp-live-badge">Live</span>
                         }
+                        
+                        <button class="btn-watch-stream d-none" title="Watch Live Stream"
+                                data-home="@match.HomeTeam"
+                                data-away="@match.AwayTeam">
+                            <i class="fas fa-play-circle stream-pulse-icon"></i> Watch Live
+                        </button>
                     </div>
                 </div>
             }
