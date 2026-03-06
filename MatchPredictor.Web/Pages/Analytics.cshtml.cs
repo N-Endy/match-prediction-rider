@@ -11,11 +11,6 @@ namespace MatchPredictor.Web.Pages;
 public class AnalyticsModel : PageModel
 {
     private readonly ApplicationDbContext _db;
-    private readonly IConfiguration _config;
-
-    public bool IsAuthenticated { get; set; }
-    [BindProperty] public string? Password { get; set; }
-    public string? ErrorMessage { get; set; }
 
     // Analytics Data Models
     public AnalyticsStats TodayStats { get; set; } = new();
@@ -23,43 +18,14 @@ public class AnalyticsModel : PageModel
     public AnalyticsStats Last3DaysStats { get; set; } = new();
     public AnalyticsStats Last7DaysStats { get; set; } = new();
 
-    public AnalyticsModel(ApplicationDbContext db, IConfiguration config)
+    public AnalyticsModel(ApplicationDbContext db)
     {
         _db = db;
-        _config = config;
     }
 
     public async Task OnGetAsync()
     {
-        IsAuthenticated = Request.Cookies.ContainsKey("MP_AI_AUTH");
-
-        if (IsAuthenticated)
-        {
-            await LoadAnalyticsDataAsync();
-        }
-    }
-
-    public async Task<IActionResult> OnPostAsync()
-    {
-        var validPassword = _config["AiChatPassword"];
-        
-        if (!string.IsNullOrEmpty(validPassword) && Password == validPassword)
-        {
-            Response.Cookies.Append("MP_AI_AUTH", "true", new CookieOptions
-            {
-                Expires = DateTime.UtcNow.AddDays(30),
-                HttpOnly = true,
-                Secure = true,
-                SameSite = SameSiteMode.Strict
-            });
-            IsAuthenticated = true;
-            await LoadAnalyticsDataAsync();
-            return RedirectToPage();
-        }
-
-        ErrorMessage = "Incorrect password.";
-        IsAuthenticated = false;
-        return Page();
+        await LoadAnalyticsDataAsync();
     }
 
     private async Task LoadAnalyticsDataAsync()

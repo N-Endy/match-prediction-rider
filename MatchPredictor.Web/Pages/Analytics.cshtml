@@ -13,36 +13,6 @@
         </div>
     </div>
 
-@if (!Model.IsAuthenticated)
-{
-    <div class="mp-ai-auth-container" style="max-width: 400px; margin: 4rem auto; text-align: center; padding: 2rem; background: var(--bg-card); border-radius: var(--radius-lg); border: 1px solid var(--border-color);">
-        <div style="font-size: 3rem; margin-bottom: 1rem;">🔒</div>
-        <h2 style="margin-bottom: 0.5rem;">Access Restricted</h2>
-        <p style="color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem;">
-            Please enter your admin password to view prediction analytics.
-        </p>
-        
-        @if (!string.IsNullOrEmpty(Model.ErrorMessage))
-        {
-            <div style="color: var(--accent-rose); background: rgba(244, 63, 94, 0.1); padding: 0.75rem; border-radius: var(--radius-sm); margin-bottom: 1rem; font-size: 0.85rem;">
-                @Model.ErrorMessage
-            </div>
-        }
-
-        <form method="post" style="display: flex; flex-direction: column; gap: 1rem;">
-            <input type="password" asp-for="Password" 
-                   class="mp-chat-input" 
-                   style="text-align: center; border-radius: var(--radius-md);" 
-                   placeholder="Enter Password" 
-                   required autofocus />
-            <button type="submit" class="mp-book-btn" style="width: 100%; border-radius: var(--radius-md); padding: 0.75rem;">
-                Unlock Dashboard
-            </button>
-        </form>
-    </div>
-}
-else
-{
     <div class="mp-analytics-tabs">
         <button class="mp-tab-btn active" onclick="switchTab('today')">Today</button>
         <button class="mp-tab-btn" onclick="switchTab('yesterday')">Yesterday</button>
@@ -62,7 +32,6 @@ else
     <div id="7days-stats" class="mp-analytics-section" style="display: none;">
         @await Html.PartialAsync("_StatCards", Model.Last7DaysStats)
     </div>
-}
 </div>
 
 @section Scripts {

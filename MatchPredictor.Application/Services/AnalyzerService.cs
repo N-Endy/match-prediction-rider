@@ -642,7 +642,7 @@ public class AnalyzerService  : IAnalyzerService
 
         if (deletedLogs > 0)
         {
-            _logger.LogInformation("🧹 Deleted {Count} scraping logs older than 2 days", deletedLogs);
+            _logger.LogInformation("🧹 Deleted {Count} scraping logs older than 2 days.", deletedLogs);
         }
     }
     
