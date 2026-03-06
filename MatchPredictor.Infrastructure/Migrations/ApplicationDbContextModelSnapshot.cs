@@ -30,17 +30,11 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("AiScoreMatchId")
-                        .HasColumnType("text");
-
                     b.Property<string>("AwayTeam")
                         .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<bool>("BTTSLabel")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("HasStream")
                         .HasColumnType("boolean");
 
                     b.Property<string>("HomeTeam")
@@ -168,17 +162,11 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("AiScoreMatchId")
-                        .HasColumnType("text");
-
                     b.Property<string>("AwayTeam")
                         .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<bool>("BTTSLabel")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("HasStream")
                         .HasColumnType("boolean");
 
                     b.Property<string>("HomeTeam")
@@ -257,9 +245,6 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<string>("ActualScore")
                         .HasColumnType("text");
 
-                    b.Property<string>("AiScoreMatchId")
-                        .HasColumnType("text");
-
                     b.Property<string>("AwayTeam")
                         .IsRequired()
                         .HasColumnType("text");
@@ -273,9 +258,6 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<string>("Date")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<bool>("HasStream")
-                        .HasColumnType("boolean");
 
                     b.Property<string>("HomeTeam")
                         .IsRequired()

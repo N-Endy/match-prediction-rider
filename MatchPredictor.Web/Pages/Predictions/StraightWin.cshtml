@@ -83,16 +83,14 @@
                                 data-prediction="@(match.PredictedOutcome ?? "Win")">
                             Add Bet
                         </button>
-                        @if (match.IsLive)
+                        @if (isActuallyLive)
                         {
-                            <span class="mp-prediction-badge mp-live-badge">Live</span>
+                            <button class="btn-watch-stream d-none" title="Watch Live Stream"
+                                    data-home="@match.HomeTeam"
+                                    data-away="@match.AwayTeam">
+                                <i class="fas fa-play-circle stream-pulse-icon"></i> Watch Live
+                            </button>
                         }
-                        
-                        <button class="btn-watch-stream d-none" title="Watch Live Stream"
-                                data-home="@match.HomeTeam"
-                                data-away="@match.AwayTeam">
-                            <i class="fas fa-play-circle stream-pulse-icon"></i> Watch Live
-                        </button>
                     </div>
                 </div>
             }
