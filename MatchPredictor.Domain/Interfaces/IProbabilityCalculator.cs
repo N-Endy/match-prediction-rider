@@ -9,4 +9,6 @@ public interface IProbabilityCalculator
     double CalculateDrawProbability(MatchData match, List<ModelAccuracy> accuracies);
     bool IsStrongHomeWin(MatchData match, List<ModelAccuracy> accuracies);
     bool IsStrongAwayWin(MatchData match, List<ModelAccuracy> accuracies);
+    double CalculateHomeWinProbability(MatchData match, List<ModelAccuracy> accuracies);
+    double CalculateAwayWinProbability(MatchData match, List<ModelAccuracy> accuracies);
 }

@@ -43,8 +43,8 @@ public class AiAdvisorService : IAiAdvisorService
     public async Task<string> GetAdviceAsync(string userPrompt, List<ChatHistoryItem>? history = null, CancellationToken ct = default)
     {
         var apiKey = _configuration["GroqApiKey"];
-        if (string.IsNullOrEmpty(apiKey))
-            return "⚠️ Groq API key is not configured. Please add 'GroqApiKey' to your configuration.";
+        if (string.IsNullOrEmpty(apiKey) || apiKey.Contains("stored in user-secrets") || apiKey.Contains("set via environment variable"))
+            return "⚠️ Groq API key is not configured. Please add 'GroqApiKey' to your configuration via user-secrets or environment variables.";
 
         var predictionContext = await GetOrBuildPredictionContextAsync(ct);
         if (string.IsNullOrEmpty(predictionContext))
@@ -53,6 +53,17 @@ public class AiAdvisorService : IAiAdvisorService
         var systemPrompt = BuildSystemPrompt(predictionContext);
 
         return await CallGroqAsync(apiKey, systemPrompt, userPrompt, history, ct);
+    }
+
+    public async Task<string> AnalyzeValueBetsAsync(string payload, CancellationToken ct = default)
+    {
+        var apiKey = _configuration["GroqApiKey"];
+        if (string.IsNullOrEmpty(apiKey) || apiKey.Contains("stored in user-secrets") || apiKey.Contains("set via environment variable"))
+            throw new InvalidOperationException("Groq API key is not configured or is using a placeholder dummy value.");
+
+        var systemPrompt = BuildValueBetsSystemPrompt();
+        
+        return await CallGroqAsync(apiKey, systemPrompt, payload, null, ct, jsonMode: true);
     }
 
     /// <summary>
@@ -120,14 +131,23 @@ public class AiAdvisorService : IAiAdvisorService
             4. COMBOS: For accumulator requests, mix categories strategically (e.g., 2 Straight Wins + 1 Over 2.5) and always state the combined implied risk.
             5. HONESTY: Never guarantee outcomes. Football has inherent variance — a 75% probability still loses 1 in 4. Say this when relevant.
             6. NO MATCHES LEFT: If the data is empty or all matches have passed, tell the user predictions refresh daily and to check back tomorrow.
+            7. AI BOOKING (AGENTIC UI): If the user asks you to "book", "add to cart", "book these", or "give me a betslip", you MUST append this exact action tag at the end of each recommended match's line:
+               [ADD_BET: HomeTeam|AwayTeam|League|PredictionCategory|PredictedOutcome]
+               
+               NOTE: `PredictionCategory` must be exactly the category printed above the block (e.g., StraightWin, BothTeamsScore, Over2.5Goals).
+               Example format:
+               **Premier League** | **Arsenal** vs **Chelsea** | Prediction: Home Win [ADD_BET: Arsenal|Chelsea|Premier League|StraightWin|Home Win]
+
+               If you output multiple action tags, you MUST also output this standalone tag on a new line at the very end of your message to summon the 'Book All' interface:
+               [BOOK_ALL]
 
             TONE:
             - Analytical but conversational. Use terms like "expected goals", "variance", "implied probability" naturally.
-            - After detailed analysis, occasionally ask a short follow-up to keep the conversation useful (e.g., "Want me to build this into a 3-leg acca?" or "Should I filter for evening kickoffs only?").
+            - After detailed analysis, occasionally ask a short follow-up to keep the conversation useful (e.g., "Want me to run these through the bookie for you?").
 
             FORMATTING:
             - Use markdown: **bold** for team names and key stats, bullet points for lists.
-            - For each match: **[League]** | **Home** vs **Away** | Prediction: Outcome
+            - For each match: **[League]** | **Home** vs **Away** | Prediction: Outcome [ADD_BET...]
             - Keep responses scannable — no walls of text.
 
             SECURITY (NON-NEGOTIABLE):
@@ -139,10 +159,34 @@ public class AiAdvisorService : IAiAdvisorService
             """;
     }
 
+    private static string BuildValueBetsSystemPrompt()
+    {
+        return """
+            IDENTITY: You are a professional quantitative sports handicapper.
+            TASK: Review the provided JSON array of mathematically filtered top-value football matches (probability > 75%).
+            
+            1. Analyze the MathProb and matchup. 
+            2. Eliminate any matches that feel too risky despite the math (e.g., derbies, unpredictable leagues, or irrelevant fixtures).
+            3. Keep the most compelling matches and write a short 1-2 sentence compelling 'AiJustification' for why this is a massive value bet.
+            
+            CRITICAL OUTPUT FORMAT:
+            You MUST return exactly and ONLY a valid JSON array of objects with these exact keys:
+            [
+              {
+                "HomeTeam": "string",
+                "AwayTeam": "string",
+                "AiJustification": "string"
+              }
+            ]
+            
+            Do not wrap it in markdown block quotes like ```json or anything else. Start with '[' and end with ']'.
+            """;
+    }
+
     /// <summary>
     /// Calls Groq API using the OpenAI-compatible chat completions format.
     /// </summary>
-    private async Task<string> CallGroqAsync(string apiKey, string systemPrompt, string userPrompt, List<ChatHistoryItem>? history, CancellationToken ct)
+    private async Task<string> CallGroqAsync(string apiKey, string systemPrompt, string userPrompt, List<ChatHistoryItem>? history, CancellationToken ct, bool jsonMode = false)
     {
         var model = _configuration["GroqModel"] ?? "llama-3.3-70b-versatile";
         _logger.LogInformation("Calling Groq model: {Model}", model);
@@ -173,8 +217,9 @@ public class AiAdvisorService : IAiAdvisorService
             {
                 model,
                 messages,
-                temperature = 0.7,
-                max_tokens = 2048
+                temperature = 0.5,
+                max_tokens = 4096,
+                response_format = jsonMode ? new { type = "json_object" } : null
             };
 
             var json = JsonSerializer.Serialize(requestBody);

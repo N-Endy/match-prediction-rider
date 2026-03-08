@@ -53,7 +53,7 @@ else
                     <ul style="font-size: 0.85rem; opacity: 0.7; margin: 0.25rem 0 0 1rem;">
                         <li>"Give me 10 of the best BTTS predictions"</li>
                         <li>"Pick 5 safe straight wins"</li>
-                        <li>"Mix 15 predictions: BTTS, over 2.5, and straight wins"</li>
+                        <li>"Give me 3 value bets and book them for me"</li>
                     </ul>
                 </div>
             </div>
@@ -104,12 +104,57 @@ else
     }
 
     function formatMessage(text) {
+        let formatted = text;
+        
+        // Parse [ADD_BET: Home|Away|League|Market|Outcome]
+        formatted = formatted.replace(
+            /\[ADD_BET:\s*(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\]/g, 
+            '<button class="mp-add-cart-btn mp-btn-sm" style="display:inline-flex; align-items:center; justify-content:center; margin-left:8px; padding:4px 10px; font-size:0.75rem; border-radius:4px; vertical-align:middle; line-height:1;" data-home="$1" data-away="$2" data-league="$3" data-market="$4" data-prediction="$5">+ Add to Slip</button>'
+        );
+
+        // Parse [BOOK_ALL]
+        formatted = formatted.replace(
+            /\[BOOK_ALL\]/g, 
+            '<div style="margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.1);"><button class="mp-book-btn" style="font-size:0.85rem; padding:8px 16px; width:auto; border-radius:8px;" onclick="addAllAndBook(this)">🎫 Add All & Open Slip</button></div>'
+        );
+
         // Basic markdown-like formatting
-        return text
+        return formatted
             .replace(/\n/g, '<br>')
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
             .replace(/\*(.*?)\*/g, '<em>$1</em>')
             .replace(/`(.*?)`/g, '<code>$1</code>');
+    }
+
+    // Agentic UI Action
+    function addAllAndBook(btn) {
+        const bubble = btn.closest('.mp-chat-bubble');
+        if (!bubble) return;
+        
+        const betBtns = bubble.querySelectorAll('.mp-add-cart-btn');
+        if (betBtns.length === 0) return;
+        
+        let addedCount = 0;
+        betBtns.forEach(b => {
+            if (typeof addToCart === 'function') {
+                addToCart({
+                    homeTeam: b.dataset.home || '',
+                    awayTeam: b.dataset.away || '',
+                    league: b.dataset.league || '',
+                    market: b.dataset.market || '',
+                    prediction: b.dataset.prediction || ''
+                });
+                addedCount++;
+            }
+        });
+        
+        if (typeof openCartModal === 'function') {
+            openCartModal();
+        }
+        
+        btn.textContent = `Added ${addedCount} picks!`;
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
     }
 
     function showTypingIndicator() {

@@ -77,6 +77,7 @@ builder.Services.AddScoped<IAnalyzerService, AnalyzerService>();
 builder.Services.AddScoped<IRegressionPredictorService, RegressionPredictorService>();
 builder.Services.AddScoped<ISportyBetBookingService, SportyBetBookingService>();
 builder.Services.AddScoped<IAiAdvisorService, AiAdvisorService>();
+builder.Services.AddScoped<IValueBetsService, ValueBetsService>();
 
 // Controllers for API endpoints (booking, AI chat)
 builder.Services.AddControllers();

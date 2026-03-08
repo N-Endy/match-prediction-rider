@@ -1,271 +1,3 @@
-// using MatchPredictor.Domain.Interfaces;
-// using MatchPredictor.Domain.Models;
-//
-// namespace MatchPredictor.Infrastructure.Services;
-//
-// /// <summary>
-// /// Data-driven probability calculator using bookmaker odds, over/under lines,
-// /// and Asian Handicap signals. Uses sigmoid squashing for smooth 0-1 outputs
-// /// and gracefully handles missing data fields.
-// /// </summary>
-// public class ProbabilityCalculator : IProbabilityCalculator
-// {
-//     public double CalculateBttsProbability(MatchData match)
-//     {
-//         // BTTS = both teams score. Requires:
-//         // 1. Goals expected (high over lines)
-//         // 2. Balanced match (neither side dominant enough to keep a clean sheet)
-//
-//         var goalSignal = GetGoalExpectation(match);
-//         var balance = GetMatchBalance(match);
-//
-//         // Base: blend goal expectation with balance
-//         // BTTS is most likely in high-scoring, balanced matches
-//         var raw = goalSignal * 0.6 + balance * 0.4;
-//
-//         // AH refinement: if AH_0 lines are close, teams are evenly matched
-//         if (match is { AhZeroHome: > 0, AhZeroAway: > 0 })
-//         {
-//             var ahBalance = 1.0 - Math.Abs(match.AhZeroHome - match.AhZeroAway);
-//
-//             // Tuned: narrower multiplier range (reduces overconfidence)
-//             // Balanced → mild boost; lopsided → mild penalty
-//             raw *= 0.765 + 0.195 * ahBalance;
-//         }
-//
-//         // Over 1.5 confirmation: at least 2 goals expected means BTTS feasible
-//         if (match.OverOnePointFive > 0)
-//         {
-//             switch (match.OverOnePointFive)
-//             {
-//                 // Tuned thresholds: avoid overly aggressive gating
-//                 case > 0.66:
-//                     raw *= 1.13;
-//                     break;
-//                 case < 0.63:
-//                     raw *= 0.82;
-//                     break;
-//             }
-//         }
-//
-//         // Tuned: softer + re-centered sigmoid to improve calibration
-//         return Sigmoid(raw, center: 0.575, steepness: 3.94);
-//     }
-//
-//     public double CalculateOverTwoGoalsProbability(MatchData match)
-//     {
-//         var baseProb = match.OverTwoGoals;
-//
-//         if (baseProb <= 0)
-//             baseProb = EstimateOverTwoFromAlternatives(match);
-//
-//         if (baseProb <= 0)
-//             return 0; // No data to work with
-//
-//         // Curve strength: if o_3.5 is also high, it's a very goal-heavy match
-//         var curveBoost = 1.0;
-//         if (match is { OverThreeGoals: > 0, OverTwoGoals: > 0 })
-//         {
-//             var gradient = match.OverThreeGoals / match.OverTwoGoals;
-//             // gradient near 0.8+ = extremely goal-heavy; near 0.3 = typical
-//             curveBoost = 0.9 + 0.2 * gradient; // Range: 0.9x to ~1.1x
-//         }
-//
-//         var raw = baseProb * curveBoost;
-//
-//         // AH dominance boost: if one team is expected to win by 2+, more goals likely
-//         if (match.AhMinusOneHome > 0.50)
-//         {
-//             raw *= 1.0 + (match.AhMinusOneHome - 0.50) * 0.4; // Up to ~1.2x
-//         }
-//         else if (match.AhMinusOneAway > 0.50)
-//         {
-//             raw *= 1.0 + (match.AhMinusOneAway - 0.50) * 0.4;
-//         }
-//
-//         // Previously: Math.Clamp(raw, 0, 1.0)
-//         // Tuned: calibration sigmoid improves log-loss/Brier while keeping ranking similar.
-//         return Calibrate(raw, center: 0.638, steepness: 3.27);
-//     }
-//
-//     public double CalculateDrawProbability(MatchData match)
-//     {
-//         var baseDrawProb = match.Draw;
-//         if (baseDrawProb <= 0) return 0;
-//
-//         var raw = baseDrawProb;
-//
-//         // AH-derived draw signal: gap between ah_0 (includes draw refund) and ah_-0.5 (no draw)
-//         if (match is { AhZeroHome: > 0, AhMinusHalfHome: > 0 })
-//         {
-//             var drawGap = match.AhZeroHome - match.AhMinusHalfHome;
-//
-//             switch (drawGap)
-//             {
-//                 case > 0.10 when baseDrawProb > 0.30:
-//                     raw *= 1.25; // Strong draw signal
-//                     break;
-//                 case > 0.05:
-//                     raw *= 1.12;
-//                     break;
-//                 case < 0.02:
-//                     raw *= 0.88; // Clean result expected, not draw
-//                     break;
-//             }
-//         }
-//
-//         // Balance confirmation from AH_0: draws require closely-matched teams
-//         if (match is { AhZeroHome: > 0, AhZeroAway: > 0 })
-//         {
-//             var ahDiff = Math.Abs(match.AhZeroHome - match.AhZeroAway);
-//             switch (ahDiff)
-//             {
-//                 case < 0.08:
-//                     raw *= 1.15; // Very even
-//                     break;
-//                 case > 0.25:
-//                     raw *= 0.82; // One team clearly dominant
-//                     break;
-//             }
-//         }
-//
-//         // Under goals confirmation: draws tend to be low-scoring
-//         if (match.UnderTwoGoals > 0.50)
-//             raw *= 1.08;
-//
-//         // Previously: Math.Clamp(raw, 0, 1.0)
-//         // Tuned: light calibration (draw probabilities are typically low and sensitive to overconfidence)
-//         return Calibrate(raw, center: 0.449, steepness: 3.52);
-//     }
-//
-//     public bool IsStrongHomeWin(MatchData match)
-//     {
-//         if (match.HomeWin < PredictionThresholds.HomeWinStrong)
-//             return false;
-//
-//         var confidence = match.HomeWin;
-//
-//         // AH confirmation: multiplicative factors instead of additive bonuses
-//         if (match.AhMinusHalfHome > 0.60)
-//             confidence *= 1.15; // Strong AH confirmation
-//         else if (match.AhMinusHalfHome > 0.50)
-//             confidence *= 1.06;
-//
-//         // AH_-1 boost: home expected to win by 2+ goals
-//         if (match.AhMinusOneHome > 0.45)
-//             confidence *= 1.08;
-//
-//         // Goal scoring confirmation
-//         if (match.OverTwoGoals >= PredictionThresholds.OverGoalsForWin)
-//             confidence *= 1.04;
-//
-//         return confidence >= 0.70;
-//     }
-//
-//     public bool IsStrongAwayWin(MatchData match)
-//     {
-//         if (match.AwayWin < PredictionThresholds.AwayWinStrong)
-//             return false;
-//
-//         var confidence = match.AwayWin;
-//
-//         // AH confirmation for away win
-//         if (match.AhPlusHalfAway > 0.60)
-//             confidence *= 1.15;
-//         else if (match.AhPlusHalfAway > 0.50)
-//             confidence *= 1.06;
-//
-//         // When AH_-0.5 home is very low, it confirms away dominance
-//         if (match.AhMinusHalfHome is > 0 and < 0.35)
-//             confidence *= 1.08;
-//
-//         if (match.OverTwoGoals >= PredictionThresholds.OverGoalsForWin)
-//             confidence *= 1.04;
-//
-//         return confidence >= 0.72;
-//     }
-//
-//     // --- Helper methods ---
-//
-//     /// <summary>
-//     /// Calibration wrapper: clamps to [0,1] then applies a sigmoid to smooth confidence.
-//     /// This improves probability calibration (log-loss/Brier/ECE) without changing the rest of the pipeline.
-//     /// </summary>
-//     private static double Calibrate(double p, double center, double steepness)
-//     {
-//         p = Math.Clamp(p, 0.0, 1.0);
-//         return Sigmoid(p, center: center, steepness: steepness);
-//     }
-//
-//     /// <summary>
-//     /// Estimates expected goals from the over/under probability curve.
-//     /// Uses ALL non-zero over lines instead of filtering by arbitrary thresholds.
-//     /// </summary>
-//     private static double GetGoalExpectation(MatchData match)
-//     {
-//         var signals = 0.0;
-//         var weights = 0.0;
-//
-//         // Use any available non-zero over line — don't filter by arbitrary thresholds
-//         if (match.OverOnePointFive > 0) { signals += match.OverOnePointFive * 0.15; weights += 0.15; }
-//         if (match.OverTwoGoals > 0)     { signals += match.OverTwoGoals * 0.35;     weights += 0.35; }
-//         if (match.OverThreeGoals > 0)   { signals += match.OverThreeGoals * 0.30;   weights += 0.30; }
-//         if (match.OverFourGoals > 0)    { signals += match.OverFourGoals * 0.20;    weights += 0.20; }
-//
-//         if (weights > 0)
-//             return signals / weights;
-//
-//         // If no over lines at all, fall back to 1X2: high away+home with low draw → more goals
-//         if (match is { HomeWin: > 0, AwayWin: > 0 })
-//             return (match.HomeWin + match.AwayWin) * 0.6; // Rough proxy
-//
-//         return 0.4; // Conservative default
-//     }
-//
-//     /// <summary>
-//     /// Measures how balanced a match is (0 = one-sided, 1 = perfectly balanced).
-//     /// </summary>
-//     private static double GetMatchBalance(MatchData match)
-//     {
-//         if (match is { AhZeroHome: > 0, AhZeroAway: > 0 })
-//             return 1.0 - Math.Abs(match.AhZeroHome - match.AhZeroAway);
-//
-//         // Fallback: use 1X2 balance
-//         var winDiff = Math.Abs(match.HomeWin - match.AwayWin);
-//         return Math.Max(0, 1.0 - winDiff * 1.5);
-//     }
-//
-//     /// <summary>
-//     /// Estimates Over 2.5 probability from adjacent over/under lines.
-//     /// </summary>
-//     private static double EstimateOverTwoFromAlternatives(MatchData match)
-//     {
-//         if (match is { OverThreeGoals: > 0, OverOnePointFive: > 0 })
-//             return (match.OverOnePointFive + match.OverThreeGoals) / 2.0;
-//         if (match.OverThreeGoals > 0)
-//             return match.OverThreeGoals * 1.3;
-//         if (match.UnderTwoGoals > 0)
-//             return 1.0 - match.UnderTwoGoals;
-//
-//         return 0;
-//     }
-//
-//     /// <summary>
-//     /// Logistic sigmoid for smooth probability squashing.
-//     /// Maps any value to (0, 1) with configurable center and steepness.
-//     /// </summary>
-//     private static double Sigmoid(double x, double center, double steepness)
-//     {
-//         return 1.0 / (1.0 + Math.Exp(-steepness * (x - center)));
-//     }
-// }
-
-
-
-
-// Without De-Vig. Recalculated Probabilities based purely on the market's true lines and mathematical Poisson projections.
-// This version is more transparent and relies on the market's own signals without attempting to adjust for the bookmaker's margin.
-
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 
@@ -443,13 +175,20 @@ public class ProbabilityCalculator : IProbabilityCalculator
     public bool IsStrongHomeWin(MatchData match, List<ModelAccuracy> accuracies)
     {
         if (match.HomeWin < _settings.HomeWinStrong) return false;
+        
+        var confidence = CalculateHomeWinProbability(match, accuracies);
+        return confidence >= 0.68; // Matches your empirical 80th percentile
+    }
+
+    public double CalculateHomeWinProbability(MatchData match, List<ModelAccuracy> accuracies)
+    {
 
         var trueOver25 = GetTrueOver25(match);
         var totalXg = EstimateTotalXg(trueOver25, match.OverOnePointFive);
 
         // Expected goals acts as a variance filter.
         // If a match has low xG (e.g., 1.8), even heavy favorites are at massive risk of a lucky 1-1 draw.
-        if (totalXg < _settings.MinTotalXgRequiredForWin) return false; 
+        if (totalXg < _settings.MinTotalXgRequiredForWin) return 0; 
 
         var confidence = match.HomeWin;
 
@@ -465,18 +204,25 @@ public class ProbabilityCalculator : IProbabilityCalculator
             
         confidence *= historyWeight;
 
-        return confidence >= 0.68; // Matches your empirical 80th percentile
+        return confidence;
     }
 
     public bool IsStrongAwayWin(MatchData match, List<ModelAccuracy> accuracies)
     {
         if (match.AwayWin < _settings.AwayWinStrong) return false;
 
+        var confidence = CalculateAwayWinProbability(match, accuracies);
+        return confidence >= 0.70; // Higher threshold for away teams
+    }
+
+    public double CalculateAwayWinProbability(MatchData match, List<ModelAccuracy> accuracies)
+    {
+
         var trueOver25 = GetTrueOver25(match);
         var totalXg = EstimateTotalXg(trueOver25, match.OverOnePointFive);
 
         // Variance filter: Away favorites in low-scoring games are highly dangerous to bet on
-        if (totalXg < _settings.MinTotalXgRequiredForWin) return false;
+        if (totalXg < _settings.MinTotalXgRequiredForWin) return 0;
 
         var confidence = match.AwayWin;
 
@@ -491,7 +237,7 @@ public class ProbabilityCalculator : IProbabilityCalculator
             
         confidence *= historyWeight;
 
-        return confidence >= 0.70; // Higher threshold for away teams
+        return confidence;
     }
 
     // --- Core Data Science Helpers ---
