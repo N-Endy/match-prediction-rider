@@ -47,12 +47,20 @@ builder.Services.AddHttpClient("SportyBet", client =>
     .HandleTransientHttpError()
     .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
 
-builder.Services.AddStackExchangeRedisCache(options =>
+var redisConn = builder.Configuration.GetConnectionString("RedisConnection");
+if (string.IsNullOrEmpty(redisConn) || redisConn == "localhost:6379")
 {
-    var redisConn = builder.Configuration.GetConnectionString("RedisConnection") ?? "localhost:6379";
-    options.Configuration = redisConn;
-    options.InstanceName = "MatchPredictor_";
-});
+    // Use Server RAM as a fallback cache, cheaper and simpler for small user bases
+    builder.Services.AddDistributedMemoryCache();
+}
+else
+{
+    builder.Services.AddStackExchangeRedisCache(options =>
+    {
+        options.Configuration = redisConn;
+        options.InstanceName = "MatchPredictor_";
+    });
+}
 
 builder.Configuration
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
