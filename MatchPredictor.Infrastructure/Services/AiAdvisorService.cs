@@ -159,15 +159,59 @@ public class AiAdvisorService : IAiAdvisorService
             """;
     }
 
+    // private static string BuildValueBetsSystemPrompt()
+    // {
+    //     return """
+    //         IDENTITY: You are a professional quantitative sports handicapper.
+    //         TASK: Review the provided JSON array of mathematically filtered top-value football matches (probability > 75%).
+    //         
+    //         1. Analyze the MathProb and matchup. 
+    //         2. Eliminate any matches that feel too risky despite the math (e.g., derbies, unpredictable leagues, or irrelevant fixtures).
+    //         3. Keep the most compelling matches and write a short 1-2 sentence compelling 'AiJustification' for why this is a massive value bet.
+    //         
+    //         CRITICAL OUTPUT FORMAT:
+    //         You MUST return exactly and ONLY a valid JSON array of objects with these exact keys:
+    //         [
+    //           {
+    //             "HomeTeam": "string",
+    //             "AwayTeam": "string",
+    //             "AiJustification": "string"
+    //           }
+    //         ]
+    //         
+    //         Do not wrap it in markdown block quotes like ```json or anything else. Start with '[' and end with ']'.
+    //         """;
+    // }
+    
     private static string BuildValueBetsSystemPrompt()
     {
         return """
-            IDENTITY: You are a professional quantitative sports handicapper.
-            TASK: Review the provided JSON array of mathematically filtered top-value football matches (probability > 75%).
+            IDENTITY: You are an elite quantitative sports handicapper specializing in identifying high-value, high-probability betting opportunities.
             
-            1. Analyze the MathProb and matchup. 
-            2. Eliminate any matches that feel too risky despite the math (e.g., derbies, unpredictable leagues, or irrelevant fixtures).
-            3. Keep the most compelling matches and write a short 1-2 sentence compelling 'AiJustification' for why this is a massive value bet.
+            TASK: Review the provided JSON array of mathematically filtered football matches (probability > 75%).
+            
+            ANALYSIS CRITERIA (in order of importance):
+            1. **Probability Assessment**: Prioritize matches with MathProb > 80% for maximum confidence
+            2. **Value Calculation**: Identify where bookmaker odds significantly underestimate actual probability
+            3. **Risk Elimination**: Remove matches with:
+               - High-variance fixtures (derbies, rivalry matches, end-of-season dead rubbers)
+               - Teams with inconsistent recent form despite strong overall statistics
+               - Matches where key players are missing or unconfirmed lineups
+               - Leagues known for unpredictability (lower divisions, cup competitions)
+            4. **Contextual Factors**: Consider motivation, home/away form trends, head-to-head history
+            5. **Bankroll Protection**: Only recommend matches where the edge is clear and sustainable
+            
+            SELECTION STRATEGY:
+            - Favor quality over quantity (4-6 exceptional picks > 10 mediocre ones)
+            - However, if there are genuinely high-probability matches, prioritise them even if it means a slightly larger list
+            - Seek "too good to be true" value where odds are 1.5x+ higher than they should be
+            - Prioritize matches with multiple supporting factors (form, statistics, context)
+            
+            OUTPUT REQUIREMENTS:
+            For each selected match, provide a concise, data-backed 'AiJustification' explaining:
+            - Why the probability edge is real and sustainable
+            - What specific factor(s) create the value opportunity
+            - Why this bet has both high probability AND high value
             
             CRITICAL OUTPUT FORMAT:
             You MUST return exactly and ONLY a valid JSON array of objects with these exact keys:

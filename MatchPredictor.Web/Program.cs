@@ -8,6 +8,7 @@ using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Repositories;
 using MatchPredictor.Infrastructure.Services;
 using MatchPredictor.Infrastructure.Utils;
+using MatchPredictor.Web.Extensions;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
@@ -23,44 +24,8 @@ builder.Services.AddMemoryCache();
 builder.Services.AddHealthChecks();
 builder.Services.AddHttpClient();
 
-builder.Services.AddHttpClient("Groq", client => 
-{
-    client.Timeout = TimeSpan.FromSeconds(60);
-})
-.AddPolicyHandler(HttpPolicyExtensions
-    .HandleTransientHttpError()
-    .OrResult(msg => msg.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
-    .WaitAndRetryAsync(2, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))))
-.AddPolicyHandler(HttpPolicyExtensions
-    .HandleTransientHttpError()
-    .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
-
-builder.Services.AddHttpClient("SportyBet", client => 
-{
-    client.Timeout = TimeSpan.FromSeconds(30);
-})
-.AddPolicyHandler(HttpPolicyExtensions
-    .HandleTransientHttpError()
-    .OrResult(msg => msg.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
-    .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))))
-.AddPolicyHandler(HttpPolicyExtensions
-    .HandleTransientHttpError()
-    .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
-
-var redisConn = builder.Configuration.GetConnectionString("RedisConnection");
-if (string.IsNullOrEmpty(redisConn) || redisConn == "localhost:6379")
-{
-    // Use Server RAM as a fallback cache, cheaper and simpler for small user bases
-    builder.Services.AddDistributedMemoryCache();
-}
-else
-{
-    builder.Services.AddStackExchangeRedisCache(options =>
-    {
-        options.Configuration = redisConn;
-        options.InstanceName = "MatchPredictor_";
-    });
-}
+builder.Services.AddHttpClientServices();
+builder.Services.AddRedisMemoryCache(builder.Configuration);
 
 builder.Configuration
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
