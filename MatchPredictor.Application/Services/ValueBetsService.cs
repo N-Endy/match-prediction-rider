@@ -61,12 +61,10 @@ public class ValueBetsService : IValueBetsService
                 { "Draw", ("Draw", _probabilityCalculator.CalculateDrawProbability(match, accuracies)) }
             };
 
-            // Find the highest probability for this match
-            var bestMarket = probs.OrderByDescending(p => p.Value.prob).First();
-
-            if (bestMarket.Value.prob > 0.75)
+            // Add ALL markets above threshold per match (Fix #12)
+            foreach (var market in probs.Where(p => p.Value.prob > 0.75))
             {
-                var category = bestMarket.Key == "StraightWinAway" ? "StraightWin" : bestMarket.Key;
+                var category = market.Key == "StraightWinAway" ? "StraightWin" : market.Key;
                 
                 candidateBets.Add(new ValueBetDto
                 {
@@ -75,8 +73,8 @@ public class ValueBetsService : IValueBetsService
                     AwayTeam = match.AwayTeam,
                     KickoffTime = match.Time,
                     PredictionCategory = category,
-                    PredictedOutcome = bestMarket.Value.outcome,
-                    MathematicalProbability = bestMarket.Value.prob,
+                    PredictedOutcome = market.Value.outcome,
+                    MathematicalProbability = market.Value.prob,
                     AiJustification = "" // To be filled by AI
                 });
             }

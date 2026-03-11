@@ -506,12 +506,30 @@ public class AnalyzerService  : IAnalyzerService
             }
         }
 
-        // 4. Update the database (Wipe & Replace strategy for simplicity)
-        await _dbContext.ModelAccuracies.ExecuteDeleteAsync();
-        await _dbContext.ModelAccuracies.AddRangeAsync(newAccuracies);
-        await _dbContext.SaveChangesAsync();
+        // 4. Incremental upsert — preserves accumulated learning (Fix #10)
+        var existingAccuracies = await _dbContext.ModelAccuracies.ToListAsync();
+        var existingDict = existingAccuracies
+            .ToDictionary(a => (a.Category, a.MetricName, a.MetricRangeStart));
 
-        _logger.LogInformation($"Saved {newAccuracies.Count} granular accuracy metrics to the database.");
+        foreach (var newAcc in newAccuracies)
+        {
+            var key = (newAcc.Category, newAcc.MetricName, newAcc.MetricRangeStart);
+            if (existingDict.TryGetValue(key, out var existing))
+            {
+                // Update existing row with blended accuracy (70% new + 30% old)
+                existing.CorrectPredictions = newAcc.CorrectPredictions;
+                existing.TotalPredictions = newAcc.TotalPredictions;
+                existing.AccuracyPercentage = (newAcc.AccuracyPercentage * 0.7) + (existing.AccuracyPercentage * 0.3);
+                existing.LastUpdated = now;
+            }
+            else
+            {
+                await _dbContext.ModelAccuracies.AddAsync(newAcc);
+            }
+        }
+
+        await _dbContext.SaveChangesAsync();
+        _logger.LogInformation("Updated {Count} granular accuracy metrics in the database (incremental).", newAccuracies.Count);
     }
     
     private async Task SaveMatchScores(List<MatchScore> scores)
@@ -629,9 +647,11 @@ public class AnalyzerService  : IAnalyzerService
             .Where(s => s.MatchTime < cutoffUtc)
             .ExecuteDeleteAsync();
     
-        // Cleanup old MatchScores (primary source)
+        // Cleanup old MatchScores — retain 30 days for Pipeline 2 regression (Fix #6)
+        var scoreCutoffDate = DateTimeProvider.GetLocalTime().AddDays(-30).Date;
+        var scoreCutoffUtc = DateTime.SpecifyKind(scoreCutoffDate, DateTimeKind.Utc);
         await _dbContext.MatchScores
-            .Where(s => s.MatchTime < cutoffUtc)
+            .Where(s => s.MatchTime < scoreCutoffUtc)
             .ExecuteDeleteAsync();
 
         // Cleanup scraping logs older than 2 days
