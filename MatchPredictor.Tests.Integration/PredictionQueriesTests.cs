@@ -56,7 +56,7 @@ public class PredictionQueriesTests
         {
             Date = dateString,
             Time = "12:00",
-            MatchDateTime = testDate,
+            MatchDateTime = testDate.AddDays(1),
             League = "TestLeague",
             HomeTeam = "Home",
             AwayTeam = "Away",

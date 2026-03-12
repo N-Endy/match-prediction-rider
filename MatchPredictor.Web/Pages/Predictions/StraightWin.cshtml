@@ -3,7 +3,7 @@
 
 @{
     ViewData["Title"] = "Straight Win";
-    var today = DateTime.UtcNow.ToString("dd MMM yyyy");
+    var today = MatchPredictor.Infrastructure.Utils.DateTimeProvider.GetLocalTime().ToString("dd MMM yyyy");
     var count = Model.Matches?.Count ?? 0;
 }
 
@@ -35,7 +35,7 @@
                     <div class="mp-match-info">
                         <div class="mp-match-league">
                             @match.League
-                            <span class="mp-time">@(DateTime.TryParse(match.Time, out var t) ? t.AddHours(-1).ToString("h:mm tt") : match.Time)</span>
+                            <span class="mp-time">@(DateTime.TryParse(match.Time, out var t) ? t.ToString("h:mm tt") : match.Time)</span>
                         </div>
                         <div class="mp-match-teams">
                             @match.HomeTeam
@@ -45,13 +45,10 @@
                     </div>
                     <div class="mp-card-badges">
                         @{
-                            var hasMatchStarted = !string.IsNullOrEmpty(match.ActualScore);
                             var isActuallyLive = match.IsLive;
-                            if (DateTime.TryParse(match.Time, out var parsedTime))
+                            if (match.MatchDateTime.HasValue && DateTime.UtcNow > match.MatchDateTime.Value.AddMinutes(200))
                             {
-                                var utcMatchTime = parsedTime.AddHours(-1);
-                                if (DateTime.UtcNow >= utcMatchTime) hasMatchStarted = true;
-                                if (DateTime.UtcNow > utcMatchTime.AddMinutes(200)) isActuallyLive = false;
+                                isActuallyLive = false;
                             }
                         }
                         @if (!string.IsNullOrEmpty(match.ActualScore))
