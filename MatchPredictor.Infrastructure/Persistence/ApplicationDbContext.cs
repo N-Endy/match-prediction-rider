@@ -11,6 +11,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
 
     public DbSet<MatchData> MatchDatas => Set<MatchData>();
     public DbSet<Prediction> Predictions => Set<Prediction>();
+    public DbSet<ForecastObservation> ForecastObservations => Set<ForecastObservation>();
     public DbSet<RegressionPrediction> RegressionPredictions => Set<RegressionPrediction>();
     public DbSet<ScrapingLog> ScrapingLogs => Set<ScrapingLog>();
     public DbSet<MatchScore> MatchScores => Set<MatchScore>();
@@ -51,6 +52,11 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
         modelBuilder.Entity<MarketCalibrationProfile>(entity =>
         {
             entity.HasIndex(e => new { e.Market, e.BucketStart }).IsUnique();
+        });
+
+        modelBuilder.Entity<ForecastObservation>(entity =>
+        {
+            entity.HasIndex(e => new { e.Date, e.HomeTeam, e.AwayTeam, e.League, e.Market }).IsUnique();
         });
     }
 }

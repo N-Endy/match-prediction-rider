@@ -57,6 +57,18 @@ public static class DateTimeProvider
         return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, WatZone);
     }
 
+    public static DateTime ConvertUtcToLocal(DateTime dateTime)
+    {
+        var utcDateTime = dateTime.Kind switch
+        {
+            DateTimeKind.Utc => dateTime,
+            DateTimeKind.Local => dateTime.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(dateTime, DateTimeKind.Utc)
+        };
+
+        return GetLocalTimeFromUtc(utcDateTime);
+    }
+
     private static DateTime GetLocalTimeFromUtc(DateTime utcDateTime)
     {
         return TimeZoneInfo.ConvertTimeFromUtc(utcDateTime, WatZone);

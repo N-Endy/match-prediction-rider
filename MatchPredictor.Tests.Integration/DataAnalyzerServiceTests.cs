@@ -20,13 +20,10 @@ public class DataAnalyzerServiceTests
             },
             new FakeCalibrationService((market, raw) =>
             {
-                if (market != PredictionMarket.StraightWin)
-                    return raw;
-
-                return raw switch
+                return (market, raw) switch
                 {
-                    0.66 => 0.69,
-                    0.62 => 0.72,
+                    (PredictionMarket.HomeWin, 0.66) => 0.69,
+                    (PredictionMarket.AwayWin, 0.62) => 0.72,
                     _ => raw
                 };
             }),
@@ -68,6 +65,31 @@ public class DataAnalyzerServiceTests
         Assert.Equal("Over 2.5", candidate.PredictedOutcome);
         Assert.Equal(0.57, candidate.RawProbability, 3);
         Assert.Equal(0.60, candidate.CalibratedProbability, 3);
+    }
+
+    [Fact]
+    public void OverTwoGoals_PreservesExistingNormalizedWatTime()
+    {
+        var match = CreateMatch();
+        match.Time = "19:00";
+        match.MatchDateTime = new DateTime(2026, 3, 12, 18, 0, 0, DateTimeKind.Utc);
+
+        var service = new DataAnalyzerService(
+            new FakeProbabilityCalculator
+            {
+                Over25 = 0.61
+            },
+            new FakeCalibrationService((_, raw) => raw),
+            Options.Create(new PredictionSettings
+            {
+                OverTwoGoalsStrongThreshold = 0.58
+            }));
+
+        var candidates = service.OverTwoGoals([match]);
+        var candidate = Assert.Single(candidates);
+
+        Assert.Equal("19:00", candidate.Time);
+        Assert.Equal(match.MatchDateTime, candidate.MatchDateTime);
     }
 
     private static MatchData CreateMatch()

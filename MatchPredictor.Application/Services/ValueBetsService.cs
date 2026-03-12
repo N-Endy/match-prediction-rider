@@ -63,8 +63,8 @@ public class ValueBetsService : IValueBetsService
             {
                 { "BothTeamsScore", ("BTTS", _calibrationService.Calibrate(PredictionMarket.BothTeamsScore, rawBtts)) },
                 { "Over2.5Goals", ("Over 2.5", _calibrationService.Calibrate(PredictionMarket.Over25Goals, rawOver25)) },
-                { "StraightWin", ("Home Win", _calibrationService.Calibrate(PredictionMarket.StraightWin, rawHomeWin)) },
-                { "StraightWinAway", ("Away Win", _calibrationService.Calibrate(PredictionMarket.StraightWin, rawAwayWin)) },
+                { "StraightWin", ("Home Win", _calibrationService.Calibrate(PredictionMarket.HomeWin, rawHomeWin)) },
+                { "StraightWinAway", ("Away Win", _calibrationService.Calibrate(PredictionMarket.AwayWin, rawAwayWin)) },
                 { "Draw", ("Draw", _calibrationService.Calibrate(PredictionMarket.Draw, rawDraw)) }
             };
 

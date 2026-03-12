@@ -138,10 +138,11 @@ public class AnalyzerService  : IAnalyzerService
                 .Where(match => match.Date == todayStr)
                 .ToListAsync();
 
-            await SavePredictions(_dataAnalyzerService.BothTeamsScore(matches));
-            await SavePredictions(_dataAnalyzerService.Draw(matches));
-            await SavePredictions(_dataAnalyzerService.OverTwoGoals(matches));
-            await SavePredictions(_dataAnalyzerService.StraightWin(matches));
+            var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates(matches);
+            var publishedCandidates = _dataAnalyzerService.SelectPublishedPredictions(forecastCandidates);
+
+            await SaveForecastObservations(forecastCandidates, publishedCandidates);
+            await SavePredictions(publishedCandidates);
             
             _logger.LogInformation("✅ Predictions calculated and saved successfully.");
             await LogScrapingStatus("Success", "✅ Prediction generation completed successfully.");
@@ -286,6 +287,9 @@ public class AnalyzerService  : IAnalyzerService
         var predictionsForToday = await _dbContext.Predictions
             .Where(p => p.Date == dateStr)
             .ToListAsync();
+        var forecastsForToday = await _dbContext.ForecastObservations
+            .Where(f => f.Date == dateStr)
+            .ToListAsync();
 
         var aiScores = await _dbContext.AiScoreMatchScores
             .Where(s => s.MatchTime >= startOfDayUtc && s.MatchTime < endOfDayUtc)
@@ -319,6 +323,17 @@ public class AnalyzerService  : IAnalyzerService
                     };
                 }
             }
+
+            foreach (var forecast in forecastsForToday)
+            {
+                var aiMatch = aiScores.FirstOrDefault(s =>
+                    ScoreMatchingHelper.TeamsMatch(s.HomeTeam, forecast.HomeTeam) &&
+                    ScoreMatchingHelper.TeamsMatch(s.AwayTeam, forecast.AwayTeam));
+
+                if (aiMatch == null) continue;
+
+                UpdateForecastObservationState(forecast, aiMatch.Score, aiMatch.BTTSLabel, aiMatch.IsLive);
+            }
         }
 
         // ── Fallback: FlashScore for any predictions still missing a score ──
@@ -329,9 +344,15 @@ public class AnalyzerService  : IAnalyzerService
         var incompletePredictions = predictionsForToday
             .Where(p => string.IsNullOrEmpty(p.ActualScore) || p.IsLive)
             .ToList();
+        var incompleteForecasts = forecastsForToday
+            .Where(f => string.IsNullOrEmpty(f.ActualScore) || f.IsLive || !f.IsSettled)
+            .ToList();
 
         var predLookup = incompletePredictions
             .GroupBy(p => (p.Date, Home: Norm(p.HomeTeam), Away: Norm(p.AwayTeam)))
+            .ToDictionary(g => g.Key, g => g.ToList());
+        var forecastLookup = incompleteForecasts
+            .GroupBy(f => (f.Date, Home: Norm(f.HomeTeam), Away: Norm(f.AwayTeam)))
             .ToDictionary(g => g.Key, g => g.ToList());
 
         if (incompletePredictions.Count > 0 && scores.Count > 0)
@@ -389,6 +410,40 @@ public class AnalyzerService  : IAnalyzerService
                         };
                     }
                 }
+
+                if (!forecastLookup.TryGetValue(key, out var matchedForecasts))
+                {
+                    matchedForecasts = incompleteForecasts
+                        .Where(f =>
+                            ScoreMatchingHelper.TeamsMatch(score.HomeTeam, f.HomeTeam) &&
+                            ScoreMatchingHelper.TeamsMatch(score.AwayTeam, f.AwayTeam))
+                        .ToList();
+                }
+
+                matchedForecasts = matchedForecasts
+                    .Where(f => string.IsNullOrEmpty(f.ActualScore) || f.IsLive || !f.IsSettled)
+                    .ToList();
+
+                switch (matchedForecasts.Count)
+                {
+                    case 0:
+                        break;
+                    case > 1 when !string.IsNullOrWhiteSpace(score.League):
+                    {
+                        var leagueFilteredForecasts = matchedForecasts
+                            .Where(f => ScoreMatchingHelper.LeaguesMatch(score.League, f.League))
+                            .ToList();
+
+                        if (leagueFilteredForecasts.Count > 0)
+                            matchedForecasts = leagueFilteredForecasts;
+                        break;
+                    }
+                }
+
+                foreach (var forecast in matchedForecasts)
+                {
+                    UpdateForecastObservationState(forecast, score.Score, score.BTTSLabel, score.IsLive);
+                }
             }
         }
 
@@ -424,10 +479,6 @@ public class AnalyzerService  : IAnalyzerService
         _logger.LogInformation("✅ Predictions updated successfully.");
 
         await _dbContext.SaveChangesAsync();
-        return;
-
-        static string Norm(string? s) =>
-            (s ?? "").Trim().ToLowerInvariant();
     }
     
     private static bool TryParseScore(string score, out int home, out int away)
@@ -466,6 +517,78 @@ public class AnalyzerService  : IAnalyzerService
         if (!TryParseScore(score, out var h, out var a)) return "Unknown";
         if (h > a) return "Home Win";
         return h < a ? "Away Win" : "Draw";
+    }
+
+    private void UpdateForecastObservationState(ForecastObservation forecast, string score, bool bttsLabel, bool isLive)
+    {
+        forecast.ActualScore = score;
+        forecast.IsLive = isLive;
+
+        if (isLive)
+        {
+            forecast.IsSettled = false;
+            forecast.OutcomeOccurred = null;
+            forecast.ActualOutcome = null;
+            forecast.SettledAt = null;
+            return;
+        }
+
+        forecast.IsSettled = true;
+        forecast.SettledAt = DateTime.UtcNow;
+        forecast.OutcomeOccurred = DetermineForecastOutcomeOccurred(forecast.Market, score, bttsLabel);
+        forecast.ActualOutcome = DetermineForecastActualOutcome(forecast.Market, score, bttsLabel);
+    }
+
+    private bool? DetermineForecastOutcomeOccurred(PredictionMarket market, string score, bool bttsLabel)
+    {
+        switch (market)
+        {
+            case PredictionMarket.BothTeamsScore:
+                if (TryParseScore(score, out var homeGoals, out var awayGoals))
+                    return homeGoals > 0 && awayGoals > 0;
+
+                return bttsLabel;
+
+            case PredictionMarket.Over25Goals:
+                return TryParseScore(score, out var homeOver, out var awayOver)
+                    ? homeOver + awayOver > 2
+                    : null;
+
+            case PredictionMarket.Draw:
+                return TryParseScore(score, out var homeDraw, out var awayDraw)
+                    ? homeDraw == awayDraw
+                    : null;
+
+            case PredictionMarket.HomeWin:
+                return TryParseScore(score, out var homeWin, out var awayWin)
+                    ? homeWin > awayWin
+                    : null;
+
+            case PredictionMarket.AwayWin:
+                return TryParseScore(score, out var homeAway, out var awayAway)
+                    ? awayAway > homeAway
+                    : null;
+
+            case PredictionMarket.StraightWin:
+                return DetermineStraightWinOutcome(score) == "Home Win" || DetermineStraightWinOutcome(score) == "Away Win";
+
+            default:
+                return null;
+        }
+    }
+
+    private string? DetermineForecastActualOutcome(PredictionMarket market, string score, bool bttsLabel)
+    {
+        return market switch
+        {
+            PredictionMarket.BothTeamsScore => (DetermineForecastOutcomeOccurred(market, score, bttsLabel) ?? false) ? "BTTS" : "No BTTS",
+            PredictionMarket.Over25Goals => DetermineOver25Outcome(score),
+            PredictionMarket.Draw => DetermineDrawOutcome(score),
+            PredictionMarket.HomeWin => (DetermineForecastOutcomeOccurred(market, score, bttsLabel) ?? false) ? "Home Win" : "Not Home Win",
+            PredictionMarket.AwayWin => (DetermineForecastOutcomeOccurred(market, score, bttsLabel) ?? false) ? "Away Win" : "Not Away Win",
+            PredictionMarket.StraightWin => DetermineStraightWinOutcome(score),
+            _ => null
+        };
     }
 
     
@@ -573,6 +696,10 @@ public class AnalyzerService  : IAnalyzerService
         await _dbContext.Predictions
             .Where(p => p.CreatedAt.Date < cutoffDate)
             .ExecuteDeleteAsync();
+
+        await _dbContext.ForecastObservations
+            .Where(f => f.CreatedAt.Date < cutoffDate)
+            .ExecuteDeleteAsync();
     
         // MatchData stores Date as a string, so we filter in memory but only once
         var allMatchData = await _dbContext.MatchDatas.ToListAsync();
@@ -651,7 +778,7 @@ public class AnalyzerService  : IAnalyzerService
             {
                 // UPDATE SCENARIO
 
-                if (existingRecord.Time != candidate.Time)
+                if (existingRecord.Time != candidate.Time || existingRecord.MatchDateTime != candidate.MatchDateTime)
                 {
                     existingRecord.Time = candidate.Time;
                     existingRecord.MatchDateTime = candidate.MatchDateTime;
@@ -689,6 +816,75 @@ public class AnalyzerService  : IAnalyzerService
 
         // 5. Save all inserts and updates in a single transaction
         await _dbContext.SaveChangesAsync();
+    }
+
+    private async Task SaveForecastObservations(
+        IEnumerable<PredictionCandidate> forecastCandidates,
+        IEnumerable<PredictionCandidate> publishedCandidates)
+    {
+        var forecastList = forecastCandidates.ToList();
+        if (!forecastList.Any()) return;
+
+        var publishedKeys = publishedCandidates
+            .Select(GetCandidateObservationKey)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var uniqueDates = forecastList.Select(candidate => candidate.Date).Distinct().ToList();
+        var existingForecasts = await _dbContext.ForecastObservations
+            .Where(forecast => uniqueDates.Contains(forecast.Date))
+            .ToListAsync();
+
+        var existingDict = existingForecasts
+            .GroupBy(GetObservationKey)
+            .ToDictionary(group => group.Key, group => group.First());
+
+        foreach (var candidate in forecastList)
+        {
+            var key = GetCandidateObservationKey(candidate);
+            var isPublished = publishedKeys.Contains(key);
+
+            if (existingDict.TryGetValue(key, out var existingRecord))
+            {
+                existingRecord.Time = candidate.Time;
+                existingRecord.MatchDateTime = candidate.MatchDateTime;
+                existingRecord.PredictedOutcome = candidate.PredictedOutcome;
+                existingRecord.RawProbability = candidate.RawProbability;
+                existingRecord.CalibratedProbability = candidate.CalibratedProbability;
+                existingRecord.IsPublished = isPublished;
+            }
+            else
+            {
+                var observation = new ForecastObservation
+                {
+                    Date = candidate.Date,
+                    Time = candidate.Time,
+                    MatchDateTime = candidate.MatchDateTime,
+                    League = candidate.League,
+                    HomeTeam = candidate.HomeTeam,
+                    AwayTeam = candidate.AwayTeam,
+                    Market = candidate.Market,
+                    PredictedOutcome = candidate.PredictedOutcome,
+                    RawProbability = candidate.RawProbability,
+                    CalibratedProbability = candidate.CalibratedProbability,
+                    IsPublished = isPublished
+                };
+
+                _dbContext.ForecastObservations.Add(observation);
+                existingDict[key] = observation;
+            }
+        }
+
+        await _dbContext.SaveChangesAsync();
+    }
+
+    private static string GetObservationKey(ForecastObservation forecast)
+    {
+        return $"{forecast.Date}|{Norm(forecast.HomeTeam)}|{Norm(forecast.AwayTeam)}|{Norm(forecast.League)}|{forecast.Market}";
+    }
+
+    private static string GetCandidateObservationKey(PredictionCandidate candidate)
+    {
+        return $"{candidate.Date}|{Norm(candidate.HomeTeam)}|{Norm(candidate.AwayTeam)}|{Norm(candidate.League)}|{candidate.Market}";
     }
     
     private async Task SaveRegressionPredictions(IEnumerable<RegressionPrediction> predictions)
@@ -747,5 +943,8 @@ public class AnalyzerService  : IAnalyzerService
         // 4. Save all inserts and updates in a single transaction
         await _dbContext.SaveChangesAsync();
     }
+
+    private static string Norm(string? s) =>
+        (s ?? "").Trim().ToLowerInvariant();
 
 }

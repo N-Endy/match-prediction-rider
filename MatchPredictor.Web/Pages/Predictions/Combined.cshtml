@@ -5,6 +5,7 @@
     ViewData["Title"] = "Combined Predictions";
     var today = MatchPredictor.Infrastructure.Utils.DateTimeProvider.GetLocalTime().ToString("dd MMM yyyy");
     var count = Model.Matches?.Count ?? 0;
+    var nowUtc = DateTime.UtcNow;
 }
 
 <div class="mp-container">
@@ -58,7 +59,7 @@
                     <div class="mp-match-info">
                         <div class="mp-match-league">
                             @match.League
-                            <span class="mp-time">@(DateTime.TryParse(match.Time, out var t) ? t.ToString("h:mm tt") : match.Time)</span>
+                            <span class="mp-time">@PredictionDisplayHelper.FormatWatTime(match)</span>
                         </div>
                         <div class="mp-match-teams">
                             @match.HomeTeam
@@ -68,20 +69,15 @@
                     </div>
                     <div class="mp-card-badges">
                         @{
-                            var isActuallyLive = match.IsLive;
-                            if (match.MatchDateTime.HasValue && DateTime.UtcNow > match.MatchDateTime.Value.AddMinutes(200))
-                            {
-                                isActuallyLive = false;
-                            }
+                            var isActuallyLive = PredictionDisplayHelper.IsActuallyLive(match, nowUtc);
                         }
                         @if (!string.IsNullOrEmpty(match.ActualScore))
                         {
                             var isCorrect = match.PredictedOutcome == match.ActualOutcome;
-                            var isPermanentlyCorrect = isCorrect && (match.PredictionCategory == "BothTeamsScore" || match.PredictionCategory == "Over2.5Goals");
 
                             if (isActuallyLive)
                             {
-                                if (isPermanentlyCorrect)
+                                if (PredictionDisplayHelper.IsLivePredictionCorrect(match))
                                 {
                                     <span class="mp-score mp-score-correct"><span class="mp-live-indicator"></span>@match.ActualScore</span>
                                 }

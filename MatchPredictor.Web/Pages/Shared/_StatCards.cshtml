@@ -1,4 +1,4 @@
-@model MatchPredictor.Web.Pages.AnalyticsStats
+@model MatchPredictor.Domain.Models.AnalyticsStats
 
 @{
     var accClass = Model.OverallAccuracy >= 0.70 ? "acc-high" :
@@ -25,9 +25,19 @@
         </div>
     </div>
     <div class="mp-stat-card">
-        <div class="mp-stat-label">Brier Score</div>
+        <div class="mp-stat-label">Settled Forecasts</div>
+        <div class="mp-stat-value mp-stat-figure">@Model.SettledForecasts</div>
+    </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Raw Brier</div>
         <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">
-            @(Model.CompletedPredictions > 0 ? Model.BrierScore.ToString("F3") : "0.000")
+            @(Model.SettledForecasts > 0 ? Model.RawBrierScore.ToString("F3") : "0.000")
+        </div>
+    </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Calibrated Brier</div>
+        <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">
+            @(Model.SettledForecasts > 0 ? Model.BrierScore.ToString("F3") : "0.000")
         </div>
     </div>
 </div>
@@ -35,14 +45,14 @@
 @if (Model.CategoryStats.Any())
 {
     <div class="mp-category-stats">
-        <h3 style="margin-bottom: 1.5rem; font-size: 1.1rem; color: white;">Performance by Concept</h3>
-        
+        <h3 style="margin-bottom: 1.5rem; font-size: 1.1rem; color: white;">Published Picks by Concept</h3>
+
         @foreach (var cat in Model.CategoryStats.Values.OrderByDescending(c => c.Total))
         {
             var catAccClass = cat.Accuracy >= 0.70 ? "acc-high" :
                               cat.Accuracy >= 0.50 ? "acc-med" : "acc-low";
             var fillWidth = cat.Total > 0 ? (cat.Accuracy * 100).ToString("F1") + "%" : "0%";
-                              
+
             <div class="mp-category-row">
                 <div class="mp-cat-header">
                     <span class="mp-cat-name">@cat.Category</span>
@@ -59,3 +69,108 @@
         }
     </div>
 }
+
+<div class="mp-market-analytics">
+    <h3 style="margin-bottom: 1.5rem; font-size: 1.1rem; color: white;">Calibration Curve Graphs</h3>
+
+    @if (Model.ForecastMarketStats.Any())
+    {
+        <div class="mp-market-grid">
+            @foreach (var market in Model.ForecastMarketStats)
+            {
+                <article class="mp-market-card">
+                    <div class="mp-market-header">
+                        <div>
+                            <h4>@market.MarketName</h4>
+                            <p>@market.SettledCount settled forecasts</p>
+                        </div>
+                        <div class="mp-market-briers">
+                            <span>Raw @market.RawBrierScore.ToString("F3")</span>
+                            <span>Cal @market.CalibratedBrierScore.ToString("F3")</span>
+                        </div>
+                    </div>
+
+                    <div class="mp-market-metrics">
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Raw REL</span>
+                            <strong>@market.RawDecomposition.Reliability.ToString("F3")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Raw RES</span>
+                            <strong>@market.RawDecomposition.Resolution.ToString("F3")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Raw UNC</span>
+                            <strong>@market.RawDecomposition.Uncertainty.ToString("F3")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Cal REL</span>
+                            <strong>@market.CalibratedDecomposition.Reliability.ToString("F3")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Cal RES</span>
+                            <strong>@market.CalibratedDecomposition.Resolution.ToString("F3")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Cal UNC</span>
+                            <strong>@market.CalibratedDecomposition.Uncertainty.ToString("F3")</strong>
+                        </div>
+                    </div>
+
+                    @if (market.RawReliabilityCurve.Any() || market.CalibratedReliabilityCurve.Any())
+                    {
+                        <div class="mp-reliability-shell">
+                            <div class="mp-reliability-chart">
+                                <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Reliability curve for @market.MarketName">
+                                    <line x1="0" y1="100" x2="100" y2="0" class="mp-reliability-diagonal"></line>
+
+                                    @if (market.RawReliabilityCurve.Count == 1)
+                                    {
+                                        var point = market.RawReliabilityCurve[0];
+                                        <circle cx="@MatchPredictor.Web.Pages.AnalyticsModel.CurveX(point).ToString("F2", System.Globalization.CultureInfo.InvariantCulture)"
+                                                cy="@MatchPredictor.Web.Pages.AnalyticsModel.CurveY(point).ToString("F2", System.Globalization.CultureInfo.InvariantCulture)"
+                                                r="2.2"
+                                                class="mp-curve-point raw"></circle>
+                                    }
+                                    else if (market.RawReliabilityCurve.Count > 1)
+                                    {
+                                        <polyline points="@MatchPredictor.Web.Pages.AnalyticsModel.BuildCurvePoints(market.RawReliabilityCurve)" class="mp-reliability-line raw"></polyline>
+                                    }
+
+                                    @if (market.CalibratedReliabilityCurve.Count == 1)
+                                    {
+                                        var point = market.CalibratedReliabilityCurve[0];
+                                        <circle cx="@MatchPredictor.Web.Pages.AnalyticsModel.CurveX(point).ToString("F2", System.Globalization.CultureInfo.InvariantCulture)"
+                                                cy="@MatchPredictor.Web.Pages.AnalyticsModel.CurveY(point).ToString("F2", System.Globalization.CultureInfo.InvariantCulture)"
+                                                r="2.2"
+                                                class="mp-curve-point calibrated"></circle>
+                                    }
+                                    else if (market.CalibratedReliabilityCurve.Count > 1)
+                                    {
+                                        <polyline points="@MatchPredictor.Web.Pages.AnalyticsModel.BuildCurvePoints(market.CalibratedReliabilityCurve)" class="mp-reliability-line calibrated"></polyline>
+                                    }
+                                </svg>
+                            </div>
+                            <div class="mp-reliability-legend">
+                                <span><i class="mp-legend-swatch raw"></i> Raw</span>
+                                <span><i class="mp-legend-swatch calibrated"></i> Calibrated</span>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="mp-market-empty">
+                            Reliability points for this market will appear after enough settled forecasts are available in this range.
+                        </div>
+                    }
+                </article>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="mp-market-empty">
+            No settled forecast data is available for this date range yet, so the calibration curve graph cannot be drawn yet. Try the `Last 7 Days` tab after more matches have finished.
+        </div>
+    }
+</div>

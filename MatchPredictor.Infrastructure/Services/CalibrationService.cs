@@ -35,48 +35,30 @@ public class CalibrationService : ICalibrationService
 
     public async Task RebuildProfilesAsync()
     {
-        var finalizedPredictions = await _dbContext.Predictions
+        var settledForecasts = await _dbContext.ForecastObservations
             .AsNoTracking()
             .Where(p =>
-                !p.IsLive &&
-                p.ActualOutcome != null &&
-                p.RawConfidenceScore != null)
+                p.IsSettled &&
+                p.OutcomeOccurred != null)
             .ToListAsync();
 
-        var rebuiltProfiles = finalizedPredictions
-            .Select(prediction =>
-            {
-                if (!PredictionMarketExtensions.TryFromCategory(prediction.PredictionCategory, out var market))
-                    return null;
-
-                var rawProbability = (double?)prediction.RawConfidenceScore;
-                if (rawProbability is null)
-                    return null;
-
-                return new
-                {
-                    market,
-                    RawProbability = Math.Clamp(rawProbability.Value, 0.0, 1.0),
-                    IsSuccess = string.Equals(prediction.PredictedOutcome, prediction.ActualOutcome, StringComparison.Ordinal)
-                };
-            })
-            .Where(x => x != null)
+        var rebuiltProfiles = settledForecasts
             .GroupBy(x => new
             {
-                x!.market,
+                x.Market,
                 BucketStart = GetBucketStart(x.RawProbability)
             })
             .Select(group =>
             {
                 var observationCount = group.Count();
-                var successCount = group.Count(item => item!.IsSuccess);
+                var successCount = group.Count(item => item.OutcomeOccurred == true);
                 var empiricalBucketProbability = (successCount + 1.0) / (observationCount + 2.0);
                 var weight = Math.Min(observationCount / 20.0, 1.0);
-                var averageRawProbability = group.Average(item => item!.RawProbability);
+                var averageRawProbability = group.Average(item => item.RawProbability);
 
                 return new MarketCalibrationProfile
                 {
-                    Market = group.Key.market,
+                    Market = group.Key.Market,
                     BucketStart = group.Key.BucketStart,
                     BucketEnd = Math.Min(group.Key.BucketStart + BucketSize, 1.0),
                     ObservationCount = observationCount,

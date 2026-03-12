@@ -21,76 +21,89 @@ public class DataAnalyzerService : IDataAnalyzerService
         _settings = options.Value;
     }
 
-    public IReadOnlyList<PredictionCandidate> BothTeamsScore(IEnumerable<MatchData> matches)
+    public IReadOnlyList<PredictionCandidate> BuildForecastCandidates(IEnumerable<MatchData> matches)
     {
         return matches
-            .Select(match => BuildCandidate(
-                match,
-                PredictionMarket.BothTeamsScore,
-                "BTTS",
-                _probabilityCalculator.CalculateBttsProbability(match)))
-            .Where(candidate => candidate != null && candidate.CalibratedProbability >= _settings.BttsScoreThreshold)
+            .SelectMany(BuildForecastCandidatesForMatch)
+            .Cast<PredictionCandidate>()
+            .ToList();
+    }
+
+    public IReadOnlyList<PredictionCandidate> SelectPublishedPredictions(IEnumerable<PredictionCandidate> forecastCandidates)
+    {
+        var forecasts = forecastCandidates.ToList();
+        var published = new List<PredictionCandidate>();
+
+        published.AddRange(forecasts.Where(candidate =>
+            candidate.Market == PredictionMarket.BothTeamsScore &&
+            candidate.CalibratedProbability >= _settings.BttsScoreThreshold));
+
+        published.AddRange(forecasts.Where(candidate =>
+            candidate.Market == PredictionMarket.Over25Goals &&
+            candidate.CalibratedProbability >= _settings.OverTwoGoalsStrongThreshold));
+
+        published.AddRange(forecasts.Where(candidate =>
+            candidate.Market == PredictionMarket.Draw &&
+            candidate.CalibratedProbability >= _settings.DrawStrongThreshold));
+
+        foreach (var matchGroup in forecasts
+                     .Where(candidate => candidate.Market is PredictionMarket.HomeWin or PredictionMarket.AwayWin)
+                     .GroupBy(candidate => (
+                         candidate.Date,
+                         candidate.HomeTeam,
+                         candidate.AwayTeam,
+                         candidate.League)))
+        {
+            var bestSide = matchGroup
+                .OrderByDescending(candidate => candidate.CalibratedProbability)
+                .First();
+
+            var threshold = bestSide.Market switch
+            {
+                PredictionMarket.HomeWin => _settings.HomeWinStrong,
+                PredictionMarket.AwayWin => _settings.AwayWinStrong,
+                _ => double.MaxValue
+            };
+
+            if (bestSide.CalibratedProbability >= threshold)
+            {
+                published.Add(bestSide);
+            }
+        }
+
+        return published;
+    }
+
+    public IReadOnlyList<PredictionCandidate> BothTeamsScore(IEnumerable<MatchData> matches)
+    {
+        return SelectPublishedPredictions(BuildForecastCandidates(matches))
+            .Where(candidate => candidate.Market == PredictionMarket.BothTeamsScore)
             .Cast<PredictionCandidate>()
             .ToList();
     }
 
     public IReadOnlyList<PredictionCandidate> OverTwoGoals(IEnumerable<MatchData> matches)
     {
-        return matches
-            .Select(match => BuildCandidate(
-                match,
-                PredictionMarket.Over25Goals,
-                "Over 2.5",
-                _probabilityCalculator.CalculateOverTwoGoalsProbability(match)))
-            .Where(candidate => candidate != null && candidate.CalibratedProbability >= _settings.OverTwoGoalsStrongThreshold)
+        return SelectPublishedPredictions(BuildForecastCandidates(matches))
+            .Where(candidate => candidate.Market == PredictionMarket.Over25Goals)
             .Cast<PredictionCandidate>()
             .ToList();
     }
 
     public IReadOnlyList<PredictionCandidate> Draw(IEnumerable<MatchData> matches)
     {
-        return matches
-            .Select(match => BuildCandidate(
-                match,
-                PredictionMarket.Draw,
-                "Draw",
-                _probabilityCalculator.CalculateDrawProbability(match)))
-            .Where(candidate => candidate != null && candidate.CalibratedProbability >= _settings.DrawStrongThreshold)
+        return SelectPublishedPredictions(BuildForecastCandidates(matches))
+            .Where(candidate => candidate.Market == PredictionMarket.Draw)
             .Cast<PredictionCandidate>()
             .ToList();
     }
 
     public IReadOnlyList<PredictionCandidate> StraightWin(IEnumerable<MatchData> matches)
     {
-        var candidates = new List<PredictionCandidate>();
-
-        foreach (var match in matches)
-        {
-            if (!HasRequiredTeams(match))
-                continue;
-
-            var rawHome = _probabilityCalculator.CalculateHomeWinProbability(match);
-            var rawAway = _probabilityCalculator.CalculateAwayWinProbability(match);
-            var calibratedHome = _calibrationService.Calibrate(PredictionMarket.StraightWin, rawHome);
-            var calibratedAway = _calibrationService.Calibrate(PredictionMarket.StraightWin, rawAway);
-
-            var homeFavored = calibratedHome >= calibratedAway;
-            var calibratedProbability = homeFavored ? calibratedHome : calibratedAway;
-            var rawProbability = homeFavored ? rawHome : rawAway;
-            var threshold = homeFavored ? _settings.HomeWinStrong : _settings.AwayWinStrong;
-
-            if (calibratedProbability < threshold)
-                continue;
-
-            candidates.Add(CreateCandidate(
-                match,
-                PredictionMarket.StraightWin,
-                homeFavored ? "Home Win" : "Away Win",
-                rawProbability,
-                calibratedProbability));
-        }
-
-        return candidates;
+        return SelectPublishedPredictions(BuildForecastCandidates(matches))
+            .Where(candidate => candidate.Market is PredictionMarket.HomeWin or PredictionMarket.AwayWin)
+            .Cast<PredictionCandidate>()
+            .ToList();
     }
 
     private PredictionCandidate? BuildCandidate(MatchData match, PredictionMarket market, string predictedOutcome, double rawProbability)
@@ -109,7 +122,17 @@ public class DataAnalyzerService : IDataAnalyzerService
         double rawProbability,
         double calibratedProbability)
     {
-        var (date, time, utcDateTime) = DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time);
+        var date = match.Date?.Trim() ?? string.Empty;
+        var time = match.Time?.Trim() ?? string.Empty;
+        DateTime? utcDateTime = match.MatchDateTime;
+
+        if (utcDateTime is null)
+        {
+            var normalizedDateTime = DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time);
+            date = normalizedDateTime.date;
+            time = normalizedDateTime.time;
+            utcDateTime = normalizedDateTime.utcDateTime;
+        }
 
         return new PredictionCandidate
         {
@@ -130,5 +153,41 @@ public class DataAnalyzerService : IDataAnalyzerService
     private static bool HasRequiredTeams(MatchData match)
     {
         return !string.IsNullOrWhiteSpace(match.HomeTeam) && !string.IsNullOrWhiteSpace(match.AwayTeam);
+    }
+
+    private IEnumerable<PredictionCandidate> BuildForecastCandidatesForMatch(MatchData match)
+    {
+        var candidates = new[]
+        {
+            BuildCandidate(
+                match,
+                PredictionMarket.BothTeamsScore,
+                "BTTS",
+                _probabilityCalculator.CalculateBttsProbability(match)),
+            BuildCandidate(
+                match,
+                PredictionMarket.Over25Goals,
+                "Over 2.5",
+                _probabilityCalculator.CalculateOverTwoGoalsProbability(match)),
+            BuildCandidate(
+                match,
+                PredictionMarket.Draw,
+                "Draw",
+                _probabilityCalculator.CalculateDrawProbability(match)),
+            BuildCandidate(
+                match,
+                PredictionMarket.HomeWin,
+                "Home Win",
+                _probabilityCalculator.CalculateHomeWinProbability(match)),
+            BuildCandidate(
+                match,
+                PredictionMarket.AwayWin,
+                "Away Win",
+                _probabilityCalculator.CalculateAwayWinProbability(match))
+        };
+
+        return candidates
+            .Where(candidate => candidate != null)
+            .Cast<PredictionCandidate>();
     }
 }

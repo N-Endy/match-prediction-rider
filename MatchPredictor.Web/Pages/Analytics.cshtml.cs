@@ -1,26 +1,28 @@
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.RazorPages;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
+using System.Globalization;
+using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Utils;
+using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.EntityFrameworkCore;
 
 namespace MatchPredictor.Web.Pages;
 
 public class AnalyticsModel : PageModel
 {
     private readonly ApplicationDbContext _db;
+    private readonly IForecastEvaluationService _forecastEvaluationService;
 
-    // Analytics Data Models
+    public string DefaultTabId { get; private set; } = "7days";
     public AnalyticsStats TodayStats { get; set; } = new();
     public AnalyticsStats YesterdayStats { get; set; } = new();
     public AnalyticsStats Last3DaysStats { get; set; } = new();
     public AnalyticsStats Last7DaysStats { get; set; } = new();
 
-    public AnalyticsModel(ApplicationDbContext db)
+    public AnalyticsModel(ApplicationDbContext db, IForecastEvaluationService forecastEvaluationService)
     {
         _db = db;
+        _forecastEvaluationService = forecastEvaluationService;
     }
 
     public async Task OnGetAsync()
@@ -28,97 +30,63 @@ public class AnalyticsModel : PageModel
         await LoadAnalyticsDataAsync();
     }
 
+    public static string BuildCurvePoints(IEnumerable<ReliabilityCurvePoint> points)
+    {
+        return string.Join(
+            " ",
+            points.Select(point =>
+                $"{CurveX(point).ToString("F2", CultureInfo.InvariantCulture)},{CurveY(point).ToString("F2", CultureInfo.InvariantCulture)}"));
+    }
+
+    public static double CurveX(ReliabilityCurvePoint point) => point.AveragePredictedProbability * 100.0;
+
+    public static double CurveY(ReliabilityCurvePoint point) => 100.0 - (point.ObservedFrequency * 100.0);
+
     private async Task LoadAnalyticsDataAsync()
     {
         var today = DateTimeProvider.GetLocalTime().Date;
-        
+
         var dateStringsToday = new[] { today.ToString("dd-MM-yyyy") };
         var dateStringsYesterday = new[] { today.AddDays(-1).ToString("dd-MM-yyyy") };
         var dateStringsLast3 = Enumerable.Range(0, 3).Select(i => today.AddDays(-i).ToString("dd-MM-yyyy")).ToArray();
         var dateStringsLast7 = Enumerable.Range(0, 7).Select(i => today.AddDays(-i).ToString("dd-MM-yyyy")).ToArray();
 
-        // 1. Fetch Predictions
         var last7Predictions = await _db.Predictions
-            .Where(p => dateStringsLast7.Contains(p.Date))
+            .Where(prediction => dateStringsLast7.Contains(prediction.Date))
             .ToListAsync();
 
-        TodayStats = CalculateStats(last7Predictions.Where(p => dateStringsToday.Contains(p.Date)));
-        YesterdayStats = CalculateStats(last7Predictions.Where(p => dateStringsYesterday.Contains(p.Date)));
-        Last3DaysStats = CalculateStats(last7Predictions.Where(p => dateStringsLast3.Contains(p.Date)));
-        Last7DaysStats = CalculateStats(last7Predictions);
+        var last7Forecasts = await _db.ForecastObservations
+            .Where(forecast => dateStringsLast7.Contains(forecast.Date))
+            .ToListAsync();
+
+        TodayStats = _forecastEvaluationService.CalculateStats(
+            last7Predictions.Where(prediction => dateStringsToday.Contains(prediction.Date)),
+            last7Forecasts.Where(forecast => dateStringsToday.Contains(forecast.Date)));
+
+        YesterdayStats = _forecastEvaluationService.CalculateStats(
+            last7Predictions.Where(prediction => dateStringsYesterday.Contains(prediction.Date)),
+            last7Forecasts.Where(forecast => dateStringsYesterday.Contains(forecast.Date)));
+
+        Last3DaysStats = _forecastEvaluationService.CalculateStats(
+            last7Predictions.Where(prediction => dateStringsLast3.Contains(prediction.Date)),
+            last7Forecasts.Where(forecast => dateStringsLast3.Contains(forecast.Date)));
+
+        Last7DaysStats = _forecastEvaluationService.CalculateStats(last7Predictions, last7Forecasts);
+
+        DefaultTabId = SelectDefaultTab();
     }
 
-    private AnalyticsStats CalculateStats(IEnumerable<Prediction> predictions)
+    private string SelectDefaultTab()
     {
-        var list = predictions.ToList();
-        var stats = new AnalyticsStats
-        {
-            TotalPredictions = list.Count,
-            CompletedPredictions = list.Count(p => !string.IsNullOrEmpty(p.ActualOutcome) && !p.IsLive)
-        };
+        if (TodayStats.SettledForecasts > 0 || TodayStats.ForecastMarketStats.Any())
+            return "today";
 
-        if (stats.CompletedPredictions > 0)
-        {
-            var completed = list.Where(p => !string.IsNullOrEmpty(p.ActualOutcome) && !p.IsLive).ToList();
-            stats.CorrectPredictions = completed.Count(p => p.PredictedOutcome == p.ActualOutcome);
-            stats.OverallAccuracy = (double)stats.CorrectPredictions / stats.CompletedPredictions;
-            var scoredPredictions = completed.Where(p => p.ConfidenceScore.HasValue).ToList();
+        if (YesterdayStats.SettledForecasts > 0 || YesterdayStats.ForecastMarketStats.Any())
+            return "yesterday";
 
-            if (scoredPredictions.Count > 0)
-            {
-                stats.BrierScore = scoredPredictions
-                    .Average(p =>
-                    {
-                        var outcome = p.PredictedOutcome == p.ActualOutcome ? 1.0 : 0.0;
-                        var probability = (double)p.ConfidenceScore!.Value;
-                        return Math.Pow(probability - outcome, 2);
-                    });
-            }
+        if (Last3DaysStats.SettledForecasts > 0 || Last3DaysStats.ForecastMarketStats.Any())
+            return "3days";
 
-            // Group by category
-            var grouped = completed.GroupBy(p => p.PredictionCategory);
-            foreach (var group in grouped)
-            {
-                var total = group.Count();
-                var correct = group.Count(p => p.PredictedOutcome == p.ActualOutcome);
-                var scoredCategoryPredictions = group.Where(p => p.ConfidenceScore.HasValue).ToList();
-                stats.CategoryStats[group.Key] = new CategoryStat
-                {
-                    Category = group.Key,
-                    Total = total,
-                    Correct = correct,
-                    Accuracy = (double)correct / total,
-                    BrierScore = scoredCategoryPredictions.Count > 0
-                        ? scoredCategoryPredictions.Average(p =>
-                        {
-                            var outcome = p.PredictedOutcome == p.ActualOutcome ? 1.0 : 0.0;
-                            var probability = (double)p.ConfidenceScore!.Value;
-                            return Math.Pow(probability - outcome, 2);
-                        })
-                        : 0.0
-                };
-            }
-        }
-
-        return stats;
+        return "7days";
     }
-}
-
-public class AnalyticsStats
-{
-    public int TotalPredictions { get; set; }
-    public int CompletedPredictions { get; set; }
-    public int CorrectPredictions { get; set; }
-    public double OverallAccuracy { get; set; }
-    public double BrierScore { get; set; }
-    public Dictionary<string, CategoryStat> CategoryStats { get; set; } = new();
-}
-
-public class CategoryStat
-{
-    public string Category { get; set; } = string.Empty;
-    public int Total { get; set; }
-    public int Correct { get; set; }
-    public double Accuracy { get; set; }
-    public double BrierScore { get; set; }
 }

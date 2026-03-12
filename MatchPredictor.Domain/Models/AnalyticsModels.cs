@@ -1,0 +1,53 @@
+namespace MatchPredictor.Domain.Models;
+
+public class AnalyticsStats
+{
+    public int TotalPredictions { get; set; }
+    public int CompletedPredictions { get; set; }
+    public int CorrectPredictions { get; set; }
+    public double OverallAccuracy { get; set; }
+    public int SettledForecasts { get; set; }
+    public double RawBrierScore { get; set; }
+    public double BrierScore { get; set; }
+    public Dictionary<string, CategoryStat> CategoryStats { get; set; } = new();
+    public List<ForecastMarketStat> ForecastMarketStats { get; set; } = [];
+}
+
+public class CategoryStat
+{
+    public string Category { get; set; } = string.Empty;
+    public int Total { get; set; }
+    public int Correct { get; set; }
+    public double Accuracy { get; set; }
+    public double BrierScore { get; set; }
+}
+
+public class ForecastMarketStat
+{
+    public PredictionMarket Market { get; set; }
+    public string MarketName { get; set; } = string.Empty;
+    public int SettledCount { get; set; }
+    public double RawBrierScore { get; set; }
+    public double CalibratedBrierScore { get; set; }
+    public BrierDecomposition RawDecomposition { get; set; } = new();
+    public BrierDecomposition CalibratedDecomposition { get; set; } = new();
+    public List<ReliabilityCurvePoint> RawReliabilityCurve { get; set; } = [];
+    public List<ReliabilityCurvePoint> CalibratedReliabilityCurve { get; set; } = [];
+}
+
+public class BrierDecomposition
+{
+    public double Score { get; set; }
+    public double Reliability { get; set; }
+    public double Resolution { get; set; }
+    public double Uncertainty { get; set; }
+}
+
+public class ReliabilityCurvePoint
+{
+    public double BucketStart { get; set; }
+    public double BucketEnd { get; set; }
+    public double AveragePredictedProbability { get; set; }
+    public double ObservedFrequency { get; set; }
+    public int Count { get; set; }
+}
