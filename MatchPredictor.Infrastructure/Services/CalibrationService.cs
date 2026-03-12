@@ -52,6 +52,11 @@ public class CalibrationService : ICalibrationService
 
     public async Task RebuildProfilesAsync()
     {
+        var previousCalibratorByMarket = _betaProfiles
+            .ToDictionary(
+                profile => profile.Market,
+                profile => profile.IsRecommended ? "Beta" : "Bucket");
+
         var settledForecasts = await _dbContext.ForecastObservations
             .AsNoTracking()
             .Where(p =>
@@ -90,6 +95,7 @@ public class CalibrationService : ICalibrationService
             .ToList();
 
         var betaProfiles = BuildBetaCalibrationProfiles(settledForecasts);
+        var promotionHistory = BuildPromotionHistory(previousCalibratorByMarket, betaProfiles);
 
         try
         {
@@ -114,6 +120,10 @@ public class CalibrationService : ICalibrationService
         }
 
         await _dbContext.BetaCalibrationProfiles.AddRangeAsync(betaProfiles);
+        if (promotionHistory.Count > 0)
+        {
+            await _dbContext.PromotionHistories.AddRangeAsync(promotionHistory);
+        }
         await _dbContext.SaveChangesAsync();
 
         _profiles = rebuiltProfiles;
@@ -130,6 +140,52 @@ public class CalibrationService : ICalibrationService
             .Where(profile => profile != null)
             .Cast<BetaCalibrationProfile>()
             .ToList();
+    }
+
+    private static List<PromotionHistory> BuildPromotionHistory(
+        IReadOnlyDictionary<PredictionMarket, string> previousCalibratorByMarket,
+        IReadOnlyCollection<BetaCalibrationProfile> betaProfiles)
+    {
+        var history = new List<PromotionHistory>();
+        var nextCalibratorByMarket = betaProfiles
+            .ToDictionary(
+                profile => profile.Market,
+                profile => profile.IsRecommended ? "Beta" : "Bucket");
+
+        var markets = previousCalibratorByMarket.Keys
+            .Union(nextCalibratorByMarket.Keys)
+            .Distinct()
+            .ToList();
+
+        foreach (var market in markets)
+        {
+            var previous = previousCalibratorByMarket.TryGetValue(market, out var previousState)
+                ? previousState
+                : "Bucket";
+            var next = nextCalibratorByMarket.TryGetValue(market, out var nextState)
+                ? nextState
+                : "Bucket";
+
+            if (string.Equals(previous, next, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var profile = betaProfiles.FirstOrDefault(item => item.Market == market);
+            history.Add(new PromotionHistory
+            {
+                Market = market,
+                ChangeType = "Calibrator",
+                PreviousValue = previous,
+                NewValue = next,
+                BaselineScore = profile?.BaselineBrierScore,
+                CandidateScore = profile?.ValidationBrierScore,
+                Improvement = profile?.Improvement,
+                EffectiveAt = DateTime.UtcNow
+            });
+        }
+
+        return history;
     }
 
     private static BetaCalibrationProfile? BuildBetaProfile(PredictionMarket market, IReadOnlyList<ForecastObservation> forecasts)

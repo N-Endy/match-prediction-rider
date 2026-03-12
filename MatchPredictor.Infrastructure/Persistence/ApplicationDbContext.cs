@@ -20,6 +20,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<MarketCalibrationProfile> MarketCalibrationProfiles => Set<MarketCalibrationProfile>();
     public DbSet<BetaCalibrationProfile> BetaCalibrationProfiles => Set<BetaCalibrationProfile>();
     public DbSet<ThresholdProfile> ThresholdProfiles => Set<ThresholdProfile>();
+    public DbSet<PromotionHistory> PromotionHistories => Set<PromotionHistory>();
     // Required by IDataProtectionKeyContext
     public DbSet<DataProtectionKey> DataProtectionKeys { get; set; }
 
@@ -69,6 +70,11 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
         modelBuilder.Entity<BetaCalibrationProfile>(entity =>
         {
             entity.HasIndex(e => e.Market).IsUnique();
+        });
+
+        modelBuilder.Entity<PromotionHistory>(entity =>
+        {
+            entity.HasIndex(e => new { e.EffectiveAt, e.Market });
         });
     }
 }

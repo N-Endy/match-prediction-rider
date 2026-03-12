@@ -1,3 +1,4 @@
+using System.Globalization;
 using Hangfire;
 using MatchPredictor.Application.Helpers;
 using MatchPredictor.Domain.Interfaces;
@@ -342,9 +343,16 @@ public class AnalyzerService  : IAnalyzerService
 
             foreach (var prediction in predictionsForToday)
             {
-                var aiMatch = aiScores.FirstOrDefault(s =>
-                    ScoreMatchingHelper.TeamsMatch(s.HomeTeam, prediction.HomeTeam) &&
-                    ScoreMatchingHelper.TeamsMatch(s.AwayTeam, prediction.AwayTeam));
+                var aiMatch = FindBestFixtureCandidate(
+                    aiScores,
+                    prediction.HomeTeam,
+                    prediction.AwayTeam,
+                    prediction.League,
+                    ResolveScheduledMatchTime(prediction.Date, prediction.Time, prediction.MatchDateTime),
+                    score => score.HomeTeam,
+                    score => score.AwayTeam,
+                    score => score.League,
+                    score => score.MatchTime);
 
                 if (aiMatch == null) continue;
 
@@ -366,9 +374,16 @@ public class AnalyzerService  : IAnalyzerService
 
             foreach (var forecast in forecastsForToday)
             {
-                var aiMatch = aiScores.FirstOrDefault(s =>
-                    ScoreMatchingHelper.TeamsMatch(s.HomeTeam, forecast.HomeTeam) &&
-                    ScoreMatchingHelper.TeamsMatch(s.AwayTeam, forecast.AwayTeam));
+                var aiMatch = FindBestFixtureCandidate(
+                    aiScores,
+                    forecast.HomeTeam,
+                    forecast.AwayTeam,
+                    forecast.League,
+                    ResolveScheduledMatchTime(forecast.Date, forecast.Time, forecast.MatchDateTime),
+                    score => score.HomeTeam,
+                    score => score.AwayTeam,
+                    score => score.League,
+                    score => score.MatchTime);
 
                 if (aiMatch == null) continue;
 
@@ -389,10 +404,10 @@ public class AnalyzerService  : IAnalyzerService
             .ToList();
 
         var predLookup = incompletePredictions
-            .GroupBy(p => (p.Date, Home: Norm(p.HomeTeam), Away: Norm(p.AwayTeam)))
+            .GroupBy(p => CreateScoreFixtureKey(p.Date, p.HomeTeam, p.AwayTeam, p.League))
             .ToDictionary(g => g.Key, g => g.ToList());
         var forecastLookup = incompleteForecasts
-            .GroupBy(f => (f.Date, Home: Norm(f.HomeTeam), Away: Norm(f.AwayTeam)))
+            .GroupBy(f => CreateScoreFixtureKey(f.Date, f.HomeTeam, f.AwayTeam, f.League))
             .ToDictionary(g => g.Key, g => g.ToList());
 
         if (incompletePredictions.Count > 0 && scores.Count > 0)
@@ -403,35 +418,41 @@ public class AnalyzerService  : IAnalyzerService
 
             foreach (var score in scores)
             {
-                var key = (dateStr, Home: Norm(score.HomeTeam), Away: Norm(score.AwayTeam));
+                var key = CreateScoreFixtureKey(dateStr, score.HomeTeam, score.AwayTeam, score.League);
 
                 if (!predLookup.TryGetValue(key, out var matched))
                 {
-                    matched = incompletePredictions
-                        .Where(p =>
-                            ScoreMatchingHelper.TeamsMatch(score.HomeTeam, p.HomeTeam) &&
-                            ScoreMatchingHelper.TeamsMatch(score.AwayTeam, p.AwayTeam))
-                        .ToList();
+                    var bestPrediction = FindBestFixtureCandidate(
+                        incompletePredictions,
+                        score.HomeTeam,
+                        score.AwayTeam,
+                        score.League,
+                        score.MatchTime,
+                        prediction => prediction.HomeTeam,
+                        prediction => prediction.AwayTeam,
+                        prediction => prediction.League,
+                        prediction => ResolveScheduledMatchTime(prediction.Date, prediction.Time, prediction.MatchDateTime));
+
+                    if (bestPrediction == null)
+                    {
+                        continue;
+                    }
+
+                    var bestKey = CreateScoreFixtureKey(
+                        bestPrediction.Date,
+                        bestPrediction.HomeTeam,
+                        bestPrediction.AwayTeam,
+                        bestPrediction.League);
+
+                    if (!predLookup.TryGetValue(bestKey, out matched))
+                    {
+                        matched = [];
+                    }
                 }
 
                 // Only update predictions that don't already have a score or are still live (from AiScore)
                 matched = matched.Where(p => string.IsNullOrEmpty(p.ActualScore) || p.IsLive).ToList();
-
-                switch (matched.Count)
-                {
-                    case 0:
-                        continue;
-                    case > 1 when !string.IsNullOrWhiteSpace(score.League):
-                    {
-                        var leagueFiltered = matched
-                            .Where(p => ScoreMatchingHelper.LeaguesMatch(score.League, p.League))
-                            .ToList();
-
-                        if (leagueFiltered.Count > 0)
-                            matched = leagueFiltered;
-                        break;
-                    }
-                }
+                if (matched.Count == 0) continue;
 
                 foreach (var prediction in matched)
                 {
@@ -453,32 +474,38 @@ public class AnalyzerService  : IAnalyzerService
 
                 if (!forecastLookup.TryGetValue(key, out var matchedForecasts))
                 {
-                    matchedForecasts = incompleteForecasts
-                        .Where(f =>
-                            ScoreMatchingHelper.TeamsMatch(score.HomeTeam, f.HomeTeam) &&
-                            ScoreMatchingHelper.TeamsMatch(score.AwayTeam, f.AwayTeam))
-                        .ToList();
+                    var bestForecast = FindBestFixtureCandidate(
+                        incompleteForecasts,
+                        score.HomeTeam,
+                        score.AwayTeam,
+                        score.League,
+                        score.MatchTime,
+                        forecast => forecast.HomeTeam,
+                        forecast => forecast.AwayTeam,
+                        forecast => forecast.League,
+                        forecast => ResolveScheduledMatchTime(forecast.Date, forecast.Time, forecast.MatchDateTime));
+
+                    if (bestForecast == null)
+                    {
+                        continue;
+                    }
+
+                    var bestKey = CreateScoreFixtureKey(
+                        bestForecast.Date,
+                        bestForecast.HomeTeam,
+                        bestForecast.AwayTeam,
+                        bestForecast.League);
+
+                    if (!forecastLookup.TryGetValue(bestKey, out matchedForecasts))
+                    {
+                        matchedForecasts = [];
+                    }
                 }
 
                 matchedForecasts = matchedForecasts
                     .Where(f => string.IsNullOrEmpty(f.ActualScore) || f.IsLive || !f.IsSettled)
                     .ToList();
-
-                switch (matchedForecasts.Count)
-                {
-                    case 0:
-                        break;
-                    case > 1 when !string.IsNullOrWhiteSpace(score.League):
-                    {
-                        var leagueFilteredForecasts = matchedForecasts
-                            .Where(f => ScoreMatchingHelper.LeaguesMatch(score.League, f.League))
-                            .ToList();
-
-                        if (leagueFilteredForecasts.Count > 0)
-                            matchedForecasts = leagueFilteredForecasts;
-                        break;
-                    }
-                }
+                if (matchedForecasts.Count == 0) continue;
 
                 foreach (var forecast in matchedForecasts)
                 {
@@ -1224,6 +1251,151 @@ public class AnalyzerService  : IAnalyzerService
 
     private static string Norm(string? s) =>
         (s ?? "").Trim().ToLowerInvariant();
+
+    private static (string Date, string Home, string Away, string League) CreateScoreFixtureKey(
+        string? date,
+        string? homeTeam,
+        string? awayTeam,
+        string? league)
+    {
+        return (
+            date ?? string.Empty,
+            ScoreMatchingHelper.CreateTeamLookupKey(homeTeam),
+            ScoreMatchingHelper.CreateTeamLookupKey(awayTeam),
+            ScoreMatchingHelper.CreateLeagueLookupKey(league));
+    }
+
+    private static DateTime? ResolveScheduledMatchTime(string? date, string? time, DateTime? matchDateTime)
+    {
+        if (matchDateTime.HasValue)
+        {
+            return matchDateTime.Value;
+        }
+
+        if (string.IsNullOrWhiteSpace(date) || string.IsNullOrWhiteSpace(time))
+        {
+            return null;
+        }
+
+        return DateTime.TryParseExact(
+            $"{date} {time}",
+            ["dd-MM-yyyy HH:mm", "dd-MM-yyyy H:mm"],
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static double GetMatchTimeScore(DateTime? targetMatchTime, DateTime? candidateMatchTime)
+    {
+        if (!targetMatchTime.HasValue || !candidateMatchTime.HasValue)
+        {
+            return 0;
+        }
+
+        var minutesApart = Math.Abs((candidateMatchTime.Value - targetMatchTime.Value).TotalMinutes);
+        if (minutesApart <= 10) return 1.0;
+        if (minutesApart <= 45) return 0.6;
+        if (minutesApart <= 120) return 0.25;
+        return 0;
+    }
+
+    private static T? FindBestFixtureCandidate<T>(
+        IEnumerable<T> candidates,
+        string homeTeam,
+        string awayTeam,
+        string? league,
+        DateTime? targetMatchTime,
+        Func<T, string> homeSelector,
+        Func<T, string> awaySelector,
+        Func<T, string?> leagueSelector,
+        Func<T, DateTime?> matchTimeSelector)
+    {
+        var targetHomeKey = ScoreMatchingHelper.CreateTeamLookupKey(homeTeam);
+        var targetAwayKey = ScoreMatchingHelper.CreateTeamLookupKey(awayTeam);
+
+        var exactCandidates = candidates
+            .Where(candidate =>
+                ScoreMatchingHelper.CreateTeamLookupKey(homeSelector(candidate)) == targetHomeKey &&
+                ScoreMatchingHelper.CreateTeamLookupKey(awaySelector(candidate)) == targetAwayKey)
+            .ToList();
+
+        if (exactCandidates.Count == 1)
+        {
+            return exactCandidates[0];
+        }
+
+        return SelectBestFixtureCandidate(
+            exactCandidates.Count > 1 ? exactCandidates : candidates,
+            homeTeam,
+            awayTeam,
+            league,
+            targetMatchTime,
+            homeSelector,
+            awaySelector,
+            leagueSelector,
+            matchTimeSelector);
+    }
+
+    private static T? SelectBestFixtureCandidate<T>(
+        IEnumerable<T> candidates,
+        string homeTeam,
+        string awayTeam,
+        string? league,
+        DateTime? targetMatchTime,
+        Func<T, string> homeSelector,
+        Func<T, string> awaySelector,
+        Func<T, string?> leagueSelector,
+        Func<T, DateTime?> matchTimeSelector)
+    {
+        var scoredCandidates = new List<(T Candidate, double BaseScore, double TotalScore, bool ExactPair)>();
+
+        foreach (var candidate in candidates)
+        {
+            var homeMatch = ScoreMatchingHelper.GetTeamMatchResult(homeTeam, homeSelector(candidate));
+            var awayMatch = ScoreMatchingHelper.GetTeamMatchResult(awayTeam, awaySelector(candidate));
+            if (!homeMatch.IsMatch || !awayMatch.IsMatch)
+            {
+                continue;
+            }
+
+            var baseScore = (homeMatch.Score + awayMatch.Score) / 2.0;
+            var exactPair = homeMatch.IsExactKeyMatch && awayMatch.IsExactKeyMatch;
+            var leagueScore = ScoreMatchingHelper.GetLeagueMatchScore(league, leagueSelector(candidate));
+            var timeScore = GetMatchTimeScore(targetMatchTime, matchTimeSelector(candidate));
+            var totalScore = baseScore + (exactPair ? 0.20 : 0.0) + (leagueScore * 0.15) + (timeScore * 0.10);
+
+            scoredCandidates.Add((candidate, baseScore, totalScore, exactPair));
+        }
+
+        if (scoredCandidates.Count == 0)
+        {
+            return default;
+        }
+
+        var ordered = scoredCandidates
+            .OrderByDescending(candidate => candidate.TotalScore)
+            .ThenByDescending(candidate => candidate.BaseScore)
+            .ToList();
+
+        var best = ordered[0];
+        if (!best.ExactPair && best.BaseScore < 0.84)
+        {
+            return default;
+        }
+
+        if (ordered.Count == 1)
+        {
+            return best.Candidate;
+        }
+
+        var runnerUp = ordered[1];
+        var requiredMargin = best.ExactPair ? 0.05 : 0.12;
+        return best.TotalScore - runnerUp.TotalScore >= requiredMargin
+            ? best.Candidate
+            : default;
+    }
 
     private static MatchData? FindMatchingMatchData(
         string date,

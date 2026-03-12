@@ -56,6 +56,10 @@ public class AnalyticsModel : PageModel
         var dateStringsYesterday = new[] { today.AddDays(-1).ToString("dd-MM-yyyy") };
         var dateStringsLast3 = Enumerable.Range(0, 3).Select(i => today.AddDays(-i).ToString("dd-MM-yyyy")).ToArray();
         var dateStringsLast7 = Enumerable.Range(0, 7).Select(i => today.AddDays(-i).ToString("dd-MM-yyyy")).ToArray();
+        var dateSetToday = new HashSet<DateTime>([today]);
+        var dateSetYesterday = new HashSet<DateTime>([today.AddDays(-1)]);
+        var dateSetLast3 = Enumerable.Range(0, 3).Select(i => today.AddDays(-i)).ToHashSet();
+        var dateSetLast7 = Enumerable.Range(0, 7).Select(i => today.AddDays(-i)).ToHashSet();
 
         var last7Predictions = await _db.Predictions
             .Where(prediction => dateStringsLast7.Contains(prediction.Date))
@@ -70,24 +74,33 @@ public class AnalyticsModel : PageModel
         var betaProfiles = await _db.BetaCalibrationProfiles
             .AsNoTracking()
             .ToDictionaryAsync(profile => profile.Market);
+        var recentPromotionHistory = await _db.PromotionHistories
+            .AsNoTracking()
+            .Where(history => history.EffectiveAt >= DateTime.UtcNow.AddDays(-30))
+            .OrderByDescending(history => history.EffectiveAt)
+            .ToListAsync();
 
         TodayStats = _forecastEvaluationService.CalculateStats(
             last7Predictions.Where(prediction => dateStringsToday.Contains(prediction.Date)),
             last7Forecasts.Where(forecast => dateStringsToday.Contains(forecast.Date)));
         EnrichForecastStats(TodayStats, thresholdProfiles, betaProfiles);
+        TodayStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetToday);
 
         YesterdayStats = _forecastEvaluationService.CalculateStats(
             last7Predictions.Where(prediction => dateStringsYesterday.Contains(prediction.Date)),
             last7Forecasts.Where(forecast => dateStringsYesterday.Contains(forecast.Date)));
         EnrichForecastStats(YesterdayStats, thresholdProfiles, betaProfiles);
+        YesterdayStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetYesterday);
 
         Last3DaysStats = _forecastEvaluationService.CalculateStats(
             last7Predictions.Where(prediction => dateStringsLast3.Contains(prediction.Date)),
             last7Forecasts.Where(forecast => dateStringsLast3.Contains(forecast.Date)));
         EnrichForecastStats(Last3DaysStats, thresholdProfiles, betaProfiles);
+        Last3DaysStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetLast3);
 
         Last7DaysStats = _forecastEvaluationService.CalculateStats(last7Predictions, last7Forecasts);
         EnrichForecastStats(Last7DaysStats, thresholdProfiles, betaProfiles);
+        Last7DaysStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetLast7);
 
         DefaultTabId = SelectDefaultTab();
     }
@@ -145,6 +158,59 @@ public class AnalyticsModel : PageModel
             return "3days";
 
         return "7days";
+    }
+
+    private static List<PromotionTimelineItem> BuildPromotionTimeline(
+        IEnumerable<PromotionHistory> promotionHistory,
+        IReadOnlySet<DateTime> localDates)
+    {
+        return promotionHistory
+            .Where(history => localDates.Contains(DateTimeProvider.ConvertUtcToLocal(history.EffectiveAt).Date))
+            .OrderByDescending(history => history.EffectiveAt)
+            .Select(history =>
+            {
+                var localTime = DateTimeProvider.ConvertUtcToLocal(history.EffectiveAt);
+                return new PromotionTimelineItem
+                {
+                    EffectiveAt = localTime,
+                    MarketName = history.Market.ToDisplayName(),
+                    ChangeType = history.ChangeType,
+                    Summary = BuildTimelineSummary(history),
+                    Detail = BuildTimelineDetail(history),
+                    Improvement = history.Improvement
+                };
+            })
+            .ToList();
+    }
+
+    private static string BuildTimelineSummary(PromotionHistory history)
+    {
+        if (history.ChangeType == "Threshold")
+        {
+            return $"{history.PreviousValue} {FormatNumeric(history.PreviousNumericValue)} -> {history.NewValue} {FormatNumeric(history.NewNumericValue)}";
+        }
+
+        return $"{history.PreviousValue} -> {history.NewValue}";
+    }
+
+    private static string BuildTimelineDetail(PromotionHistory history)
+    {
+        if (history.Improvement.HasValue)
+        {
+            return $"Delta {history.Improvement.Value:+0.000;-0.000;0.000}";
+        }
+
+        if (history.BaselineScore.HasValue && history.CandidateScore.HasValue)
+        {
+            return $"Base {history.BaselineScore.Value:F3}, New {history.CandidateScore.Value:F3}";
+        }
+
+        return "State change recorded";
+    }
+
+    private static string FormatNumeric(double? value)
+    {
+        return value.HasValue ? value.Value.ToString("F2") : "--";
     }
 
     private double GetFallbackThreshold(PredictionMarket market)

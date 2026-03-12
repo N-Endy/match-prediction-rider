@@ -11,6 +11,7 @@ public class AnalyticsStats
     public double BrierScore { get; set; }
     public Dictionary<string, CategoryStat> CategoryStats { get; set; } = new();
     public List<ForecastMarketStat> ForecastMarketStats { get; set; } = [];
+    public List<PromotionTimelineItem> PromotionTimeline { get; set; } = [];
 }
 
 public class CategoryStat
@@ -76,4 +77,14 @@ public class EraPerformanceStat
     public int Count { get; set; }
     public double HitRate { get; set; }
     public double BrierScore { get; set; }
+}
+
+public class PromotionTimelineItem
+{
+    public DateTime EffectiveAt { get; set; }
+    public string MarketName { get; set; } = string.Empty;
+    public string ChangeType { get; set; } = string.Empty;
+    public string Summary { get; set; } = string.Empty;
+    public string Detail { get; set; } = string.Empty;
+    public double? Improvement { get; set; }
 }

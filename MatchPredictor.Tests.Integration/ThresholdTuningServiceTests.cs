@@ -102,6 +102,50 @@ public class ThresholdTuningServiceTests
         Assert.True(profile.ValidationSampleCount >= 15);
     }
 
+    [Fact]
+    public async Task RebuildProfilesAsync_RecordsPromotionHistory_WhenThresholdFallsBackToConfigured()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        context.ThresholdProfiles.Add(new ThresholdProfile
+        {
+            Market = PredictionMarket.Over25Goals,
+            BaselineThreshold = 0.58,
+            Threshold = 0.64,
+            SampleCount = 24,
+            HitRate = 0.72,
+            PublishedPerWeek = 2.5,
+            AverageCalibratedProbability = 0.69,
+            ObservedFrequency = 0.72,
+            BrierScore = 0.180,
+            TrainingSampleCount = 50,
+            ValidationSampleCount = 18,
+            BaselineHitRate = 0.62,
+            BaselineBrierScore = 0.220,
+            Improvement = 0.015,
+            IsPromoted = true,
+            LastUpdated = DateTime.UtcNow
+        });
+
+        await context.SaveChangesAsync();
+
+        var service = CreateService(context);
+
+        await service.RebuildProfilesAsync();
+
+        var history = await context.PromotionHistories.SingleAsync();
+
+        Assert.Equal(PredictionMarket.Over25Goals, history.Market);
+        Assert.Equal("Threshold", history.ChangeType);
+        Assert.Equal("Tuned", history.PreviousValue);
+        Assert.Equal("Configured", history.NewValue);
+        Assert.Equal(0.64, history.PreviousNumericValue.GetValueOrDefault(), 3);
+        Assert.Equal(0.58, history.NewNumericValue.GetValueOrDefault(), 3);
+    }
+
     private static ThresholdTuningService CreateService(ApplicationDbContext context)
     {
         return new ThresholdTuningService(

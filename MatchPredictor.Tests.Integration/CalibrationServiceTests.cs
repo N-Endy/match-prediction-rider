@@ -106,4 +106,41 @@ public class CalibrationServiceTests
 
         Assert.Equal(expected, calibrated, 6);
     }
+
+    [Fact]
+    public async Task RebuildProfilesAsync_RecordsPromotionHistory_WhenBetaDemotesToBucket()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        context.BetaCalibrationProfiles.Add(new BetaCalibrationProfile
+        {
+            Market = PredictionMarket.BothTeamsScore,
+            Alpha = 1.4,
+            Beta = 0.8,
+            Gamma = 0.2,
+            TrainingSampleCount = 50,
+            ValidationSampleCount = 20,
+            BaselineBrierScore = 0.220,
+            ValidationBrierScore = 0.201,
+            Improvement = 0.019,
+            IsRecommended = true,
+            LastUpdated = DateTime.UtcNow
+        });
+
+        await context.SaveChangesAsync();
+
+        var service = new CalibrationService(context);
+
+        await service.RebuildProfilesAsync();
+
+        var history = await context.PromotionHistories.SingleAsync();
+
+        Assert.Equal(PredictionMarket.BothTeamsScore, history.Market);
+        Assert.Equal("Calibrator", history.ChangeType);
+        Assert.Equal("Beta", history.PreviousValue);
+        Assert.Equal("Bucket", history.NewValue);
+    }
 }

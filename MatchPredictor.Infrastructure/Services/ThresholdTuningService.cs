@@ -58,6 +58,7 @@ public class ThresholdTuningService : IThresholdTuningService
 
     public async Task RebuildProfilesAsync()
     {
+        var previousProfiles = _profiles.ToDictionary(profile => profile.Market);
         var cutoff = DateTime.UtcNow.AddDays(-EvaluationWindowDays);
         var forecasts = await _dbContext.ForecastObservations
             .AsNoTracking()
@@ -159,6 +160,8 @@ public class ThresholdTuningService : IThresholdTuningService
             });
         }
 
+        var promotionHistory = BuildPromotionHistory(previousProfiles, rebuiltProfiles);
+
         try
         {
             await _dbContext.ThresholdProfiles.ExecuteDeleteAsync();
@@ -170,6 +173,10 @@ public class ThresholdTuningService : IThresholdTuningService
         }
 
         await _dbContext.ThresholdProfiles.AddRangeAsync(rebuiltProfiles);
+        if (promotionHistory.Count > 0)
+        {
+            await _dbContext.PromotionHistories.AddRangeAsync(promotionHistory);
+        }
         await _dbContext.SaveChangesAsync();
 
         _profiles = rebuiltProfiles;
@@ -251,6 +258,64 @@ public class ThresholdTuningService : IThresholdTuningService
         var minDate = forecasts.Min(forecast => forecast.SettledAt ?? forecast.CreatedAt);
         var maxDate = forecasts.Max(forecast => forecast.SettledAt ?? forecast.CreatedAt);
         return Math.Max((maxDate - minDate).TotalDays + 1.0, 7.0);
+    }
+
+    private List<PromotionHistory> BuildPromotionHistory(
+        IReadOnlyDictionary<PredictionMarket, ThresholdProfile> previousProfiles,
+        IReadOnlyCollection<ThresholdProfile> rebuiltProfiles)
+    {
+        var history = new List<PromotionHistory>();
+        var rebuiltLookup = rebuiltProfiles.ToDictionary(profile => profile.Market);
+
+        var markets = new[]
+        {
+            (PredictionMarket.BothTeamsScore, _settings.BttsScoreThreshold),
+            (PredictionMarket.Over25Goals, _settings.OverTwoGoalsStrongThreshold),
+            (PredictionMarket.Draw, _settings.DrawStrongThreshold),
+            (PredictionMarket.HomeWin, _settings.HomeWinStrong),
+            (PredictionMarket.AwayWin, _settings.AwayWinStrong)
+        };
+
+        foreach (var (market, fallbackThreshold) in markets)
+        {
+            var previousProfile = previousProfiles.TryGetValue(market, out var existingProfile)
+                ? existingProfile
+                : null;
+            var nextProfile = rebuiltLookup.TryGetValue(market, out var rebuiltProfile)
+                ? rebuiltProfile
+                : null;
+
+            var previousSource = previousProfile?.IsPromoted == true ? "Tuned" : "Configured";
+            var nextSource = nextProfile?.IsPromoted == true ? "Tuned" : "Configured";
+            var previousThreshold = previousProfile?.IsPromoted == true
+                ? previousProfile.Threshold
+                : fallbackThreshold;
+            var nextThreshold = nextProfile?.IsPromoted == true
+                ? nextProfile.Threshold
+                : fallbackThreshold;
+
+            if (string.Equals(previousSource, nextSource, StringComparison.Ordinal) &&
+                Math.Abs(previousThreshold - nextThreshold) < 0.0001)
+            {
+                continue;
+            }
+
+            history.Add(new PromotionHistory
+            {
+                Market = market,
+                ChangeType = "Threshold",
+                PreviousValue = previousSource,
+                NewValue = nextSource,
+                PreviousNumericValue = previousThreshold,
+                NewNumericValue = nextThreshold,
+                BaselineScore = nextProfile?.BaselineBrierScore,
+                CandidateScore = nextProfile?.BrierScore,
+                Improvement = nextProfile?.Improvement,
+                EffectiveAt = DateTime.UtcNow
+            });
+        }
+
+        return history;
     }
 
     private sealed class ThresholdCandidate

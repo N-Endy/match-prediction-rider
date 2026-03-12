@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using MatchPredictor.Domain.Models;
 
 namespace MatchPredictor.Application.Helpers;
@@ -10,6 +11,8 @@ namespace MatchPredictor.Application.Helpers;
 public static class ScoreMatchingHelper
 {
     private static readonly char[] Separators = { '-', '.', ':', ',', '/', '(', ')', ' ' };
+    private static readonly Regex CountrySuffixRegex = new(@"\([A-Za-z]{3}\)", RegexOptions.Compiled);
+    private static readonly Regex AgeQualifierRegex = new(@"\b(?:u|under)[\s-]?(\d{2})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     // Common league noise words
     private static readonly HashSet<string> LeagueStopWords = new(StringComparer.OrdinalIgnoreCase)
@@ -28,6 +31,32 @@ public static class ScoreMatchingHelper
         "ssd", "srl", "sad", "sag", "spa",
         // Prepositions / articles common in team names
         "de", "da", "do", "la", "le", "los", "del", "al", "el", "di", "il", "des", "den", "het"
+    };
+
+    // Common football terms that are too generic to identify a club on their own.
+    private static readonly HashSet<string> WeakTeamTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "athletic", "atletico", "boys", "city", "deportivo", "dynamo",
+        "international", "inter", "juniors", "old", "olympique",
+        "real", "rovers", "saint", "sporting", "united", "wanderers"
+    };
+
+    private static readonly Dictionary<string, string> TeamQualifierSynonyms = new(StringComparer.OrdinalIgnoreCase)
+    {
+        { "b", "reserve" },
+        { "ii", "reserve" },
+        { "iii", "reserve3" },
+        { "res", "reserve" },
+        { "reserve", "reserve" },
+        { "reserves", "reserve" },
+        { "w", "women" },
+        { "women", "women" },
+        { "ladies", "women" },
+        { "fem", "women" },
+        { "femenino", "women" },
+        { "feminino", "women" },
+        { "youth", "youth" },
+        { "academy", "youth" }
     };
 
     // Map common abbreviations to their full words
@@ -68,6 +97,12 @@ public static class ScoreMatchingHelper
         { "nott", "nottingham" },
         { "bri", "brighton" }
     };
+
+    public readonly record struct TeamMatchResult(
+        bool IsMatch,
+        double Score,
+        bool IsExactKeyMatch,
+        bool HasQualifierMismatch);
 
     public static void PatchMissingScores(List<Prediction> predictions, List<MatchScore> scores)
     {
@@ -134,120 +169,302 @@ public static class ScoreMatchingHelper
 
     public static bool TeamsMatch(string nameA, string nameB)
     {
-        var wordsA = ExtractTeamWords(nameA);
-        var wordsB = ExtractTeamWords(nameB);
-
-        if (wordsA.Count == 0 || wordsB.Count == 0) return false;
-
-        var shorter = wordsA.Count <= wordsB.Count ? wordsA : wordsB;
-        var longer = wordsA.Count <= wordsB.Count ? wordsB : wordsA;
-
-        var matchCount = 0;
-
-        foreach (var shortWord in shorter)
-        {
-            // 1. Exact match (fastest)
-            if (longer.Contains(shortWord))
-            {
-                matchCount++;
-                continue;
-            }
-
-            // 2. Substring / prefix match for short words (≥3 chars)
-            //    e.g., "lyon" matches "lyonnais", "glad" matches "gladbach"
-            if (shortWord.Length >= 3)
-            {
-                bool prefixMatch = false;
-                foreach (var longWord in longer)
-                {
-                    if (longWord.StartsWith(shortWord, StringComparison.OrdinalIgnoreCase) ||
-                        shortWord.StartsWith(longWord, StringComparison.OrdinalIgnoreCase))
-                    {
-                        prefixMatch = true;
-                        break;
-                    }
-                }
-                if (prefixMatch)
-                {
-                    matchCount++;
-                    continue;
-                }
-            }
-
-            // 3. Levenshtein fuzzy match with dynamic tolerance
-            //    - Less than 4 chars: 0 typos (exact only — already checked above)
-            //    - 4 to 6 chars: 1 typo allowed
-            //    - 7+ chars: 2 typos allowed
-            int allowedTypos = shortWord.Length >= 7 ? 2 : (shortWord.Length >= 4 ? 1 : 0);
-
-            if (allowedTypos > 0)
-            {
-                bool isFuzzyMatch = false;
-                foreach (var longWord in longer)
-                {
-                    int distance = ComputeLevenshteinDistance(shortWord, longWord);
-                    if (distance <= allowedTypos)
-                    {
-                        isFuzzyMatch = true;
-                        break;
-                    }
-                }
-                if (isFuzzyMatch) matchCount++;
-            }
-        }
-
-        var ratio = (double)matchCount / shorter.Count;
-        return ratio >= 0.5;
+        return GetTeamMatchResult(nameA, nameB).IsMatch;
     }
 
     public static bool LeaguesMatch(string leagueA, string leagueB)
     {
+        return GetLeagueMatchScore(leagueA, leagueB) >= 0.6;
+    }
+
+    public static TeamMatchResult GetTeamMatchResult(string nameA, string nameB)
+    {
+        var teamA = ParseTeamIdentity(nameA);
+        var teamB = ParseTeamIdentity(nameB);
+
+        if (teamA.CoreTokens.Count == 0 || teamB.CoreTokens.Count == 0)
+        {
+            return new TeamMatchResult(false, 0, false, false);
+        }
+
+        if (!QualifiersMatch(teamA, teamB))
+        {
+            return new TeamMatchResult(false, 0, false, true);
+        }
+
+        if (string.Equals(teamA.LookupKey, teamB.LookupKey, StringComparison.Ordinal))
+        {
+            return new TeamMatchResult(true, 1.0, true, false);
+        }
+
+        var shorter = teamA.TotalWeight <= teamB.TotalWeight ? teamA : teamB;
+        var longer = ReferenceEquals(shorter, teamA) ? teamB : teamA;
+
+        var matchedWeight = 0.0;
+        var matchedStrongTokens = 0;
+
+        foreach (var token in shorter.CoreTokens)
+        {
+            var weight = GetTokenWeight(token);
+
+            if (longer.CoreTokenSet.Contains(token))
+            {
+                matchedWeight += weight;
+                if (!WeakTeamTokens.Contains(token)) matchedStrongTokens++;
+                continue;
+            }
+
+            if (token.Length >= 4 && longer.CoreTokens.Any(longToken =>
+                    longToken.StartsWith(token, StringComparison.OrdinalIgnoreCase) ||
+                    token.StartsWith(longToken, StringComparison.OrdinalIgnoreCase)))
+            {
+                matchedWeight += weight * 0.92;
+                if (!WeakTeamTokens.Contains(token)) matchedStrongTokens++;
+                continue;
+            }
+
+            var allowedTypos = GetAllowedTypos(token);
+            if (allowedTypos > 0 && longer.CoreTokens.Any(longToken =>
+                    ComputeLevenshteinDistance(token, longToken) <= allowedTypos))
+            {
+                matchedWeight += weight * 0.82;
+                if (!WeakTeamTokens.Contains(token)) matchedStrongTokens++;
+            }
+        }
+
+        if (shorter.TotalWeight <= 0)
+        {
+            return new TeamMatchResult(false, 0, false, false);
+        }
+
+        var ratio = Math.Min(0.99, matchedWeight / shorter.TotalWeight);
+        var strongRatio = shorter.StrongTokenCount == 0
+            ? 1.0
+            : matchedStrongTokens / (double)shorter.StrongTokenCount;
+
+        var isMatch = ratio >= 0.74 && strongRatio >= 0.5;
+        return new TeamMatchResult(isMatch, ratio, false, false);
+    }
+
+    public static string CreateTeamLookupKey(string? name)
+    {
+        return ParseTeamIdentity(name).LookupKey;
+    }
+
+    public static string CreateLeagueLookupKey(string? league)
+    {
+        var words = ExtractWords(league, LeagueStopWords)
+            .OrderBy(word => word, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return string.Join('|', words).ToLowerInvariant();
+    }
+
+    public static double GetLeagueMatchScore(string? leagueA, string? leagueB)
+    {
         var wordsA = ExtractWords(leagueA, LeagueStopWords);
         var wordsB = ExtractWords(leagueB, LeagueStopWords);
 
-        if (wordsA.Count == 0 || wordsB.Count == 0) return false;
+        if (wordsA.Count == 0 || wordsB.Count == 0) return 0;
+
+        var keyA = string.Join('|', wordsA.OrderBy(word => word, StringComparer.OrdinalIgnoreCase));
+        var keyB = string.Join('|', wordsB.OrderBy(word => word, StringComparer.OrdinalIgnoreCase));
+
+        if (string.Equals(keyA, keyB, StringComparison.OrdinalIgnoreCase))
+        {
+            return 1.0;
+        }
 
         var shorter = wordsA.Count <= wordsB.Count ? wordsA : wordsB;
         var longer = wordsA.Count <= wordsB.Count ? wordsB : wordsA;
 
-        var matchCount = shorter.Count(w => longer.Contains(w));
-        return ((double)matchCount / shorter.Count) >= 0.4;
+        var matched = 0.0;
+
+        foreach (var token in shorter)
+        {
+            if (longer.Contains(token))
+            {
+                matched += 1.0;
+                continue;
+            }
+
+            if (token.Length >= 4 && longer.Any(longToken =>
+                    longToken.StartsWith(token, StringComparison.OrdinalIgnoreCase) ||
+                    token.StartsWith(longToken, StringComparison.OrdinalIgnoreCase)))
+            {
+                matched += 0.85;
+            }
+        }
+
+        return matched / shorter.Count;
     }
 
-    private static HashSet<string> ExtractTeamWords(string name)
+    private static TeamIdentity ParseTeamIdentity(string? name)
     {
-        var words = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        
-        // Normalize diacritics first (São → Sao, Zürich → Zurich, etc.)
-        var normalized = RemoveDiacritics(name);
-        
+        var coreTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var qualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var normalized = PreNormalizeTeamName(name);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return TeamIdentity.Empty;
+        }
+
         var parts = normalized.Split(Separators, StringSplitOptions.RemoveEmptyEntries);
 
         foreach (var part in parts)
         {
-            if (TeamStopWords.Contains(part)) continue;
+            var token = NormalizeToken(part);
+            if (string.IsNullOrWhiteSpace(token)) continue;
 
-            // Normalize abbreviations
-            var finalWord = CommonSynonyms.TryGetValue(part, out var synonym) ? synonym : part;
-            words.Add(finalWord);
+            if (TryNormalizeQualifier(token, out var qualifier))
+            {
+                qualifiers.Add(qualifier);
+                continue;
+            }
+
+            if (CommonSynonyms.TryGetValue(token, out var synonym))
+            {
+                token = synonym;
+            }
+
+            if (TryNormalizeQualifier(token, out qualifier))
+            {
+                qualifiers.Add(qualifier);
+                continue;
+            }
+
+            if (TeamStopWords.Contains(token)) continue;
+            coreTokens.Add(token);
         }
 
-        return words;
+        if (coreTokens.Count == 0)
+        {
+            return TeamIdentity.Empty with
+            {
+                Qualifiers = qualifiers,
+                LookupKey = BuildLookupKey(Array.Empty<string>(), qualifiers)
+            };
+        }
+
+        var orderedCore = coreTokens
+            .OrderBy(token => token, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var totalWeight = orderedCore.Sum(GetTokenWeight);
+        var strongTokenCount = orderedCore.Count(token => !WeakTeamTokens.Contains(token));
+
+        return new TeamIdentity
+        {
+            CoreTokens = orderedCore,
+            CoreTokenSet = coreTokens,
+            Qualifiers = qualifiers,
+            TotalWeight = totalWeight,
+            StrongTokenCount = strongTokenCount,
+            LookupKey = BuildLookupKey(orderedCore, qualifiers)
+        };
     }
 
-    private static HashSet<string> ExtractWords(string name, HashSet<string> stopWords)
+    private static HashSet<string> ExtractWords(string? name, HashSet<string> stopWords)
     {
         var normalized = RemoveDiacritics(name);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
         var parts = normalized.Split(Separators, StringSplitOptions.RemoveEmptyEntries);
         return parts.Where(p => !stopWords.Contains(p))
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string PreNormalizeTeamName(string? name)
+    {
+        var normalized = RemoveDiacritics(name);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        normalized = normalized.Replace('’', '\'');
+        normalized = normalized.Replace("'", string.Empty, StringComparison.Ordinal);
+        normalized = CountrySuffixRegex.Replace(normalized, " ");
+        normalized = AgeQualifierRegex.Replace(normalized, "u$1");
+        return normalized;
+    }
+
+    private static string NormalizeToken(string token)
+    {
+        return token.Trim().ToLowerInvariant();
+    }
+
+    private static string BuildLookupKey(IEnumerable<string> coreTokens, IEnumerable<string> qualifiers)
+    {
+        var coreKey = string.Join('|', coreTokens);
+        var qualifierKey = string.Join('|', qualifiers.OrderBy(q => q, StringComparer.OrdinalIgnoreCase));
+        return $"{coreKey}#{qualifierKey}".TrimEnd('#');
+    }
+
+    private static bool TryNormalizeQualifier(string token, out string qualifier)
+    {
+        qualifier = string.Empty;
+
+        if (AgeQualifierRegex.IsMatch(token))
+        {
+            qualifier = AgeQualifierRegex.Replace(token, "u$1").ToLowerInvariant();
+            return true;
+        }
+
+        if (TeamQualifierSynonyms.TryGetValue(token, out var normalizedQualifier))
+        {
+            qualifier = normalizedQualifier;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool QualifiersMatch(TeamIdentity teamA, TeamIdentity teamB)
+    {
+        var womenA = teamA.Qualifiers.Contains("women");
+        var womenB = teamB.Qualifiers.Contains("women");
+        if (womenA != womenB) return false;
+
+        var reserveA = teamA.Qualifiers.Contains("reserve") || teamA.Qualifiers.Contains("reserve3");
+        var reserveB = teamB.Qualifiers.Contains("reserve") || teamB.Qualifiers.Contains("reserve3");
+        if (reserveA != reserveB) return false;
+
+        var ageA = teamA.Qualifiers.FirstOrDefault(q => q.StartsWith("u", StringComparison.OrdinalIgnoreCase));
+        var ageB = teamB.Qualifiers.FirstOrDefault(q => q.StartsWith("u", StringComparison.OrdinalIgnoreCase));
+        if (!string.Equals(ageA, ageB, StringComparison.OrdinalIgnoreCase))
+        {
+            return string.IsNullOrEmpty(ageA) && string.IsNullOrEmpty(ageB);
+        }
+
+        var youthA = teamA.Qualifiers.Contains("youth");
+        var youthB = teamB.Qualifiers.Contains("youth");
+        return youthA == youthB;
+    }
+
+    private static double GetTokenWeight(string token)
+    {
+        return WeakTeamTokens.Contains(token) ? 0.35 : 1.0;
+    }
+
+    private static int GetAllowedTypos(string token)
+    {
+        return token.Length switch
+        {
+            >= 8 => 2,
+            >= 5 => 1,
+            _ => 0
+        };
     }
 
     /// <summary>
     /// Strips diacritical marks so accented characters match their plain equivalents.
     /// e.g., "São Paulo" → "Sao Paulo", "Malmö FF" → "Malmo FF"
     /// </summary>
-    private static string RemoveDiacritics(string text)
+    private static string? RemoveDiacritics(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return text;
         
@@ -329,5 +546,25 @@ public static class ScoreMatchingHelper
             for (int j = 0; j < v0.Length; j++) v0[j] = v1[j];
         }
         return v1[target.Length];
+    }
+
+    private sealed record TeamIdentity
+    {
+        public static TeamIdentity Empty { get; } = new()
+        {
+            CoreTokens = Array.Empty<string>(),
+            CoreTokenSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            Qualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            LookupKey = string.Empty,
+            TotalWeight = 0,
+            StrongTokenCount = 0
+        };
+
+        public IReadOnlyList<string> CoreTokens { get; init; } = Array.Empty<string>();
+        public HashSet<string> CoreTokenSet { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> Qualifiers { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+        public string LookupKey { get; init; } = string.Empty;
+        public double TotalWeight { get; init; }
+        public int StrongTokenCount { get; init; }
     }
 }

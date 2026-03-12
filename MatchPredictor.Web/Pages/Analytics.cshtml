@@ -196,6 +196,85 @@
         margin-top: 2rem;
     }
 
+    .mp-switch-log {
+        margin-top: 2rem;
+    }
+
+    .mp-switch-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.85rem;
+    }
+
+    .mp-switch-item {
+        display: grid;
+        grid-template-columns: 96px minmax(0, 1fr);
+        gap: 1rem;
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-lg);
+        padding: 1rem 1.1rem;
+    }
+
+    .mp-switch-time {
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+        color: var(--text-muted);
+        font-size: 0.78rem;
+        font-variant-numeric: tabular-nums;
+        font-feature-settings: "tnum" 1;
+    }
+
+    .mp-switch-time strong {
+        color: white;
+        font-size: 0.9rem;
+    }
+
+    .mp-switch-body {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+    }
+
+    .mp-switch-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .mp-switch-market {
+        color: white;
+        font-weight: 600;
+    }
+
+    .mp-switch-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.2rem 0.55rem;
+        border-radius: 999px;
+        background: rgba(16, 185, 129, 0.12);
+        color: #10b981;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .mp-switch-summary {
+        color: white;
+        font-size: 0.92rem;
+        font-variant-numeric: tabular-nums;
+        font-feature-settings: "tnum" 1;
+    }
+
+    .mp-switch-detail {
+        color: var(--text-muted);
+        font-size: 0.8rem;
+        font-variant-numeric: tabular-nums;
+        font-feature-settings: "tnum" 1;
+    }
+
     .mp-market-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
@@ -486,6 +565,15 @@
         }
 
         .mp-market-briers {
+            align-items: flex-start;
+        }
+
+        .mp-switch-item {
+            grid-template-columns: 1fr;
+        }
+
+        .mp-switch-header {
+            flex-direction: column;
             align-items: flex-start;
         }
 

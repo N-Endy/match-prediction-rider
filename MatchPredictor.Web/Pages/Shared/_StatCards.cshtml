@@ -42,6 +42,39 @@
     </div>
 </div>
 
+<div class="mp-switch-log">
+    <h3 style="margin-bottom: 1.5rem; font-size: 1.1rem; color: white;">Strategy Switch Log</h3>
+
+    @if (Model.PromotionTimeline.Any())
+    {
+        <div class="mp-switch-list">
+            @foreach (var item in Model.PromotionTimeline)
+            {
+                <article class="mp-switch-item">
+                    <div class="mp-switch-time">
+                        <strong>@item.EffectiveAt.ToString("dd MMM")</strong>
+                        <span>@item.EffectiveAt.ToString("HH:mm") WAT</span>
+                    </div>
+                    <div class="mp-switch-body">
+                        <div class="mp-switch-header">
+                            <span class="mp-switch-market">@item.MarketName</span>
+                            <span class="mp-switch-badge">@item.ChangeType</span>
+                        </div>
+                        <div class="mp-switch-summary">@item.Summary</div>
+                        <div class="mp-switch-detail">@item.Detail</div>
+                    </div>
+                </article>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="mp-market-empty">
+            No calibrator or threshold switches were recorded in this date range.
+        </div>
+    }
+</div>
+
 @if (Model.CategoryStats.Any())
 {
     <div class="mp-category-stats">
