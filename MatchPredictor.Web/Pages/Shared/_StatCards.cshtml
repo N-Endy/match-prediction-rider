@@ -71,7 +71,7 @@
 }
 
 <div class="mp-market-analytics">
-    <h3 style="margin-bottom: 1.5rem; font-size: 1.1rem; color: white;">Calibration Curve Graphs</h3>
+    <h3 style="margin-bottom: 1.5rem; font-size: 1.1rem; color: white;">Calibration Curves & Forecast Selection</h3>
 
     @if (Model.ForecastMarketStats.Any())
     {
@@ -90,7 +90,38 @@
                         </div>
                     </div>
 
+                    <div class="mp-market-meta">
+                        <span class="mp-market-pill">
+                            <strong>Threshold @market.ActiveThreshold.ToString("F2")</strong>
+                            <em>@market.ThresholdSource</em>
+                        </span>
+                        <span class="mp-market-pill">Base @market.FallbackThreshold.ToString("F2")</span>
+                        <span class="mp-market-pill">Calibrator @market.ActiveCalibrator</span>
+                        @if (market.ThresholdSampleCount > 0)
+                        {
+                            <span class="mp-market-pill">@market.ThresholdSampleCount tuned picks</span>
+                        }
+                        @if (market.ThresholdLastUpdated.HasValue)
+                        {
+                            <span class="mp-market-meta-note">
+                                Updated @market.ThresholdLastUpdated.Value.ToString("dd MMM")
+                            </span>
+                        }
+                    </div>
+
                     <div class="mp-market-metrics">
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">THR HIT</span>
+                            <strong>@(market.ThresholdSampleCount > 0 ? $"{market.ThresholdHitRate * 100:F1}%" : "--")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">THR/WK</span>
+                            <strong>@(market.ThresholdSampleCount > 0 ? market.ThresholdPublishedPerWeek.ToString("F1") : "--")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">THR BRIER</span>
+                            <strong>@(market.ThresholdSampleCount > 0 ? market.ThresholdBrierScore.ToString("F3") : "--")</strong>
+                        </div>
                         <div class="mp-market-metric-block">
                             <span class="mp-market-metric-label">Raw REL</span>
                             <strong>@market.RawDecomposition.Reliability.ToString("F3")</strong>
@@ -115,6 +146,104 @@
                             <span class="mp-market-metric-label">Cal UNC</span>
                             <strong>@market.CalibratedDecomposition.Uncertainty.ToString("F3")</strong>
                         </div>
+                    </div>
+
+                    <div class="mp-market-beta">
+                        <div class="mp-market-beta-header">
+                            <span>Beta Candidate</span>
+                            @if (market.BetaValidationBrierScore.HasValue)
+                            {
+                                <strong class="@(market.BetaRecommended ? "acc-high" : "acc-med")">
+                                    @(market.BetaRecommended ? "Promoted" : "Tracking")
+                                </strong>
+                            }
+                            else
+                            {
+                                <strong class="acc-low">Insufficient Data</strong>
+                            }
+                        </div>
+
+                        @if (market.BetaValidationBrierScore.HasValue)
+                        {
+                            <div class="mp-market-beta-grid">
+                                <span>Bucket @market.BetaBaselineBrierScore?.ToString("F3")</span>
+                                <span>Beta @market.BetaValidationBrierScore?.ToString("F3")</span>
+                                <span>Delta @market.BetaImprovement?.ToString("F3")</span>
+                                <span>
+                                    Train @market.BetaTrainingSampleCount / Val @market.BetaValidationSampleCount
+                                </span>
+                            </div>
+                            @if (market.BetaLastUpdated.HasValue)
+                            {
+                                <p class="mp-market-beta-empty">
+                                    Compared @market.BetaLastUpdated.Value.ToString("dd MMM yyyy")
+                                </p>
+                            }
+                        }
+                        else
+                        {
+                            <p class="mp-market-beta-empty">
+                                Beta calibration needs more settled forecasts before it can be compared safely.
+                            </p>
+                        }
+                    </div>
+
+                    <div class="mp-era-grid">
+                        <section class="mp-era-card">
+                            <div class="mp-market-beta-header">
+                                <span>Calibrator Eras</span>
+                            </div>
+                            @if (market.CalibratorEraStats.Any())
+                            {
+                                <div class="mp-era-row mp-era-row-head">
+                                    <span class="mp-era-name">Era</span>
+                                    <span class="mp-era-metric">Count</span>
+                                    <span class="mp-era-metric">Hit</span>
+                                    <span class="mp-era-metric">Brier</span>
+                                </div>
+                                foreach (var era in market.CalibratorEraStats)
+                                {
+                                    <div class="mp-era-row">
+                                        <span class="mp-era-name">@era.Era</span>
+                                        <span class="mp-era-metric">@era.Count</span>
+                                        <span class="mp-era-metric">@((era.HitRate * 100).ToString("F1"))%</span>
+                                        <span class="mp-era-metric">@era.BrierScore.ToString("F3")</span>
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                <p class="mp-market-beta-empty">No settled calibrator-era data yet.</p>
+                            }
+                        </section>
+
+                        <section class="mp-era-card">
+                            <div class="mp-market-beta-header">
+                                <span>Threshold Eras</span>
+                            </div>
+                            @if (market.ThresholdEraStats.Any())
+                            {
+                                <div class="mp-era-row mp-era-row-head">
+                                    <span class="mp-era-name">Era</span>
+                                    <span class="mp-era-metric">Count</span>
+                                    <span class="mp-era-metric">Hit</span>
+                                    <span class="mp-era-metric">Brier</span>
+                                </div>
+                                foreach (var era in market.ThresholdEraStats)
+                                {
+                                    <div class="mp-era-row">
+                                        <span class="mp-era-name">@era.Era</span>
+                                        <span class="mp-era-metric">@era.Count</span>
+                                        <span class="mp-era-metric">@((era.HitRate * 100).ToString("F1"))%</span>
+                                        <span class="mp-era-metric">@era.BrierScore.ToString("F3")</span>
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                <p class="mp-market-beta-empty">No published threshold-era data yet.</p>
+                            }
+                        </section>
                     </div>
 
                     @if (market.RawReliabilityCurve.Any() || market.CalibratedReliabilityCurve.Any())

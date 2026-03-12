@@ -6,6 +6,7 @@ using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace MatchPredictor.Application.Services;
 
@@ -18,6 +19,8 @@ public class AnalyzerService  : IAnalyzerService
     private readonly ILogger<AnalyzerService> _logger;
     private readonly IRegressionPredictorService _regressionPredictorService;
     private readonly ICalibrationService _calibrationService;
+    private readonly IThresholdTuningService _thresholdTuningService;
+    private readonly PredictionSettings _predictionSettings;
     
     public AnalyzerService(
         IDataAnalyzerService dataAnalyzerService,
@@ -26,6 +29,8 @@ public class AnalyzerService  : IAnalyzerService
         IExtractFromExcel excelExtract,
         IRegressionPredictorService regressionPredictorService,
         ICalibrationService calibrationService,
+        IThresholdTuningService thresholdTuningService,
+        IOptions<PredictionSettings> predictionOptions,
         ILogger<AnalyzerService> logger)
     {
         _dataAnalyzerService = dataAnalyzerService;
@@ -34,6 +39,8 @@ public class AnalyzerService  : IAnalyzerService
         _excelExtract = excelExtract;
         _regressionPredictorService = regressionPredictorService;
         _calibrationService = calibrationService;
+        _thresholdTuningService = thresholdTuningService;
+        _predictionSettings = predictionOptions.Value;
         _logger = logger;
     }
 
@@ -133,6 +140,9 @@ public class AnalyzerService  : IAnalyzerService
         _logger.LogInformation("Starting prediction generation process...");
         try
         {
+            await BackfillStoredPredictionTimesAsync(7);
+            await BackfillDecisionProvenanceAsync(30);
+
             var todayStr = DateTimeProvider.GetLocalTime().ToString("dd-MM-yyyy");
             var matches = await _dbContext.MatchDatas
                 .Where(match => match.Date == todayStr)
@@ -202,6 +212,26 @@ public class AnalyzerService  : IAnalyzerService
     {
         _logger.LogInformation("Starting daily analysis process...");
 
+        try
+        {
+            await BackfillStoredPredictionTimesAsync();
+            _logger.LogInformation("✅ Stored prediction time backfill completed.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Stored prediction time backfill failed, continuing with analytics rebuild.");
+        }
+
+        try
+        {
+            await BackfillDecisionProvenanceAsync();
+            _logger.LogInformation("✅ Decision provenance backfill completed.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Decision provenance backfill failed, continuing with analytics rebuild.");
+        }
+
         // ── Step 1: Calibration rebuild (independent) ──
         try
         {
@@ -211,6 +241,16 @@ public class AnalyzerService  : IAnalyzerService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "⚠️ Calibration rebuild failed, continuing with regression predictions.");
+        }
+
+        try
+        {
+            await RebuildThresholdProfiles();
+            _logger.LogInformation("✅ Threshold tuning rebuild completed.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Threshold tuning rebuild failed, continuing with regression predictions.");
         }
 
         // ── Step 2: Download fresh data and generate regression predictions ──
@@ -599,6 +639,14 @@ public class AnalyzerService  : IAnalyzerService
         var profileCount = await _dbContext.MarketCalibrationProfiles.CountAsync();
         _logger.LogInformation("Updated {Count} calibration profiles.", profileCount);
     }
+
+    private async Task RebuildThresholdProfiles()
+    {
+        _logger.LogInformation("Starting threshold tuning rebuild...");
+        await _thresholdTuningService.RebuildProfilesAsync();
+        var profileCount = await _dbContext.ThresholdProfiles.CountAsync();
+        _logger.LogInformation("Updated {Count} threshold profiles.", profileCount);
+    }
     
     private async Task SaveMatchScores(List<MatchScore> scores)
     {
@@ -737,6 +785,137 @@ public class AnalyzerService  : IAnalyzerService
             _logger.LogInformation("🧹 Deleted {Count} scraping logs older than 2 days.", deletedLogs);
         }
     }
+
+    public async Task BackfillStoredPredictionTimesAsync(int lookbackDays = 90)
+    {
+        var today = DateTimeProvider.GetLocalTime().Date;
+        var dates = Enumerable.Range(0, Math.Max(lookbackDays, 0) + 1)
+            .Select(offset => today.AddDays(-offset).ToString("dd-MM-yyyy"))
+            .ToHashSet(StringComparer.Ordinal);
+
+        var matches = await _dbContext.MatchDatas
+            .Where(match => match.Date != null && dates.Contains(match.Date))
+            .ToListAsync();
+
+        if (matches.Count == 0)
+        {
+            return;
+        }
+
+        var predictions = await _dbContext.Predictions
+            .Where(prediction => dates.Contains(prediction.Date))
+            .ToListAsync();
+
+        var forecasts = await _dbContext.ForecastObservations
+            .Where(forecast => dates.Contains(forecast.Date))
+            .ToListAsync();
+
+        var matchLookup = matches
+            .GroupBy(match => (
+                Date: match.Date ?? string.Empty,
+                Home: Norm(match.HomeTeam),
+                Away: Norm(match.AwayTeam),
+                League: Norm(match.League)))
+            .ToDictionary(group => group.Key, group => group.OrderBy(m => m.MatchDateTime).First());
+
+        var teamLookup = matches
+            .GroupBy(match => (
+                Home: Norm(match.HomeTeam),
+                Away: Norm(match.AwayTeam),
+                League: Norm(match.League)))
+            .ToDictionary(group => group.Key, group => group.OrderBy(m => m.MatchDateTime).ToList());
+
+        var updatedPredictions = 0;
+        var updatedForecasts = 0;
+
+        foreach (var prediction in predictions)
+        {
+            var matched = FindMatchingMatchData(prediction.Date, prediction.HomeTeam, prediction.AwayTeam, prediction.League, prediction.MatchDateTime, matchLookup, teamLookup);
+            if (matched != null && ApplyStoredTime(prediction, matched))
+            {
+                updatedPredictions++;
+            }
+        }
+
+        foreach (var forecast in forecasts)
+        {
+            var matched = FindMatchingMatchData(forecast.Date, forecast.HomeTeam, forecast.AwayTeam, forecast.League, forecast.MatchDateTime, matchLookup, teamLookup);
+            if (matched != null && ApplyStoredTime(forecast, matched))
+            {
+                updatedForecasts++;
+            }
+        }
+
+        if (updatedPredictions > 0 || updatedForecasts > 0)
+        {
+            await _dbContext.SaveChangesAsync();
+            _logger.LogInformation(
+                "Repaired stored kickoff times for {PredictionCount} predictions and {ForecastCount} forecasts.",
+                updatedPredictions,
+                updatedForecasts);
+        }
+    }
+
+    public async Task BackfillDecisionProvenanceAsync(int lookbackDays = 90)
+    {
+        var today = DateTimeProvider.GetLocalTime().Date;
+        var dates = Enumerable.Range(0, Math.Max(lookbackDays, 0) + 1)
+            .Select(offset => today.AddDays(-offset).ToString("dd-MM-yyyy"))
+            .ToHashSet(StringComparer.Ordinal);
+
+        var predictions = await _dbContext.Predictions
+            .Where(prediction =>
+                dates.Contains(prediction.Date) &&
+                (string.IsNullOrEmpty(prediction.CalibratorUsed) ||
+                 prediction.CalibratorUsed == "Unknown" ||
+                 string.IsNullOrEmpty(prediction.ThresholdSource) ||
+                 prediction.ThresholdSource == "Unknown" ||
+                 prediction.ThresholdUsed <= 0 ||
+                 !prediction.WasPublished))
+            .ToListAsync();
+
+        var forecasts = await _dbContext.ForecastObservations
+            .Where(forecast =>
+                dates.Contains(forecast.Date) &&
+                (string.IsNullOrEmpty(forecast.CalibratorUsed) ||
+                 forecast.CalibratorUsed == "Unknown" ||
+                 string.IsNullOrEmpty(forecast.ThresholdSource) ||
+                 forecast.ThresholdSource == "Unknown" ||
+                 forecast.ThresholdUsed <= 0))
+            .ToListAsync();
+
+        var updatedPredictions = 0;
+        foreach (var prediction in predictions)
+        {
+            if (!TryResolvePredictionMarket(prediction, out var market))
+            {
+                continue;
+            }
+
+            if (ApplyDecisionBackfill(prediction, market))
+            {
+                updatedPredictions++;
+            }
+        }
+
+        var updatedForecasts = 0;
+        foreach (var forecast in forecasts)
+        {
+            if (ApplyDecisionBackfill(forecast, forecast.Market))
+            {
+                updatedForecasts++;
+            }
+        }
+
+        if (updatedPredictions > 0 || updatedForecasts > 0)
+        {
+            await _dbContext.SaveChangesAsync();
+            _logger.LogInformation(
+                "Backfilled decision provenance for {PredictionCount} predictions and {ForecastCount} forecasts.",
+                updatedPredictions,
+                updatedForecasts);
+        }
+    }
     
     private async Task SavePredictions(IEnumerable<PredictionCandidate> candidates)
     {
@@ -791,6 +970,10 @@ public class AnalyzerService  : IAnalyzerService
 
                 existingRecord.RawConfidenceScore = Math.Round((decimal)candidate.RawProbability, 4);
                 existingRecord.ConfidenceScore = Math.Round((decimal)candidate.CalibratedProbability, 4);
+                existingRecord.CalibratorUsed = candidate.CalibratorUsed;
+                existingRecord.ThresholdUsed = Math.Round(candidate.ThresholdUsed, 4);
+                existingRecord.ThresholdSource = candidate.ThresholdSource;
+                existingRecord.WasPublished = candidate.WasPublished;
             }
             else
             {
@@ -804,6 +987,10 @@ public class AnalyzerService  : IAnalyzerService
                     PredictedOutcome = candidate.PredictedOutcome,
                     RawConfidenceScore = Math.Round((decimal)candidate.RawProbability, 4),
                     ConfidenceScore = Math.Round((decimal)candidate.CalibratedProbability, 4),
+                    CalibratorUsed = candidate.CalibratorUsed,
+                    ThresholdUsed = Math.Round(candidate.ThresholdUsed, 4),
+                    ThresholdSource = candidate.ThresholdSource,
+                    WasPublished = candidate.WasPublished,
                     Date = candidate.Date,
                     Time = candidate.Time,
                     MatchDateTime = candidate.MatchDateTime
@@ -851,6 +1038,9 @@ public class AnalyzerService  : IAnalyzerService
                 existingRecord.RawProbability = candidate.RawProbability;
                 existingRecord.CalibratedProbability = candidate.CalibratedProbability;
                 existingRecord.IsPublished = isPublished;
+                existingRecord.CalibratorUsed = candidate.CalibratorUsed;
+                existingRecord.ThresholdUsed = Math.Round(candidate.ThresholdUsed, 4);
+                existingRecord.ThresholdSource = candidate.ThresholdSource;
             }
             else
             {
@@ -866,6 +1056,9 @@ public class AnalyzerService  : IAnalyzerService
                     PredictedOutcome = candidate.PredictedOutcome,
                     RawProbability = candidate.RawProbability,
                     CalibratedProbability = candidate.CalibratedProbability,
+                    CalibratorUsed = candidate.CalibratorUsed,
+                    ThresholdUsed = Math.Round(candidate.ThresholdUsed, 4),
+                    ThresholdSource = candidate.ThresholdSource,
                     IsPublished = isPublished
                 };
 
@@ -885,6 +1078,91 @@ public class AnalyzerService  : IAnalyzerService
     private static string GetCandidateObservationKey(PredictionCandidate candidate)
     {
         return $"{candidate.Date}|{Norm(candidate.HomeTeam)}|{Norm(candidate.AwayTeam)}|{Norm(candidate.League)}|{candidate.Market}";
+    }
+
+    private bool ApplyDecisionBackfill(Prediction prediction, PredictionMarket market)
+    {
+        var updated = false;
+
+        if (string.IsNullOrWhiteSpace(prediction.CalibratorUsed) || prediction.CalibratorUsed == "Unknown")
+        {
+            prediction.CalibratorUsed = "Bucket";
+            updated = true;
+        }
+
+        if (prediction.ThresholdUsed <= 0)
+        {
+            prediction.ThresholdUsed = ResolveFallbackThreshold(market);
+            updated = true;
+        }
+
+        if (string.IsNullOrWhiteSpace(prediction.ThresholdSource) || prediction.ThresholdSource == "Unknown")
+        {
+            prediction.ThresholdSource = "Configured";
+            updated = true;
+        }
+
+        if (!prediction.WasPublished)
+        {
+            prediction.WasPublished = true;
+            updated = true;
+        }
+
+        return updated;
+    }
+
+    private bool ApplyDecisionBackfill(ForecastObservation forecast, PredictionMarket market)
+    {
+        var updated = false;
+
+        if (string.IsNullOrWhiteSpace(forecast.CalibratorUsed) || forecast.CalibratorUsed == "Unknown")
+        {
+            forecast.CalibratorUsed = "Bucket";
+            updated = true;
+        }
+
+        if (forecast.ThresholdUsed <= 0)
+        {
+            forecast.ThresholdUsed = ResolveFallbackThreshold(market);
+            updated = true;
+        }
+
+        if (string.IsNullOrWhiteSpace(forecast.ThresholdSource) || forecast.ThresholdSource == "Unknown")
+        {
+            forecast.ThresholdSource = "Configured";
+            updated = true;
+        }
+
+        return updated;
+    }
+
+    private bool TryResolvePredictionMarket(Prediction prediction, out PredictionMarket market)
+    {
+        market = prediction.PredictionCategory switch
+        {
+            "BothTeamsScore" => PredictionMarket.BothTeamsScore,
+            "Over2.5Goals" => PredictionMarket.Over25Goals,
+            "Draw" => PredictionMarket.Draw,
+            "StraightWin" when prediction.PredictedOutcome == "Home Win" => PredictionMarket.HomeWin,
+            "StraightWin" when prediction.PredictedOutcome == "Away Win" => PredictionMarket.AwayWin,
+            _ => default
+        };
+
+        return prediction.PredictionCategory is "BothTeamsScore" or "Over2.5Goals" or "Draw" ||
+               (prediction.PredictionCategory == "StraightWin" && prediction.PredictedOutcome is "Home Win" or "Away Win");
+    }
+
+    private double ResolveFallbackThreshold(PredictionMarket market)
+    {
+        return market switch
+        {
+            PredictionMarket.BothTeamsScore => _predictionSettings.BttsScoreThreshold,
+            PredictionMarket.Over25Goals => _predictionSettings.OverTwoGoalsStrongThreshold,
+            PredictionMarket.Draw => _predictionSettings.DrawStrongThreshold,
+            PredictionMarket.HomeWin => _predictionSettings.HomeWinStrong,
+            PredictionMarket.AwayWin => _predictionSettings.AwayWinStrong,
+            _ => 0.0
+        };
     }
     
     private async Task SaveRegressionPredictions(IEnumerable<RegressionPrediction> predictions)
@@ -946,5 +1224,97 @@ public class AnalyzerService  : IAnalyzerService
 
     private static string Norm(string? s) =>
         (s ?? "").Trim().ToLowerInvariant();
+
+    private static MatchData? FindMatchingMatchData(
+        string date,
+        string homeTeam,
+        string awayTeam,
+        string league,
+        DateTime? matchDateTime,
+        IReadOnlyDictionary<(string Date, string Home, string Away, string League), MatchData> datedMatches,
+        IReadOnlyDictionary<(string Home, string Away, string League), List<MatchData>> teamMatches)
+    {
+        var datedKey = (
+            Date: date,
+            Home: Norm(homeTeam),
+            Away: Norm(awayTeam),
+            League: Norm(league));
+
+        if (datedMatches.TryGetValue(datedKey, out var exactMatch))
+        {
+            return exactMatch;
+        }
+
+        var teamKey = (
+            Home: Norm(homeTeam),
+            Away: Norm(awayTeam),
+            League: Norm(league));
+
+        if (!teamMatches.TryGetValue(teamKey, out var candidates) || candidates.Count == 0)
+        {
+            return null;
+        }
+
+        if (matchDateTime.HasValue)
+        {
+            return candidates
+                .OrderBy(candidate => candidate.MatchDateTime.HasValue
+                    ? Math.Abs((candidate.MatchDateTime.Value - matchDateTime.Value).TotalMinutes)
+                    : double.MaxValue)
+                .FirstOrDefault();
+        }
+
+        return candidates.FirstOrDefault();
+    }
+
+    private static bool ApplyStoredTime(Prediction prediction, MatchData match)
+    {
+        var updated = false;
+
+        if (!string.Equals(prediction.Date, match.Date, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(match.Date))
+        {
+            prediction.Date = match.Date!;
+            updated = true;
+        }
+
+        if (!string.Equals(prediction.Time, match.Time, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(match.Time))
+        {
+            prediction.Time = match.Time!;
+            updated = true;
+        }
+
+        if (prediction.MatchDateTime != match.MatchDateTime && match.MatchDateTime.HasValue)
+        {
+            prediction.MatchDateTime = match.MatchDateTime;
+            updated = true;
+        }
+
+        return updated;
+    }
+
+    private static bool ApplyStoredTime(ForecastObservation forecast, MatchData match)
+    {
+        var updated = false;
+
+        if (!string.Equals(forecast.Date, match.Date, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(match.Date))
+        {
+            forecast.Date = match.Date!;
+            updated = true;
+        }
+
+        if (!string.Equals(forecast.Time, match.Time, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(match.Time))
+        {
+            forecast.Time = match.Time!;
+            updated = true;
+        }
+
+        if (forecast.MatchDateTime != match.MatchDateTime && match.MatchDateTime.HasValue)
+        {
+            forecast.MatchDateTime = match.MatchDateTime;
+            updated = true;
+        }
+
+        return updated;
+    }
 
 }

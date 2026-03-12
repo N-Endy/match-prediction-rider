@@ -7,4 +7,5 @@ public interface IAnalyzerService
     Task RunScoreUpdaterAsync();
     Task RunDailyAnalysisAsync();
     Task CleanupOldPredictionsAndMatchDataAsync();
+    Task BackfillStoredPredictionTimesAsync(int lookbackDays = 90);
 }

@@ -3,6 +3,7 @@ using System;
 using MatchPredictor.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MatchPredictor.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260312204959_AddThresholdProfiles")]
+    partial class AddThresholdProfiles
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -60,55 +63,6 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.ToTable("AiScoreMatchScores");
                 });
 
-            modelBuilder.Entity("MatchPredictor.Domain.Models.BetaCalibrationProfile", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<double>("Alpha")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("BaselineBrierScore")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("Beta")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("Gamma")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("Improvement")
-                        .HasColumnType("double precision");
-
-                    b.Property<bool>("IsRecommended")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime>("LastUpdated")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("Market")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("TrainingSampleCount")
-                        .HasColumnType("integer");
-
-                    b.Property<double>("ValidationBrierScore")
-                        .HasColumnType("double precision");
-
-                    b.Property<int>("ValidationSampleCount")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Market")
-                        .IsUnique();
-
-                    b.ToTable("BetaCalibrationProfiles");
-                });
-
             modelBuilder.Entity("MatchPredictor.Domain.Models.ForecastObservation", b =>
                 {
                     b.Property<int>("Id")
@@ -129,10 +83,6 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     b.Property<double>("CalibratedProbability")
                         .HasColumnType("double precision");
-
-                    b.Property<string>("CalibratorUsed")
-                        .IsRequired()
-                        .HasColumnType("text");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -176,13 +126,6 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     b.Property<DateTime?>("SettledAt")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("ThresholdSource")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<double>("ThresholdUsed")
-                        .HasColumnType("double precision");
 
                     b.Property<string>("Time")
                         .IsRequired()
@@ -422,10 +365,6 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("CalibratorUsed")
-                        .IsRequired()
-                        .HasColumnType("text");
-
                     b.Property<decimal?>("ConfidenceScore")
                         .HasColumnType("numeric");
 
@@ -461,19 +400,9 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<decimal?>("RawConfidenceScore")
                         .HasColumnType("numeric");
 
-                    b.Property<string>("ThresholdSource")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<double>("ThresholdUsed")
-                        .HasColumnType("double precision");
-
                     b.Property<string>("Time")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<bool>("WasPublished")
-                        .HasColumnType("boolean");
 
                     b.HasKey("Id");
 
@@ -573,26 +502,11 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<double>("AverageCalibratedProbability")
                         .HasColumnType("double precision");
 
-                    b.Property<double>("BaselineBrierScore")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("BaselineHitRate")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("BaselineThreshold")
-                        .HasColumnType("double precision");
-
                     b.Property<double>("BrierScore")
                         .HasColumnType("double precision");
 
                     b.Property<double>("HitRate")
                         .HasColumnType("double precision");
-
-                    b.Property<double>("Improvement")
-                        .HasColumnType("double precision");
-
-                    b.Property<bool>("IsPromoted")
-                        .HasColumnType("boolean");
 
                     b.Property<DateTime>("LastUpdated")
                         .HasColumnType("timestamp with time zone");
@@ -611,12 +525,6 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     b.Property<double>("Threshold")
                         .HasColumnType("double precision");
-
-                    b.Property<int>("TrainingSampleCount")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("ValidationSampleCount")
-                        .HasColumnType("integer");
 
                     b.HasKey("Id");
 

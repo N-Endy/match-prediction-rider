@@ -9,15 +9,18 @@ public class DataAnalyzerService : IDataAnalyzerService
 {
     private readonly IProbabilityCalculator _probabilityCalculator;
     private readonly ICalibrationService _calibrationService;
+    private readonly IThresholdTuningService _thresholdTuningService;
     private readonly PredictionSettings _settings;
 
     public DataAnalyzerService(
         IProbabilityCalculator probabilityCalculator,
         ICalibrationService calibrationService,
+        IThresholdTuningService thresholdTuningService,
         IOptions<PredictionSettings> options)
     {
         _probabilityCalculator = probabilityCalculator;
         _calibrationService = calibrationService;
+        _thresholdTuningService = thresholdTuningService;
         _settings = options.Value;
     }
 
@@ -33,18 +36,35 @@ public class DataAnalyzerService : IDataAnalyzerService
     {
         var forecasts = forecastCandidates.ToList();
         var published = new List<PredictionCandidate>();
+        var thresholdDecisions = new Dictionary<PredictionMarket, ThresholdDecision>
+        {
+            [PredictionMarket.BothTeamsScore] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.BothTeamsScore, _settings.BttsScoreThreshold),
+            [PredictionMarket.Over25Goals] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.Over25Goals, _settings.OverTwoGoalsStrongThreshold),
+            [PredictionMarket.Draw] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.Draw, _settings.DrawStrongThreshold),
+            [PredictionMarket.HomeWin] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.HomeWin, _settings.HomeWinStrong),
+            [PredictionMarket.AwayWin] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.AwayWin, _settings.AwayWinStrong)
+        };
 
-        published.AddRange(forecasts.Where(candidate =>
+        foreach (var candidate in forecasts)
+        {
+            if (thresholdDecisions.TryGetValue(candidate.Market, out var decision))
+            {
+                candidate.ThresholdUsed = decision.Threshold;
+                candidate.ThresholdSource = decision.ThresholdSource;
+            }
+        }
+
+        published.AddRange(MarkPublished(forecasts.Where(candidate =>
             candidate.Market == PredictionMarket.BothTeamsScore &&
-            candidate.CalibratedProbability >= _settings.BttsScoreThreshold));
+            candidate.CalibratedProbability >= thresholdDecisions[PredictionMarket.BothTeamsScore].Threshold)));
 
-        published.AddRange(forecasts.Where(candidate =>
+        published.AddRange(MarkPublished(forecasts.Where(candidate =>
             candidate.Market == PredictionMarket.Over25Goals &&
-            candidate.CalibratedProbability >= _settings.OverTwoGoalsStrongThreshold));
+            candidate.CalibratedProbability >= thresholdDecisions[PredictionMarket.Over25Goals].Threshold)));
 
-        published.AddRange(forecasts.Where(candidate =>
+        published.AddRange(MarkPublished(forecasts.Where(candidate =>
             candidate.Market == PredictionMarket.Draw &&
-            candidate.CalibratedProbability >= _settings.DrawStrongThreshold));
+            candidate.CalibratedProbability >= thresholdDecisions[PredictionMarket.Draw].Threshold)));
 
         foreach (var matchGroup in forecasts
                      .Where(candidate => candidate.Market is PredictionMarket.HomeWin or PredictionMarket.AwayWin)
@@ -60,13 +80,14 @@ public class DataAnalyzerService : IDataAnalyzerService
 
             var threshold = bestSide.Market switch
             {
-                PredictionMarket.HomeWin => _settings.HomeWinStrong,
-                PredictionMarket.AwayWin => _settings.AwayWinStrong,
+                PredictionMarket.HomeWin => thresholdDecisions[PredictionMarket.HomeWin].Threshold,
+                PredictionMarket.AwayWin => thresholdDecisions[PredictionMarket.AwayWin].Threshold,
                 _ => double.MaxValue
             };
 
             if (bestSide.CalibratedProbability >= threshold)
             {
+                bestSide.WasPublished = true;
                 published.Add(bestSide);
             }
         }
@@ -111,8 +132,8 @@ public class DataAnalyzerService : IDataAnalyzerService
         if (!HasRequiredTeams(match) || rawProbability <= 0)
             return null;
 
-        var calibratedProbability = _calibrationService.Calibrate(market, rawProbability);
-        return CreateCandidate(match, market, predictedOutcome, rawProbability, calibratedProbability);
+        var calibration = _calibrationService.CalibrateWithDecision(market, rawProbability);
+        return CreateCandidate(match, market, predictedOutcome, rawProbability, calibration.Probability, calibration.CalibratorUsed);
     }
 
     private static PredictionCandidate CreateCandidate(
@@ -120,7 +141,8 @@ public class DataAnalyzerService : IDataAnalyzerService
         PredictionMarket market,
         string predictedOutcome,
         double rawProbability,
-        double calibratedProbability)
+        double calibratedProbability,
+        string calibratorUsed)
     {
         var date = match.Date?.Trim() ?? string.Empty;
         var time = match.Time?.Trim() ?? string.Empty;
@@ -146,8 +168,18 @@ public class DataAnalyzerService : IDataAnalyzerService
             PredictionCategory = market.ToCategory(),
             PredictedOutcome = predictedOutcome,
             RawProbability = Math.Clamp(rawProbability, 0.0, 1.0),
-            CalibratedProbability = Math.Clamp(calibratedProbability, 0.0, 1.0)
+            CalibratedProbability = Math.Clamp(calibratedProbability, 0.0, 1.0),
+            CalibratorUsed = calibratorUsed
         };
+    }
+
+    private static IEnumerable<PredictionCandidate> MarkPublished(IEnumerable<PredictionCandidate> candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            candidate.WasPublished = true;
+            yield return candidate;
+        }
     }
 
     private static bool HasRequiredTeams(MatchData match)

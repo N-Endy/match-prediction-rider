@@ -18,6 +18,8 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<AiScoreMatchScore> AiScoreMatchScores => Set<AiScoreMatchScore>();
     public DbSet<ModelAccuracy> ModelAccuracies => Set<ModelAccuracy>();
     public DbSet<MarketCalibrationProfile> MarketCalibrationProfiles => Set<MarketCalibrationProfile>();
+    public DbSet<BetaCalibrationProfile> BetaCalibrationProfiles => Set<BetaCalibrationProfile>();
+    public DbSet<ThresholdProfile> ThresholdProfiles => Set<ThresholdProfile>();
     // Required by IDataProtectionKeyContext
     public DbSet<DataProtectionKey> DataProtectionKeys { get; set; }
 
@@ -57,6 +59,16 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
         modelBuilder.Entity<ForecastObservation>(entity =>
         {
             entity.HasIndex(e => new { e.Date, e.HomeTeam, e.AwayTeam, e.League, e.Market }).IsUnique();
+        });
+
+        modelBuilder.Entity<ThresholdProfile>(entity =>
+        {
+            entity.HasIndex(e => e.Market).IsUnique();
+        });
+
+        modelBuilder.Entity<BetaCalibrationProfile>(entity =>
+        {
+            entity.HasIndex(e => e.Market).IsUnique();
         });
     }
 }

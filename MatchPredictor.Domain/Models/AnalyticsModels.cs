@@ -27,12 +27,30 @@ public class ForecastMarketStat
     public PredictionMarket Market { get; set; }
     public string MarketName { get; set; } = string.Empty;
     public int SettledCount { get; set; }
+    public string ActiveCalibrator { get; set; } = "Bucket";
+    public double FallbackThreshold { get; set; }
+    public double ActiveThreshold { get; set; }
+    public string ThresholdSource { get; set; } = "Configured";
+    public int ThresholdSampleCount { get; set; }
+    public double ThresholdHitRate { get; set; }
+    public double ThresholdPublishedPerWeek { get; set; }
+    public double ThresholdBrierScore { get; set; }
+    public DateTime? ThresholdLastUpdated { get; set; }
     public double RawBrierScore { get; set; }
     public double CalibratedBrierScore { get; set; }
+    public double? BetaBaselineBrierScore { get; set; }
+    public double? BetaValidationBrierScore { get; set; }
+    public double? BetaImprovement { get; set; }
+    public bool BetaRecommended { get; set; }
+    public int? BetaTrainingSampleCount { get; set; }
+    public int? BetaValidationSampleCount { get; set; }
+    public DateTime? BetaLastUpdated { get; set; }
     public BrierDecomposition RawDecomposition { get; set; } = new();
     public BrierDecomposition CalibratedDecomposition { get; set; } = new();
     public List<ReliabilityCurvePoint> RawReliabilityCurve { get; set; } = [];
     public List<ReliabilityCurvePoint> CalibratedReliabilityCurve { get; set; } = [];
+    public List<EraPerformanceStat> CalibratorEraStats { get; set; } = [];
+    public List<EraPerformanceStat> ThresholdEraStats { get; set; } = [];
 }
 
 public class BrierDecomposition
@@ -50,4 +68,12 @@ public class ReliabilityCurvePoint
     public double AveragePredictedProbability { get; set; }
     public double ObservedFrequency { get; set; }
     public int Count { get; set; }
+}
+
+public class EraPerformanceStat
+{
+    public string Era { get; set; } = string.Empty;
+    public int Count { get; set; }
+    public double HitRate { get; set; }
+    public double BrierScore { get; set; }
 }

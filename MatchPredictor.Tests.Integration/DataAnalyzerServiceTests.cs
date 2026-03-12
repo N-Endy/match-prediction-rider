@@ -27,6 +27,7 @@ public class DataAnalyzerServiceTests
                     _ => raw
                 };
             }),
+            new FakeThresholdTuningService(),
             Options.Create(new PredictionSettings
             {
                 HomeWinStrong = 0.68,
@@ -40,6 +41,10 @@ public class DataAnalyzerServiceTests
         Assert.Equal("Away Win", candidate.PredictedOutcome);
         Assert.Equal(0.62, candidate.RawProbability, 3);
         Assert.Equal(0.72, candidate.CalibratedProbability, 3);
+        Assert.Equal("Bucket", candidate.CalibratorUsed);
+        Assert.Equal(0.70, candidate.ThresholdUsed, 3);
+        Assert.Equal("Configured", candidate.ThresholdSource);
+        Assert.True(candidate.WasPublished);
     }
 
     [Fact]
@@ -53,6 +58,7 @@ public class DataAnalyzerServiceTests
             },
             new FakeCalibrationService((market, raw) =>
                 market == PredictionMarket.Over25Goals ? 0.60 : raw),
+            new FakeThresholdTuningService(),
             Options.Create(new PredictionSettings
             {
                 OverTwoGoalsStrongThreshold = 0.58
@@ -65,6 +71,10 @@ public class DataAnalyzerServiceTests
         Assert.Equal("Over 2.5", candidate.PredictedOutcome);
         Assert.Equal(0.57, candidate.RawProbability, 3);
         Assert.Equal(0.60, candidate.CalibratedProbability, 3);
+        Assert.Equal("Bucket", candidate.CalibratorUsed);
+        Assert.Equal(0.58, candidate.ThresholdUsed, 3);
+        Assert.Equal("Configured", candidate.ThresholdSource);
+        Assert.True(candidate.WasPublished);
     }
 
     [Fact]
@@ -80,6 +90,7 @@ public class DataAnalyzerServiceTests
                 Over25 = 0.61
             },
             new FakeCalibrationService((_, raw) => raw),
+            new FakeThresholdTuningService(),
             Options.Create(new PredictionSettings
             {
                 OverTwoGoalsStrongThreshold = 0.58
@@ -90,6 +101,46 @@ public class DataAnalyzerServiceTests
 
         Assert.Equal("19:00", candidate.Time);
         Assert.Equal(match.MatchDateTime, candidate.MatchDateTime);
+    }
+
+    [Fact]
+    public void BuildForecastCandidates_CapturesCalibrationAndThresholdProvenance()
+    {
+        var match = CreateMatch();
+        var thresholdService = new FakeThresholdTuningService
+        {
+            Decisions =
+            {
+                [PredictionMarket.BothTeamsScore] = new ThresholdDecision
+                {
+                    Threshold = 0.61,
+                    ThresholdSource = "Tuned"
+                }
+            }
+        };
+
+        var service = new DataAnalyzerService(
+            new FakeProbabilityCalculator
+            {
+                Btts = 0.64
+            },
+            new FakeCalibrationService((market, raw) =>
+                market == PredictionMarket.BothTeamsScore
+                    ? new CalibrationDecision { Probability = 0.67, CalibratorUsed = "Beta" }
+                    : new CalibrationDecision { Probability = raw, CalibratorUsed = "Bucket" }),
+            thresholdService,
+            Options.Create(new PredictionSettings
+            {
+                BttsScoreThreshold = 0.55
+            }));
+
+        var candidates = service.SelectPublishedPredictions(service.BuildForecastCandidates([match]));
+        var candidate = Assert.Single(candidates);
+
+        Assert.Equal("Beta", candidate.CalibratorUsed);
+        Assert.Equal(0.61, candidate.ThresholdUsed, 3);
+        Assert.Equal("Tuned", candidate.ThresholdSource);
+        Assert.True(candidate.WasPublished);
     }
 
     private static MatchData CreateMatch()
@@ -121,14 +172,51 @@ public class DataAnalyzerServiceTests
 
     private sealed class FakeCalibrationService : ICalibrationService
     {
-        private readonly Func<PredictionMarket, double, double> _calibrate;
+        private readonly Func<PredictionMarket, double, CalibrationDecision> _calibrate;
 
         public FakeCalibrationService(Func<PredictionMarket, double, double> calibrate)
+            : this((market, raw) => new CalibrationDecision
+            {
+                Probability = calibrate(market, raw),
+                CalibratorUsed = "Bucket"
+            })
+        {
+        }
+
+        public FakeCalibrationService(Func<PredictionMarket, double, CalibrationDecision> calibrate)
         {
             _calibrate = calibrate;
         }
 
-        public double Calibrate(PredictionMarket market, double rawProbability) => _calibrate(market, rawProbability);
+        public double Calibrate(PredictionMarket market, double rawProbability) =>
+            _calibrate(market, rawProbability).Probability;
+
+        public CalibrationDecision CalibrateWithDecision(PredictionMarket market, double rawProbability) =>
+            _calibrate(market, rawProbability);
+
+        public Task RebuildProfilesAsync() => Task.CompletedTask;
+    }
+
+    private sealed class FakeThresholdTuningService : IThresholdTuningService
+    {
+        public Dictionary<PredictionMarket, ThresholdDecision> Decisions { get; } = new();
+
+        public double GetThreshold(PredictionMarket market, double fallbackThreshold) =>
+            GetThresholdDecision(market, fallbackThreshold).Threshold;
+
+        public ThresholdDecision GetThresholdDecision(PredictionMarket market, double fallbackThreshold)
+        {
+            if (Decisions.TryGetValue(market, out var decision))
+            {
+                return decision;
+            }
+
+            return new ThresholdDecision
+            {
+                Threshold = fallbackThreshold,
+                ThresholdSource = "Configured"
+            };
+        }
 
         public Task RebuildProfilesAsync() => Task.CompletedTask;
     }

@@ -90,8 +90,40 @@ public class ForecastEvaluationService : IForecastEvaluationService
             RawDecomposition = BuildDecomposition(rawInputs),
             CalibratedDecomposition = BuildDecomposition(calibratedInputs),
             RawReliabilityCurve = BuildReliabilityCurve(rawInputs),
-            CalibratedReliabilityCurve = BuildReliabilityCurve(calibratedInputs)
+            CalibratedReliabilityCurve = BuildReliabilityCurve(calibratedInputs),
+            CalibratorEraStats = BuildEraStats(
+                settled,
+                forecast => NormalizeCalibrator(forecast.CalibratorUsed),
+                ["Bucket", "Beta", "Unknown"]),
+            ThresholdEraStats = BuildEraStats(
+                settled.Where(forecast => forecast.IsPublished),
+                forecast => NormalizeThresholdSource(forecast.ThresholdSource),
+                ["Configured", "Tuned", "Unknown"])
         };
+    }
+
+    private static List<EraPerformanceStat> BuildEraStats(
+        IEnumerable<ForecastObservation> forecasts,
+        Func<ForecastObservation, string> eraSelector,
+        IReadOnlyList<string> preferredOrder)
+    {
+        var orderLookup = preferredOrder
+            .Select((era, index) => (era, index))
+            .ToDictionary(item => item.era, item => item.index, StringComparer.OrdinalIgnoreCase);
+
+        return forecasts
+            .Where(forecast => forecast.OutcomeOccurred.HasValue)
+            .GroupBy(eraSelector)
+            .Select(group => new EraPerformanceStat
+            {
+                Era = group.Key,
+                Count = group.Count(),
+                HitRate = group.Average(forecast => forecast.OutcomeOccurred == true ? 1.0 : 0.0),
+                BrierScore = group.Average(forecast => SquaredError(forecast.CalibratedProbability, forecast.OutcomeOccurred!.Value))
+            })
+            .OrderBy(stat => orderLookup.TryGetValue(stat.Era, out var index) ? index : int.MaxValue)
+            .ThenBy(stat => stat.Era)
+            .ToList();
     }
 
     private static BrierDecomposition BuildDecomposition(IReadOnlyCollection<(double Probability, bool Outcome)> inputs)
@@ -156,5 +188,25 @@ public class ForecastEvaluationService : IForecastEvaluationService
     {
         var clamped = Math.Clamp(probability, 0.0, 0.999999);
         return Math.Floor(clamped / BucketSize) * BucketSize;
+    }
+
+    private static string NormalizeCalibrator(string? calibratorUsed)
+    {
+        if (string.IsNullOrWhiteSpace(calibratorUsed) || calibratorUsed.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Unknown";
+        }
+
+        return calibratorUsed.Equals("Beta", StringComparison.OrdinalIgnoreCase) ? "Beta" : "Bucket";
+    }
+
+    private static string NormalizeThresholdSource(string? thresholdSource)
+    {
+        if (string.IsNullOrWhiteSpace(thresholdSource) || thresholdSource.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Unknown";
+        }
+
+        return thresholdSource.Equals("Tuned", StringComparison.OrdinalIgnoreCase) ? "Tuned" : "Configured";
     }
 }

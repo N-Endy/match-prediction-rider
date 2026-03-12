@@ -13,6 +13,9 @@ public class ForecastObservation
     public string PredictedOutcome { get; set; } = string.Empty;
     public double RawProbability { get; set; }
     public double CalibratedProbability { get; set; }
+    public string CalibratorUsed { get; set; } = "Unknown";
+    public double ThresholdUsed { get; set; }
+    public string ThresholdSource { get; set; } = "Unknown";
     public bool? OutcomeOccurred { get; set; }
     public string? ActualOutcome { get; set; }
     public string? ActualScore { get; set; }

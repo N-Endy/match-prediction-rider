@@ -14,6 +14,10 @@ public class Prediction
     public string PredictedOutcome { get; set; } = null!;
     public decimal? RawConfidenceScore { get; set; }
     public decimal? ConfidenceScore { get; set; }
+    public string CalibratorUsed { get; set; } = "Unknown";
+    public double ThresholdUsed { get; set; }
+    public string ThresholdSource { get; set; } = "Unknown";
+    public bool WasPublished { get; set; } = true;
     public string? ActualOutcome { get; set; }
     public string? ActualScore { get; set; }
     public bool IsLive { get; set; }

@@ -13,4 +13,8 @@ public class PredictionCandidate
     public string PredictedOutcome { get; set; } = string.Empty;
     public double RawProbability { get; set; }
     public double CalibratedProbability { get; set; }
+    public string CalibratorUsed { get; set; } = "Bucket";
+    public double ThresholdUsed { get; set; }
+    public string ThresholdSource { get; set; } = "Configured";
+    public bool WasPublished { get; set; }
 }
