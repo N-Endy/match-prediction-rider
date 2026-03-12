@@ -8,6 +8,7 @@ public static class EpplusLicenseBootstrapper
 {
     private static readonly object Sync = new();
     private static bool _initialized;
+    private static string? _licenseSource;
 
     public static void EnsureInitialized(IConfiguration configuration, ILogger? logger = null)
     {
@@ -19,12 +20,13 @@ public static class EpplusLicenseBootstrapper
             if (_initialized)
                 return;
 
-            var configuredLicense = ResolveConfiguredLicense(configuration);
+            var (configuredLicense, licenseSource) = ResolveConfiguredLicense(configuration);
             if (string.IsNullOrWhiteSpace(configuredLicense))
             {
                 if (IsDevelopmentEnvironment())
                 {
                     configuredLicense = "NonCommercialPersonal:MatchPredictor Development";
+                    licenseSource = "development fallback";
                     logger?.LogWarning(
                         "EPPlus license was not configured. Falling back to a development-only noncommercial license. " +
                         "Set 'EPPlus:ExcelPackage:License' explicitly for shared or production environments.");
@@ -32,30 +34,38 @@ public static class EpplusLicenseBootstrapper
                 else
                 {
                     throw new InvalidOperationException(
-                        "EPPlus license is not configured. Set 'EPPlus:ExcelPackage:License' to one of: " +
-                        "'Commercial:<license-key>', 'NonCommercialPersonal:<your-name>', or " +
+                        "EPPlus license is not configured. Set one of these configuration values to a real license: " +
+                        "'EPPlus:ExcelPackage:License', 'EPPlus__ExcelPackage__License', 'EPPlusLicense', or 'EPPlusLicenseContext'. " +
+                        "Allowed formats are 'Commercial:<license-key>', 'NonCommercialPersonal:<your-name>', or " +
                         "'NonCommercialOrganization:<organization-name>'.");
                 }
             }
 
             ApplyLicense(configuredLicense);
+            _licenseSource = licenseSource;
             _initialized = true;
+            logger?.LogInformation("EPPlus license configured from {LicenseSource}.", _licenseSource);
         }
     }
 
-    private static string? ResolveConfiguredLicense(IConfiguration configuration)
+    private static (string? value, string? source) ResolveConfiguredLicense(IConfiguration configuration)
     {
-        var candidates = new[]
+        var candidates = new (string? Value, string Source)[]
         {
-            configuration["EPPlus:ExcelPackage:License"],
-            configuration["EPPlus:ExcelPackage.License"],
-            Environment.GetEnvironmentVariable("EPPlusLicense"),
-            Environment.GetEnvironmentVariable("EPPlusLicenseContext")
+            (configuration["EPPlus:ExcelPackage:License"], "configuration:EPPlus:ExcelPackage:License"),
+            (configuration["EPPlus:ExcelPackage.License"], "configuration:EPPlus:ExcelPackage.License"),
+            (Environment.GetEnvironmentVariable("EPPlus__ExcelPackage__License"), "env:EPPlus__ExcelPackage__License"),
+            (Environment.GetEnvironmentVariable("EPPLUS__EXCELPACKAGE__LICENSE"), "env:EPPLUS__EXCELPACKAGE__LICENSE"),
+            (Environment.GetEnvironmentVariable("EPPlus:ExcelPackage:License"), "env:EPPlus:ExcelPackage:License"),
+            (Environment.GetEnvironmentVariable("EPPlusLicense"), "env:EPPlusLicense"),
+            (Environment.GetEnvironmentVariable("EPPLUSLICENSE"), "env:EPPLUSLICENSE"),
+            (Environment.GetEnvironmentVariable("EPPlusLicenseContext"), "env:EPPlusLicenseContext"),
+            (Environment.GetEnvironmentVariable("EPPLUSLICENSECONTEXT"), "env:EPPLUSLICENSECONTEXT")
         };
 
         return candidates
-            .Select(candidate => candidate?.Trim())
-            .FirstOrDefault(IsUsableLicenseValue);
+            .Select(candidate => (Value: candidate.Value?.Trim(), candidate.Source))
+            .FirstOrDefault(candidate => IsUsableLicenseValue(candidate.Value));
     }
 
     private static bool IsUsableLicenseValue(string? value)
