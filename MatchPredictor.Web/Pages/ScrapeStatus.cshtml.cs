@@ -11,7 +11,7 @@ namespace MatchPredictor.Web.Pages;
 public class ScrapeStatus : PageModel
 {
     private readonly ApplicationDbContext _dbContext;
-    public List<ScrapingLog> Logs { get; set; }
+    public List<ScrapingLog> Logs { get; set; } = [];
 
     public ScrapeStatus(ApplicationDbContext dbContext)
     {

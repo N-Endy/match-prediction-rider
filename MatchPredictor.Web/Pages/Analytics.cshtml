@@ -95,6 +95,10 @@
         border-radius: var(--radius-lg);
         padding: 1.5rem;
         text-align: center;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 0.5rem;
         transition: transform 0.2s;
     }
     .mp-stat-card:hover {
@@ -104,8 +108,24 @@
     .mp-stat-value {
         font-size: 2.5rem;
         font-weight: 700;
-        margin: 0.5rem 0;
+        margin: 0;
         font-family: monospace;
+        line-height: 1;
+    }
+
+    .mp-stat-figure {
+        font-variant-numeric: tabular-nums;
+        font-feature-settings: "tnum" 1;
+        min-height: 2.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+    }
+
+    .mp-stat-value-compact {
+        font-size: 2rem;
+        min-height: 2rem;
     }
     
     .mp-stat-label {
@@ -130,8 +150,10 @@
     }
     
     .mp-cat-header {
-        display: flex;
-        justify-content: space-between;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: baseline;
+        gap: 1rem;
         margin-bottom: 0.5rem;
         font-size: 0.9rem;
     }
@@ -141,6 +163,19 @@
     }
     .mp-cat-details {
         color: var(--text-muted);
+        display: inline-flex;
+        align-items: baseline;
+        justify-content: flex-end;
+        gap: 0.5rem;
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+        font-feature-settings: "tnum" 1;
+    }
+
+    .mp-cat-metric {
+        display: inline-flex;
+        align-items: baseline;
     }
     
     .mp-progress-track {
@@ -159,5 +194,19 @@
     .acc-high { color: #10b981; }
     .acc-med { color: #f59e0b; }
     .acc-low { color: #ef4444; }
+
+    @@media (max-width: 640px) {
+        .mp-cat-header {
+            grid-template-columns: 1fr;
+            gap: 0.35rem;
+        }
+
+        .mp-cat-details {
+            justify-content: flex-start;
+            text-align: left;
+            flex-wrap: wrap;
+            white-space: normal;
+        }
+    }
 </style>
 }

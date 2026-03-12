@@ -192,6 +192,43 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.ToTable("MatchScores");
                 });
 
+            modelBuilder.Entity("MatchPredictor.Domain.Models.MarketCalibrationProfile", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<double>("BucketEnd")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("BucketStart")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("CalibratedProbability")
+                        .HasColumnType("double precision");
+
+                    b.Property<DateTime>("LastUpdated")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Market")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("ObservationCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SuccessCount")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Market", "BucketStart")
+                        .IsUnique();
+
+                    b.ToTable("MarketCalibrationProfiles");
+                });
+
             modelBuilder.Entity("MatchPredictor.Domain.Models.ModelAccuracy", b =>
                 {
                     b.Property<int>("Id")
@@ -248,6 +285,9 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<string>("AwayTeam")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<decimal?>("RawConfidenceScore")
+                        .HasColumnType("numeric");
 
                     b.Property<decimal?>("ConfidenceScore")
                         .HasColumnType("numeric");

@@ -11,5 +11,5 @@ public interface IRegressionPredictorService
     /// - "Over2.5Goals"
     /// - "BTTS"
     /// - "StraightWin"
-    IEnumerable<RegressionPrediction> GeneratePredictions(IEnumerable<MatchData> upcomingMatches, List<ModelAccuracy> accuracies);
+    IEnumerable<RegressionPrediction> GeneratePredictions(IEnumerable<MatchData> upcomingMatches);
 }

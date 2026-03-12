@@ -16,6 +16,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<MatchScore> MatchScores => Set<MatchScore>();
     public DbSet<AiScoreMatchScore> AiScoreMatchScores => Set<AiScoreMatchScore>();
     public DbSet<ModelAccuracy> ModelAccuracies => Set<ModelAccuracy>();
+    public DbSet<MarketCalibrationProfile> MarketCalibrationProfiles => Set<MarketCalibrationProfile>();
     // Required by IDataProtectionKeyContext
     public DbSet<DataProtectionKey> DataProtectionKeys { get; set; }
 
@@ -45,6 +46,11 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.FriendlyName).HasColumnType("TEXT");
             entity.Property(e => e.Xml).HasColumnType("TEXT");
+        });
+
+        modelBuilder.Entity<MarketCalibrationProfile>(entity =>
+        {
+            entity.HasIndex(e => new { e.Market, e.BucketStart }).IsUnique();
         });
     }
 }

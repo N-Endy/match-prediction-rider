@@ -8,20 +8,26 @@
 <div class="mp-stat-grid">
     <div class="mp-stat-card">
         <div class="mp-stat-label">Total Predictions</div>
-        <div class="mp-stat-value">@Model.TotalPredictions</div>
+        <div class="mp-stat-value mp-stat-figure">@Model.TotalPredictions</div>
     </div>
     <div class="mp-stat-card">
         <div class="mp-stat-label">Matched & Completed</div>
-        <div class="mp-stat-value">@Model.CompletedPredictions</div>
+        <div class="mp-stat-value mp-stat-figure">@Model.CompletedPredictions</div>
     </div>
     <div class="mp-stat-card">
         <div class="mp-stat-label">Correct Picks</div>
-        <div class="mp-stat-value">@Model.CorrectPredictions</div>
+        <div class="mp-stat-value mp-stat-figure">@Model.CorrectPredictions</div>
     </div>
     <div class="mp-stat-card">
         <div class="mp-stat-label">Win Rate</div>
-        <div class="mp-stat-value @accClass">
+        <div class="mp-stat-value mp-stat-figure @accClass">
             @(Model.CompletedPredictions > 0 ? (Model.OverallAccuracy * 100).ToString("F1") + "%" : "0.0%")
+        </div>
+    </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Brier Score</div>
+        <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">
+            @(Model.CompletedPredictions > 0 ? Model.BrierScore.ToString("F3") : "0.000")
         </div>
     </div>
 </div>
@@ -41,7 +47,9 @@
                 <div class="mp-cat-header">
                     <span class="mp-cat-name">@cat.Category</span>
                     <span class="mp-cat-details @catAccClass">
-                        <strong>@fillWidth</strong> (@cat.Correct / @cat.Total)
+                        <span class="mp-cat-metric"><strong>@fillWidth</strong></span>
+                        <span class="mp-cat-metric">(@cat.Correct / @cat.Total)</span>
+                        <span class="mp-cat-metric">Brier @cat.BrierScore.ToString("F3")</span>
                     </span>
                 </div>
                 <div class="mp-progress-track">

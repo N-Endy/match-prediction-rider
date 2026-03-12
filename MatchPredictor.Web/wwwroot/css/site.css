@@ -66,6 +66,8 @@ html {
   font-size: 16px;
   scroll-behavior: smooth;
   -webkit-font-smoothing: antialiased;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 body {
@@ -74,7 +76,8 @@ body {
   color: var(--text-primary);
   min-height: 100vh;
   line-height: 1.6;
-  overflow-x: hidden;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 a {
@@ -207,6 +210,7 @@ a:hover {
   text-align: center;
   padding: 5rem 1.5rem 3rem;
   position: relative;
+  overflow: clip;
 }
 
 .mp-hero::before {
@@ -215,8 +219,8 @@ a:hover {
   top: -100px;
   left: 50%;
   transform: translateX(-50%);
-  width: 600px;
-  height: 600px;
+  width: min(600px, calc(100vw - 2rem));
+  height: min(600px, calc(100vw - 2rem));
   background: radial-gradient(circle, rgba(59, 130, 246, 0.08) 0%, transparent 70%);
   pointer-events: none;
 }
@@ -720,7 +724,7 @@ a:hover {
 .mp-scroll-top {
   position: fixed;
   bottom: 2rem;
-  right: 2rem;
+  right: max(1rem, env(safe-area-inset-right));
   width: 44px;
   height: 44px;
   border-radius: var(--radius-full);
@@ -798,6 +802,27 @@ a:hover {
   .mp-hero {
     padding: 3rem 1rem 2rem;
   }
+
+  .mp-scroll-top {
+    right: max(0.75rem, env(safe-area-inset-right));
+    bottom: 1rem;
+    width: 40px;
+    height: 40px;
+  }
+
+  .mp-cart-fab {
+    right: max(0.75rem, env(safe-area-inset-right));
+    bottom: 4rem;
+    width: 48px;
+    height: 48px;
+    font-size: 1.25rem;
+  }
+
+  .mp-cart-badge {
+    width: 20px;
+    height: 20px;
+    font-size: 0.65rem;
+  }
 }
 
 /* ─── Add Bet Button ─── */
@@ -825,7 +850,7 @@ a:hover {
 .mp-cart-fab {
   position: fixed;
   bottom: 5rem;
-  right: 2rem;
+  right: max(1rem, env(safe-area-inset-right));
   width: 52px;
   height: 52px;
   border-radius: var(--radius-full);
@@ -849,8 +874,8 @@ a:hover {
 
 .mp-cart-badge {
   position: absolute;
-  top: -4px;
-  right: -4px;
+  top: 2px;
+  right: 2px;
   width: 22px;
   height: 22px;
   border-radius: var(--radius-full);
@@ -1516,6 +1541,7 @@ a:hover {
 .mp-ad-ins {
   z-index: 1;
   width: 100%;
+  max-width: 100%;
 }
 
 /* ─── Cookie Consent Banner ─── */

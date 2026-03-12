@@ -62,6 +62,18 @@ public class AnalyticsModel : PageModel
             var completed = list.Where(p => !string.IsNullOrEmpty(p.ActualOutcome) && !p.IsLive).ToList();
             stats.CorrectPredictions = completed.Count(p => p.PredictedOutcome == p.ActualOutcome);
             stats.OverallAccuracy = (double)stats.CorrectPredictions / stats.CompletedPredictions;
+            var scoredPredictions = completed.Where(p => p.ConfidenceScore.HasValue).ToList();
+
+            if (scoredPredictions.Count > 0)
+            {
+                stats.BrierScore = scoredPredictions
+                    .Average(p =>
+                    {
+                        var outcome = p.PredictedOutcome == p.ActualOutcome ? 1.0 : 0.0;
+                        var probability = (double)p.ConfidenceScore!.Value;
+                        return Math.Pow(probability - outcome, 2);
+                    });
+            }
 
             // Group by category
             var grouped = completed.GroupBy(p => p.PredictionCategory);
@@ -69,12 +81,21 @@ public class AnalyticsModel : PageModel
             {
                 var total = group.Count();
                 var correct = group.Count(p => p.PredictedOutcome == p.ActualOutcome);
+                var scoredCategoryPredictions = group.Where(p => p.ConfidenceScore.HasValue).ToList();
                 stats.CategoryStats[group.Key] = new CategoryStat
                 {
                     Category = group.Key,
                     Total = total,
                     Correct = correct,
-                    Accuracy = (double)correct / total
+                    Accuracy = (double)correct / total,
+                    BrierScore = scoredCategoryPredictions.Count > 0
+                        ? scoredCategoryPredictions.Average(p =>
+                        {
+                            var outcome = p.PredictedOutcome == p.ActualOutcome ? 1.0 : 0.0;
+                            var probability = (double)p.ConfidenceScore!.Value;
+                            return Math.Pow(probability - outcome, 2);
+                        })
+                        : 0.0
                 };
             }
         }
@@ -89,6 +110,7 @@ public class AnalyticsStats
     public int CompletedPredictions { get; set; }
     public int CorrectPredictions { get; set; }
     public double OverallAccuracy { get; set; }
+    public double BrierScore { get; set; }
     public Dictionary<string, CategoryStat> CategoryStats { get; set; } = new();
 }
 
@@ -98,4 +120,5 @@ public class CategoryStat
     public int Total { get; set; }
     public int Correct { get; set; }
     public double Accuracy { get; set; }
+    public double BrierScore { get; set; }
 }

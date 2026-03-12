@@ -12,6 +12,7 @@ public class Prediction
     public string AwayTeam { get; set; } = null!;
     public string PredictionCategory { get; set; } = null!;
     public string PredictedOutcome { get; set; } = null!;
+    public decimal? RawConfidenceScore { get; set; }
     public decimal? ConfidenceScore { get; set; }
     public string? ActualOutcome { get; set; }
     public string? ActualScore { get; set; }

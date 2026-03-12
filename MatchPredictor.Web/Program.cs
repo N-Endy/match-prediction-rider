@@ -46,6 +46,7 @@ builder.Services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
 builder.Services.AddScoped<IWebScraperService, WebScraperService>();
 builder.Services.AddScoped<IExtractFromExcel, ExtractFromExcel>();
 builder.Services.AddScoped<IProbabilityCalculator, ProbabilityCalculator>();
+builder.Services.AddScoped<ICalibrationService, CalibrationService>();
 builder.Services.AddScoped<IAnalyzerService, AnalyzerService>();
 builder.Services.AddScoped<IRegressionPredictorService, RegressionPredictorService>();
 builder.Services.AddScoped<ISportyBetBookingService, SportyBetBookingService>();
@@ -256,5 +257,4 @@ app.MapControllers();
 app.MapHealthChecks("/health");
 
 app.Run();
-
 

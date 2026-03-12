@@ -17,6 +17,7 @@ public class AnalyzerService  : IAnalyzerService
     private readonly IExtractFromExcel _excelExtract;
     private readonly ILogger<AnalyzerService> _logger;
     private readonly IRegressionPredictorService _regressionPredictorService;
+    private readonly ICalibrationService _calibrationService;
     
     public AnalyzerService(
         IDataAnalyzerService dataAnalyzerService,
@@ -24,6 +25,7 @@ public class AnalyzerService  : IAnalyzerService
         ApplicationDbContext dbContext,
         IExtractFromExcel excelExtract,
         IRegressionPredictorService regressionPredictorService,
+        ICalibrationService calibrationService,
         ILogger<AnalyzerService> logger)
     {
         _dataAnalyzerService = dataAnalyzerService;
@@ -31,6 +33,7 @@ public class AnalyzerService  : IAnalyzerService
         _dbContext = dbContext;
         _excelExtract = excelExtract;
         _regressionPredictorService = regressionPredictorService;
+        _calibrationService = calibrationService;
         _logger = logger;
     }
 
@@ -46,7 +49,19 @@ public class AnalyzerService  : IAnalyzerService
             var scraped = _excelExtract.ExtractMatchDatasetFromFile().ToList();
             try
             {
-                // Check if they exist in the database first, and only put those not existing.
+                var existingMatches = await _dbContext.MatchDatas
+                    .Where(m => scraped.Select(s => s.Date).Distinct().Contains(m.Date!))
+                    .ToListAsync();
+
+                var existingMatchLookup = existingMatches
+                    .GroupBy(m => (
+                        Home: (m.HomeTeam ?? string.Empty).Trim().ToLowerInvariant(),
+                        Away: (m.AwayTeam ?? string.Empty).Trim().ToLowerInvariant(),
+                        League: (m.League ?? string.Empty).Trim().ToLowerInvariant(),
+                        Date: m.Date ?? string.Empty,
+                        Time: m.Time ?? string.Empty))
+                    .ToDictionary(group => group.Key, group => group.First());
+
                 foreach (var match in scraped)
                 {
                     var properDateTime = DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time);
@@ -54,14 +69,41 @@ public class AnalyzerService  : IAnalyzerService
                     match.Time = properDateTime.time;
                     match.MatchDateTime = properDateTime.utcDateTime;
 
-                    var exists = await _dbContext.MatchDatas.AnyAsync(m =>
-                        m.HomeTeam == match.HomeTeam &&
-                        m.AwayTeam == match.AwayTeam &&
-                        m.League == match.League &&
-                        m.Date == match.Date &&
-                        m.Time == match.Time);
-                    
-                    if (!exists) await _dbContext.MatchDatas.AddAsync(match);
+                    var key = (
+                        Home: (match.HomeTeam ?? string.Empty).Trim().ToLowerInvariant(),
+                        Away: (match.AwayTeam ?? string.Empty).Trim().ToLowerInvariant(),
+                        League: (match.League ?? string.Empty).Trim().ToLowerInvariant(),
+                        Date: match.Date ?? string.Empty,
+                        Time: match.Time ?? string.Empty);
+
+                    if (existingMatchLookup.TryGetValue(key, out var existing))
+                    {
+                        existing.HomeWin = match.HomeWin;
+                        existing.Draw = match.Draw;
+                        existing.AwayWin = match.AwayWin;
+                        existing.OverOneGoal = match.OverOneGoal;
+                        existing.OverOnePointFive = match.OverOnePointFive;
+                        existing.OverTwoGoals = match.OverTwoGoals;
+                        existing.OverThreeGoals = match.OverThreeGoals;
+                        existing.OverFourGoals = match.OverFourGoals;
+                        existing.UnderOnePointFive = match.UnderOnePointFive;
+                        existing.UnderTwoGoals = match.UnderTwoGoals;
+                        existing.UnderThreeGoals = match.UnderThreeGoals;
+                        existing.AhZeroHome = match.AhZeroHome;
+                        existing.AhZeroAway = match.AhZeroAway;
+                        existing.AhMinusHalfHome = match.AhMinusHalfHome;
+                        existing.AhMinusHalfAway = match.AhMinusHalfAway;
+                        existing.AhMinusOneHome = match.AhMinusOneHome;
+                        existing.AhMinusOneAway = match.AhMinusOneAway;
+                        existing.AhPlusHalfHome = match.AhPlusHalfHome;
+                        existing.AhPlusHalfAway = match.AhPlusHalfAway;
+                        existing.MatchDateTime = match.MatchDateTime;
+                    }
+                    else
+                    {
+                        await _dbContext.MatchDatas.AddAsync(match);
+                        existingMatchLookup[key] = match;
+                    }
                 }
                 
                 await _dbContext.SaveChangesAsync();
@@ -91,13 +133,15 @@ public class AnalyzerService  : IAnalyzerService
         _logger.LogInformation("Starting prediction generation process...");
         try
         {
-            var matches = await _dbContext.MatchDatas.ToListAsync();
-            var accuracies = await _dbContext.ModelAccuracies.ToListAsync();
+            var todayStr = DateTimeProvider.GetLocalTime().ToString("dd-MM-yyyy");
+            var matches = await _dbContext.MatchDatas
+                .Where(match => match.Date == todayStr)
+                .ToListAsync();
 
-            await SavePredictions("BothTeamsScore", _dataAnalyzerService.BothTeamsScore(matches, accuracies));
-            await SavePredictions("Draw", _dataAnalyzerService.Draw(matches, accuracies));
-            await SavePredictions("Over2.5Goals", _dataAnalyzerService.OverTwoGoals(matches, accuracies));
-            await SavePredictions("StraightWin", _dataAnalyzerService.StraightWin(matches, accuracies));
+            await SavePredictions(_dataAnalyzerService.BothTeamsScore(matches));
+            await SavePredictions(_dataAnalyzerService.Draw(matches));
+            await SavePredictions(_dataAnalyzerService.OverTwoGoals(matches));
+            await SavePredictions(_dataAnalyzerService.StraightWin(matches));
             
             _logger.LogInformation("✅ Predictions calculated and saved successfully.");
             await LogScrapingStatus("Success", "✅ Prediction generation completed successfully.");
@@ -157,15 +201,15 @@ public class AnalyzerService  : IAnalyzerService
     {
         _logger.LogInformation("Starting daily analysis process...");
 
-        // ── Step 1: Pattern Analysis (independent) ──
+        // ── Step 1: Calibration rebuild (independent) ──
         try
         {
-            await AnalyzePatterns();
-            _logger.LogInformation("✅ Pattern analysis completed.");
+            await RebuildCalibrationProfiles();
+            _logger.LogInformation("✅ Calibration rebuild completed.");
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "⚠️ Pattern analysis failed, continuing with regression predictions.");
+            _logger.LogWarning(ex, "⚠️ Calibration rebuild failed, continuing with regression predictions.");
         }
 
         // ── Step 2: Download fresh data and generate regression predictions ──
@@ -183,7 +227,10 @@ public class AnalyzerService  : IAnalyzerService
             catch (Exception dlEx)
             {
                 _logger.LogWarning(dlEx, "⚠️ Fresh Excel download failed. Falling back to database data.");
-                scraped = await _dbContext.MatchDatas.ToListAsync();
+                var todayStr = DateTimeProvider.GetLocalTime().ToString("dd-MM-yyyy");
+                scraped = await _dbContext.MatchDatas
+                    .Where(match => match.Date == todayStr)
+                    .ToListAsync();
             }
 
             if (scraped.Count == 0)
@@ -192,8 +239,7 @@ public class AnalyzerService  : IAnalyzerService
             }
             else
             {
-                var accuracies = await _dbContext.ModelAccuracies.ToListAsync();
-                var regressionPredictions = _regressionPredictorService.GeneratePredictions(scraped, accuracies);
+                var regressionPredictions = _regressionPredictorService.GeneratePredictions(scraped);
                 await SaveRegressionPredictions(regressionPredictions);
                 _logger.LogInformation("✅ Regression-based predictions saved ({Count} matches, {PredCount} predictions).", scraped.Count, regressionPredictions.Count());
             }
@@ -258,17 +304,20 @@ public class AnalyzerService  : IAnalyzerService
 
                 if (aiMatch == null) continue;
 
-                prediction.ActualOutcome = prediction.PredictionCategory switch
-                {
-                    "BothTeamsScore" => aiMatch.BTTSLabel ? "BTTS" : "No BTTS",
-                    "Draw"           => DetermineDrawOutcome(aiMatch.Score),
-                    "Over2.5Goals"   => DetermineOver25Outcome(aiMatch.Score),
-                    "StraightWin"    => DetermineStraightWinOutcome(aiMatch.Score),
-                    _                => prediction.ActualOutcome
-                };
-
                 prediction.ActualScore = aiMatch.Score;
                 prediction.IsLive = aiMatch.IsLive;
+
+                if (!aiMatch.IsLive)
+                {
+                    prediction.ActualOutcome = prediction.PredictionCategory switch
+                    {
+                        "BothTeamsScore" => aiMatch.BTTSLabel ? "BTTS" : "No BTTS",
+                        "Draw"           => DetermineDrawOutcome(aiMatch.Score),
+                        "Over2.5Goals"   => DetermineOver25Outcome(aiMatch.Score),
+                        "StraightWin"    => DetermineStraightWinOutcome(aiMatch.Score),
+                        _                => prediction.ActualOutcome
+                    };
+                }
             }
         }
 
@@ -325,17 +374,20 @@ public class AnalyzerService  : IAnalyzerService
 
                 foreach (var prediction in matched)
                 {
-                    prediction.ActualOutcome = prediction.PredictionCategory switch
-                    {
-                        "BothTeamsScore" => score.BTTSLabel ? "BTTS" : "No BTTS",
-                        "Draw"           => DetermineDrawOutcome(score.Score),
-                        "Over2.5Goals"   => DetermineOver25Outcome(score.Score),
-                        "StraightWin"    => DetermineStraightWinOutcome(score.Score),
-                        _                => prediction.ActualOutcome
-                    };
-
                     prediction.ActualScore = score.Score;
                     prediction.IsLive = score.IsLive;
+
+                    if (!score.IsLive)
+                    {
+                        prediction.ActualOutcome = prediction.PredictionCategory switch
+                        {
+                            "BothTeamsScore" => score.BTTSLabel ? "BTTS" : "No BTTS",
+                            "Draw"           => DetermineDrawOutcome(score.Score),
+                            "Over2.5Goals"   => DetermineOver25Outcome(score.Score),
+                            "StraightWin"    => DetermineStraightWinOutcome(score.Score),
+                            _                => prediction.ActualOutcome
+                        };
+                    }
                 }
             }
         }
@@ -417,119 +469,12 @@ public class AnalyzerService  : IAnalyzerService
     }
 
     
-    private async Task AnalyzePatterns()
+    private async Task RebuildCalibrationProfiles()
     {
-        _logger.LogInformation("Starting detailed pattern analysis for self-learning...");
-        
-        // 1. Fetch completed predictions with their matching MatchData
-        var completedPredictions = await _dbContext.Predictions
-            .Where(p => p.ActualOutcome != null)
-            .ToListAsync();
-            
-        var allMatchData = await _dbContext.MatchDatas.ToListAsync();
-        
-        var predictionDataPairs = completedPredictions
-            .Join(allMatchData,
-                p => new { p.Date, p.HomeTeam, p.AwayTeam }!,
-                m => new { m.Date, m.HomeTeam, m.AwayTeam },
-                (p, m) => new { Prediction = p, Match = m })
-            .ToList();
-
-        if (predictionDataPairs.Count == 0)
-        {
-            _logger.LogInformation("No completed predictions with match data found to analyze.");
-            return;
-        }
-
-        var newAccuracies = new List<ModelAccuracy>();
-        var now = DateTime.UtcNow;
-
-        // 2. Define the metrics we want to track (including secondary fallbacks)
-        var metricsToTrack = new List<(string Name, Func<MatchData, double> Selector)>
-        {
-            // Primary Signals
-            ("AhMinusHalfHome", m => m.AhMinusHalfHome),
-            ("AhPlusHalfAway", m => m.AhPlusHalfAway),
-            ("OverTwoGoals", m => m.OverTwoGoals),
-            ("HomeWin", m => m.HomeWin),
-            ("AwayWin", m => m.AwayWin),
-            
-            // Secondary/Fallback Signals (for when primary is 0)
-            ("AhMinusOneHome", m => m.AhMinusOneHome),
-            ("AhPlusHalfHome", m => m.AhPlusHalfHome), // Away win fallback correlation
-            ("OverOnePointFive", m => m.OverOnePointFive),
-            ("OverThreeGoals", m => m.OverThreeGoals),
-            ("DrawOdds", m => m.Draw)
-        };
-
-        // 3. Bucketize & Aggregate
-        foreach (var categoryGroup in predictionDataPairs.GroupBy(x => x.Prediction.PredictionCategory))
-        {
-            var category = categoryGroup.Key;
-
-            foreach (var metric in metricsToTrack)
-            {
-                // Create buckets of 0.10 ranges (e.g., 0.50 to 0.59)
-                // Filter out 0 values as they typically represent missing data in MatchData
-                var bucketed = categoryGroup
-                    .Where(x => metric.Selector(x.Match) > 0)
-                    .GroupBy(x => 
-                    {
-                        var val = metric.Selector(x.Match);
-                        return Math.Floor(val * 10) / 10.0; 
-                    });
-
-                foreach (var bucket in bucketed)
-                {
-                    var rangeStart = bucket.Key;
-                    var rangeEnd = rangeStart + 0.10;
-                    
-                    var total = bucket.Count();
-                    // Don't save noise. Require at least slightly significant data points.
-                    if (total < 5) continue; 
-
-                    var correct = bucket.Count(x => x.Prediction.PredictedOutcome == x.Prediction.ActualOutcome);
-                    var accuracy = (double)correct / total;
-
-                    newAccuracies.Add(new ModelAccuracy
-                    {
-                        Category = category,
-                        MetricName = metric.Name,
-                        MetricRangeStart = rangeStart,
-                        MetricRangeEnd = rangeEnd,
-                        TotalPredictions = total,
-                        CorrectPredictions = correct,
-                        AccuracyPercentage = accuracy,
-                        LastUpdated = now
-                    });
-                }
-            }
-        }
-
-        // 4. Incremental upsert — preserves accumulated learning (Fix #10)
-        var existingAccuracies = await _dbContext.ModelAccuracies.ToListAsync();
-        var existingDict = existingAccuracies
-            .ToDictionary(a => (a.Category, a.MetricName, a.MetricRangeStart));
-
-        foreach (var newAcc in newAccuracies)
-        {
-            var key = (newAcc.Category, newAcc.MetricName, newAcc.MetricRangeStart);
-            if (existingDict.TryGetValue(key, out var existing))
-            {
-                // Update existing row with blended accuracy (70% new + 30% old)
-                existing.CorrectPredictions = newAcc.CorrectPredictions;
-                existing.TotalPredictions = newAcc.TotalPredictions;
-                existing.AccuracyPercentage = (newAcc.AccuracyPercentage * 0.7) + (existing.AccuracyPercentage * 0.3);
-                existing.LastUpdated = now;
-            }
-            else
-            {
-                await _dbContext.ModelAccuracies.AddAsync(newAcc);
-            }
-        }
-
-        await _dbContext.SaveChangesAsync();
-        _logger.LogInformation("Updated {Count} granular accuracy metrics in the database (incremental).", newAccuracies.Count);
+        _logger.LogInformation("Starting market calibration rebuild...");
+        await _calibrationService.RebuildProfilesAsync();
+        var profileCount = await _dbContext.MarketCalibrationProfiles.CountAsync();
+        _logger.LogInformation("Updated {Count} calibration profiles.", profileCount);
     }
     
     private async Task SaveMatchScores(List<MatchScore> scores)
@@ -621,7 +566,7 @@ public class AnalyzerService  : IAnalyzerService
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
     public async Task CleanupOldPredictionsAndMatchDataAsync()
     {
-        var cutoffDate = DateTimeProvider.GetLocalTime().AddDays(-8).Date;
+        var cutoffDate = DateTimeProvider.GetLocalTime().AddDays(-90).Date;
     
         // Delete old predictions directly in the database using CreatedAt (proper DateTime)
         
@@ -647,8 +592,8 @@ public class AnalyzerService  : IAnalyzerService
             .Where(s => s.MatchTime < cutoffUtc)
             .ExecuteDeleteAsync();
     
-        // Cleanup old MatchScores — retain 30 days for Pipeline 2 regression (Fix #6)
-        var scoreCutoffDate = DateTimeProvider.GetLocalTime().AddDays(-30).Date;
+        // Cleanup old MatchScores — retain 90 days for calibration and regression.
+        var scoreCutoffDate = DateTimeProvider.GetLocalTime().AddDays(-90).Date;
         var scoreCutoffUtc = DateTime.SpecifyKind(scoreCutoffDate, DateTimeKind.Utc);
         await _dbContext.MatchScores
             .Where(s => s.MatchTime < scoreCutoffUtc)
@@ -666,38 +611,13 @@ public class AnalyzerService  : IAnalyzerService
         }
     }
     
-    private async Task SavePredictions(string category, IEnumerable<MatchData> matches)
+    private async Task SavePredictions(IEnumerable<PredictionCandidate> candidates)
     {
-        var matchList = matches.ToList();
-        if (!matchList.Any()) return;
-
-        // 1. Pre-process the incoming matches to get their parsed dates and times
-        var processedMatches = matchList.Select(match =>
-        {
-            var properDateTime = DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time);
-            DateTime? matchDateTime = null;
-            
-            if (DateTime.TryParseExact(
-                    $"{properDateTime.date} {properDateTime.time}",
-                    "dd-MM-yyyy HH:mm",
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    System.Globalization.DateTimeStyles.None,
-                    out var parsed))
-            {
-                matchDateTime = parsed;
-            }
-
-            return new 
-            { 
-                Original = match, 
-                DateStr = properDateTime.date, 
-                TimeStr = properDateTime.time, 
-                MatchDateTime = matchDateTime 
-            };
-        }).ToList();
+        var candidateList = candidates.ToList();
+        if (!candidateList.Any()) return;
 
         // 2. Extract unique dates to fetch existing records in ONE bulk query
-        var uniqueDates = processedMatches.Select(m => m.DateStr).Distinct().ToList();
+        var uniqueDates = candidateList.Select(c => c.Date).Distinct().ToList();
 
         var existingPredictions = await _dbContext.Predictions
             .Where(p => uniqueDates.Contains(p.Date))
@@ -714,43 +634,36 @@ public class AnalyzerService  : IAnalyzerService
             .ToDictionary(g => g.Key, g => g.First());
 
         // 4. Loop through the memory collection, not the database
-        foreach (var item in processedMatches)
+        foreach (var candidate in candidateList)
         {
-            var match = item.Original;
-            var homeTeam = match.HomeTeam ?? "N/A";
-            var awayTeam = match.AwayTeam ?? "N/A";
-            var league = match.League ?? "N/A";
-
-            var predictedOutcome = category switch
-            {
-                "BothTeamsScore" => "BTTS",
-                "Draw"           => "Draw",
-                "Over2.5Goals"   => "Over 2.5",
-                "StraightWin"    => match.HomeWin > match.AwayWin ? "Home Win" : "Away Win",
-                _                => "Unknown"
-            };
+            var homeTeam = candidate.HomeTeam ?? "N/A";
+            var awayTeam = candidate.AwayTeam ?? "N/A";
+            var league = candidate.League ?? "N/A";
 
             var key = (
                 Home: homeTeam.Trim().ToLowerInvariant(),
                 Away: awayTeam.Trim().ToLowerInvariant(),
                 League: league.Trim().ToLowerInvariant(),
-                Date: item.DateStr,
-                Category: category);
+                Date: candidate.Date,
+                Category: candidate.PredictionCategory);
 
             if (existingDict.TryGetValue(key, out var existingRecord))
             {
                 // UPDATE SCENARIO
 
-                if (existingRecord.Time != item.TimeStr)
+                if (existingRecord.Time != candidate.Time)
                 {
-                    existingRecord.Time = item.TimeStr;
-                    existingRecord.MatchDateTime = item.MatchDateTime;
+                    existingRecord.Time = candidate.Time;
+                    existingRecord.MatchDateTime = candidate.MatchDateTime;
                 }
 
-                if (existingRecord.PredictedOutcome != predictedOutcome)
+                if (existingRecord.PredictedOutcome != candidate.PredictedOutcome)
                 {
-                    existingRecord.PredictedOutcome = predictedOutcome;
+                    existingRecord.PredictedOutcome = candidate.PredictedOutcome;
                 }
+
+                existingRecord.RawConfidenceScore = Math.Round((decimal)candidate.RawProbability, 4);
+                existingRecord.ConfidenceScore = Math.Round((decimal)candidate.CalibratedProbability, 4);
             }
             else
             {
@@ -760,11 +673,13 @@ public class AnalyzerService  : IAnalyzerService
                     HomeTeam = homeTeam.Trim(),
                     AwayTeam = awayTeam.Trim(),
                     League = league.Trim(),
-                    PredictionCategory = category,
-                    PredictedOutcome = predictedOutcome,
-                    Date = item.DateStr,
-                    Time = item.TimeStr,
-                    MatchDateTime = item.MatchDateTime
+                    PredictionCategory = candidate.PredictionCategory,
+                    PredictedOutcome = candidate.PredictedOutcome,
+                    RawConfidenceScore = Math.Round((decimal)candidate.RawProbability, 4),
+                    ConfidenceScore = Math.Round((decimal)candidate.CalibratedProbability, 4),
+                    Date = candidate.Date,
+                    Time = candidate.Time,
+                    MatchDateTime = candidate.MatchDateTime
                 };
 
                 _dbContext.Predictions.Add(prediction);
@@ -813,10 +728,10 @@ public class AnalyzerService  : IAnalyzerService
             if (existingDict.TryGetValue(key, out var existingRecord))
             {
                 // UPDATE SCENARIO: The prediction already exists.
-                // If regression models produce updated probabilities or metrics on a second run, 
-                // update those specific fields here. For example:
-                
                 existingRecord.PredictedOutcome = prediction.PredictedOutcome;
+                existingRecord.ConfidenceScore = prediction.ConfidenceScore;
+                existingRecord.ExpectedHomeGoals = prediction.ExpectedHomeGoals;
+                existingRecord.ExpectedAwayGoals = prediction.ExpectedAwayGoals;
             }
             else
             {
@@ -834,4 +749,3 @@ public class AnalyzerService  : IAnalyzerService
     }
 
 }
-

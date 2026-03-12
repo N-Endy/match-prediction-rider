@@ -12,17 +12,20 @@ public class ValueBetsService : IValueBetsService
 {
     private readonly ApplicationDbContext _dbContext;
     private readonly IProbabilityCalculator _probabilityCalculator;
+    private readonly ICalibrationService _calibrationService;
     private readonly IAiAdvisorService _aiAdvisorService;
     private readonly ILogger<ValueBetsService> _logger;
 
     public ValueBetsService(
         ApplicationDbContext dbContext,
         IProbabilityCalculator probabilityCalculator,
+        ICalibrationService calibrationService,
         IAiAdvisorService aiAdvisorService,
         ILogger<ValueBetsService> logger)
     {
         _dbContext = dbContext;
         _probabilityCalculator = probabilityCalculator;
+        _calibrationService = calibrationService;
         _aiAdvisorService = aiAdvisorService;
         _logger = logger;
     }
@@ -45,20 +48,24 @@ public class ValueBetsService : IValueBetsService
             return Enumerable.Empty<ValueBetDto>();
         }
 
-        var accuracies = await _dbContext.ModelAccuracies.ToListAsync(ct);
-
         var candidateBets = new List<ValueBetDto>();
 
         // 2. Compute probabilities
         foreach (var match in upcomingMatches)
         {
+            var rawBtts = _probabilityCalculator.CalculateBttsProbability(match);
+            var rawOver25 = _probabilityCalculator.CalculateOverTwoGoalsProbability(match);
+            var rawHomeWin = _probabilityCalculator.CalculateHomeWinProbability(match);
+            var rawAwayWin = _probabilityCalculator.CalculateAwayWinProbability(match);
+            var rawDraw = _probabilityCalculator.CalculateDrawProbability(match);
+
             var probs = new Dictionary<string, (string outcome, double prob)>
             {
-                { "BothTeamsScore", ("BTTS", _probabilityCalculator.CalculateBttsProbability(match, accuracies)) },
-                { "Over2.5Goals", ("Over 2.5", _probabilityCalculator.CalculateOverTwoGoalsProbability(match, accuracies)) },
-                { "StraightWin", ("Home Win", _probabilityCalculator.CalculateHomeWinProbability(match, accuracies)) },
-                { "StraightWinAway", ("Away Win", _probabilityCalculator.CalculateAwayWinProbability(match, accuracies)) },
-                { "Draw", ("Draw", _probabilityCalculator.CalculateDrawProbability(match, accuracies)) }
+                { "BothTeamsScore", ("BTTS", _calibrationService.Calibrate(PredictionMarket.BothTeamsScore, rawBtts)) },
+                { "Over2.5Goals", ("Over 2.5", _calibrationService.Calibrate(PredictionMarket.Over25Goals, rawOver25)) },
+                { "StraightWin", ("Home Win", _calibrationService.Calibrate(PredictionMarket.StraightWin, rawHomeWin)) },
+                { "StraightWinAway", ("Away Win", _calibrationService.Calibrate(PredictionMarket.StraightWin, rawAwayWin)) },
+                { "Draw", ("Draw", _calibrationService.Calibrate(PredictionMarket.Draw, rawDraw)) }
             };
 
             // Add ALL markets above threshold per match (Fix #12)
@@ -68,10 +75,10 @@ public class ValueBetsService : IValueBetsService
                 
                 candidateBets.Add(new ValueBetDto
                 {
-                    League = match.League,
-                    HomeTeam = match.HomeTeam,
-                    AwayTeam = match.AwayTeam,
-                    KickoffTime = match.Time,
+                    League = match.League ?? string.Empty,
+                    HomeTeam = match.HomeTeam ?? string.Empty,
+                    AwayTeam = match.AwayTeam ?? string.Empty,
+                    KickoffTime = match.Time ?? string.Empty,
                     PredictionCategory = category,
                     PredictedOutcome = market.Value.outcome,
                     MathematicalProbability = market.Value.prob,

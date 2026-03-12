@@ -3,6 +3,8 @@ using MatchPredictor.Domain.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using OfficeOpenXml;
+using System.Globalization;
+using MatchPredictor.Infrastructure.Utils;
 
 namespace MatchPredictor.Infrastructure;
 
@@ -15,6 +17,7 @@ public class ExtractFromExcel : IExtractFromExcel
     {
         _configuration = configuration;
         _logger = logger;
+        EpplusLicenseBootstrapper.EnsureInitialized(configuration, logger);
     }
 
     private string GetFilePath()
@@ -62,13 +65,6 @@ public class ExtractFromExcel : IExtractFromExcel
     
     public IEnumerable<MatchData> ExtractMatchDatasetFromFile()
     {
-        //ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
-        ExcelPackage.License.SetNonCommercialPersonal("My Name"); //This will also set the Author property to the name provided in the argument.
-        using(var _ = new ExcelPackage(new FileInfo("MyWorkbook.xlsx")))
-        {
-
-        }
-        
         var extractedData = new List<MatchData>();
         var filePath = GetFilePath();
 
@@ -91,73 +87,81 @@ public class ExtractFromExcel : IExtractFromExcel
             // Read data from the downloaded Excel file and extract relevant information
             using var package = new ExcelPackage(new FileInfo(filePath));
 
-            if (package.Workbook.Worksheets.Count > 0)
-            {
-                var worksheet = package.Workbook.Worksheets[0];
-
-                if (worksheet.Dimension == null || worksheet.Cells.Any(cell => cell.Value == null))
-                {
-                    _logger.LogWarning("❌ Excel file is empty.");
-                    return extractedData;
-                }
-
-                var rowCount = worksheet.Dimension?.Rows ?? 0;
-
-                for (var row = 2; row <= rowCount; row++)
-                {
-                    var dateString = worksheet.Cells[row, 5].Value?.ToString();
-                    if (dateString != null)
-                    {
-                        var datePart = dateString.Split(' ')[0].Split('.');
-                        if (datePart.Length > 0 && int.TryParse(datePart[0], out int day))
-                        {
-                            var currentDay = DateTime.Now.Day;
-
-                            if (day == currentDay)
-                            {
-                                var dt = DateTime.ParseExact(dateString, "d.M.yyyy H:mm", null);
-                                dateString = dt.ToString("dd-MM-yyyy, HH:mm");
-                                var matchData = new MatchData
-                                {
-                                    Date = DateTime.ParseExact(dateString.Split(',')[0], "dd-MM-yyyy", null).ToString("dd-MM-yyyy"),
-                                    Time = dateString.Split(',')[1].Trim(),
-                                    League = worksheet.Cells[row, 4].Value?.ToString(),
-                                    HomeTeam = worksheet.Cells[row, 2].Value?.ToString(),
-                                    AwayTeam = worksheet.Cells[row, 3].Value?.ToString(),
-                                    HomeWin = double.TryParse(worksheet.Cells[row, 6].Value?.ToString(), out var homeWin) ? homeWin : 0,
-                                    Draw = double.TryParse(worksheet.Cells[row, 7].Value?.ToString(), out var draw) ? draw : 0,
-                                    AwayWin = double.TryParse(worksheet.Cells[row, 8].Value?.ToString(), out var awayWin) ? awayWin : 0,
-                                    
-                                    // Granular Over/Under lines
-                                    OverOneGoal = double.TryParse(worksheet.Cells[row, 12].Value?.ToString(), out var o1) ? o1 : 0,
-                                    OverOnePointFive = double.TryParse(worksheet.Cells[row, 14].Value?.ToString(), out var o15) ? o15 : 0,
-                                    OverTwoGoals = double.TryParse(worksheet.Cells[row, 18].Value?.ToString(), out var overTwoGoals) ? overTwoGoals : 0,
-                                    OverThreeGoals = double.TryParse(worksheet.Cells[row, 22].Value?.ToString(), out var overThreeGoals) ? overThreeGoals : 0,
-                                    OverFourGoals = double.TryParse(worksheet.Cells[row, 24].Value?.ToString(), out var overFourGoals) ? overFourGoals : 0,
-                                    UnderOnePointFive = double.TryParse(worksheet.Cells[row, 30].Value?.ToString(), out var u15) ? u15 : 0,
-                                    UnderTwoGoals = double.TryParse(worksheet.Cells[row, 34].Value?.ToString(), out var underTwoGoals) ? underTwoGoals : 0,
-                                    UnderThreeGoals = double.TryParse(worksheet.Cells[row, 38].Value?.ToString(), out var underThreeGoals) ? underThreeGoals : 0,
-                                    
-                                    // Asian Handicap data
-                                    AhZeroHome = double.TryParse(worksheet.Cells[row, 57].Value?.ToString(), out var ah0h) ? ah0h : 0,
-                                    AhZeroAway = double.TryParse(worksheet.Cells[row, 58].Value?.ToString(), out var ah0a) ? ah0a : 0,
-                                    AhMinusHalfHome = double.TryParse(worksheet.Cells[row, 53].Value?.ToString(), out var ahm05h) ? ahm05h : 0,
-                                    AhMinusHalfAway = double.TryParse(worksheet.Cells[row, 54].Value?.ToString(), out var ahm05a) ? ahm05a : 0,
-                                    AhMinusOneHome = double.TryParse(worksheet.Cells[row, 49].Value?.ToString(), out var ahm1h) ? ahm1h : 0,
-                                    AhMinusOneAway = double.TryParse(worksheet.Cells[row, 50].Value?.ToString(), out var ahm1a) ? ahm1a : 0,
-                                    AhPlusHalfHome = double.TryParse(worksheet.Cells[row, 71].Value?.ToString(), out var ahp05h) ? ahp05h : 0,
-                                    AhPlusHalfAway = double.TryParse(worksheet.Cells[row, 72].Value?.ToString(), out var ahp05a) ? ahp05a : 0,
-                                };
-                                extractedData.Add(matchData);
-                            }
-                        }
-                    }
-                }
-            }
-            else
+            if (package.Workbook.Worksheets.Count <= 0)
             {
                 _logger.LogWarning("❌ Excel file does not contain any worksheets.");
                 return extractedData;
+            }
+
+            var worksheet = package.Workbook.Worksheets[0];
+
+            if (!string.Equals(worksheet.Name, "soccer", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogError("❌ Expected worksheet[0] to be 'soccer' but found '{WorksheetName}'.", worksheet.Name);
+                throw new InvalidOperationException($"Expected first worksheet to be 'soccer' but found '{worksheet.Name}'.");
+            }
+
+            if (worksheet.Dimension == null || worksheet.Dimension.Rows < 2)
+            {
+                _logger.LogWarning("❌ Excel file is empty.");
+                return extractedData;
+            }
+
+            ValidateExpectedHeaders(worksheet);
+
+            var rowCount = worksheet.Dimension.Rows;
+            var today = DateTimeProvider.GetLocalTime().Date;
+
+            for (var row = 2; row <= rowCount; row++)
+            {
+                var dateString = worksheet.Cells[row, 5].Value?.ToString();
+                if (string.IsNullOrWhiteSpace(dateString))
+                    continue;
+
+                if (!DateTime.TryParseExact(
+                        dateString,
+                        "d.M.yyyy H:mm",
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.None,
+                        out var matchDateTime))
+                {
+                    _logger.LogDebug("Skipping row {Row} because date '{DateString}' could not be parsed.", row, dateString);
+                    continue;
+                }
+
+                if (matchDateTime.Date != today)
+                    continue;
+
+                var matchData = new MatchData
+                {
+                    Date = matchDateTime.ToString("dd-MM-yyyy", CultureInfo.InvariantCulture),
+                    Time = matchDateTime.ToString("HH:mm", CultureInfo.InvariantCulture),
+                    League = worksheet.Cells[row, 4].Value?.ToString(),
+                    HomeTeam = worksheet.Cells[row, 2].Value?.ToString(),
+                    AwayTeam = worksheet.Cells[row, 3].Value?.ToString(),
+                    HomeWin = ParseProbability(worksheet.Cells[row, 6].Value),
+                    Draw = ParseProbability(worksheet.Cells[row, 7].Value),
+                    AwayWin = ParseProbability(worksheet.Cells[row, 8].Value),
+                    OverOneGoal = ParseProbability(worksheet.Cells[row, 12].Value),
+                    OverOnePointFive = ParseProbability(worksheet.Cells[row, 14].Value),
+                    OverTwoGoals = ParseProbability(worksheet.Cells[row, 18].Value),
+                    OverThreeGoals = ParseProbability(worksheet.Cells[row, 22].Value),
+                    OverFourGoals = ParseProbability(worksheet.Cells[row, 24].Value),
+                    UnderOnePointFive = ParseProbability(worksheet.Cells[row, 30].Value),
+                    UnderTwoGoals = ParseProbability(worksheet.Cells[row, 34].Value),
+                    UnderThreeGoals = ParseProbability(worksheet.Cells[row, 38].Value),
+                    AhZeroHome = ParseProbability(worksheet.Cells[row, 57].Value),
+                    AhZeroAway = ParseProbability(worksheet.Cells[row, 58].Value),
+                    AhMinusHalfHome = ParseProbability(worksheet.Cells[row, 53].Value),
+                    AhMinusHalfAway = ParseProbability(worksheet.Cells[row, 54].Value),
+                    AhMinusOneHome = ParseProbability(worksheet.Cells[row, 49].Value),
+                    AhMinusOneAway = ParseProbability(worksheet.Cells[row, 50].Value),
+                    AhPlusHalfHome = ParseProbability(worksheet.Cells[row, 71].Value),
+                    AhPlusHalfAway = ParseProbability(worksheet.Cells[row, 72].Value)
+                };
+
+                matchData.NormalizeSourceProbabilities();
+                extractedData.Add(matchData);
             }
         }
         catch (Exception e)
@@ -166,5 +170,53 @@ public class ExtractFromExcel : IExtractFromExcel
             throw; // Re-throw the exception to handle it further up if needed
         }
         return extractedData;
+    }
+
+    private static double ParseProbability(object? value)
+    {
+        return double.TryParse(value?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : 0.0;
+    }
+
+    private static void ValidateExpectedHeaders(ExcelWorksheet worksheet)
+    {
+        var requiredHeaders = new Dictionary<int, string>
+        {
+            [2] = "home",
+            [3] = "away",
+            [4] = "league",
+            [5] = "date",
+            [6] = "1x2_h",
+            [7] = "1x2_d",
+            [8] = "1x2_a",
+            [18] = "o_2.5",
+            [34] = "u_2.5",
+            [49] = "ah_-1_h",
+            [50] = "ah_-1_a",
+            [53] = "ah_-0.5_h",
+            [54] = "ah_-0.5_a",
+            [57] = "ah_0_h",
+            [58] = "ah_0_a",
+            [71] = "ah_+0.5_h",
+            [72] = "ah_+0.5_a"
+        };
+
+        foreach (var (column, expectedHeader) in requiredHeaders)
+        {
+            var actualHeader = NormalizeHeader(worksheet.Cells[1, column].Value?.ToString());
+            if (!string.Equals(actualHeader, expectedHeader, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Expected header '{expectedHeader}' at column {column}, but found '{actualHeader ?? "<null>"}'.");
+            }
+        }
+    }
+
+    private static string? NormalizeHeader(string? header)
+    {
+        return string.IsNullOrWhiteSpace(header)
+            ? null
+            : header.Replace('\u00A0', ' ').Trim();
     }
 }
