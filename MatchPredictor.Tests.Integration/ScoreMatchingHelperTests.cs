@@ -26,4 +26,23 @@ public class ScoreMatchingHelperTests
 
         Assert.Equal(left, right);
     }
+
+    [Fact]
+    public void GetTeamMatchResult_UsesLeagueContextForImplicitWomenAndYouthQualifiers()
+    {
+        var womenMatch = ScoreMatchingHelper.GetTeamMatchResult(
+            "Newcastle Jets",
+            "Newcastle Jets Women",
+            "Australia - A League Women",
+            "Australia W-League");
+
+        var youthMatch = ScoreMatchingHelper.GetTeamMatchResult(
+            "Manchester United",
+            "Manchester United U21",
+            "England - Premier League 2 U21",
+            "England - Premier League 2 U21");
+
+        Assert.True(womenMatch.IsMatch);
+        Assert.True(youthMatch.IsMatch);
+    }
 }

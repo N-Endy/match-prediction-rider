@@ -159,30 +159,6 @@ public class AiAdvisorService : IAiAdvisorService
             """;
     }
 
-    // private static string BuildValueBetsSystemPrompt()
-    // {
-    //     return """
-    //         IDENTITY: You are a professional quantitative sports handicapper.
-    //         TASK: Review the provided JSON array of mathematically filtered top-value football matches (probability > 75%).
-    //         
-    //         1. Analyze the MathProb and matchup. 
-    //         2. Eliminate any matches that feel too risky despite the math (e.g., derbies, unpredictable leagues, or irrelevant fixtures).
-    //         3. Keep the most compelling matches and write a short 1-2 sentence compelling 'AiJustification' for why this is a massive value bet.
-    //         
-    //         CRITICAL OUTPUT FORMAT:
-    //         You MUST return exactly and ONLY a valid JSON array of objects with these exact keys:
-    //         [
-    //           {
-    //             "HomeTeam": "string",
-    //             "AwayTeam": "string",
-    //             "AiJustification": "string"
-    //           }
-    //         ]
-    //         
-    //         Do not wrap it in markdown block quotes like ```json or anything else. Start with '[' and end with ']'.
-    //         """;
-    // }
-    
     private static string BuildValueBetsSystemPrompt()
     {
         return """

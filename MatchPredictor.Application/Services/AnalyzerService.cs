@@ -13,6 +13,8 @@ namespace MatchPredictor.Application.Services;
 
 public class AnalyzerService  : IAnalyzerService
 {
+    private const int ScoreUpdaterLookbackDays = 14;
+
     private readonly IDataAnalyzerService _dataAnalyzerService;
     private readonly IWebScraperService _webScraperService;
     private readonly ApplicationDbContext _dbContext;
@@ -318,30 +320,40 @@ public class AnalyzerService  : IAnalyzerService
     private async Task UpdatePredictionsWithActualResults()
     {
         var today = DateTimeProvider.GetLocalTime().Date;
-        var dateStr = today.ToString("dd-MM-yyyy");
+        var earliestSettlementDate = today.AddDays(-ScoreUpdaterLookbackDays);
+        var settlementDates = Enumerable.Range(0, ScoreUpdaterLookbackDays + 1)
+            .Select(offset => earliestSettlementDate.AddDays(offset).ToString("dd-MM-yyyy"))
+            .ToHashSet(StringComparer.Ordinal);
 
-        // 1. Set up the UTC boundaries for the start and end of the day
-        var startOfDayUtc = DateTime.SpecifyKind(today, DateTimeKind.Utc);
-        var endOfDayUtc = startOfDayUtc.AddDays(1);
+        var startOfWindowUtc = DateTimeProvider.ConvertLocalToUtc(earliestSettlementDate);
+        var endOfWindowUtc = DateTimeProvider.ConvertLocalToUtc(today.AddDays(1));
 
         // ── Primary: AiScore (broader league coverage) ──
-        var predictionsForToday = await _dbContext.Predictions
-            .Where(p => p.Date == dateStr)
+        var predictionsForSettlement = await _dbContext.Predictions
+            .Where(p => settlementDates.Contains(p.Date))
             .ToListAsync();
-        var forecastsForToday = await _dbContext.ForecastObservations
-            .Where(f => f.Date == dateStr)
+        var forecastsForSettlement = await _dbContext.ForecastObservations
+            .Where(f => settlementDates.Contains(f.Date))
             .ToListAsync();
 
+        foreach (var prediction in predictionsForSettlement)
+        {
+            RepairPredictionOutcomeFromStoredScore(prediction);
+        }
+
         var aiScores = await _dbContext.AiScoreMatchScores
-            .Where(s => s.MatchTime >= startOfDayUtc && s.MatchTime < endOfDayUtc)
+            .Where(s => s.MatchTime >= startOfWindowUtc && s.MatchTime < endOfWindowUtc)
             .ToListAsync();
 
         if (aiScores.Count > 0)
         {
-            _logger.LogInformation("Matching scores from AiScore ({Count} scores) against {PredCount} predictions.",
-                aiScores.Count, predictionsForToday.Count);
+            _logger.LogInformation(
+                "Matching scores from AiScore ({Count} scores) against {PredCount} predictions in the {LookbackDays}-day settlement window.",
+                aiScores.Count,
+                predictionsForSettlement.Count,
+                ScoreUpdaterLookbackDays);
 
-            foreach (var prediction in predictionsForToday)
+            foreach (var prediction in predictionsForSettlement)
             {
                 var aiMatch = FindBestFixtureCandidate(
                     aiScores,
@@ -356,23 +368,10 @@ public class AnalyzerService  : IAnalyzerService
 
                 if (aiMatch == null) continue;
 
-                prediction.ActualScore = aiMatch.Score;
-                prediction.IsLive = aiMatch.IsLive;
-
-                if (!aiMatch.IsLive)
-                {
-                    prediction.ActualOutcome = prediction.PredictionCategory switch
-                    {
-                        "BothTeamsScore" => aiMatch.BTTSLabel ? "BTTS" : "No BTTS",
-                        "Draw"           => DetermineDrawOutcome(aiMatch.Score),
-                        "Over2.5Goals"   => DetermineOver25Outcome(aiMatch.Score),
-                        "StraightWin"    => DetermineStraightWinOutcome(aiMatch.Score),
-                        _                => prediction.ActualOutcome
-                    };
-                }
+                UpdatePredictionSettlementState(prediction, aiMatch.Score, aiMatch.BTTSLabel, aiMatch.IsLive);
             }
 
-            foreach (var forecast in forecastsForToday)
+            foreach (var forecast in forecastsForSettlement)
             {
                 var aiMatch = FindBestFixtureCandidate(
                     aiScores,
@@ -393,13 +392,13 @@ public class AnalyzerService  : IAnalyzerService
 
         // ── Fallback: FlashScore for any predictions still missing a score ──
         var scores = await _dbContext.MatchScores
-            .Where(s => s.MatchTime >= startOfDayUtc && s.MatchTime < endOfDayUtc)
+            .Where(s => s.MatchTime >= startOfWindowUtc && s.MatchTime < endOfWindowUtc)
             .ToListAsync();
 
-        var incompletePredictions = predictionsForToday
-            .Where(p => string.IsNullOrEmpty(p.ActualScore) || p.IsLive)
+        var incompletePredictions = predictionsForSettlement
+            .Where(NeedsPredictionSettlementRepair)
             .ToList();
-        var incompleteForecasts = forecastsForToday
+        var incompleteForecasts = forecastsForSettlement
             .Where(f => string.IsNullOrEmpty(f.ActualScore) || f.IsLive || !f.IsSettled)
             .ToList();
 
@@ -418,7 +417,8 @@ public class AnalyzerService  : IAnalyzerService
 
             foreach (var score in scores)
             {
-                var key = CreateScoreFixtureKey(dateStr, score.HomeTeam, score.AwayTeam, score.League);
+                var scoreDate = DateTimeProvider.ConvertUtcToLocal(score.MatchTime).ToString("dd-MM-yyyy");
+                var key = CreateScoreFixtureKey(scoreDate, score.HomeTeam, score.AwayTeam, score.League);
 
                 if (!predLookup.TryGetValue(key, out var matched))
                 {
@@ -450,26 +450,13 @@ public class AnalyzerService  : IAnalyzerService
                     }
                 }
 
-                // Only update predictions that don't already have a score or are still live (from AiScore)
-                matched = matched.Where(p => string.IsNullOrEmpty(p.ActualScore) || p.IsLive).ToList();
+                // Repair anything still missing a score, still marked live, or missing its derived outcome.
+                matched = matched.Where(NeedsPredictionSettlementRepair).ToList();
                 if (matched.Count == 0) continue;
 
                 foreach (var prediction in matched)
                 {
-                    prediction.ActualScore = score.Score;
-                    prediction.IsLive = score.IsLive;
-
-                    if (!score.IsLive)
-                    {
-                        prediction.ActualOutcome = prediction.PredictionCategory switch
-                        {
-                            "BothTeamsScore" => score.BTTSLabel ? "BTTS" : "No BTTS",
-                            "Draw"           => DetermineDrawOutcome(score.Score),
-                            "Over2.5Goals"   => DetermineOver25Outcome(score.Score),
-                            "StraightWin"    => DetermineStraightWinOutcome(score.Score),
-                            _                => prediction.ActualOutcome
-                        };
-                    }
+                    UpdatePredictionSettlementState(prediction, score.Score, score.BTTSLabel, score.IsLive);
                 }
 
                 if (!forecastLookup.TryGetValue(key, out var matchedForecasts))
@@ -515,15 +502,17 @@ public class AnalyzerService  : IAnalyzerService
         }
 
         // ── Matching Statistics & Diagnostics ──
-        var matchedCount = predictionsForToday.Count(p => !string.IsNullOrEmpty(p.ActualScore));
-        var unmatchedPredictions = predictionsForToday
+        var matchedCount = predictionsForSettlement.Count(p => !string.IsNullOrEmpty(p.ActualScore));
+        var unmatchedPredictions = predictionsForSettlement
             .Where(p => string.IsNullOrEmpty(p.ActualScore))
             .ToList();
 
         _logger.LogInformation(
-            "📊 Score matching summary: {Matched}/{Total} predictions matched ({Percentage}%), {Unmatched} unmatched.",
-            matchedCount, predictionsForToday.Count,
-            predictionsForToday.Count > 0 ? (matchedCount * 100 / predictionsForToday.Count) : 0,
+            "📊 Score matching summary: {Matched}/{Total} predictions matched ({Percentage}%) in the {LookbackDays}-day settlement window, {Unmatched} unmatched.",
+            matchedCount,
+            predictionsForSettlement.Count,
+            predictionsForSettlement.Count > 0 ? (matchedCount * 100 / predictionsForSettlement.Count) : 0,
+            ScoreUpdaterLookbackDays,
             unmatchedPredictions.Count);
 
         if (unmatchedPredictions.Count > 0)
@@ -586,12 +575,109 @@ public class AnalyzerService  : IAnalyzerService
         return h < a ? "Away Win" : "Draw";
     }
 
+    private void UpdatePredictionSettlementState(Prediction prediction, string score, bool bttsLabel, bool isLive)
+    {
+        var effectiveIsLive = DetermineEffectiveIsLive(
+            isLive,
+            ResolveScheduledMatchTime(prediction.Date, prediction.Time, prediction.MatchDateTime));
+
+        prediction.ActualScore = score;
+        prediction.IsLive = effectiveIsLive;
+
+        if (effectiveIsLive)
+        {
+            return;
+        }
+
+        prediction.ActualOutcome = DeterminePredictionActualOutcome(
+            prediction.PredictionCategory,
+            score,
+            bttsLabel);
+    }
+
+    private void RepairPredictionOutcomeFromStoredScore(Prediction prediction)
+    {
+        var effectiveIsLive = DetermineEffectiveIsLive(
+            prediction.IsLive,
+            ResolveScheduledMatchTime(prediction.Date, prediction.Time, prediction.MatchDateTime));
+
+        prediction.IsLive = effectiveIsLive;
+
+        if (effectiveIsLive || string.IsNullOrWhiteSpace(prediction.ActualScore) ||
+            !IsOutcomeMissing(prediction.ActualOutcome))
+        {
+            return;
+        }
+
+        prediction.ActualOutcome = DeterminePredictionActualOutcome(
+            prediction.PredictionCategory,
+            prediction.ActualScore,
+            null);
+    }
+
+    private bool NeedsPredictionSettlementRepair(Prediction prediction)
+    {
+        return string.IsNullOrWhiteSpace(prediction.ActualScore) ||
+               DetermineEffectiveIsLive(
+                   prediction.IsLive,
+                   ResolveScheduledMatchTime(prediction.Date, prediction.Time, prediction.MatchDateTime)) ||
+               (!string.IsNullOrWhiteSpace(prediction.ActualScore) && IsOutcomeMissing(prediction.ActualOutcome));
+    }
+
+    private string? DeterminePredictionActualOutcome(string predictionCategory, string score, bool? bttsLabel)
+    {
+        return predictionCategory switch
+        {
+            "BothTeamsScore" => DetermineBttsOutcome(score, bttsLabel),
+            "Draw" => DetermineDrawOutcome(score),
+            "Over2.5Goals" => DetermineOver25Outcome(score),
+            "StraightWin" => DetermineStraightWinOutcome(score),
+            _ => null
+        };
+    }
+
+    private string DetermineBttsOutcome(string score, bool? fallbackBttsLabel)
+    {
+        if (TryParseScore(score, out var homeGoals, out var awayGoals))
+        {
+            return homeGoals > 0 && awayGoals > 0 ? "BTTS" : "No BTTS";
+        }
+
+        return fallbackBttsLabel switch
+        {
+            true => "BTTS",
+            false => "No BTTS",
+            null => "Unknown"
+        };
+    }
+
+    private static bool IsOutcomeMissing(string? actualOutcome)
+    {
+        return string.IsNullOrWhiteSpace(actualOutcome) ||
+               string.Equals(actualOutcome, "Unknown", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool DetermineEffectiveIsLive(bool sourceIsLive, DateTime? scheduledMatchTimeUtc)
+    {
+        if (!sourceIsLive)
+        {
+            return false;
+        }
+
+        return !scheduledMatchTimeUtc.HasValue ||
+               DateTime.UtcNow <= scheduledMatchTimeUtc.Value.AddMinutes(200);
+    }
+
     private void UpdateForecastObservationState(ForecastObservation forecast, string score, bool bttsLabel, bool isLive)
     {
-        forecast.ActualScore = score;
-        forecast.IsLive = isLive;
+        var effectiveIsLive = DetermineEffectiveIsLive(
+            isLive,
+            ResolveScheduledMatchTime(forecast.Date, forecast.Time, forecast.MatchDateTime));
 
-        if (isLive)
+        forecast.ActualScore = score;
+        forecast.IsLive = effectiveIsLive;
+
+        if (effectiveIsLive)
         {
             forecast.IsSettled = false;
             forecast.OutcomeOccurred = null;
@@ -1260,8 +1346,8 @@ public class AnalyzerService  : IAnalyzerService
     {
         return (
             date ?? string.Empty,
-            ScoreMatchingHelper.CreateTeamLookupKey(homeTeam),
-            ScoreMatchingHelper.CreateTeamLookupKey(awayTeam),
+            ScoreMatchingHelper.CreateTeamLookupKey(homeTeam, league),
+            ScoreMatchingHelper.CreateTeamLookupKey(awayTeam, league),
             ScoreMatchingHelper.CreateLeagueLookupKey(league));
     }
 
@@ -1283,7 +1369,7 @@ public class AnalyzerService  : IAnalyzerService
             CultureInfo.InvariantCulture,
             DateTimeStyles.None,
             out var parsed)
-            ? parsed
+            ? DateTimeProvider.ConvertLocalToUtc(parsed)
             : null;
     }
 
@@ -1312,13 +1398,13 @@ public class AnalyzerService  : IAnalyzerService
         Func<T, string?> leagueSelector,
         Func<T, DateTime?> matchTimeSelector)
     {
-        var targetHomeKey = ScoreMatchingHelper.CreateTeamLookupKey(homeTeam);
-        var targetAwayKey = ScoreMatchingHelper.CreateTeamLookupKey(awayTeam);
+        var targetHomeKey = ScoreMatchingHelper.CreateTeamLookupKey(homeTeam, league);
+        var targetAwayKey = ScoreMatchingHelper.CreateTeamLookupKey(awayTeam, league);
 
         var exactCandidates = candidates
             .Where(candidate =>
-                ScoreMatchingHelper.CreateTeamLookupKey(homeSelector(candidate)) == targetHomeKey &&
-                ScoreMatchingHelper.CreateTeamLookupKey(awaySelector(candidate)) == targetAwayKey)
+                ScoreMatchingHelper.CreateTeamLookupKey(homeSelector(candidate), leagueSelector(candidate)) == targetHomeKey &&
+                ScoreMatchingHelper.CreateTeamLookupKey(awaySelector(candidate), leagueSelector(candidate)) == targetAwayKey)
             .ToList();
 
         if (exactCandidates.Count == 1)
@@ -1353,8 +1439,9 @@ public class AnalyzerService  : IAnalyzerService
 
         foreach (var candidate in candidates)
         {
-            var homeMatch = ScoreMatchingHelper.GetTeamMatchResult(homeTeam, homeSelector(candidate));
-            var awayMatch = ScoreMatchingHelper.GetTeamMatchResult(awayTeam, awaySelector(candidate));
+            var candidateLeague = leagueSelector(candidate);
+            var homeMatch = ScoreMatchingHelper.GetTeamMatchResult(homeTeam, homeSelector(candidate), league, candidateLeague);
+            var awayMatch = ScoreMatchingHelper.GetTeamMatchResult(awayTeam, awaySelector(candidate), league, candidateLeague);
             if (!homeMatch.IsMatch || !awayMatch.IsMatch)
             {
                 continue;
@@ -1362,7 +1449,7 @@ public class AnalyzerService  : IAnalyzerService
 
             var baseScore = (homeMatch.Score + awayMatch.Score) / 2.0;
             var exactPair = homeMatch.IsExactKeyMatch && awayMatch.IsExactKeyMatch;
-            var leagueScore = ScoreMatchingHelper.GetLeagueMatchScore(league, leagueSelector(candidate));
+            var leagueScore = ScoreMatchingHelper.GetLeagueMatchScore(league, candidateLeague);
             var timeScore = GetMatchTimeScore(targetMatchTime, matchTimeSelector(candidate));
             var totalScore = baseScore + (exactPair ? 0.20 : 0.0) + (leagueScore * 0.15) + (timeScore * 0.10);
 

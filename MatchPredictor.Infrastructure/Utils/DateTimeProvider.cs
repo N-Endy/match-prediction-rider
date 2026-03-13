@@ -69,6 +69,15 @@ public static class DateTimeProvider
         return GetLocalTimeFromUtc(utcDateTime);
     }
 
+    public static DateTime ConvertLocalToUtc(DateTime localDateTime)
+    {
+        var unspecifiedLocal = localDateTime.Kind == DateTimeKind.Unspecified
+            ? localDateTime
+            : DateTime.SpecifyKind(localDateTime, DateTimeKind.Unspecified);
+
+        return TimeZoneInfo.ConvertTimeToUtc(unspecifiedLocal, WatZone);
+    }
+
     private static DateTime GetLocalTimeFromUtc(DateTime utcDateTime)
     {
         return TimeZoneInfo.ConvertTimeFromUtc(utcDateTime, WatZone);

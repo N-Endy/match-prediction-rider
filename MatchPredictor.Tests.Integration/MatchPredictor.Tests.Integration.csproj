@@ -21,6 +21,7 @@
     <ProjectReference Include="..\MatchPredictor.Application\MatchPredictor.Application.csproj" />
     <ProjectReference Include="..\MatchPredictor.Infrastructure\MatchPredictor.Infrastructure.csproj" />
     <ProjectReference Include="..\MatchPredictor.Domain\MatchPredictor.Domain.csproj" />
+    <ProjectReference Include="..\MatchPredictor.Web\MatchPredictor.Web.csproj" />
   </ItemGroup>
 
 </Project>

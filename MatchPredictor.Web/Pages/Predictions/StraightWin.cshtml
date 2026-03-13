@@ -50,13 +50,21 @@
                         }
                         @if (!string.IsNullOrEmpty(match.ActualScore))
                         {
+                            var isCorrect = PredictionDisplayHelper.IsPredictionCorrect(match);
+
                             if (isActuallyLive)
                             {
-                                <span class="mp-score mp-score-live"><span class="mp-live-indicator"></span>@match.ActualScore</span>
+                                if (isCorrect)
+                                {
+                                    <span class="mp-score mp-score-correct"><span class="mp-live-indicator"></span>@match.ActualScore</span>
+                                }
+                                else
+                                {
+                                    <span class="mp-score mp-score-live"><span class="mp-live-indicator"></span>@match.ActualScore</span>
+                                }
                             }
                             else
                             {
-                                var isCorrect = match.PredictedOutcome == match.ActualOutcome;
                                 <span class="mp-score @(isCorrect ? "mp-score-correct" : "mp-score-incorrect")">
                                     @match.ActualScore
                                 </span>

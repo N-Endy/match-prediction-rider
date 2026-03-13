@@ -179,8 +179,13 @@ public static class ScoreMatchingHelper
 
     public static TeamMatchResult GetTeamMatchResult(string nameA, string nameB)
     {
-        var teamA = ParseTeamIdentity(nameA);
-        var teamB = ParseTeamIdentity(nameB);
+        return GetTeamMatchResult(nameA, nameB, null, null);
+    }
+
+    public static TeamMatchResult GetTeamMatchResult(string nameA, string nameB, string? leagueA, string? leagueB)
+    {
+        var teamA = ParseTeamIdentity(nameA, leagueA);
+        var teamB = ParseTeamIdentity(nameB, leagueB);
 
         if (teamA.CoreTokens.Count == 0 || teamB.CoreTokens.Count == 0)
         {
@@ -248,7 +253,12 @@ public static class ScoreMatchingHelper
 
     public static string CreateTeamLookupKey(string? name)
     {
-        return ParseTeamIdentity(name).LookupKey;
+        return CreateTeamLookupKey(name, null);
+    }
+
+    public static string CreateTeamLookupKey(string? name, string? league)
+    {
+        return ParseTeamIdentity(name, league).LookupKey;
     }
 
     public static string CreateLeagueLookupKey(string? league)
@@ -299,7 +309,7 @@ public static class ScoreMatchingHelper
         return matched / shorter.Count;
     }
 
-    private static TeamIdentity ParseTeamIdentity(string? name)
+    private static TeamIdentity ParseTeamIdentity(string? name, string? league)
     {
         var coreTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var qualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -336,6 +346,11 @@ public static class ScoreMatchingHelper
 
             if (TeamStopWords.Contains(token)) continue;
             coreTokens.Add(token);
+        }
+
+        foreach (var inferredQualifier in InferLeagueQualifiers(league))
+        {
+            qualifiers.Add(inferredQualifier);
         }
 
         if (coreTokens.Count == 0)
@@ -421,6 +436,39 @@ public static class ScoreMatchingHelper
         }
 
         return false;
+    }
+
+    private static IEnumerable<string> InferLeagueQualifiers(string? league)
+    {
+        if (string.IsNullOrWhiteSpace(league))
+        {
+            yield break;
+        }
+
+        var normalizedLeague = PreNormalizeTeamName(league);
+        if (string.IsNullOrWhiteSpace(normalizedLeague))
+        {
+            yield break;
+        }
+
+        if (normalizedLeague.Contains("women", StringComparison.OrdinalIgnoreCase) ||
+            normalizedLeague.Contains("ladies", StringComparison.OrdinalIgnoreCase) ||
+            normalizedLeague.Contains("w-league", StringComparison.OrdinalIgnoreCase) ||
+            normalizedLeague.Contains("w league", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return "women";
+        }
+
+        if (normalizedLeague.Contains("youth", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return "youth";
+        }
+
+        var ageQualifierMatch = AgeQualifierRegex.Match(normalizedLeague);
+        if (ageQualifierMatch.Success)
+        {
+            yield return $"u{ageQualifierMatch.Groups[1].Value}";
+        }
     }
 
     private static bool QualifiersMatch(TeamIdentity teamA, TeamIdentity teamB)
