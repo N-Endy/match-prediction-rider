@@ -15,6 +15,7 @@ using Npgsql;
 
 var mode = args.FirstOrDefault()?.Trim().ToLowerInvariant() switch
 {
+    "--score-backfill" or "score-backfill" => RunnerMode.ScoreBackfill,
     "--score" or "score" => RunnerMode.Score,
     _ => RunnerMode.Sync
 };
@@ -51,7 +52,15 @@ services.AddHttpClient("SportyBet", client => client.Timeout = TimeSpan.FromSeco
 services.AddDistributedMemoryCache();
 services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
 services.AddScoped<IWebScraperService, WebScraperService>();
-services.AddScoped<IExtractFromExcel, ExtractFromExcel>();
+if (mode == RunnerMode.Score)
+{
+    // Score mode never reads the workbook, so avoid requiring an EPPlus license.
+    services.AddScoped<IExtractFromExcel, NoOpExtractFromExcel>();
+}
+else
+{
+    services.AddScoped<IExtractFromExcel, ExtractFromExcel>();
+}
 services.AddScoped<IProbabilityCalculator, ProbabilityCalculator>();
 services.AddScoped<ICalibrationService, CalibrationService>();
 services.AddScoped<IThresholdTuningService, ThresholdTuningService>();
@@ -86,6 +95,9 @@ switch (mode)
 {
     case RunnerMode.Score:
         await analyzer.RunScoreUpdaterAsync();
+        break;
+    case RunnerMode.ScoreBackfill:
+        await analyzer.RunScoreUpdaterAsync(14, "backfill");
         break;
     case RunnerMode.Sync:
         await analyzer.ExtractDataAndSyncDatabaseAsync();
@@ -208,5 +220,11 @@ static string NormalizeConnectionString(string rawConnectionString)
 enum RunnerMode
 {
     Sync,
-    Score
+    Score,
+    ScoreBackfill
+}
+
+sealed class NoOpExtractFromExcel : IExtractFromExcel
+{
+    public IEnumerable<MatchData> ExtractMatchDatasetFromFile() => [];
 }

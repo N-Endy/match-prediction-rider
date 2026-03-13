@@ -156,6 +156,7 @@ using (var scope = app.Services.CreateScope())
 
     // Remove the temporary noon job if it exists
     recurringJobs.RemoveIfExists("prediction-generation-job-noon");
+    recurringJobs.RemoveIfExists("score-backfill-job");
 
     recurringJobs.AddOrUpdate<IAnalyzerService>(
         "prediction-generation-job",
@@ -169,8 +170,18 @@ using (var scope = app.Services.CreateScope())
 
     recurringJobs.AddOrUpdate<IAnalyzerService>(
         "score-update-job",
-        service => service.RunScoreUpdaterAsync(),
-        "*/5 * * * *", // Every 5 minutes
+        service => service.RunScoreUpdaterAsync(1, "recent"),
+        "*/5 * * * *", // Every 5 minutes for today's and yesterday's fixtures
+        new RecurringJobOptions
+        {
+            TimeZone = watTimeZone
+        }
+    );
+
+    recurringJobs.AddOrUpdate<IAnalyzerService>(
+        "score-backfill-job",
+        service => service.RunScoreUpdaterAsync(14, "backfill"),
+        "17 * * * *", // Hourly backfill for older unresolved fixtures
         new RecurringJobOptions
         {
             TimeZone = watTimeZone

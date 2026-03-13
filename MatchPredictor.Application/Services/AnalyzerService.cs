@@ -13,7 +13,8 @@ namespace MatchPredictor.Application.Services;
 
 public class AnalyzerService  : IAnalyzerService
 {
-    private const int ScoreUpdaterLookbackDays = 14;
+    private const int RecentScoreUpdaterLookbackDays = 1;
+    private const int HistoricalScoreBackfillLookbackDays = 14;
 
     private readonly IDataAnalyzerService _dataAnalyzerService;
     private readonly IWebScraperService _webScraperService;
@@ -186,9 +187,16 @@ public class AnalyzerService  : IAnalyzerService
     }
 
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
-    public async Task RunScoreUpdaterAsync()
+    [DisableConcurrentExecution(timeoutInSeconds: 1800)]
+    public async Task RunScoreUpdaterAsync(int lookbackDays = RecentScoreUpdaterLookbackDays, string runLabel = "recent")
     {
-        _logger.LogInformation("Starting score updating process (every 5m)...");
+        var normalizedLookbackDays = Math.Clamp(lookbackDays, 0, HistoricalScoreBackfillLookbackDays);
+        var normalizedRunLabel = string.IsNullOrWhiteSpace(runLabel) ? "recent" : runLabel.Trim();
+
+        _logger.LogInformation(
+            "Starting {RunLabel} score updating process for the last {LookbackDays} day(s).",
+            normalizedRunLabel,
+            normalizedLookbackDays);
         try
         {
             // Score scraping is non-blocking
@@ -214,10 +222,14 @@ public class AnalyzerService  : IAnalyzerService
                 _logger.LogWarning(aiScoreEx, "❌ AiScore scraping failed.");
             }
 
-            await UpdatePredictionsWithActualResults();
-            _logger.LogInformation("✅ Predictions updated with actual results.");
+            await UpdatePredictionsWithActualResults(normalizedLookbackDays, normalizedRunLabel);
+            _logger.LogInformation(
+                "✅ Predictions updated with actual results for the {RunLabel} window.",
+                normalizedRunLabel);
 
-            await LogScrapingStatus("Success", "✅ Score updating completed successfully.");
+            await LogScrapingStatus(
+                "Success",
+                $"✅ {normalizedRunLabel} score updating completed successfully for the last {normalizedLookbackDays} day(s).");
         }
         catch (Exception ex)
         {
@@ -357,11 +369,11 @@ public class AnalyzerService  : IAnalyzerService
         match.NormalizeSourceProbabilities();
     }
 
-    private async Task UpdatePredictionsWithActualResults()
+    private async Task UpdatePredictionsWithActualResults(int lookbackDays, string runLabel)
     {
         var today = DateTimeProvider.GetLocalTime().Date;
-        var earliestSettlementDate = today.AddDays(-ScoreUpdaterLookbackDays);
-        var settlementDates = Enumerable.Range(0, ScoreUpdaterLookbackDays + 1)
+        var earliestSettlementDate = today.AddDays(-lookbackDays);
+        var settlementDates = Enumerable.Range(0, lookbackDays + 1)
             .Select(offset => earliestSettlementDate.AddDays(offset).ToString("dd-MM-yyyy"))
             .ToHashSet(StringComparer.Ordinal);
 
@@ -381,52 +393,66 @@ public class AnalyzerService  : IAnalyzerService
             RepairPredictionOutcomeFromStoredScore(prediction);
         }
 
+        var settlementFixtures = BuildSettlementFixtureGroups(predictionsForSettlement, forecastsForSettlement);
+
         var aiScores = await _dbContext.AiScoreMatchScores
             .Where(s => s.MatchTime >= startOfWindowUtc && s.MatchTime < endOfWindowUtc)
             .ToListAsync();
 
         if (aiScores.Count > 0)
         {
+            var aiScoreIndex = new FixtureCandidateIndex<AiScoreMatchScore>(
+                aiScores,
+                score => score.HomeTeam,
+                score => score.AwayTeam,
+                score => score.League,
+                score => score.MatchTime);
+            var settlementFixtureIndex = new FixtureCandidateIndex<SettlementFixtureGroup>(
+                settlementFixtures,
+                fixture => fixture.HomeTeam,
+                fixture => fixture.AwayTeam,
+                fixture => fixture.League,
+                fixture => fixture.ScheduledMatchTimeUtc);
+
             _logger.LogInformation(
-                "Matching scores from AiScore ({Count} scores) against {PredCount} predictions in the {LookbackDays}-day settlement window.",
+                "Matching scores from AiScore ({Count} scores) against {FixtureCount} fixtures ({PredCount} predictions, {ForecastCount} forecasts) in the {LookbackDays}-day settlement window.",
                 aiScores.Count,
+                settlementFixtures.Count,
                 predictionsForSettlement.Count,
-                ScoreUpdaterLookbackDays);
+                forecastsForSettlement.Count,
+                lookbackDays);
 
-            foreach (var prediction in predictionsForSettlement)
+            var aiMatchedFixtures = 0;
+            for (var index = 0; index < settlementFixtures.Count; index++)
             {
+                var fixture = settlementFixtures[index];
                 var aiMatch = FindBestFixtureCandidate(
-                    aiScores,
-                    prediction.HomeTeam,
-                    prediction.AwayTeam,
-                    prediction.League,
-                    ResolveScheduledMatchTime(prediction.Date, prediction.Time, prediction.MatchDateTime),
+                    aiScoreIndex,
+                    fixture.HomeTeam,
+                    fixture.AwayTeam,
+                    fixture.League,
+                    fixture.Date,
+                    fixture.ScheduledMatchTimeUtc,
                     score => score.HomeTeam,
                     score => score.AwayTeam,
                     score => score.League,
                     score => score.MatchTime);
 
-                if (aiMatch == null) continue;
+                if (aiMatch != null &&
+                    IsReciprocalFixtureMatch(
+                        settlementFixtureIndex,
+                        fixture,
+                        aiMatch,
+                        score => score.HomeTeam,
+                        score => score.AwayTeam,
+                        score => score.League,
+                        score => score.MatchTime))
+                {
+                    ApplyFixtureSettlement(fixture, aiMatch.Score, aiMatch.BTTSLabel, aiMatch.IsLive);
+                    aiMatchedFixtures++;
+                }
 
-                UpdatePredictionSettlementState(prediction, aiMatch.Score, aiMatch.BTTSLabel, aiMatch.IsLive);
-            }
-
-            foreach (var forecast in forecastsForSettlement)
-            {
-                var aiMatch = FindBestFixtureCandidate(
-                    aiScores,
-                    forecast.HomeTeam,
-                    forecast.AwayTeam,
-                    forecast.League,
-                    ResolveScheduledMatchTime(forecast.Date, forecast.Time, forecast.MatchDateTime),
-                    score => score.HomeTeam,
-                    score => score.AwayTeam,
-                    score => score.League,
-                    score => score.MatchTime);
-
-                if (aiMatch == null) continue;
-
-                UpdateForecastObservationState(forecast, aiMatch.Score, aiMatch.BTTSLabel, aiMatch.IsLive);
+                LogFixtureMatchingProgress("AiScore", index + 1, settlementFixtures.Count, aiMatchedFixtures);
             }
         }
 
@@ -435,109 +461,70 @@ public class AnalyzerService  : IAnalyzerService
             .Where(s => s.MatchTime >= startOfWindowUtc && s.MatchTime < endOfWindowUtc)
             .ToListAsync();
 
-        var incompletePredictions = predictionsForSettlement
+        var incompleteFixtures = settlementFixtures
+            .Where(NeedsFixtureSettlementRepair)
+            .ToList();
+        var incompletePredictions = incompleteFixtures
+            .SelectMany(fixture => fixture.Predictions)
             .Where(NeedsPredictionSettlementRepair)
             .ToList();
-        var incompleteForecasts = forecastsForSettlement
-            .Where(f => string.IsNullOrEmpty(f.ActualScore) || f.IsLive || !f.IsSettled)
+        var incompleteForecasts = incompleteFixtures
+            .SelectMany(fixture => fixture.Forecasts)
+            .Where(NeedsForecastSettlementRepair)
             .ToList();
 
-        var predLookup = incompletePredictions
-            .GroupBy(p => CreateScoreFixtureKey(p.Date, p.HomeTeam, p.AwayTeam, p.League))
-            .ToDictionary(g => g.Key, g => g.ToList());
-        var forecastLookup = incompleteForecasts
-            .GroupBy(f => CreateScoreFixtureKey(f.Date, f.HomeTeam, f.AwayTeam, f.League))
-            .ToDictionary(g => g.Key, g => g.ToList());
-
-        if (incompletePredictions.Count > 0 && scores.Count > 0)
+        if (incompleteFixtures.Count > 0 && scores.Count > 0)
         {
+            var scoreIndex = new FixtureCandidateIndex<MatchScore>(
+                scores,
+                score => score.HomeTeam,
+                score => score.AwayTeam,
+                score => score.League,
+                score => score.MatchTime);
+            var incompleteFixtureIndex = new FixtureCandidateIndex<SettlementFixtureGroup>(
+                incompleteFixtures,
+                fixture => fixture.HomeTeam,
+                fixture => fixture.AwayTeam,
+                fixture => fixture.League,
+                fixture => fixture.ScheduledMatchTimeUtc);
+
             _logger.LogInformation(
-                "Attempting fallback score match from FlashScore for {Count} incomplete predictions.",
-                incompletePredictions.Count);
+                "Attempting fallback score match from FlashScore for {FixtureCount} incomplete fixtures ({PredictionCount} predictions, {ForecastCount} forecasts).",
+                incompleteFixtures.Count,
+                incompletePredictions.Count,
+                incompleteForecasts.Count);
 
-            foreach (var score in scores)
+            var flashMatchedFixtures = 0;
+            for (var index = 0; index < incompleteFixtures.Count; index++)
             {
-                var scoreDate = DateTimeProvider.ConvertUtcToLocal(score.MatchTime).ToString("dd-MM-yyyy");
-                var key = CreateScoreFixtureKey(scoreDate, score.HomeTeam, score.AwayTeam, score.League);
+                var fixture = incompleteFixtures[index];
+                var scoreMatch = FindBestFixtureCandidate(
+                    scoreIndex,
+                    fixture.HomeTeam,
+                    fixture.AwayTeam,
+                    fixture.League,
+                    fixture.Date,
+                    fixture.ScheduledMatchTimeUtc,
+                    score => score.HomeTeam,
+                    score => score.AwayTeam,
+                    score => score.League,
+                    score => score.MatchTime);
 
-                if (!predLookup.TryGetValue(key, out var matched))
+                if (scoreMatch != null &&
+                    IsReciprocalFixtureMatch(
+                        incompleteFixtureIndex,
+                        fixture,
+                        scoreMatch,
+                        score => score.HomeTeam,
+                        score => score.AwayTeam,
+                        score => score.League,
+                        score => score.MatchTime))
                 {
-                    var bestPrediction = FindBestFixtureCandidate(
-                        incompletePredictions,
-                        score.HomeTeam,
-                        score.AwayTeam,
-                        score.League,
-                        score.MatchTime,
-                        prediction => prediction.HomeTeam,
-                        prediction => prediction.AwayTeam,
-                        prediction => prediction.League,
-                        prediction => ResolveScheduledMatchTime(prediction.Date, prediction.Time, prediction.MatchDateTime));
-
-                    if (bestPrediction == null)
-                    {
-                        continue;
-                    }
-
-                    var bestKey = CreateScoreFixtureKey(
-                        bestPrediction.Date,
-                        bestPrediction.HomeTeam,
-                        bestPrediction.AwayTeam,
-                        bestPrediction.League);
-
-                    if (!predLookup.TryGetValue(bestKey, out matched))
-                    {
-                        matched = [];
-                    }
+                    ApplyFixtureSettlement(fixture, scoreMatch.Score, scoreMatch.BTTSLabel, scoreMatch.IsLive);
+                    flashMatchedFixtures++;
                 }
 
-                // Repair anything still missing a score, still marked live, or missing its derived outcome.
-                matched = matched.Where(NeedsPredictionSettlementRepair).ToList();
-                if (matched.Count == 0) continue;
-
-                foreach (var prediction in matched)
-                {
-                    UpdatePredictionSettlementState(prediction, score.Score, score.BTTSLabel, score.IsLive);
-                }
-
-                if (!forecastLookup.TryGetValue(key, out var matchedForecasts))
-                {
-                    var bestForecast = FindBestFixtureCandidate(
-                        incompleteForecasts,
-                        score.HomeTeam,
-                        score.AwayTeam,
-                        score.League,
-                        score.MatchTime,
-                        forecast => forecast.HomeTeam,
-                        forecast => forecast.AwayTeam,
-                        forecast => forecast.League,
-                        forecast => ResolveScheduledMatchTime(forecast.Date, forecast.Time, forecast.MatchDateTime));
-
-                    if (bestForecast == null)
-                    {
-                        continue;
-                    }
-
-                    var bestKey = CreateScoreFixtureKey(
-                        bestForecast.Date,
-                        bestForecast.HomeTeam,
-                        bestForecast.AwayTeam,
-                        bestForecast.League);
-
-                    if (!forecastLookup.TryGetValue(bestKey, out matchedForecasts))
-                    {
-                        matchedForecasts = [];
-                    }
-                }
-
-                matchedForecasts = matchedForecasts
-                    .Where(f => string.IsNullOrEmpty(f.ActualScore) || f.IsLive || !f.IsSettled)
-                    .ToList();
-                if (matchedForecasts.Count == 0) continue;
-
-                foreach (var forecast in matchedForecasts)
-                {
-                    UpdateForecastObservationState(forecast, score.Score, score.BTTSLabel, score.IsLive);
-                }
+                LogFixtureMatchingProgress("FlashScore", index + 1, incompleteFixtures.Count, flashMatchedFixtures);
             }
         }
 
@@ -552,7 +539,7 @@ public class AnalyzerService  : IAnalyzerService
             matchedCount,
             predictionsForSettlement.Count,
             predictionsForSettlement.Count > 0 ? (matchedCount * 100 / predictionsForSettlement.Count) : 0,
-            ScoreUpdaterLookbackDays,
+            lookbackDays,
             unmatchedPredictions.Count);
 
         if (unmatchedPredictions.Count > 0)
@@ -572,9 +559,151 @@ public class AnalyzerService  : IAnalyzerService
             }
         }
 
-        _logger.LogInformation("✅ Predictions updated successfully.");
+        _logger.LogInformation(
+            "✅ Predictions updated successfully for the {RunLabel} window.",
+            runLabel);
 
         await _dbContext.SaveChangesAsync();
+    }
+
+    private static List<SettlementFixtureGroup> BuildSettlementFixtureGroups(
+        IEnumerable<Prediction> predictions,
+        IEnumerable<ForecastObservation> forecasts)
+    {
+        var fixtures = new Dictionary<(string Date, string Home, string Away, string League, long MatchTimeTicks), SettlementFixtureGroup>();
+
+        foreach (var prediction in predictions)
+        {
+            var scheduledMatchTime = ResolveScheduledMatchTime(prediction.Date, prediction.Time, prediction.MatchDateTime);
+            var scoreKey = CreateScoreFixtureKey(prediction.Date, prediction.HomeTeam, prediction.AwayTeam, prediction.League);
+            var fixtureKey = (
+                prediction.Date ?? string.Empty,
+                scoreKey.Home,
+                scoreKey.Away,
+                scoreKey.League,
+                scheduledMatchTime?.Ticks ?? 0L);
+
+            if (!fixtures.TryGetValue(fixtureKey, out var fixture))
+            {
+                fixture = new SettlementFixtureGroup
+                {
+                    Date = prediction.Date ?? string.Empty,
+                    HomeTeam = prediction.HomeTeam ?? string.Empty,
+                    AwayTeam = prediction.AwayTeam ?? string.Empty,
+                    League = prediction.League ?? string.Empty,
+                    ScheduledMatchTimeUtc = scheduledMatchTime
+                };
+                fixtures[fixtureKey] = fixture;
+            }
+
+            fixture.Predictions.Add(prediction);
+        }
+
+        foreach (var forecast in forecasts)
+        {
+            var scheduledMatchTime = ResolveScheduledMatchTime(forecast.Date, forecast.Time, forecast.MatchDateTime);
+            var scoreKey = CreateScoreFixtureKey(forecast.Date, forecast.HomeTeam, forecast.AwayTeam, forecast.League);
+            var fixtureKey = (
+                forecast.Date ?? string.Empty,
+                scoreKey.Home,
+                scoreKey.Away,
+                scoreKey.League,
+                scheduledMatchTime?.Ticks ?? 0L);
+
+            if (!fixtures.TryGetValue(fixtureKey, out var fixture))
+            {
+                fixture = new SettlementFixtureGroup
+                {
+                    Date = forecast.Date ?? string.Empty,
+                    HomeTeam = forecast.HomeTeam ?? string.Empty,
+                    AwayTeam = forecast.AwayTeam ?? string.Empty,
+                    League = forecast.League ?? string.Empty,
+                    ScheduledMatchTimeUtc = scheduledMatchTime
+                };
+                fixtures[fixtureKey] = fixture;
+            }
+
+            fixture.Forecasts.Add(forecast);
+        }
+
+        return fixtures.Values
+            .OrderBy(fixture => fixture.ScheduledMatchTimeUtc)
+            .ThenBy(fixture => fixture.HomeTeam)
+            .ThenBy(fixture => fixture.AwayTeam)
+            .ToList();
+    }
+
+    private void ApplyFixtureSettlement(SettlementFixtureGroup fixture, string score, bool bttsLabel, bool isLive)
+    {
+        foreach (var prediction in fixture.Predictions.Where(NeedsPredictionSettlementRepair))
+        {
+            UpdatePredictionSettlementState(prediction, score, bttsLabel, isLive);
+        }
+
+        foreach (var forecast in fixture.Forecasts.Where(NeedsForecastSettlementRepair))
+        {
+            UpdateForecastObservationState(forecast, score, bttsLabel, isLive);
+        }
+    }
+
+    private static bool NeedsFixtureSettlementRepair(SettlementFixtureGroup fixture)
+    {
+        return fixture.Predictions.Any(NeedsPredictionSettlementRepair) ||
+               fixture.Forecasts.Any(NeedsForecastSettlementRepair);
+    }
+
+    private static bool NeedsForecastSettlementRepair(ForecastObservation forecast)
+    {
+        return string.IsNullOrWhiteSpace(forecast.ActualScore) || forecast.IsLive || !forecast.IsSettled;
+    }
+
+    private void LogFixtureMatchingProgress(string sourceName, int processed, int total, int matchedFixtures)
+    {
+        if (total < 250)
+        {
+            return;
+        }
+
+        if (processed % 250 != 0 && processed != total)
+        {
+            return;
+        }
+
+        _logger.LogInformation(
+            "{SourceName} score matching progress: {Processed}/{Total} fixtures processed, {Matched} matched so far.",
+            sourceName,
+            processed,
+            total,
+            matchedFixtures);
+    }
+
+    private static bool IsReciprocalFixtureMatch<TCandidate>(
+        FixtureCandidateIndex<SettlementFixtureGroup> fixtureIndex,
+        SettlementFixtureGroup expectedFixture,
+        TCandidate candidate,
+        Func<TCandidate, string> homeSelector,
+        Func<TCandidate, string> awaySelector,
+        Func<TCandidate, string?> leagueSelector,
+        Func<TCandidate, DateTime?> matchTimeSelector)
+        where TCandidate : class
+    {
+        var candidateDate = matchTimeSelector(candidate).HasValue
+            ? DateTimeProvider.ConvertUtcToLocal(matchTimeSelector(candidate)!.Value).ToString("dd-MM-yyyy")
+            : expectedFixture.Date;
+
+        var resolvedFixture = FindBestFixtureCandidate(
+            fixtureIndex,
+            homeSelector(candidate),
+            awaySelector(candidate),
+            leagueSelector(candidate),
+            candidateDate,
+            matchTimeSelector(candidate),
+            fixture => fixture.HomeTeam,
+            fixture => fixture.AwayTeam,
+            fixture => fixture.League,
+            fixture => fixture.ScheduledMatchTimeUtc);
+
+        return ReferenceEquals(resolvedFixture, expectedFixture);
     }
     
     private static bool TryParseScore(string score, out int home, out int away)
@@ -655,7 +784,7 @@ public class AnalyzerService  : IAnalyzerService
             null);
     }
 
-    private bool NeedsPredictionSettlementRepair(Prediction prediction)
+    private static bool NeedsPredictionSettlementRepair(Prediction prediction)
     {
         return string.IsNullOrWhiteSpace(prediction.ActualScore) ||
                DetermineEffectiveIsLive(
@@ -1428,32 +1557,34 @@ public class AnalyzerService  : IAnalyzerService
     }
 
     private static T? FindBestFixtureCandidate<T>(
-        IEnumerable<T> candidates,
+        FixtureCandidateIndex<T> candidateIndex,
         string homeTeam,
         string awayTeam,
         string? league,
+        string? targetDate,
         DateTime? targetMatchTime,
         Func<T, string> homeSelector,
         Func<T, string> awaySelector,
         Func<T, string?> leagueSelector,
         Func<T, DateTime?> matchTimeSelector)
+        where T : class
     {
         var targetHomeKey = ScoreMatchingHelper.CreateTeamLookupKey(homeTeam, league);
         var targetAwayKey = ScoreMatchingHelper.CreateTeamLookupKey(awayTeam, league);
 
-        var exactCandidates = candidates
-            .Where(candidate =>
-                ScoreMatchingHelper.CreateTeamLookupKey(homeSelector(candidate), leagueSelector(candidate)) == targetHomeKey &&
-                ScoreMatchingHelper.CreateTeamLookupKey(awaySelector(candidate), leagueSelector(candidate)) == targetAwayKey)
-            .ToList();
+        var exactCandidates = candidateIndex.GetExactPairCandidates(targetHomeKey, targetAwayKey).ToList();
 
         if (exactCandidates.Count == 1)
         {
             return exactCandidates[0];
         }
 
+        var scopedCandidates = exactCandidates.Count > 1
+            ? exactCandidates
+            : candidateIndex.GetScopedCandidates(targetDate, league, targetMatchTime);
+
         return SelectBestFixtureCandidate(
-            exactCandidates.Count > 1 ? exactCandidates : candidates,
+            scopedCandidates.Count > 0 ? scopedCandidates : candidateIndex.AllCandidates,
             homeTeam,
             awayTeam,
             league,
@@ -1522,6 +1653,100 @@ public class AnalyzerService  : IAnalyzerService
         return best.TotalScore - runnerUp.TotalScore >= requiredMargin
             ? best.Candidate
             : default;
+    }
+
+    private sealed class SettlementFixtureGroup
+    {
+        public string Date { get; init; } = string.Empty;
+        public string HomeTeam { get; init; } = string.Empty;
+        public string AwayTeam { get; init; } = string.Empty;
+        public string League { get; init; } = string.Empty;
+        public DateTime? ScheduledMatchTimeUtc { get; init; }
+        public List<Prediction> Predictions { get; } = [];
+        public List<ForecastObservation> Forecasts { get; } = [];
+    }
+
+    private sealed class FixtureCandidateIndex<T>
+        where T : class
+    {
+        private readonly Dictionary<(string HomeKey, string AwayKey), List<T>> _exactPairLookup;
+        private readonly Dictionary<string, List<T>> _dateLookup;
+        private readonly Dictionary<(string Date, string LeagueKey), List<T>> _dateLeagueLookup;
+
+        public FixtureCandidateIndex(
+            IEnumerable<T> candidates,
+            Func<T, string> homeSelector,
+            Func<T, string> awaySelector,
+            Func<T, string?> leagueSelector,
+            Func<T, DateTime?> matchTimeSelector)
+        {
+            AllCandidates = candidates.ToList();
+
+            _exactPairLookup = AllCandidates
+                .GroupBy(candidate => (
+                    HomeKey: ScoreMatchingHelper.CreateTeamLookupKey(homeSelector(candidate), leagueSelector(candidate)),
+                    AwayKey: ScoreMatchingHelper.CreateTeamLookupKey(awaySelector(candidate), leagueSelector(candidate))))
+                .ToDictionary(group => group.Key, group => group.ToList());
+
+            _dateLookup = AllCandidates
+                .Where(candidate => matchTimeSelector(candidate).HasValue)
+                .GroupBy(candidate => DateTimeProvider.ConvertUtcToLocal(matchTimeSelector(candidate)!.Value).ToString("dd-MM-yyyy"))
+                .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+
+            _dateLeagueLookup = AllCandidates
+                .Where(candidate => matchTimeSelector(candidate).HasValue)
+                .GroupBy(candidate => (
+                    Date: DateTimeProvider.ConvertUtcToLocal(matchTimeSelector(candidate)!.Value).ToString("dd-MM-yyyy"),
+                    LeagueKey: ScoreMatchingHelper.CreateLeagueLookupKey(leagueSelector(candidate))))
+                .ToDictionary(group => group.Key, group => group.ToList());
+        }
+
+        public IReadOnlyList<T> AllCandidates { get; }
+
+        public IReadOnlyList<T> GetExactPairCandidates(string homeKey, string awayKey)
+        {
+            return _exactPairLookup.TryGetValue((homeKey, awayKey), out var candidates)
+                ? candidates
+                : [];
+        }
+
+        public IReadOnlyList<T> GetScopedCandidates(string? targetDate, string? league, DateTime? targetMatchTime)
+        {
+            var datesToTry = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(targetDate))
+            {
+                datesToTry.Add(targetDate);
+            }
+
+            if (targetMatchTime.HasValue)
+            {
+                var derivedDate = DateTimeProvider.ConvertUtcToLocal(targetMatchTime.Value).ToString("dd-MM-yyyy");
+                if (!datesToTry.Contains(derivedDate, StringComparer.Ordinal))
+                {
+                    datesToTry.Add(derivedDate);
+                }
+            }
+
+            var leagueKey = ScoreMatchingHelper.CreateLeagueLookupKey(league);
+
+            foreach (var date in datesToTry)
+            {
+                if (!string.IsNullOrWhiteSpace(leagueKey) &&
+                    _dateLeagueLookup.TryGetValue((date, leagueKey), out var dateLeagueCandidates) &&
+                    dateLeagueCandidates.Count > 0)
+                {
+                    return dateLeagueCandidates;
+                }
+
+                if (_dateLookup.TryGetValue(date, out var dateCandidates) && dateCandidates.Count > 0)
+                {
+                    return dateCandidates;
+                }
+            }
+
+            return AllCandidates;
+        }
     }
 
     private static MatchData? FindMatchingMatchData(

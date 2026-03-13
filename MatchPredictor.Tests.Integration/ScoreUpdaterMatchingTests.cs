@@ -152,6 +152,68 @@ public class ScoreUpdaterMatchingTests
     }
 
     [Fact]
+    public async Task RunScoreUpdaterAsync_SettlesAllMarketsForSharedFixtureFromSingleScoreMatch()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = DateTimeProvider.GetLocalTime().Date.AddHours(19);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        context.Predictions.AddRange(
+            CreatePrediction(date, kickoff, "Adelaide United", "Perth Glory", "BothTeamsScore", "BTTS", "Australia - A League Women"),
+            CreatePrediction(date, kickoff, "Adelaide United", "Perth Glory", "Over2.5Goals", "Over 2.5", "Australia - A League Women"),
+            CreatePrediction(date, kickoff, "Adelaide United", "Perth Glory", "StraightWin", "Home Win", "Australia - A League Women"));
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                AiScoreMatchScores =
+                [
+                    new AiScoreMatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+                        League = "Australia W-League",
+                        HomeTeam = "Adelaide United Women",
+                        AwayTeam = "Perth Glory Women",
+                        Score = "2:1",
+                        BTTSLabel = true,
+                        IsLive = false
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var predictions = await context.Predictions
+            .OrderBy(prediction => prediction.PredictionCategory)
+            .ToListAsync();
+
+        Assert.Collection(
+            predictions,
+            prediction =>
+            {
+                Assert.Equal("2:1", prediction.ActualScore);
+                Assert.Equal("BTTS", prediction.ActualOutcome);
+            },
+            prediction =>
+            {
+                Assert.Equal("2:1", prediction.ActualScore);
+                Assert.Equal("Over 2.5", prediction.ActualOutcome);
+            },
+            prediction =>
+            {
+                Assert.Equal("2:1", prediction.ActualScore);
+                Assert.Equal("Home Win", prediction.ActualOutcome);
+            });
+    }
+
+    [Fact]
     public async Task RunScoreUpdaterAsync_BackfillsUnresolvedPredictionFromPreviousDay()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
@@ -195,6 +257,59 @@ public class ScoreUpdaterMatchingTests
         await service.RunScoreUpdaterAsync();
 
         var prediction = await context.Predictions.SingleAsync();
+        Assert.Equal("2:0", prediction.ActualScore);
+        Assert.Equal("Home Win", prediction.ActualOutcome);
+    }
+
+    [Fact]
+    public async Task RunScoreUpdaterAsync_DefaultRecentWindowSkipsOlderFixture_UntilBackfillRuns()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = DateTimeProvider.GetLocalTime().Date.AddDays(-3).AddHours(18);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        context.Predictions.Add(CreatePrediction(
+            date,
+            kickoff,
+            "Sao Paulo",
+            "Santos",
+            "StraightWin",
+            "Home Win",
+            "Brazil - Serie A"));
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                MatchScores =
+                [
+                    new MatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+                        League = "Brazil Serie A",
+                        HomeTeam = "São Paulo FC",
+                        AwayTeam = "Santos",
+                        Score = "2:0",
+                        BTTSLabel = false,
+                        IsLive = false
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var prediction = await context.Predictions.SingleAsync();
+        Assert.Null(prediction.ActualScore);
+
+        await service.RunScoreUpdaterAsync(14, "backfill");
+
+        prediction = await context.Predictions.SingleAsync();
         Assert.Equal("2:0", prediction.ActualScore);
         Assert.Equal("Home Win", prediction.ActualOutcome);
     }
