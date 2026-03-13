@@ -1,14 +1,23 @@
+using Hangfire;
+using Hangfire.PostgreSql;
 using MatchPredictor.Application.Services;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Services;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Npgsql;
+
+var mode = args.FirstOrDefault()?.Trim().ToLowerInvariant() switch
+{
+    "--score" or "score" => RunnerMode.Score,
+    _ => RunnerMode.Sync
+};
 
 var rawConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection")
     ?? Environment.GetEnvironmentVariable("MATCHPREDICTOR_DEV_DB")
@@ -24,7 +33,9 @@ var configuration = new ConfigurationBuilder()
     .AddEnvironmentVariables()
     .Build();
 
-var loggerFactory = LoggerFactory.Create(builder =>
+var services = new ServiceCollection();
+services.AddSingleton<IConfiguration>(configuration);
+services.AddLogging(builder =>
 {
     builder
         .AddSimpleConsole(options =>
@@ -34,38 +45,59 @@ var loggerFactory = LoggerFactory.Create(builder =>
         })
         .SetMinimumLevel(LogLevel.Information);
 });
+services.Configure<PredictionSettings>(configuration.GetSection("PredictionSettings"));
+services.AddDbContext<ApplicationDbContext>(options => options.UseNpgsql(connectionString));
+services.AddHttpClient("SportyBet", client => client.Timeout = TimeSpan.FromSeconds(30));
+services.AddDistributedMemoryCache();
+services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
+services.AddScoped<IWebScraperService, WebScraperService>();
+services.AddScoped<IExtractFromExcel, ExtractFromExcel>();
+services.AddScoped<IProbabilityCalculator, ProbabilityCalculator>();
+services.AddScoped<ICalibrationService, CalibrationService>();
+services.AddScoped<IThresholdTuningService, ThresholdTuningService>();
+services.AddScoped<IRegressionPredictorService, RegressionPredictorService>();
+services.AddScoped<SportyBetBookingService>();
+services.AddScoped<ISourceMarketPricingService>(provider => provider.GetRequiredService<SportyBetBookingService>());
+services.AddScoped<IAnalyzerService, AnalyzerService>();
 
-var dbOptions = new DbContextOptionsBuilder<ApplicationDbContext>()
-    .UseNpgsql(connectionString)
-    .Options;
+GlobalConfiguration.Configuration.UsePostgreSqlStorage(
+    connectionString,
+    new PostgreSqlStorageOptions
+    {
+        SchemaName = "hangfire",
+        QueuePollInterval = TimeSpan.FromSeconds(15),
+        PrepareSchemaIfNecessary = true,
+        DistributedLockTimeout = TimeSpan.FromMinutes(1),
+        TransactionSynchronisationTimeout = TimeSpan.FromMinutes(1)
+    });
 
-await using var context = new ApplicationDbContext(dbOptions);
+await using var serviceProvider = services.BuildServiceProvider();
+await using var scope = serviceProvider.CreateAsyncScope();
 
+var context = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+var analyzer = scope.ServiceProvider.GetRequiredService<IAnalyzerService>();
+
+Console.WriteLine($"Mode: {mode}");
 Console.WriteLine("Before:");
 await PrintMissingSummaryAsync(context);
+await PrintBttsSummaryAsync(context);
 
-var scraperLogger = loggerFactory.CreateLogger<WebScraperService>();
-var analyzerLogger = loggerFactory.CreateLogger<AnalyzerService>();
-var predictionSettings = configuration.GetSection("PredictionSettings").Get<PredictionSettings>() ?? new PredictionSettings();
-
-var analyzer = new AnalyzerService(
-    new NoOpDataAnalyzerService(),
-    new WebScraperService(configuration, scraperLogger),
-    context,
-    new NoOpExtractFromExcel(),
-    new NoOpRegressionPredictorService(),
-    new NoOpCalibrationService(),
-    new NoOpThresholdTuningService(),
-    Options.Create(predictionSettings),
-    analyzerLogger);
-
-await analyzer.RunScoreUpdaterAsync();
+switch (mode)
+{
+    case RunnerMode.Score:
+        await analyzer.RunScoreUpdaterAsync();
+        break;
+    case RunnerMode.Sync:
+        await analyzer.ExtractDataAndSyncDatabaseAsync();
+        break;
+}
 
 context.ChangeTracker.Clear();
 
 Console.WriteLine();
 Console.WriteLine("After:");
 await PrintMissingSummaryAsync(context);
+await PrintBttsSummaryAsync(context);
 
 static async Task PrintMissingSummaryAsync(ApplicationDbContext context)
 {
@@ -106,6 +138,28 @@ static async Task PrintMissingSummaryAsync(ApplicationDbContext context)
     foreach (var row in summary)
     {
         Console.WriteLine($"{row.Date}: total={row.Total}, missing={row.Missing}, overdueMissing={row.OverdueMissing}");
+    }
+}
+
+static async Task PrintBttsSummaryAsync(ApplicationDbContext context)
+{
+    var today = DateTimeProvider.GetLocalTime().ToString("dd-MM-yyyy");
+
+    var todayMatches = await context.MatchDatas
+        .AsNoTracking()
+        .Where(match => match.Date == today)
+        .ToListAsync();
+
+    var populated = todayMatches.Count(match => match.BttsYes > 0 && match.BttsNo > 0);
+    Console.WriteLine($"BTTS source pricing for {today}: totalMatches={todayMatches.Count}, populated={populated}");
+
+    foreach (var sample in todayMatches
+                 .Where(match => match.BttsYes > 0 && match.BttsNo > 0)
+                 .OrderByDescending(match => match.BttsYes)
+                 .Take(5))
+    {
+        Console.WriteLine(
+            $"  {sample.HomeTeam} vs {sample.AwayTeam} [{sample.League}] -> yes={sample.BttsYes:F3}, no={sample.BttsNo:F3}");
     }
 }
 
@@ -151,50 +205,8 @@ static string NormalizeConnectionString(string rawConnectionString)
     return builder.ConnectionString;
 }
 
-internal sealed class NoOpDataAnalyzerService : IDataAnalyzerService
+enum RunnerMode
 {
-    public IReadOnlyList<PredictionCandidate> BuildForecastCandidates(IEnumerable<MatchData> matches) => [];
-    public IReadOnlyList<PredictionCandidate> SelectPublishedPredictions(IEnumerable<PredictionCandidate> forecastCandidates) => [];
-    public IReadOnlyList<PredictionCandidate> BothTeamsScore(IEnumerable<MatchData> matches) => [];
-    public IReadOnlyList<PredictionCandidate> OverTwoGoals(IEnumerable<MatchData> matches) => [];
-    public IReadOnlyList<PredictionCandidate> Draw(IEnumerable<MatchData> matches) => [];
-    public IReadOnlyList<PredictionCandidate> StraightWin(IEnumerable<MatchData> matches) => [];
-}
-
-internal sealed class NoOpExtractFromExcel : IExtractFromExcel
-{
-    public IEnumerable<MatchData> ExtractMatchDatasetFromFile() => [];
-}
-
-internal sealed class NoOpRegressionPredictorService : IRegressionPredictorService
-{
-    public IEnumerable<RegressionPrediction> GeneratePredictions(IEnumerable<MatchData> upcomingMatches) => [];
-}
-
-internal sealed class NoOpCalibrationService : ICalibrationService
-{
-    public double Calibrate(PredictionMarket market, double rawProbability) => rawProbability;
-
-    public CalibrationDecision CalibrateWithDecision(PredictionMarket market, double rawProbability) =>
-        new()
-        {
-            Probability = rawProbability,
-            CalibratorUsed = "Bucket"
-        };
-
-    public Task RebuildProfilesAsync() => Task.CompletedTask;
-}
-
-internal sealed class NoOpThresholdTuningService : IThresholdTuningService
-{
-    public double GetThreshold(PredictionMarket market, double fallbackThreshold) => fallbackThreshold;
-
-    public ThresholdDecision GetThresholdDecision(PredictionMarket market, double fallbackThreshold) =>
-        new()
-        {
-            Threshold = fallbackThreshold,
-            ThresholdSource = "Configured"
-        };
-
-    public Task RebuildProfilesAsync() => Task.CompletedTask;
+    Sync,
+    Score
 }

@@ -7,7 +7,7 @@
 <div class="mp-container">
     <div class="mp-header-area">
         <h1 class="mp-page-title">🎯 AI Value Bets</h1>
-        <h3 class="mp-page-subtitle">Highly profitable mathematical mismatches hand-picked by our AI Handicapper.</p>
+        <h3 class="mp-page-subtitle">Calibrated model-vs-market edges, with short AI notes layered on top.</h3>
     </div>
 
     <!-- AI Loading State -->
@@ -16,13 +16,13 @@
             <div class="mp-spinner"></div>
         </div>
         <h3>🧠 AI is analyzing the top value plays...</h3>
-        <p style="color: var(--text-muted); font-size: 0.95rem;">Scanning mathematical probabilities vs bookmaker odds.</p>
+        <p style="color: var(--text-muted); font-size: 0.95rem;">Comparing calibrated model probabilities against source market pricing.</p>
     </div>
 
     <!-- No Bets State -->
     <div id="noBetsState" style="display: none; text-align: center; padding: 4rem 1rem; background: var(--card-bg); border-radius: 12px; border: 1px solid var(--border-color);">
         <h3 style="margin-bottom: 0.5rem;">No Value Bets Right Now</h3>
-        <p style="color: var(--text-muted);">We only show bets with a mathematical probability greater than 75%. Check back later as odds shift.</p>
+        <p style="color: var(--text-muted);">We only show markets where the calibrated model clears its threshold and still beats the source market by a real edge.</p>
     </div>
 
     <!-- Error State -->
@@ -65,14 +65,24 @@
                 grid.style.display = 'grid';
                 grid.style.gap = '1.5rem';
                 grid.innerHTML = valueBets.map(bet => {
-                    const mathProbString = (bet.mathematicalProbability * 100).toFixed(1) + '%';
+                    const modelProbString = (bet.mathematicalProbability * 100).toFixed(1) + '%';
+                    const marketProbString = (bet.marketProbability * 100).toFixed(1) + '%';
+                    const edgeString = '+' + (bet.edge * 100).toFixed(1) + ' pts';
+                    const thresholdString = (bet.thresholdUsed * 100).toFixed(1) + '%';
+                    const thresholdSource = (bet.thresholdSource || 'Configured').toLowerCase();
                     
                     let badgeClass = 'mp-badge-combined'; 
-                    if (bet.predictionCategory === 'BTTS') badgeClass = 'mp-badge-btts';
-                    else if (bet.predictionCategory === 'Over 2.5') badgeClass = 'mp-badge-over';
+                    if (bet.predictionCategory === 'BothTeamsScore') badgeClass = 'mp-badge-btts';
+                    else if (bet.predictionCategory === 'Over2.5Goals') badgeClass = 'mp-badge-over';
                     else if (bet.predictionCategory === 'Draw') badgeClass = 'mp-badge-draw';
-                    else if (bet.predictionCategory === 'Home Win' || bet.predictionCategory === 'StraightWin') badgeClass = 'mp-badge-win-home';
-                    else if (bet.predictionCategory === 'Away Win') badgeClass = 'mp-badge-win-away';
+                    else if (bet.predictionCategory === 'StraightWin' && bet.predictedOutcome === 'Away Win') badgeClass = 'mp-badge-win-away';
+                    else if (bet.predictionCategory === 'StraightWin') badgeClass = 'mp-badge-win-home';
+
+                    const badgeLabel =
+                        bet.predictionCategory === 'Over2.5Goals' ? 'Over 2.5' :
+                        bet.predictionCategory === 'BothTeamsScore' ? 'BTTS' :
+                        bet.predictionCategory === 'StraightWin' ? 'Straight Win' :
+                        bet.predictionCategory;
 
                     return `
                         <div class="mp-prediction-card" style="flex-direction: column; align-items: stretch; gap: 1rem; position: relative; overflow: hidden; border-top: 4px solid var(--accent-blue);">
@@ -92,7 +102,7 @@
                                 </div>
                                 
                                 <div class="mp-card-badges" style="display: flex; flex-direction: column; align-items: flex-end; gap: 10px;">
-                                    <span class="mp-prediction-badge ${badgeClass}">${bet.predictionCategory}</span>
+                                    <span class="mp-prediction-badge ${badgeClass}">${badgeLabel}</span>
                                     <button class="mp-add-cart-btn" title="Add Bet"
                                             data-home="${bet.homeTeam}"
                                             data-away="${bet.awayTeam}"
@@ -107,14 +117,27 @@
                             <!-- Bottom Row: AI Insights -->
                             <div style="background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.15); border-radius: 8px; padding: 1.25rem; margin-top: 0.5rem;">
                                 
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
-                                    <div style="display: flex; align-items: center; gap: 10px;">
-                                        <span style="font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">AI Pick:</span>
-                                        <span style="font-weight: 700; color: var(--text-primary); font-size: 1.1rem;">${bet.predictedOutcome}</span>
+                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 1rem; gap: 0.75rem;">
+                                    <div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Pick</div>
+                                        <div style="font-weight: 700; color: var(--text-primary); font-size: 1.05rem;">${bet.predictedOutcome}</div>
                                     </div>
-                                    <div style="display: flex; align-items: center; gap: 10px;">
-                                        <span style="font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Edge:</span>
-                                        <span style="color: #10b981; font-weight: 700; background: rgba(16, 185, 129, 0.1); padding: 4px 10px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.2); font-size: 0.95rem;">+${mathProbString} Win Prob</span>
+                                    <div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Model</div>
+                                        <div style="font-weight: 700; color: var(--text-primary); font-size: 1.05rem;">${modelProbString}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Market</div>
+                                        <div style="font-weight: 700; color: var(--text-primary); font-size: 1.05rem;">${marketProbString}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Edge</div>
+                                        <div style="color: #10b981; font-weight: 700; font-size: 1.05rem;">${edgeString}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Threshold</div>
+                                        <div style="font-weight: 700; color: var(--text-primary); font-size: 1.05rem;">${thresholdString}</div>
+                                        <div style="font-size: 0.8rem; color: var(--text-muted);">${thresholdSource}</div>
                                     </div>
                                 </div>
 

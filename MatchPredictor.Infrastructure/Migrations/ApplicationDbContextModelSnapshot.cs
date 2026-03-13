@@ -274,6 +274,12 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<int>("BttsLabel")
                         .HasColumnType("integer");
 
+                    b.Property<double>("BttsNo")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("BttsYes")
+                        .HasColumnType("double precision");
+
                     b.Property<string>("Date")
                         .HasColumnType("text");
 

@@ -6,6 +6,8 @@ namespace MatchPredictor.Web.Pages;
 
 public class AiChatModel : PageModel
 {
+    private const string AuthCookieName = "MP_AI_AUTH";
+    private const string SessionCookieName = "MP_AI_CHAT_SESSION";
     private readonly IConfiguration _config;
     public bool IsAuthenticated { get; set; }
     [BindProperty] public string? Password { get; set; }
@@ -18,7 +20,7 @@ public class AiChatModel : PageModel
 
     public void OnGet()
     {
-        IsAuthenticated = Request.Cookies.ContainsKey("MP_AI_AUTH");
+        IsAuthenticated = Request.Cookies.ContainsKey(AuthCookieName);
     }
 
     public IActionResult OnPost()
@@ -27,13 +29,24 @@ public class AiChatModel : PageModel
         
         if (!string.IsNullOrEmpty(validPassword) && Password == validPassword)
         {
-            Response.Cookies.Append("MP_AI_AUTH", "true", new CookieOptions
+            Response.Cookies.Append(AuthCookieName, "true", new CookieOptions
             {
                 Expires = DateTime.UtcNow.AddDays(30),
                 HttpOnly = true,
-                Secure = true,
+                Secure = Request.IsHttps,
                 SameSite = SameSiteMode.Strict
             });
+
+            if (!Request.Cookies.ContainsKey(SessionCookieName))
+            {
+                Response.Cookies.Append(SessionCookieName, Guid.NewGuid().ToString("N"), new CookieOptions
+                {
+                    HttpOnly = true,
+                    Secure = Request.IsHttps,
+                    SameSite = SameSiteMode.Strict
+                });
+            }
+
             return RedirectToPage();
         }
 

@@ -17,6 +17,8 @@ public class MatchData
     public double UnderTwoGoals { get; set; }
     public double UnderThreeGoals { get; set; }
     public double OverFourGoals { get; set; }
+    public double BttsYes { get; set; }
+    public double BttsNo { get; set; }
     
     // Granular Over/Under lines for better goal expectation modeling
     public double OverOneGoal { get; set; }

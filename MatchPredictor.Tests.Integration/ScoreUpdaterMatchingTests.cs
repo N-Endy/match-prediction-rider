@@ -330,6 +330,7 @@ public class ScoreUpdaterMatchingTests
             new StubRegressionPredictorService(),
             new StubCalibrationService(),
             new StubThresholdTuningService(),
+            new StubSourceMarketPricingService(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -397,5 +398,11 @@ public class ScoreUpdaterMatchingTests
             };
 
         public Task RebuildProfilesAsync() => Task.CompletedTask;
+    }
+
+    private sealed class StubSourceMarketPricingService : ISourceMarketPricingService
+    {
+        public Task<IReadOnlyList<SourceMarketFixture>> GetTodaySourceMarketFixturesAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<SourceMarketFixture>>([]);
     }
 }

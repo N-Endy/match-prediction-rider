@@ -8,4 +8,5 @@ public class PredictionSettings
     public double OverTwoGoalsStrongThreshold { get; set; } = 0.58;
     public double DrawStrongThreshold { get; set; } = 0.30;
     public double MinTotalXgRequiredForWin { get; set; } = 2.0;
+    public double ValueBetMinimumEdge { get; set; } = 0.03;
 }

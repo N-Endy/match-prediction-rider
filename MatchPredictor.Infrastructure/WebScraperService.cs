@@ -42,6 +42,7 @@ public partial class WebScraperService : IWebScraperService
         try
         {
             var chromeOptions = GetChromeOptions();
+            var scrapeStartedAtUtc = DateTime.UtcNow;
 
             // var service = ChromeDriverService.CreateDefaultService();
             // service.HideCommandPromptWindow = true;
@@ -77,7 +78,7 @@ public partial class WebScraperService : IWebScraperService
             _logger.LogInformation("Download button clicked successfully.");
 
 
-            await CheckFileIsDownloaded();
+            await CheckFileIsDownloaded(scrapeStartedAtUtc);
         }
         catch (Exception ex)
         {
@@ -696,7 +697,7 @@ public partial class WebScraperService : IWebScraperService
         public bool IsLive { get; set; }
     }
 
-    private async Task CheckFileIsDownloaded()
+    private async Task CheckFileIsDownloaded(DateTime scrapeStartedAtUtc)
     {
         var fileName = _configuration["ScrapingValues:PredictionsFileName"]
                        ?? throw new InvalidOperationException("Predictions file name not configured in appsettings.json");
@@ -717,6 +718,18 @@ public partial class WebScraperService : IWebScraperService
             {
                 _logger.LogInformation("Checking for file at: {Path}", path);
                 if (!File.Exists(path)) continue;
+
+                var lastWriteTimeUtc = File.GetLastWriteTimeUtc(path);
+                if (lastWriteTimeUtc < scrapeStartedAtUtc.AddSeconds(-2))
+                {
+                    _logger.LogInformation(
+                        "Ignoring stale file at {Path}. Last write time {LastWriteTimeUtc:o} was before scrape start {ScrapeStartedAtUtc:o}.",
+                        path,
+                        lastWriteTimeUtc,
+                        scrapeStartedAtUtc);
+                    continue;
+                }
+
                 _logger.LogInformation("File found at: {Path}", path);
                 if (path == Path.Combine(_downloadFolder, fileName)) return;
                 File.Move(path, Path.Combine(_downloadFolder, fileName), true);

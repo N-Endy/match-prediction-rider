@@ -16,9 +16,14 @@ function saveCart(cart) {
 
 function addToCart(match) {
     const cart = getCart();
-    // Avoid duplicates by checking home+away+league
+    // Avoid duplicates by checking the full bet identity, not just the fixture.
     const exists = cart.some(
-        m => m.homeTeam === match.homeTeam && m.awayTeam === match.awayTeam && m.league === match.league
+        m =>
+            m.homeTeam === match.homeTeam &&
+            m.awayTeam === match.awayTeam &&
+            m.league === match.league &&
+            (m.market || '') === (match.market || '') &&
+            (m.prediction || '') === (match.prediction || '')
     );
     if (exists) {
         showToast('Already in betslip');

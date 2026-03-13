@@ -10,6 +10,10 @@ public static class MatchDataProbabilityExtensions
 
     public static double Under35(this MatchData match) => match.UnderThreeGoals;
 
+    public static double BttsYesProbability(this MatchData match) => match.BttsYes;
+
+    public static double BttsNoProbability(this MatchData match) => match.BttsNo;
+
     public static void NormalizeSourceProbabilities(this MatchData match)
     {
         if (TryGetNormalizedOneX2(match, out var oneX2))
@@ -23,6 +27,12 @@ public static class MatchDataProbabilityExtensions
         {
             match.OverTwoGoals = overUnder25.over25;
             match.UnderTwoGoals = overUnder25.under25;
+        }
+
+        if (TryGetNormalizedBttsPair(match, out var bttsPair))
+        {
+            match.BttsYes = bttsPair.yes;
+            match.BttsNo = bttsPair.no;
         }
     }
 
@@ -53,6 +63,21 @@ public static class MatchDataProbabilityExtensions
             return false;
 
         normalized = (match.OverTwoGoals / total, match.UnderTwoGoals / total);
+        return true;
+    }
+
+    public static bool TryGetNormalizedBttsPair(this MatchData match, out (double yes, double no) normalized)
+    {
+        normalized = default;
+
+        if (match.BttsYes <= 0 || match.BttsNo <= 0)
+            return false;
+
+        var total = match.BttsYes + match.BttsNo;
+        if (total <= 0)
+            return false;
+
+        normalized = (match.BttsYes / total, match.BttsNo / total);
         return true;
     }
 }

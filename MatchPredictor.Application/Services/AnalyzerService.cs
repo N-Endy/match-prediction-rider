@@ -23,6 +23,7 @@ public class AnalyzerService  : IAnalyzerService
     private readonly IRegressionPredictorService _regressionPredictorService;
     private readonly ICalibrationService _calibrationService;
     private readonly IThresholdTuningService _thresholdTuningService;
+    private readonly ISourceMarketPricingService _sourceMarketPricingService;
     private readonly PredictionSettings _predictionSettings;
     
     public AnalyzerService(
@@ -33,6 +34,7 @@ public class AnalyzerService  : IAnalyzerService
         IRegressionPredictorService regressionPredictorService,
         ICalibrationService calibrationService,
         IThresholdTuningService thresholdTuningService,
+        ISourceMarketPricingService sourceMarketPricingService,
         IOptions<PredictionSettings> predictionOptions,
         ILogger<AnalyzerService> logger)
     {
@@ -43,6 +45,7 @@ public class AnalyzerService  : IAnalyzerService
         _regressionPredictorService = regressionPredictorService;
         _calibrationService = calibrationService;
         _thresholdTuningService = thresholdTuningService;
+        _sourceMarketPricingService = sourceMarketPricingService;
         _predictionSettings = predictionOptions.Value;
         _logger = logger;
     }
@@ -57,6 +60,17 @@ public class AnalyzerService  : IAnalyzerService
             _logger.LogInformation("✅ Web scraping for match data completed successfully.");
 
             var scraped = _excelExtract.ExtractMatchDatasetFromFile().ToList();
+            IReadOnlyList<SourceMarketFixture> sourceMarketFixtures = [];
+            try
+            {
+                sourceMarketFixtures = await _sourceMarketPricingService.GetTodaySourceMarketFixturesAsync();
+                _logger.LogInformation("Fetched {Count} source market fixtures for BTTS enrichment.", sourceMarketFixtures.Count);
+            }
+            catch (Exception sourceMarketEx)
+            {
+                _logger.LogWarning(sourceMarketEx, "⚠️ Failed to fetch source market fixtures for BTTS enrichment. Continuing with workbook-only data.");
+            }
+
             try
             {
                 var existingMatches = await _dbContext.MatchDatas
@@ -78,6 +92,7 @@ public class AnalyzerService  : IAnalyzerService
                     match.Date = properDateTime.date;
                     match.Time = properDateTime.time;
                     match.MatchDateTime = properDateTime.utcDateTime;
+                    EnrichSourceMarketProbabilities(match, sourceMarketFixtures);
 
                     var key = (
                         Home: (match.HomeTeam ?? string.Empty).Trim().ToLowerInvariant(),
@@ -107,6 +122,8 @@ public class AnalyzerService  : IAnalyzerService
                         existing.AhMinusOneAway = match.AhMinusOneAway;
                         existing.AhPlusHalfHome = match.AhPlusHalfHome;
                         existing.AhPlusHalfAway = match.AhPlusHalfAway;
+                        existing.BttsYes = match.BttsYes;
+                        existing.BttsNo = match.BttsNo;
                         existing.MatchDateTime = match.MatchDateTime;
                     }
                     else
@@ -315,6 +332,29 @@ public class AnalyzerService  : IAnalyzerService
         {
             _logger.LogError(ex, "Failed to write scraping log.");
         }
+    }
+
+    private void EnrichSourceMarketProbabilities(MatchData match, IReadOnlyList<SourceMarketFixture> sourceMarketFixtures)
+    {
+        if (sourceMarketFixtures.Count == 0)
+            return;
+
+        var sourceFixture = SourceMarketFixtureMatcher.FindBestFixture(
+            sourceMarketFixtures,
+            match.HomeTeam,
+            match.AwayTeam,
+            match.League,
+            match.MatchDateTime);
+
+        if (sourceFixture?.BttsYesProbability is not double bttsYesProbability ||
+            sourceFixture.BttsNoProbability is not double bttsNoProbability)
+        {
+            return;
+        }
+
+        match.BttsYes = bttsYesProbability;
+        match.BttsNo = bttsNoProbability;
+        match.NormalizeSourceProbabilities();
     }
 
     private async Task UpdatePredictionsWithActualResults()

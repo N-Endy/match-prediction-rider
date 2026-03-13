@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
+using System.Globalization;
 
 namespace MatchPredictor.Infrastructure.Services;
 
@@ -18,7 +19,7 @@ namespace MatchPredictor.Infrastructure.Services;
 /// This is ~100x faster than Selenium and uses no additional RAM.
 /// No login required for booking code generation.
 /// </summary>
-public class SportyBetBookingService : ISportyBetBookingService
+public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPricingService
 {
     private readonly IConfiguration _configuration;
     private readonly ILogger<SportyBetBookingService> _logger;
@@ -53,7 +54,7 @@ public class SportyBetBookingService : ISportyBetBookingService
             _logger.LogInformation("Searching SportyBet API for {Count} selections...", selections.Count);
 
             // Step 1: Fetch today's fixtures from SportyBet to get outcome IDs
-            var fixtureMap = await FetchTodayFixturesAsync(baseUrl, soccerSportId, market1X2);
+            var fixtureMap = await FetchTodayFixturesAsync(baseUrl, soccerSportId, market1X2, CancellationToken.None);
             if (fixtureMap.Count == 0)
             {
                 _logger.LogWarning("Could not fetch fixtures from SportyBet API.");
@@ -116,17 +117,40 @@ public class SportyBetBookingService : ISportyBetBookingService
         }
     }
 
+    public async Task<IReadOnlyList<SourceMarketFixture>> GetTodaySourceMarketFixturesAsync(CancellationToken ct = default)
+    {
+        var baseUrl = _configuration["SportyBet:BaseUrl"] ?? "https://www.sportybet.com";
+        var soccerSportId = _configuration["SportyBet:SoccerSportId"] ?? "sr:sport:1";
+        var market1X2 = _configuration["SportyBet:Market1X2"] ?? "1";
+
+        var fixtures = await FetchTodayFixturesAsync(baseUrl, soccerSportId, market1X2, ct);
+        return fixtures.Select(fixture => new SourceMarketFixture
+        {
+            EventId = fixture.EventId,
+            League = fixture.League,
+            HomeTeam = fixture.HomeTeam,
+            AwayTeam = fixture.AwayTeam,
+            MatchTimeUtc = fixture.MatchTimeUtc,
+            HomeWinProbability = fixture.HomeProbability,
+            DrawProbability = fixture.DrawProbability,
+            AwayWinProbability = fixture.AwayProbability,
+            Over25Probability = fixture.Over25Probability,
+            BttsYesProbability = fixture.BttsYesProbability,
+            BttsNoProbability = fixture.BttsNoProbability
+        }).ToList();
+    }
+
     /// <summary>
     /// Fetches today's football fixtures from SportyBet and returns a flat list indexed by fixture.
     /// </summary>
-    private async Task<List<SportyBetFixture>> FetchTodayFixturesAsync(string baseUrl, string soccerSportId, string market1X2)
+    private async Task<List<SportyBetFixture>> FetchTodayFixturesAsync(string baseUrl, string soccerSportId, string market1X2, CancellationToken ct)
     {
         var cacheKey = $"sportybet_fixtures_{DateTime.UtcNow:yyyyMMdd}";
         string? cachedData = null;
 
         try
         {
-            cachedData = await _cache.GetStringAsync(cacheKey);
+            cachedData = await _cache.GetStringAsync(cacheKey, ct);
         }
         catch (Exception ex)
         {
@@ -157,8 +181,8 @@ public class SportyBetBookingService : ISportyBetBookingService
 
                 _logger.LogInformation("SportyBet API GET: {Url}", url);
 
-                var response = await client.GetAsync(url);
-                var responseBody = await response.Content.ReadAsStringAsync();
+                var response = await client.GetAsync(url, ct);
+                var responseBody = await response.Content.ReadAsStringAsync(ct);
 
                 if (!response.IsSuccessStatusCode)
                 {
@@ -198,6 +222,11 @@ public class SportyBetBookingService : ISportyBetBookingService
                             var homeTeam = ev.GetProperty("homeTeamName").GetString() ?? "";
                             var awayTeam = ev.GetProperty("awayTeamName").GetString() ?? "";
                             var eventId = ev.GetProperty("eventId").GetString() ?? "";
+                            var kickoffTimeUtc = ev.TryGetProperty("estimateStartTime", out var estimateStartTimeElement) &&
+                                                 estimateStartTimeElement.TryGetInt64(out var estimateStartTime)
+                                ? DateTimeOffset.FromUnixTimeMilliseconds(estimateStartTime).UtcDateTime
+                                : (DateTime?)null;
+                            var league = ExtractLeagueName(ev);
 
                             // Extract 1X2 market outcomes
                             var homeOutcomeId = "";
@@ -205,6 +234,12 @@ public class SportyBetBookingService : ISportyBetBookingService
                             var awayOutcomeId = "";
                             var bttsOutcomeId = "";
                             var over25OutcomeId = "";
+                            double? homeProbability = null;
+                            double? drawProbability = null;
+                            double? awayProbability = null;
+                            double? bttsYesProbability = null;
+                            double? bttsNoProbability = null;
+                            double? over25Probability = null;
 
                             if (ev.TryGetProperty("markets", out var markets))
                             {
@@ -218,16 +253,26 @@ public class SportyBetBookingService : ISportyBetBookingService
                                         if (market.TryGetProperty("outcomes", out var outcomes))
                                         {
                                             foreach (var o in outcomes.EnumerateArray())
-                                            {
-                                                var oid = o.GetProperty("id").GetString() ?? "";
-                                                var desc = o.TryGetProperty("desc", out var d) ? d.GetString() ?? "" : "";
+                                                {
+                                                    var oid = o.GetProperty("id").GetString() ?? "";
+                                                    var desc = o.TryGetProperty("desc", out var d) ? d.GetString() ?? "" : "";
+                                                    var probability = TryParseProbability(o);
                                                 
                                                 if (oid == "1" || desc.Contains("Home", StringComparison.OrdinalIgnoreCase))
+                                                {
                                                     homeOutcomeId = oid;
+                                                    homeProbability = probability;
+                                                }
                                                 else if (oid == "2" || desc.Contains("Draw", StringComparison.OrdinalIgnoreCase))
+                                                {
                                                     drawOutcomeId = oid;
+                                                    drawProbability = probability;
+                                                }
                                                 else if (oid == "3" || desc.Contains("Away", StringComparison.OrdinalIgnoreCase))
+                                                {
                                                     awayOutcomeId = oid;
+                                                    awayProbability = probability;
+                                                }
                                             }
                                         }
                                     }
@@ -242,8 +287,12 @@ public class SportyBetBookingService : ISportyBetBookingService
                                                 {
                                                     var oid = o.GetProperty("id").GetString() ?? "";
                                                     var desc = o.TryGetProperty("desc", out var d) ? d.GetString() ?? "" : "";
+                                                    var probability = TryParseProbability(o);
                                                     if (oid == "12" || desc.Contains("Over", StringComparison.OrdinalIgnoreCase))
+                                                    {
                                                         over25OutcomeId = oid;
+                                                        over25Probability = probability;
+                                                    }
                                                 }
                                             }
                                         }
@@ -256,8 +305,16 @@ public class SportyBetBookingService : ISportyBetBookingService
                                             {
                                                 var oid = o.GetProperty("id").GetString() ?? "";
                                                 var desc = o.TryGetProperty("desc", out var d) ? d.GetString() ?? "" : "";
+                                                var probability = TryParseProbability(o);
                                                 if (oid == "74" || desc.Equals("Yes", StringComparison.OrdinalIgnoreCase))
+                                                {
                                                     bttsOutcomeId = oid;
+                                                    bttsYesProbability = probability;
+                                                }
+                                                else if (oid == "76" || desc.Equals("No", StringComparison.OrdinalIgnoreCase))
+                                                {
+                                                    bttsNoProbability = probability;
+                                                }
                                             }
                                         }
                                     }
@@ -267,13 +324,21 @@ public class SportyBetBookingService : ISportyBetBookingService
                             fixtures.Add(new SportyBetFixture
                             {
                                 EventId = eventId,
+                                League = league,
                                 HomeTeam = homeTeam,
                                 AwayTeam = awayTeam,
+                                MatchTimeUtc = kickoffTimeUtc,
                                 HomeOutcomeId = homeOutcomeId,
                                 DrawOutcomeId = drawOutcomeId,
                                 AwayOutcomeId = awayOutcomeId,
                                 BttsYesOutcomeId = bttsOutcomeId,
-                                Over25OutcomeId = over25OutcomeId
+                                Over25OutcomeId = over25OutcomeId,
+                                HomeProbability = homeProbability,
+                                DrawProbability = drawProbability,
+                                AwayProbability = awayProbability,
+                                Over25Probability = over25Probability,
+                                BttsYesProbability = bttsYesProbability,
+                                BttsNoProbability = bttsNoProbability
                             });
                         }
                         catch (Exception ex)
@@ -305,7 +370,7 @@ public class SportyBetBookingService : ISportyBetBookingService
                 {
                     AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15) // Cache for 15 mins
                 };
-                await _cache.SetStringAsync(cacheKey, serialized, cacheOptions);
+                await _cache.SetStringAsync(cacheKey, serialized, cacheOptions, ct);
                 _logger.LogInformation("Cached {Count} SportyBet fixtures in Redis.", fixtures.Count);
             }
             catch (Exception ex)
@@ -464,6 +529,43 @@ public class SportyBetBookingService : ISportyBetBookingService
             .Replace("fc", "").Replace("cf", "").Replace("afc", "").Replace("sc", "")
             .Replace("united", "utd").Replace("  ", " ").Trim();
     }
+
+    private static string ExtractLeagueName(JsonElement fixtureElement)
+    {
+        if (!fixtureElement.TryGetProperty("sport", out var sport) ||
+            !sport.TryGetProperty("category", out var category))
+        {
+            return string.Empty;
+        }
+
+        var country = category.TryGetProperty("name", out var categoryName) ? categoryName.GetString() ?? string.Empty : string.Empty;
+        var tournament = category.TryGetProperty("tournament", out var tournamentElement) &&
+                         tournamentElement.TryGetProperty("name", out var tournamentName)
+            ? tournamentName.GetString() ?? string.Empty
+            : string.Empty;
+
+        if (string.IsNullOrWhiteSpace(country))
+            return tournament;
+        if (string.IsNullOrWhiteSpace(tournament))
+            return country;
+
+        return $"{country} - {tournament}";
+    }
+
+    private static double? TryParseProbability(JsonElement outcomeElement)
+    {
+        if (!outcomeElement.TryGetProperty("probability", out var probabilityElement))
+            return null;
+
+        if (probabilityElement.ValueKind == JsonValueKind.Number && probabilityElement.TryGetDouble(out var numericProbability))
+            return numericProbability;
+
+        if (probabilityElement.ValueKind == JsonValueKind.String &&
+            double.TryParse(probabilityElement.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var stringProbability))
+            return stringProbability;
+
+        return null;
+    }
 }
 
 // ── Internal Models ──
@@ -471,13 +573,21 @@ public class SportyBetBookingService : ISportyBetBookingService
 public record SportyBetFixture
 {
     public string EventId { get; init; } = "";
+    public string League { get; init; } = "";
     public string HomeTeam { get; init; } = "";
     public string AwayTeam { get; init; } = "";
+    public DateTime? MatchTimeUtc { get; init; }
     public string HomeOutcomeId { get; init; } = "";
     public string DrawOutcomeId { get; init; } = "";
     public string AwayOutcomeId { get; init; } = "";
     public string BttsYesOutcomeId { get; init; } = "";
     public string Over25OutcomeId { get; init; } = "";
+    public double? HomeProbability { get; init; }
+    public double? DrawProbability { get; init; }
+    public double? AwayProbability { get; init; }
+    public double? Over25Probability { get; init; }
+    public double? BttsYesProbability { get; init; }
+    public double? BttsNoProbability { get; init; }
 }
 
 public record SportyBetOutcome

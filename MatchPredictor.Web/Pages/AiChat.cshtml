@@ -48,12 +48,12 @@ else
             <div class="mp-chat-message mp-chat-ai">
                 <div class="mp-chat-avatar">🤖</div>
                 <div class="mp-chat-bubble">
-                    <p>Hello! I'm Nelson, your prediction advisor. I can analyse today's predictions and give you picks based on your preferences.</p>
+                    <p>Hello! I'm Nelson, your grounded prediction advisor. I only work from today's MatchPredictor card, so every pick I discuss comes from the predictions currently in the system.</p>
                     <p style="margin-top: 0.5rem; font-size: 0.85rem; opacity: 0.7;">Try asking:</p>
                     <ul style="font-size: 0.85rem; opacity: 0.7; margin: 0.25rem 0 0 1rem;">
                         <li>"Give me 10 of the best BTTS predictions"</li>
                         <li>"Pick 5 safe straight wins"</li>
-                        <li>"Give me 3 value bets and book them for me"</li>
+                        <li>"Give me 3 strong picks and add them to the slip"</li>
                     </ul>
                 </div>
             </div>
@@ -76,16 +76,16 @@ else
     const chatMessages = document.getElementById('chatMessages');
     const chatInput = document.getElementById('chatInput');
     const chatSendBtn = document.getElementById('chatSendBtn');
-    let conversationHistory = [];
+    if (chatInput && chatSendBtn) {
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendChatMessage();
+            }
+        });
+    }
 
-    chatInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendChatMessage();
-        }
-    });
-
-    function appendMessage(role, text) {
+    function appendTextMessage(role, text) {
         const div = document.createElement('div');
         div.className = `mp-chat-message mp-chat-${role}`;
 
@@ -95,7 +95,7 @@ else
 
         const bubble = document.createElement('div');
         bubble.className = 'mp-chat-bubble';
-        bubble.innerHTML = formatMessage(text);
+        bubble.innerHTML = formatMessageHtml(text);
 
         div.appendChild(avatar);
         div.appendChild(bubble);
@@ -103,23 +103,98 @@ else
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 
-    function formatMessage(text) {
-        let formatted = text;
-        
-        // Parse [ADD_BET: Home|Away|League|Market|Outcome]
-        formatted = formatted.replace(
-            /\[ADD_BET:\s*(.*?)\|(.*?)\|(.*?)\|(.*?)\|(.*?)\]/g, 
-            '<button class="mp-add-cart-btn mp-btn-sm" style="display:inline-flex; align-items:center; justify-content:center; margin-left:8px; padding:4px 10px; font-size:0.75rem; border-radius:4px; vertical-align:middle; line-height:1;" data-home="$1" data-away="$2" data-league="$3" data-market="$4" data-prediction="$5">+ Add to Slip</button>'
-        );
+    function appendAiResponse(response) {
+        const div = document.createElement('div');
+        div.className = 'mp-chat-message mp-chat-ai';
 
-        // Parse [BOOK_ALL]
-        formatted = formatted.replace(
-            /\[BOOK_ALL\]/g, 
-            '<div style="margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.1);"><button class="mp-book-btn" style="font-size:0.85rem; padding:8px 16px; width:auto; border-radius:8px;" onclick="addAllAndBook(this)">🎫 Add All & Open Slip</button></div>'
-        );
+        const avatar = document.createElement('div');
+        avatar.className = 'mp-chat-avatar';
+        avatar.textContent = '🤖';
 
-        // Basic markdown-like formatting
-        return formatted
+        const bubble = document.createElement('div');
+        bubble.className = 'mp-chat-bubble';
+
+        const message = document.createElement('div');
+        message.innerHTML = formatMessageHtml(response.message || '');
+        bubble.appendChild(message);
+
+        if (Array.isArray(response.warnings) && response.warnings.length > 0) {
+            const warnings = document.createElement('div');
+            warnings.style.marginTop = '0.75rem';
+            warnings.style.fontSize = '0.8rem';
+            warnings.style.opacity = '0.75';
+            warnings.innerHTML = response.warnings
+                .map(warning => `<div>${escapeHtml(warning)}</div>`)
+                .join('');
+            bubble.appendChild(warnings);
+        }
+
+        if (Array.isArray(response.actions) && response.actions.length > 0) {
+            const actions = document.createElement('div');
+            actions.style.display = 'flex';
+            actions.style.flexWrap = 'wrap';
+            actions.style.gap = '0.5rem';
+            actions.style.marginTop = '0.85rem';
+
+            response.actions.forEach(action => {
+                const btn = document.createElement('button');
+                btn.className = 'mp-add-cart-btn mp-btn-sm';
+                btn.style.display = 'inline-flex';
+                btn.style.alignItems = 'center';
+                btn.style.justifyContent = 'center';
+                btn.style.padding = '4px 10px';
+                btn.style.fontSize = '0.75rem';
+                btn.style.borderRadius = '4px';
+                btn.style.lineHeight = '1';
+                btn.textContent = `+ ${action.homeTeam} vs ${action.awayTeam}`;
+                btn.dataset.home = action.homeTeam || '';
+                btn.dataset.away = action.awayTeam || '';
+                btn.dataset.league = action.league || '';
+                btn.dataset.market = action.market || '';
+                btn.dataset.prediction = action.prediction || '';
+                actions.appendChild(btn);
+            });
+
+            bubble.appendChild(actions);
+
+            if (response.showBookAll && response.actions.length > 1) {
+                const footer = document.createElement('div');
+                footer.style.marginTop = '12px';
+                footer.style.paddingTop = '12px';
+                footer.style.borderTop = '1px solid rgba(255,255,255,0.1)';
+
+                const btn = document.createElement('button');
+                btn.className = 'mp-book-btn';
+                btn.style.fontSize = '0.85rem';
+                btn.style.padding = '8px 16px';
+                btn.style.width = 'auto';
+                btn.style.borderRadius = '8px';
+                btn.textContent = '🎫 Add All & Open Slip';
+                btn.addEventListener('click', () => addAllAndBook(btn));
+
+                footer.appendChild(btn);
+                bubble.appendChild(footer);
+            }
+        }
+
+        div.appendChild(avatar);
+        div.appendChild(bubble);
+        chatMessages.appendChild(div);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function escapeHtml(text) {
+        return String(text ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function formatMessageHtml(text) {
+        const escaped = escapeHtml(text);
+        return escaped
             .replace(/\n/g, '<br>')
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
             .replace(/\*(.*?)\*/g, '<em>$1</em>')
@@ -183,12 +258,9 @@ else
         if (!message) return;
 
         // Show user message
-        appendMessage('user', message);
+        appendTextMessage('user', message);
         chatInput.value = '';
         chatSendBtn.disabled = true;
-
-        // Add to conversation history
-        conversationHistory.push({ role: 'user', content: message });
 
         showTypingIndicator();
 
@@ -199,10 +271,7 @@ else
             const response = await fetch('/api/ai/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: message,
-                    history: conversationHistory
-                }),
+                body: JSON.stringify({ message }),
                 signal: controller.signal
             });
 
@@ -211,19 +280,18 @@ else
 
             if (response.ok) {
                 const data = await response.json();
-                appendMessage('ai', data.response);
-                conversationHistory.push({ role: 'assistant', content: data.response });
+                appendAiResponse(data);
             } else {
                 const errorData = await response.json().catch(() => null);
-                const errorMsg = errorData?.response || 'Something went wrong. Please try again.';
-                appendMessage('ai', `❌ ${errorMsg}`);
+                const errorMsg = errorData?.message || 'Something went wrong. Please try again.';
+                appendAiResponse({ message: `❌ ${errorMsg}`, actions: [], showBookAll: false, warnings: [] });
             }
         } catch (err) {
             removeTypingIndicator();
             if (err.name === 'AbortError') {
-                appendMessage('ai', '⏳ Request timed out. The AI service may be busy — please try again in a moment.');
+                appendAiResponse({ message: '⏳ Request timed out. The AI service may be busy — please try again in a moment.', actions: [], showBookAll: false, warnings: [] });
             } else {
-                appendMessage('ai', '❌ Network error. Please check your connection and try again.');
+                appendAiResponse({ message: '❌ Network error. Please check your connection and try again.', actions: [], showBookAll: false, warnings: [] });
             }
         } finally {
             chatSendBtn.disabled = false;
