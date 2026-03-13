@@ -21,6 +21,7 @@ public class AiAdvisorService : IAiAdvisorService
 {
     private const int MaxHistoryItems = 12;
     private const int MaxMessageLength = 1000;
+    private const int MaxRecommendedActions = 60;
     private static readonly TimeSpan SessionSlidingExpiration = TimeSpan.FromHours(12);
 
     private readonly ApplicationDbContext _dbContext;
@@ -119,7 +120,7 @@ public class AiAdvisorService : IAiAdvisorService
             temperature: 0.2,
             maxTokens: 1400);
 
-        var parsed = ParseAiChatResponse(rawResponse, selection.Candidates);
+        var parsed = ParseAiChatResponse(rawResponse, selection, normalizedPrompt);
         await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, parsed, ct);
         return parsed;
     }
@@ -165,6 +166,8 @@ public class AiAdvisorService : IAiAdvisorService
             - "Best" and "safe" picks should lean on higher calibrated confidence and stronger margin above threshold.
             - Prefer low-variance Straight Win setups when the user asks for safer options.
             - If multiple picks are suggested, keep them grounded and avoid hype or guarantees.
+            - If the payload includes requestedMarkets with counts, try to satisfy that market mix as closely as the supplied candidates allow.
+            - When the user asks for a list of picks, recommend the supplied candidates that best fit the request instead of narrowing aggressively.
             - Never mention data you were not given.
 
             ACTION RULES:
@@ -172,12 +175,18 @@ public class AiAdvisorService : IAiAdvisorService
             - You may only return ActionKeys that appear in the payload.
             - If you do not want to recommend a candidate, omit its ActionKey.
             - If fewer than 2 candidates are recommended, showBookAll should be false.
+            - If the user asks to book the picks and there is more than one suitable candidate, prefer showBookAll = true.
 
             OUTPUT FORMAT:
             Return exactly one JSON object with this shape:
             {
               "message": "string",
-              "recommendedActionKeys": ["P123", "P456"],
+              "recommendations": [
+                {
+                  "actionKey": "P123",
+                  "explanation": "One short grounded sentence about why this pick fits."
+                }
+              ],
               "showBookAll": false,
               "warnings": ["optional string"]
             }
@@ -236,6 +245,12 @@ public class AiAdvisorService : IAiAdvisorService
         {
             question = userPrompt,
             availablePredictionCount = selection.TotalAvailableCount,
+            requestedPredictionCount = selection.RequestedCandidateCount,
+            requestedMarkets = selection.RequestedMarketSlices.Select(slice => new
+            {
+                market = slice.DisplayName,
+                count = slice.Count
+            }),
             relevantPredictions = selection.Candidates.Select(candidate => new
             {
                 candidate.ActionKey,
@@ -261,24 +276,77 @@ public class AiAdvisorService : IAiAdvisorService
 
     private AiChatResponse ParseAiChatResponse(
         string rawResponse,
-        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidates)
+        AiChatContextBuilder.AiChatContextSelection selection,
+        string userPrompt)
     {
         if (!TryParseChatModelResponse(rawResponse, out var parsed))
         {
+            var fallbackActions = BuildDeterministicFallbackActions(selection);
             return new AiChatResponse
             {
                 Message = string.IsNullOrWhiteSpace(rawResponse)
                     ? "I couldn't generate a clean response just now. Please try again."
-                    : rawResponse.Trim()
+                    : rawResponse.Trim(),
+                Actions = fallbackActions,
+                ShowBookAll = ShouldShowBookAll(userPrompt, fallbackActions.Count, modelRequestedBookAll: false)
             };
         }
 
-        var lookup = candidates.ToDictionary(candidate => candidate.ActionKey, StringComparer.OrdinalIgnoreCase);
-        var actions = (parsed.RecommendedActionKeys ?? [])
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(lookup.ContainsKey)
-            .Take(8)
-            .Select(key => CreateAction(lookup[key]))
+        var lookup = selection.Candidates.ToDictionary(candidate => candidate.ActionKey, StringComparer.OrdinalIgnoreCase);
+        var targetActionCount = selection.RequestedCandidateCount > 0
+            ? Math.Min(selection.RequestedCandidateCount, Math.Min(selection.Candidates.Count, MaxRecommendedActions))
+            : MaxRecommendedActions;
+
+        var recommendationStream = (parsed.Recommendations ?? [])
+            .Where(recommendation => !string.IsNullOrWhiteSpace(recommendation.ActionKey))
+            .Select(recommendation => (ActionKey: recommendation.ActionKey.Trim(), Explanation: recommendation.Explanation?.Trim()));
+
+        if ((parsed.Recommendations?.Count ?? 0) == 0 && parsed.RecommendedActionKeys is { Count: > 0 })
+        {
+            recommendationStream = parsed.RecommendedActionKeys
+                .Where(key => !string.IsNullOrWhiteSpace(key))
+                .Select(key => (ActionKey: key.Trim(), Explanation: (string?)null));
+        }
+
+        var actionKeys = new List<string>();
+        var explanationsByKey = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var recommendation in recommendationStream)
+        {
+            if (!lookup.ContainsKey(recommendation.ActionKey) || actionKeys.Contains(recommendation.ActionKey, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            actionKeys.Add(recommendation.ActionKey);
+            explanationsByKey[recommendation.ActionKey] = string.IsNullOrWhiteSpace(recommendation.Explanation)
+                ? BuildDefaultActionExplanation(lookup[recommendation.ActionKey])
+                : NormalizeActionExplanation(recommendation.Explanation);
+            if (actionKeys.Count >= targetActionCount)
+            {
+                break;
+            }
+        }
+
+        if (selection.RequestedCandidateCount > 0 && actionKeys.Count < targetActionCount)
+        {
+            foreach (var candidate in selection.Candidates)
+            {
+                if (actionKeys.Contains(candidate.ActionKey, StringComparer.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                actionKeys.Add(candidate.ActionKey);
+                explanationsByKey[candidate.ActionKey] = BuildDefaultActionExplanation(candidate);
+                if (actionKeys.Count >= targetActionCount)
+                {
+                    break;
+                }
+            }
+        }
+
+        var actions = actionKeys
+            .Select(key => CreateAction(lookup[key], explanationsByKey.GetValueOrDefault(key)))
             .ToList();
 
         return new AiChatResponse
@@ -287,9 +355,59 @@ public class AiAdvisorService : IAiAdvisorService
                 ? "I couldn't generate a clean response just now. Please try again."
                 : parsed.Message.Trim(),
             Actions = actions,
-            ShowBookAll = parsed.ShowBookAll && actions.Count > 1,
+            ShowBookAll = ShouldShowBookAll(userPrompt, actions.Count, parsed.ShowBookAll),
             Warnings = parsed.Warnings ?? []
         };
+    }
+
+    private static List<AiChatAction> BuildDeterministicFallbackActions(AiChatContextBuilder.AiChatContextSelection selection)
+    {
+        if (selection.RequestedCandidateCount <= 0)
+        {
+            return [];
+        }
+
+        return selection.Candidates
+            .Take(Math.Min(selection.RequestedCandidateCount, MaxRecommendedActions))
+            .Select(candidate => CreateAction(candidate, BuildDefaultActionExplanation(candidate)))
+            .ToList();
+    }
+
+    private static string NormalizeActionExplanation(string explanation)
+    {
+        return NormalizeHistoryContent(explanation).Trim();
+    }
+
+    private static string BuildDefaultActionExplanation(AiChatContextBuilder.AiChatContextCandidate candidate)
+    {
+        var confidence = (double)(candidate.ConfidenceScore ?? decimal.Zero) * 100d;
+        var marginPoints = candidate.MarginAboveThreshold * 100d;
+        var thresholdLabel = string.IsNullOrWhiteSpace(candidate.ThresholdSource)
+            ? "current"
+            : candidate.ThresholdSource.ToLowerInvariant();
+
+        return $"{candidate.PredictedOutcome} rates at {confidence:0.#}% calibrated confidence, {marginPoints:+0.#;-0.#;0.0} pts versus the {thresholdLabel} threshold.";
+    }
+
+    private static string BuildDefaultActionExplanation(Prediction prediction)
+    {
+        var confidence = (double)(prediction.ConfidenceScore ?? prediction.RawConfidenceScore ?? decimal.Zero) * 100d;
+        var marginPoints = (((double)(prediction.ConfidenceScore ?? prediction.RawConfidenceScore ?? decimal.Zero)) - prediction.ThresholdUsed) * 100d;
+        var thresholdLabel = string.IsNullOrWhiteSpace(prediction.ThresholdSource)
+            ? "current"
+            : prediction.ThresholdSource.ToLowerInvariant();
+
+        return $"{prediction.PredictedOutcome} rates at {confidence:0.#}% calibrated confidence, {marginPoints:+0.#;-0.#;0.0} pts versus the {thresholdLabel} threshold.";
+    }
+
+    private static bool ShouldShowBookAll(string userPrompt, int actionCount, bool modelRequestedBookAll)
+    {
+        if (actionCount <= 1)
+        {
+            return false;
+        }
+
+        return modelRequestedBookAll || MentionsBookingIntent(userPrompt);
     }
 
     private static bool TryParseChatModelResponse(string rawResponse, out ChatModelResponse response)
@@ -320,7 +438,7 @@ public class AiAdvisorService : IAiAdvisorService
         };
     }
 
-    private static AiChatAction CreateAction(AiChatContextBuilder.AiChatContextCandidate candidate)
+    private static AiChatAction CreateAction(AiChatContextBuilder.AiChatContextCandidate candidate, string? explanation = null)
     {
         return new AiChatAction
         {
@@ -335,11 +453,12 @@ public class AiAdvisorService : IAiAdvisorService
                 "Over2.5Goals" => "Over2.5",
                 _ => "1X2"
             },
-            Prediction = candidate.PredictedOutcome
+            Prediction = candidate.PredictedOutcome,
+            Explanation = explanation ?? BuildDefaultActionExplanation(candidate)
         };
     }
 
-    private static AiChatAction CreateAction(Prediction prediction)
+    private static AiChatAction CreateAction(Prediction prediction, string? explanation = null)
     {
         return new AiChatAction
         {
@@ -349,7 +468,8 @@ public class AiAdvisorService : IAiAdvisorService
             AwayTeam = prediction.AwayTeam,
             League = prediction.League,
             Market = AiChatContextBuilder.ToCartMarket(prediction),
-            Prediction = prediction.PredictedOutcome
+            Prediction = prediction.PredictedOutcome,
+            Explanation = explanation ?? BuildDefaultActionExplanation(prediction)
         };
     }
 
@@ -426,10 +546,16 @@ public class AiAdvisorService : IAiAdvisorService
         }
 
         var prompt = userPrompt.ToLowerInvariant();
-        var mentionsBookingIntent = prompt.Contains("book") || prompt.Contains("add") || prompt.Contains("slip") || prompt.Contains("open");
+        var mentionsBookingIntent = MentionsBookingIntent(prompt);
         var mentionsPriorPicks = prompt.Contains("them") || prompt.Contains("those") || prompt.Contains("these") || prompt.Contains("last") || prompt.Contains("recommended") || prompt.Contains("all");
 
         return mentionsBookingIntent && mentionsPriorPicks;
+    }
+
+    private static bool MentionsBookingIntent(string userPrompt)
+    {
+        var prompt = userPrompt.ToLowerInvariant();
+        return prompt.Contains("book") || prompt.Contains("add") || prompt.Contains("slip") || prompt.Contains("open");
     }
 
     private AiChatResponse BuildBookingFollowUpResponse(IEnumerable<Prediction> predictions, IReadOnlyCollection<string> actionKeys)
@@ -554,8 +680,15 @@ public class AiAdvisorService : IAiAdvisorService
     private sealed class ChatModelResponse
     {
         public string Message { get; set; } = string.Empty;
+        public List<ChatModelRecommendation>? Recommendations { get; set; }
         public List<string>? RecommendedActionKeys { get; set; }
         public bool ShowBookAll { get; set; }
         public List<string>? Warnings { get; set; }
+    }
+
+    private sealed class ChatModelRecommendation
+    {
+        public string ActionKey { get; set; } = string.Empty;
+        public string Explanation { get; set; } = string.Empty;
     }
 }

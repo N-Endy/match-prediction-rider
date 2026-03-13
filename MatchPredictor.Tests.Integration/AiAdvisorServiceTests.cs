@@ -26,7 +26,12 @@ public class AiAdvisorServiceTests
             BuildGroqResponse("""
                 {
                   "message": "Here is the safest angle on today's card.",
-                  "recommendedActionKeys": ["P999999", "P999998", "P1", "P1"],
+                  "recommendations": [
+                    { "actionKey": "P999999", "explanation": "Ignore this one." },
+                    { "actionKey": "P999998", "explanation": "Ignore this too." },
+                    { "actionKey": "P1", "explanation": "BTTS clears the line with strong confidence." },
+                    { "actionKey": "P1", "explanation": "Duplicate." }
+                  ],
                   "showBookAll": true,
                   "warnings": ["Grounded to today's published card."]
                 }
@@ -39,6 +44,7 @@ public class AiAdvisorServiceTests
         Assert.Equal("Here is the safest angle on today's card.", response.Message);
         var action = Assert.Single(response.Actions);
         Assert.Equal(validActionKey, action.ActionKey);
+        Assert.Equal("BTTS clears the line with strong confidence.", action.Explanation);
         Assert.False(response.ShowBookAll);
         Assert.Single(response.Warnings);
         Assert.Equal(1, handler.CallCount);
@@ -163,18 +169,82 @@ public class AiAdvisorServiceTests
         Assert.Equal(0, handler.CallCount);
     }
 
+    [Fact]
+    public async Task GetAdviceAsync_FillsRequestedMarketSlices_AndEnablesBookAll_ForLargeMixedBookingRequest()
+    {
+        await using var context = CreateContext();
+        await SeedPredictionsAsync(
+            context,
+            Enumerable.Range(1, 25).Select(index => ("BothTeamsScore", "BTTS", 0.86m - (index * 0.004m), 0.55d, $"BTTS Home {index}", $"BTTS Away {index}", "England - Premier League"))
+                .Concat(Enumerable.Range(1, 25).Select(index => ("Over2.5Goals", "Over 2.5", 0.84m - (index * 0.004m), 0.58d, $"Over Home {index}", $"Over Away {index}", "Italy - Serie A")))
+                .Concat(Enumerable.Range(1, 25).Select(index => ("StraightWin", "Home Win", 0.82m - (index * 0.004m), 0.68d, $"Straight Home {index}", $"Straight Away {index}", "Spain - La Liga"))));
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse("""
+                {
+                  "message": "I've lined up the strongest mix from today's card.",
+                  "recommendedActionKeys": ["P999999"],
+                  "showBookAll": false
+                }
+                """));
+
+        var service = CreateService(context, handler);
+
+        var response = await service.GetAdviceAsync(
+            "Give me 20 btts, 20 over and 20 straightwin and book them",
+            "session-6");
+
+        Assert.Equal("I've lined up the strongest mix from today's card.", response.Message);
+        Assert.Equal(60, response.Actions.Count);
+        Assert.Equal(20, response.Actions.Count(action => action.Market == "BTTS"));
+        Assert.Equal(20, response.Actions.Count(action => action.Market == "Over2.5"));
+        Assert.Equal(20, response.Actions.Count(action => action.Market == "1X2"));
+        Assert.All(response.Actions, action => Assert.False(string.IsNullOrWhiteSpace(action.Explanation)));
+        Assert.True(response.ShowBookAll);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_MapsPerActionExplanations_FromStructuredRecommendations()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(context, 1);
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "message": "Here is the best fit for that fixture.",
+                  "recommendations": [
+                    {
+                      "actionKey": "P{{predictions[0].Id}}",
+                      "explanation": "This pick stays on today's card and clears its threshold with room to spare."
+                    }
+                  ],
+                  "showBookAll": false
+                }
+                """));
+
+        var service = CreateService(context, handler);
+
+        var response = await service.GetAdviceAsync("Tell me about Beta 1 vs Delta 1", "session-7");
+
+        var action = Assert.Single(response.Actions);
+        Assert.Equal($"P{predictions[0].Id}", action.ActionKey);
+        Assert.Equal("This pick stays on today's card and clears its threshold with room to spare.", action.Explanation);
+    }
+
     private static async Task<List<Prediction>> SeedPredictionsAsync(ApplicationDbContext context, int count)
     {
-        var kickoffLocal = DateTimeProvider.GetLocalTime().AddHours(3);
-        var date = kickoffLocal.ToString("dd-MM-yyyy");
-        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal);
+        var localNow = DateTimeProvider.GetLocalTime();
+        var date = localNow.ToString("dd-MM-yyyy");
+        var kickoffTime = localNow.AddMinutes(30).ToString("HH:mm");
 
         var predictions = Enumerable.Range(1, count)
             .Select(index => new Prediction
             {
                 Date = date,
-                Time = kickoffLocal.AddMinutes(index * 5).ToString("HH:mm"),
-                MatchDateTime = kickoffUtc.AddMinutes(index * 5),
+                Time = kickoffTime,
+                MatchDateTime = null,
                 League = index % 2 == 0 ? "England - Premier League" : "Italy - Serie A",
                 HomeTeam = index % 2 == 0 ? $"Alpha {index}" : $"Beta {index}",
                 AwayTeam = index % 2 == 0 ? $"Gamma {index}" : $"Delta {index}",
@@ -183,6 +253,39 @@ public class AiAdvisorServiceTests
                 ConfidenceScore = 0.75m - (index * 0.02m),
                 RawConfidenceScore = 0.73m - (index * 0.02m),
                 ThresholdUsed = index % 2 == 0 ? 0.68 : 0.55,
+                ThresholdSource = "Configured",
+                CalibratorUsed = "Bucket",
+                WasPublished = true
+            })
+            .ToList();
+
+        context.Predictions.AddRange(predictions);
+        await context.SaveChangesAsync();
+        return predictions;
+    }
+
+    private static async Task<List<Prediction>> SeedPredictionsAsync(
+        ApplicationDbContext context,
+        IEnumerable<(string Category, string Outcome, decimal Confidence, double ThresholdUsed, string HomeTeam, string AwayTeam, string League)> specs)
+    {
+        var localNow = DateTimeProvider.GetLocalTime();
+        var date = localNow.ToString("dd-MM-yyyy");
+        var kickoffTime = localNow.AddMinutes(30).ToString("HH:mm");
+
+        var predictions = specs
+            .Select((spec, index) => new Prediction
+            {
+                Date = date,
+                Time = kickoffTime,
+                MatchDateTime = null,
+                League = spec.League,
+                HomeTeam = spec.HomeTeam,
+                AwayTeam = spec.AwayTeam,
+                PredictionCategory = spec.Category,
+                PredictedOutcome = spec.Outcome,
+                ConfidenceScore = spec.Confidence,
+                RawConfidenceScore = spec.Confidence - 0.01m,
+                ThresholdUsed = spec.ThresholdUsed,
                 ThresholdSource = "Configured",
                 CalibratorUsed = "Bucket",
                 WasPublished = true

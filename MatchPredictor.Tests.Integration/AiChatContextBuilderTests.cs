@@ -90,6 +90,35 @@ public class AiChatContextBuilderTests
         Assert.False(selection.NoRelevantMatchesFound);
     }
 
+    [Fact]
+    public void BuildSelection_ReturnsRequestedCountsAcrossMultipleMarkets()
+    {
+        var predictions = Enumerable.Range(1, 25)
+            .Select(index => CreatePrediction(index, "BothTeamsScore", "BTTS", $"BTTS Home {index}", $"BTTS Away {index}", "England - Premier League", 0.85m - (index * 0.005m)))
+            .Concat(Enumerable.Range(26, 25)
+                .Select(index => CreatePrediction(index, "Over2.5Goals", "Over 2.5", $"Over Home {index}", $"Over Away {index}", "Italy - Serie A", 0.83m - ((index - 25) * 0.005m))))
+            .Concat(Enumerable.Range(51, 25)
+                .Select(index => CreatePrediction(index, "StraightWin", "Home Win", $"Straight Home {index}", $"Straight Away {index}", "Spain - La Liga", 0.81m - ((index - 50) * 0.005m), thresholdUsed: 0.68)))
+            .ToArray();
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me 20 btts, 20 over and 20 straightwin and book them",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(60, selection.Candidates.Count);
+        Assert.Equal(20, selection.Candidates.Count(candidate => candidate.PredictionCategory == "BothTeamsScore"));
+        Assert.Equal(20, selection.Candidates.Count(candidate => candidate.PredictionCategory == "Over2.5Goals"));
+        Assert.Equal(20, selection.Candidates.Count(candidate => candidate.PredictionCategory == "StraightWin"));
+        Assert.Equal(60, selection.RequestedCandidateCount);
+        Assert.Collection(
+            selection.RequestedMarketSlices,
+            slice => Assert.Equal("BothTeamsScore", slice.PredictionCategory),
+            slice => Assert.Equal("Over2.5Goals", slice.PredictionCategory),
+            slice => Assert.Equal("StraightWin", slice.PredictionCategory));
+    }
+
     private static Prediction CreatePrediction(
         int id,
         string category,
@@ -99,7 +128,8 @@ public class AiChatContextBuilderTests
         string league,
         decimal confidence,
         DateTime? matchDateTimeUtc = null,
-        string? date = null)
+        string? date = null,
+        double thresholdUsed = 0.55)
     {
         var kickoffUtc = matchDateTimeUtc ?? DateTime.UtcNow.AddHours(2);
 
@@ -116,7 +146,7 @@ public class AiChatContextBuilderTests
             PredictedOutcome = outcome,
             ConfidenceScore = confidence,
             RawConfidenceScore = confidence,
-            ThresholdUsed = 0.55,
+            ThresholdUsed = thresholdUsed,
             ThresholdSource = "Configured",
             CalibratorUsed = "Bucket",
             WasPublished = true

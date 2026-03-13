@@ -131,28 +131,57 @@ else
 
         if (Array.isArray(response.actions) && response.actions.length > 0) {
             const actions = document.createElement('div');
-            actions.style.display = 'flex';
-            actions.style.flexWrap = 'wrap';
-            actions.style.gap = '0.5rem';
+            actions.style.display = 'grid';
+            actions.style.gap = '0.75rem';
             actions.style.marginTop = '0.85rem';
 
             response.actions.forEach(action => {
+                const card = document.createElement('div');
+                card.style.padding = '0.85rem';
+                card.style.borderRadius = '12px';
+                card.style.border = '1px solid rgba(148, 163, 184, 0.16)';
+                card.style.background = 'rgba(15, 23, 42, 0.35)';
+
+                const title = document.createElement('div');
+                title.style.fontWeight = '600';
+                title.style.fontSize = '0.9rem';
+                title.textContent = `${action.homeTeam} vs ${action.awayTeam}`;
+                card.appendChild(title);
+
+                const meta = document.createElement('div');
+                meta.style.marginTop = '0.3rem';
+                meta.style.fontSize = '0.75rem';
+                meta.style.opacity = '0.72';
+                meta.textContent = `${action.league || 'Today'} • ${action.market || 'Market'} • ${action.prediction || 'Pick'}`;
+                card.appendChild(meta);
+
+                if (action.explanation) {
+                    const explanation = document.createElement('div');
+                    explanation.style.marginTop = '0.55rem';
+                    explanation.style.fontSize = '0.82rem';
+                    explanation.style.lineHeight = '1.5';
+                    explanation.innerHTML = formatMessageHtml(action.explanation);
+                    card.appendChild(explanation);
+                }
+
                 const btn = document.createElement('button');
                 btn.className = 'mp-add-cart-btn mp-btn-sm';
                 btn.style.display = 'inline-flex';
                 btn.style.alignItems = 'center';
                 btn.style.justifyContent = 'center';
-                btn.style.padding = '4px 10px';
-                btn.style.fontSize = '0.75rem';
-                btn.style.borderRadius = '4px';
+                btn.style.marginTop = '0.7rem';
+                btn.style.padding = '6px 12px';
+                btn.style.fontSize = '0.78rem';
+                btn.style.borderRadius = '8px';
                 btn.style.lineHeight = '1';
-                btn.textContent = `+ ${action.homeTeam} vs ${action.awayTeam}`;
+                btn.textContent = `+ Add ${action.market}`;
                 btn.dataset.home = action.homeTeam || '';
                 btn.dataset.away = action.awayTeam || '';
                 btn.dataset.league = action.league || '';
                 btn.dataset.market = action.market || '';
                 btn.dataset.prediction = action.prediction || '';
-                actions.appendChild(btn);
+                card.appendChild(btn);
+                actions.appendChild(card);
             });
 
             bubble.appendChild(actions);

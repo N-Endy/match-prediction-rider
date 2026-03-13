@@ -10,4 +10,5 @@ public class AiChatAction
     public string League { get; set; } = string.Empty;
     public string Market { get; set; } = string.Empty;
     public string Prediction { get; set; } = string.Empty;
+    public string Explanation { get; set; } = string.Empty;
 }

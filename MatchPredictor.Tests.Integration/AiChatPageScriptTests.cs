@@ -43,6 +43,16 @@ public class AiChatPageScriptTests
         Assert.DoesNotContain("<img", html);
     }
 
+    [Fact]
+    public void ChatScript_RendersPerActionExplanationsThroughEscapedFormatter()
+    {
+        var script = ExtractScript(
+            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/Pages/AiChat.cshtml");
+
+        Assert.Contains("action.explanation", script);
+        Assert.Contains("formatMessageHtml(action.explanation)", script);
+    }
+
     private static string ExtractScript(string path)
     {
         var content = File.ReadAllText(path);
