@@ -119,6 +119,80 @@ public class AiChatContextBuilderTests
             slice => Assert.Equal("StraightWin", slice.PredictionCategory));
     }
 
+    [Fact]
+    public void BuildSelection_TreatsStrongPicksForTodayPrompt_AsGenericRecommendationRequest()
+    {
+        var predictions = new[]
+        {
+            CreatePrediction(1, "StraightWin", "Home Win", "Palmeiras", "Sporting Cristal", "CONMEBOL - Copa Libertadores U20", 0.905m, thresholdUsed: 0.68),
+            CreatePrediction(2, "StraightWin", "Away Win", "Arouca", "Benfica", "Portugal - Primeira Liga", 0.724m, thresholdUsed: 0.70),
+            CreatePrediction(3, "BothTeamsScore", "BTTS", "Inter", "Milan", "Italy - Serie A", 0.781m)
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me your strong picks for today",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.NotEmpty(selection.Candidates);
+    }
+
+    [Fact]
+    public void BuildSelection_TreatsRolloverPrompt_AsGenericRecommendationRequest()
+    {
+        var predictions = new[]
+        {
+            CreatePrediction(1, "StraightWin", "Home Win", "Palmeiras", "Sporting Cristal", "CONMEBOL - Copa Libertadores U20", 0.905m, thresholdUsed: 0.68),
+            CreatePrediction(2, "StraightWin", "Away Win", "Arouca", "Benfica", "Portugal - Primeira Liga", 0.724m, thresholdUsed: 0.70),
+            CreatePrediction(3, "BothTeamsScore", "BTTS", "Inter", "Milan", "Italy - Serie A", 0.781m)
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "I'm doing a rollover of 2 odds. Today is day 1. Give me your strong picks for today",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.NotEmpty(selection.Candidates);
+    }
+
+    [Fact]
+    public void BuildSelection_ExtractsRolloverTargetOdds_WhenPresent()
+    {
+        var predictions = new[]
+        {
+            CreatePrediction(1, "StraightWin", "Home Win", "Palmeiras", "Sporting Cristal", "CONMEBOL - Copa Libertadores U20", 0.905m, thresholdUsed: 0.68),
+            CreatePrediction(2, "BothTeamsScore", "BTTS", "Inter", "Milan", "Italy - Serie A", 0.781m)
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "I'm doing a rollover of 2.5 odds. Give me your strong picks for today",
+            DateTime.UtcNow);
+
+        Assert.True(selection.IsRolloverRequest);
+        Assert.False(selection.NeedsRolloverTargetOdds);
+        Assert.Equal(2.5, selection.RequestedCombinedOdds);
+    }
+
+    [Fact]
+    public void BuildSelection_UsesGenericPickCount_WhenNoMarketSlicesAreSpecified()
+    {
+        var predictions = Enumerable.Range(1, 10)
+            .Select(index => CreatePrediction(index, "StraightWin", "Home Win", $"Team {index}", $"Opponent {index}", "England - Premier League", 0.82m - (index * 0.01m), thresholdUsed: 0.68))
+            .ToArray();
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me 3 strong picks for today",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(3, selection.RequestedCandidateCount);
+        Assert.Equal(3, selection.Candidates.Count);
+    }
+
     private static Prediction CreatePrediction(
         int id,
         string category,

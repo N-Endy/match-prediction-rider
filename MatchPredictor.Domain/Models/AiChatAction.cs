@@ -11,4 +11,8 @@ public class AiChatAction
     public string Market { get; set; } = string.Empty;
     public string Prediction { get; set; } = string.Empty;
     public string Explanation { get; set; } = string.Empty;
+    public double? ModelProbability { get; set; }
+    public double? MarketProbability { get; set; }
+    public double? EdgePoints { get; set; }
+    public double? EstimatedOdds { get; set; }
 }

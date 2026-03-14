@@ -54,6 +54,7 @@ else
                         <li>"Give me 10 of the best BTTS predictions"</li>
                         <li>"Pick 5 safe straight wins"</li>
                         <li>"Give me 3 strong picks and add them to the slip"</li>
+                        <li>"I'm doing a rollover of 2 odds. Give me your strong picks for today"</li>
                     </ul>
                 </div>
             </div>
@@ -152,8 +153,37 @@ else
                 meta.style.marginTop = '0.3rem';
                 meta.style.fontSize = '0.75rem';
                 meta.style.opacity = '0.72';
-                meta.textContent = `${action.league || 'Today'} • ${action.market || 'Market'} • ${action.prediction || 'Pick'}`;
+                const metaParts = [
+                    action.league || 'Today',
+                    action.market || 'Market',
+                    action.prediction || 'Pick'
+                ];
+                if (Number.isFinite(Number(action.estimatedOdds))) {
+                    metaParts.push(`~${Number(action.estimatedOdds).toFixed(2)} odds`);
+                }
+                meta.textContent = metaParts.join(' • ');
                 card.appendChild(meta);
+
+                const statParts = [];
+                if (Number.isFinite(Number(action.modelProbability))) {
+                    statParts.push(`Model ${(Number(action.modelProbability) * 100).toFixed(1)}%`);
+                }
+                if (Number.isFinite(Number(action.marketProbability))) {
+                    statParts.push(`Market ${(Number(action.marketProbability) * 100).toFixed(1)}%`);
+                }
+                if (Number.isFinite(Number(action.edgePoints))) {
+                    const edge = Number(action.edgePoints);
+                    statParts.push(`Edge ${edge >= 0 ? '+' : ''}${edge.toFixed(1)} pts`);
+                }
+
+                if (statParts.length > 0) {
+                    const stats = document.createElement('div');
+                    stats.style.marginTop = '0.45rem';
+                    stats.style.fontSize = '0.74rem';
+                    stats.style.opacity = '0.78';
+                    stats.textContent = statParts.join(' • ');
+                    card.appendChild(stats);
+                }
 
                 if (action.explanation) {
                     const explanation = document.createElement('div');

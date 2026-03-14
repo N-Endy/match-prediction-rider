@@ -53,6 +53,18 @@ public class AiChatPageScriptTests
         Assert.Contains("formatMessageHtml(action.explanation)", script);
     }
 
+    [Fact]
+    public void ChatScript_RendersOddsAndStrengthMetadata_ForReturnedActions()
+    {
+        var script = ExtractScript(
+            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/Pages/AiChat.cshtml");
+
+        Assert.Contains("action.estimatedOdds", script);
+        Assert.Contains("action.modelProbability", script);
+        Assert.Contains("action.marketProbability", script);
+        Assert.Contains("action.edgePoints", script);
+    }
+
     private static string ExtractScript(string path)
     {
         var content = File.ReadAllText(path);

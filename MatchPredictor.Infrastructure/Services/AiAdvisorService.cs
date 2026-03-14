@@ -65,6 +65,11 @@ public class AiAdvisorService : IAiAdvisorService
         }
 
         var sessionState = await LoadSessionStateAsync(sessionId, ct);
+        if (TryResolvePendingRolloverPrompt(normalizedPrompt, sessionState, out var effectivePrompt))
+        {
+            normalizedPrompt = effectivePrompt;
+        }
+
         var predictions = await LoadUpcomingPublishedPredictionsAsync(ct);
 
         if (predictions.Count == 0)
@@ -78,6 +83,8 @@ public class AiAdvisorService : IAiAdvisorService
             return noPredictions;
         }
 
+        var pricingByPredictionId = await LoadCandidatePricingByPredictionIdAsync(predictions, ct);
+
         if (IsBookingFollowUp(normalizedPrompt, sessionState))
         {
             var followUp = BuildBookingFollowUpResponse(predictions, sessionState.LastRecommendedActionKeys);
@@ -85,7 +92,26 @@ public class AiAdvisorService : IAiAdvisorService
             return followUp;
         }
 
-        var selection = AiChatContextBuilder.BuildSelection(predictions, normalizedPrompt, DateTime.UtcNow);
+        var selection = AiChatContextBuilder.BuildSelection(predictions, normalizedPrompt, DateTime.UtcNow, pricingByPredictionId);
+
+        if (selection.NeedsRolloverTargetOdds)
+        {
+            sessionState.AwaitingRolloverTargetOdds = true;
+            sessionState.PendingRolloverPrompt = normalizedPrompt;
+
+            var askForTargetOdds = new AiChatResponse
+            {
+                Message = "I can build that rollover from today's published predictions. What total odds are you rolling to for this leg?",
+                Warnings =
+                [
+                    "Reply with a target like `2 odds` or `3.5 odds`, and I'll line up the strongest grounded slip I can from today's card."
+                ]
+            };
+
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, askForTargetOdds, ct);
+            return askForTargetOdds;
+        }
+
         if (selection.NoRelevantMatchesFound)
         {
             var noMatchResponse = new AiChatResponse
@@ -106,6 +132,13 @@ public class AiAdvisorService : IAiAdvisorService
 
             await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, emptySelection, ct);
             return emptySelection;
+        }
+
+        if (selection.IsRolloverRequest && selection.RequestedCombinedOdds is > 0)
+        {
+            var rolloverResponse = BuildRolloverResponse(normalizedPrompt, selection);
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, rolloverResponse, ct);
+            return rolloverResponse;
         }
 
         var systemPrompt = BuildChatSystemPrompt();
@@ -151,6 +184,365 @@ public class AiAdvisorService : IAiAdvisorService
             .ToListAsync(ct);
     }
 
+    private async Task<IReadOnlyDictionary<int, AiChatContextBuilder.AiChatCandidatePricing>> LoadCandidatePricingByPredictionIdAsync(
+        IReadOnlyCollection<Prediction> predictions,
+        CancellationToken ct)
+    {
+        if (predictions.Count == 0)
+        {
+            return new Dictionary<int, AiChatContextBuilder.AiChatCandidatePricing>();
+        }
+
+        var dates = predictions
+            .Select(prediction => prediction.Date)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var matchDatas = await _dbContext.MatchDatas
+            .AsNoTracking()
+            .Where(match => match.Date != null && dates.Contains(match.Date))
+            .ToListAsync(ct);
+
+        var byFixtureAndLeague = matchDatas
+            .GroupBy(match => BuildPredictionMatchKey(match.Date, match.League, match.HomeTeam, match.AwayTeam, includeLeague: true))
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        var byFixture = matchDatas
+            .GroupBy(match => BuildPredictionMatchKey(match.Date, null, match.HomeTeam, match.AwayTeam, includeLeague: false))
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        var pricingByPredictionId = new Dictionary<int, AiChatContextBuilder.AiChatCandidatePricing>();
+
+        foreach (var prediction in predictions)
+        {
+            var leagueKey = BuildPredictionMatchKey(prediction.Date, prediction.League, prediction.HomeTeam, prediction.AwayTeam, includeLeague: true);
+            var fixtureKey = BuildPredictionMatchKey(prediction.Date, null, prediction.HomeTeam, prediction.AwayTeam, includeLeague: false);
+
+            MatchData? matchData = null;
+            if (byFixtureAndLeague.TryGetValue(leagueKey, out var leagueMatches))
+            {
+                matchData = SelectBestMatchData(leagueMatches, prediction);
+            }
+
+            if (matchData is null && byFixture.TryGetValue(fixtureKey, out var fallbackMatches))
+            {
+                matchData = SelectBestMatchData(fallbackMatches, prediction);
+            }
+
+            if (matchData is null || !TryGetPredictionMarketProbability(matchData, prediction, out var marketProbability))
+            {
+                continue;
+            }
+
+            pricingByPredictionId[prediction.Id] = new AiChatContextBuilder.AiChatCandidatePricing
+            {
+                MarketProbability = marketProbability,
+                EstimatedDecimalOdds = ConvertProbabilityToDecimalOdds(marketProbability)
+            };
+        }
+
+        return pricingByPredictionId;
+    }
+
+    private static bool TryResolvePendingRolloverPrompt(
+        string userPrompt,
+        AiChatSessionState sessionState,
+        out string effectivePrompt)
+    {
+        effectivePrompt = userPrompt;
+
+        if (!sessionState.AwaitingRolloverTargetOdds)
+        {
+            return false;
+        }
+
+        if (AiChatContextBuilder.TryExtractRolloverTargetOdds(userPrompt, out var targetOdds))
+        {
+            var normalizedTarget = targetOdds.ToString("0.##", CultureInfo.InvariantCulture);
+            effectivePrompt = string.IsNullOrWhiteSpace(sessionState.PendingRolloverPrompt)
+                ? $"Build a rollover slip to {normalizedTarget} odds"
+                : $"{sessionState.PendingRolloverPrompt} {normalizedTarget} odds";
+
+            sessionState.AwaitingRolloverTargetOdds = false;
+            sessionState.PendingRolloverPrompt = string.Empty;
+            return true;
+        }
+
+        if (!AiChatContextBuilder.MentionsRolloverIntent(userPrompt))
+        {
+            sessionState.AwaitingRolloverTargetOdds = false;
+            sessionState.PendingRolloverPrompt = string.Empty;
+        }
+
+        return false;
+    }
+
+    private static string BuildPredictionMatchKey(
+        string? date,
+        string? league,
+        string? homeTeam,
+        string? awayTeam,
+        bool includeLeague)
+    {
+        var parts = new List<string>
+        {
+            NormalizeKeyPart(date),
+            NormalizeKeyPart(homeTeam),
+            NormalizeKeyPart(awayTeam)
+        };
+
+        if (includeLeague)
+        {
+            parts.Insert(1, NormalizeKeyPart(league));
+        }
+
+        return string.Join("|", parts);
+    }
+
+    private static string NormalizeKeyPart(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : value.Trim().ToLowerInvariant();
+    }
+
+    private static MatchData? SelectBestMatchData(IEnumerable<MatchData> candidates, Prediction prediction)
+    {
+        var predictionTime = NormalizeKeyPart(prediction.Time);
+
+        return candidates
+            .OrderBy(match => NormalizeKeyPart(match.Time) == predictionTime ? 0 : 1)
+            .ThenBy(match => Math.Abs((match.MatchDateTime - prediction.MatchDateTime)?.TotalMinutes ?? 0))
+            .FirstOrDefault();
+    }
+
+    private static bool TryGetPredictionMarketProbability(MatchData match, Prediction prediction, out double marketProbability)
+    {
+        marketProbability = 0;
+
+        if (prediction.PredictionCategory == "BothTeamsScore" && match.TryGetNormalizedBttsPair(out var btts))
+        {
+            marketProbability = prediction.PredictedOutcome.Equals("No BTTS", StringComparison.OrdinalIgnoreCase)
+                ? btts.no
+                : btts.yes;
+            return marketProbability > 0;
+        }
+
+        if (prediction.PredictionCategory == "Over2.5Goals" && match.TryGetNormalizedOver25Pair(out var overUnder25))
+        {
+            marketProbability = prediction.PredictedOutcome.Equals("Under 2.5", StringComparison.OrdinalIgnoreCase)
+                ? overUnder25.under25
+                : overUnder25.over25;
+            return marketProbability > 0;
+        }
+
+        if ((prediction.PredictionCategory == "StraightWin" || prediction.PredictionCategory == "Draw") &&
+            match.TryGetNormalizedOneX2(out var oneX2))
+        {
+            marketProbability = prediction.PredictedOutcome switch
+            {
+                "Home Win" => oneX2.home,
+                "Away Win" => oneX2.away,
+                "Draw" => oneX2.draw,
+                _ => 0
+            };
+
+            return marketProbability > 0;
+        }
+
+        return false;
+    }
+
+    private static double? ConvertProbabilityToDecimalOdds(double probability)
+    {
+        return probability is > 0 and < 1
+            ? Math.Round(1d / probability, 2)
+            : null;
+    }
+
+    private AiChatResponse BuildRolloverResponse(
+        string userPrompt,
+        AiChatContextBuilder.AiChatContextSelection selection)
+    {
+        var targetOdds = selection.RequestedCombinedOdds ?? 0d;
+        var candidatePool = selection.Candidates
+            .Where(candidate => candidate.EstimatedOdds is > 1.01)
+            .GroupBy(candidate => candidate.FixtureKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderByDescending(BuildRolloverCandidateStrength).First())
+            .OrderByDescending(BuildRolloverCandidateStrength)
+            .Take(14)
+            .ToList();
+
+        if (candidatePool.Count == 0)
+        {
+            return new AiChatResponse
+            {
+                Message = $"I can see today's published predictions, but I don't have enough stored market pricing to build a grounded rollover toward {targetOdds:0.##} odds yet.",
+                Warnings =
+                [
+                    "Try a normal request like `Give me 5 strong picks`, or rerun the sync so today's market probabilities are available."
+                ]
+            };
+        }
+
+        var combo = FindBestRolloverCombo(candidatePool, targetOdds, selection.RequestedCandidateCount);
+        if (combo.Count == 0)
+        {
+            return new AiChatResponse
+            {
+                Message = $"I couldn't build a grounded rollover close to {targetOdds:0.##} odds from today's published card without forcing weak picks in.",
+                Warnings =
+                [
+                    "Try a lower target odds request or ask for straight-win heavy picks for a safer slip."
+                ]
+            };
+        }
+
+        var combinedOdds = combo.Aggregate(1d, (running, candidate) => running * candidate.EstimatedOdds!.Value);
+        var actions = combo
+            .Select(candidate => CreateAction(candidate))
+            .ToList();
+
+        var warnings = new List<string>
+        {
+            $"Estimated combined odds: {combinedOdds:0.00} from stored source-market pricing on today's card."
+        };
+
+        if (combinedOdds < targetOdds)
+        {
+            warnings.Add($"This is the closest strong combo I could build under the {targetOdds:0.##} target without padding the slip with weaker picks.");
+        }
+
+        return new AiChatResponse
+        {
+            Message = BuildRolloverSummaryMessage(userPrompt, targetOdds, combinedOdds, actions.Count),
+            Actions = actions,
+            ShowBookAll = actions.Count > 1 || MentionsBookingIntent(userPrompt),
+            Warnings = warnings
+        };
+    }
+
+    private static string BuildRolloverSummaryMessage(
+        string userPrompt,
+        double targetOdds,
+        double combinedOdds,
+        int legCount)
+    {
+        var intro = MentionsBookingIntent(userPrompt)
+            ? "I've lined up"
+            : "Here are";
+        var legLabel = legCount == 1 ? "pick" : "picks";
+
+        if (combinedOdds >= targetOdds)
+        {
+            return $"{intro} {legCount} strong {legLabel} for your rollover. The estimated combined odds come out around {combinedOdds:0.00} against a {targetOdds:0.##} target.";
+        }
+
+        return $"{intro} the strongest grounded rollover I could build from today's card. It lands around {combinedOdds:0.00} against a {targetOdds:0.##} target without forcing lower-quality legs.";
+    }
+
+    private static IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> FindBestRolloverCombo(
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidatePool,
+        double targetOdds,
+        int requestedCandidateCount)
+    {
+        if (candidatePool.Count == 0 || targetOdds <= 0)
+        {
+            return [];
+        }
+
+        var maxLegs = requestedCandidateCount > 0
+            ? Math.Min(requestedCandidateCount, 6)
+            : targetOdds switch
+            {
+                <= 2.2 => 3,
+                <= 4.5 => 4,
+                _ => 6
+            };
+
+        var bestScore = double.NegativeInfinity;
+        List<AiChatContextBuilder.AiChatContextCandidate> bestCombo = [];
+
+        var totalMasks = 1 << candidatePool.Count;
+        for (var mask = 1; mask < totalMasks; mask++)
+        {
+            var legs = CountBits(mask);
+            if (legs > maxLegs)
+            {
+                continue;
+            }
+
+            var combo = new List<AiChatContextBuilder.AiChatContextCandidate>(legs);
+            var combinedOdds = 1d;
+            var qualityScore = 0d;
+
+            for (var index = 0; index < candidatePool.Count; index++)
+            {
+                if ((mask & (1 << index)) == 0)
+                {
+                    continue;
+                }
+
+                var candidate = candidatePool[index];
+                combo.Add(candidate);
+                combinedOdds *= candidate.EstimatedOdds ?? 1d;
+                qualityScore += BuildRolloverCandidateStrength(candidate);
+            }
+
+            var score = ScoreRolloverCombo(combinedOdds, targetOdds, combo.Count, qualityScore);
+            if (score <= bestScore)
+            {
+                continue;
+            }
+
+            bestScore = score;
+            bestCombo = combo;
+        }
+
+        return bestCombo
+            .OrderByDescending(BuildRolloverCandidateStrength)
+            .ToList();
+    }
+
+    private static int CountBits(int value)
+    {
+        var count = 0;
+        while (value != 0)
+        {
+            count += value & 1;
+            value >>= 1;
+        }
+
+        return count;
+    }
+
+    private static double BuildRolloverCandidateStrength(AiChatContextBuilder.AiChatContextCandidate candidate)
+    {
+        var confidence = (double)(candidate.ConfidenceScore ?? decimal.Zero) * 100d;
+        var margin = candidate.MarginAboveThreshold * 150d;
+        var edge = (candidate.EdgePoints ?? 0d) * 3d;
+        var priceAdjustment = candidate.EstimatedOdds switch
+        {
+            > 0 and <= 1.75 => 10d,
+            > 1.75 and <= 2.10 => 6d,
+            > 2.10 => 2d,
+            _ => 0d
+        };
+
+        return confidence + margin + edge + priceAdjustment;
+    }
+
+    private static double ScoreRolloverCombo(double combinedOdds, double targetOdds, int legCount, double qualityScore)
+    {
+        var ratio = combinedOdds / targetOdds;
+        var closenessPenalty = ratio >= 1d
+            ? (ratio - 1d) * 110d
+            : (1d - ratio) * 165d;
+        var legPenalty = Math.Max(0, legCount - 1) * 6d;
+
+        return qualityScore - closenessPenalty - legPenalty;
+    }
+
     private static string BuildChatSystemPrompt()
     {
         return """
@@ -160,14 +552,15 @@ public class AiAdvisorService : IAiAdvisorService
             - You may discuss only the prediction candidates supplied in the current request payload.
             - If a team, league, or fixture is not in the supplied candidates, say so plainly.
             - Do not invent injuries, lineups, bookmaker odds, expected goals, form streaks, motivation, or weather unless those fields are explicitly present.
-            - If the user asks for "value", explain that AI Chat does not have bookmaker pricing and that you are using margin above threshold as the closest internal proxy.
+            - If marketProbability, estimatedDecimalOdds, or modelEdgePoints are present, you may use them. Otherwise say the pricing is unavailable.
 
             PICKING RULES:
-            - "Best" and "safe" picks should lean on higher calibrated confidence and stronger margin above threshold.
+            - "Best" and "safe" picks should lean on higher calibrated confidence, stronger margin above threshold, and positive modelEdgePoints when available.
             - Prefer low-variance Straight Win setups when the user asks for safer options.
             - If multiple picks are suggested, keep them grounded and avoid hype or guarantees.
             - If the payload includes requestedMarkets with counts, try to satisfy that market mix as closely as the supplied candidates allow.
             - When the user asks for a list of picks, recommend the supplied candidates that best fit the request instead of narrowing aggressively.
+            - If the payload includes a rolloverTargetOdds, prioritize a combination whose estimated decimal odds are close to that target without padding the slip with weak picks.
             - Never mention data you were not given.
 
             ACTION RULES:
@@ -264,11 +657,15 @@ public class AiAdvisorService : IAiAdvisorService
                 calibratedConfidence = candidate.ConfidenceScore,
                 rawConfidence = candidate.RawConfidenceScore,
                 candidate.MarginAboveThreshold,
+                candidate.MarketProbability,
+                candidate.EstimatedOdds,
+                candidate.EdgePoints,
                 candidate.ThresholdUsed,
                 candidate.ThresholdSource,
                 candidate.CalibratorUsed,
                 candidate.WasPublished
-            })
+            }),
+            rolloverTargetOdds = selection.RequestedCombinedOdds
         };
 
         return JsonSerializer.Serialize(payload);
@@ -386,6 +783,11 @@ public class AiAdvisorService : IAiAdvisorService
             ? "current"
             : candidate.ThresholdSource.ToLowerInvariant();
 
+        if (candidate.MarketProbability is > 0 && candidate.EstimatedOdds is > 0)
+        {
+            return $"{candidate.PredictedOutcome} rates at {confidence:0.#}% model confidence versus {candidate.MarketProbability.Value * 100d:0.#}% market probability (+{candidate.EdgePoints.GetValueOrDefault():0.#} pts), with estimated odds around {candidate.EstimatedOdds.Value:0.00}.";
+        }
+
         return $"{candidate.PredictedOutcome} rates at {confidence:0.#}% calibrated confidence, {marginPoints:+0.#;-0.#;0.0} pts versus the {thresholdLabel} threshold.";
     }
 
@@ -454,7 +856,11 @@ public class AiAdvisorService : IAiAdvisorService
                 _ => "1X2"
             },
             Prediction = candidate.PredictedOutcome,
-            Explanation = explanation ?? BuildDefaultActionExplanation(candidate)
+            Explanation = explanation ?? BuildDefaultActionExplanation(candidate),
+            ModelProbability = candidate.ConfidenceScore is decimal confidence ? (double)confidence : null,
+            MarketProbability = candidate.MarketProbability,
+            EdgePoints = candidate.EdgePoints,
+            EstimatedOdds = candidate.EstimatedOdds
         };
     }
 
@@ -469,7 +875,8 @@ public class AiAdvisorService : IAiAdvisorService
             League = prediction.League,
             Market = AiChatContextBuilder.ToCartMarket(prediction),
             Prediction = prediction.PredictedOutcome,
-            Explanation = explanation ?? BuildDefaultActionExplanation(prediction)
+            Explanation = explanation ?? BuildDefaultActionExplanation(prediction),
+            ModelProbability = prediction.ConfidenceScore is decimal confidence ? (double)confidence : prediction.RawConfidenceScore is decimal raw ? (double)raw : null
         };
     }
 

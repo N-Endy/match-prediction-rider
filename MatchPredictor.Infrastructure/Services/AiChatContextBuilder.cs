@@ -13,26 +13,29 @@ public static partial class AiChatContextBuilder
     {
         "a", "about", "acca", "accumulator", "add", "all", "analysis", "analyse", "analyze", "any", "another",
         "and", "away", "banker", "bankers", "best", "bet", "bets", "book", "booking", "both", "btts", "can", "chat",
-        "combo", "draw", "for", "game", "games", "give", "goals", "good", "help", "home", "i", "in", "into", "is",
-        "it", "leg", "legs", "list", "match", "matches", "me", "need", "of", "on", "open", "over", "pick", "picks",
+        "combo", "day", "days", "doing", "draw", "for", "game", "games", "give", "goals", "good", "help", "home", "i", "in", "into", "is",
+        "it", "leg", "legs", "list", "match", "matches", "me", "need", "odd", "odds", "of", "on", "open", "over", "pick", "picks",
         "prediction", "predictions", "safe", "safer", "score", "show", "slip", "some", "straight", "strong",
-        "straightwin", "straightwins", "stronger", "teams", "the", "them", "these", "this", "those", "ticket", "to",
+        "straightwin", "straightwins", "stronger", "rollover", "teams", "the", "them", "these", "this", "those", "ticket", "to",
         "today", "top", "value",
-        "want", "what", "which", "win", "wins", "with", "you"
+        "want", "what", "which", "win", "wins", "with", "you", "your"
     };
 
     public static AiChatContextSelection BuildSelection(
         IEnumerable<Prediction> predictions,
         string userPrompt,
         DateTime nowUtc,
+        IReadOnlyDictionary<int, AiChatCandidatePricing>? pricingByPredictionId = null,
         int limit = 40)
     {
         var nowLocal = DateTimeProvider.ConvertUtcToLocal(nowUtc);
         var todayStr = nowLocal.ToString("dd-MM-yyyy", CultureInfo.InvariantCulture);
+        var isRolloverRequest = MentionsRolloverIntent(userPrompt);
+        var hasTargetCombinedOdds = TryExtractRolloverTargetOdds(userPrompt, out var requestedCombinedOdds);
         var candidates = predictions
             .Where(prediction => prediction.Date == todayStr && prediction.WasPublished)
             .Where(prediction => prediction.MatchDateTime is null || prediction.MatchDateTime >= nowUtc)
-            .Select(CreateCandidate)
+            .Select(prediction => CreateCandidate(prediction, pricingByPredictionId?.GetValueOrDefault(prediction.Id)))
             .ToList();
 
         if (candidates.Count == 0)
@@ -46,13 +49,19 @@ public static partial class AiChatContextBuilder
 
         var promptTokens = Tokenize(userPrompt);
         var requestedMarketSlices = ExtractRequestedMarketSlices(userPrompt);
+        var genericRequestedCount = ExtractGenericRequestedCount(userPrompt, requestedMarketSlices);
         var marketFilters = DetectMarketFilters(promptTokens);
         var specificTokens = promptTokens
             .Where(token => !GenericPromptTokens.Contains(token))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var requestedCandidateCount = requestedMarketSlices.Sum(slice => slice.Count);
+        if (requestedCandidateCount == 0 && genericRequestedCount > 0)
+        {
+            requestedCandidateCount = genericRequestedCount;
+        }
 
         var ranked = candidates
-            .Select(candidate => CreateRankedCandidate(candidate, promptTokens, marketFilters))
+            .Select(candidate => CreateRankedCandidate(candidate, promptTokens, marketFilters, isRolloverRequest))
             .ToList();
 
         if (specificTokens.Count > 0)
@@ -69,7 +78,10 @@ public static partial class AiChatContextBuilder
                     TotalAvailableCount = candidates.Count,
                     NoRelevantMatchesFound = true,
                     RequestedMarketSlices = requestedMarketSlices,
-                    RequestedCandidateCount = requestedMarketSlices.Sum(slice => slice.Count)
+                    RequestedCandidateCount = requestedCandidateCount,
+                    IsRolloverRequest = isRolloverRequest,
+                    RequestedCombinedOdds = hasTargetCombinedOdds ? requestedCombinedOdds : null,
+                    NeedsRolloverTargetOdds = isRolloverRequest && !hasTargetCombinedOdds
                 };
             }
 
@@ -88,12 +100,13 @@ public static partial class AiChatContextBuilder
         var orderedRanked = ranked
             .OrderByDescending(item => item.Score)
             .ThenByDescending(item => item.Candidate.ConfidenceScore ?? decimal.Zero)
+            .ThenByDescending(item => item.Candidate.EdgePoints ?? double.MinValue)
             .ToList();
 
         var selected = requestedMarketSlices.Count > 0
             ? SelectRequestedMarketSlices(orderedRanked, requestedMarketSlices, limit)
             : orderedRanked
-                .Take(limit)
+                .Take(isRolloverRequest ? limit : ResolveSelectionLimit(limit, requestedCandidateCount))
                 .Select(item => item.Candidate)
                 .ToList();
 
@@ -103,11 +116,60 @@ public static partial class AiChatContextBuilder
             TotalAvailableCount = candidates.Count,
             NoRelevantMatchesFound = selected.Count == 0 && specificTokens.Count > 0,
             RequestedMarketSlices = requestedMarketSlices,
-            RequestedCandidateCount = requestedMarketSlices.Sum(slice => slice.Count)
+            RequestedCandidateCount = requestedCandidateCount,
+            IsRolloverRequest = isRolloverRequest,
+            RequestedCombinedOdds = hasTargetCombinedOdds ? requestedCombinedOdds : null,
+            NeedsRolloverTargetOdds = isRolloverRequest && !hasTargetCombinedOdds
         };
     }
 
     public static string CreateActionKey(Prediction prediction) => $"P{prediction.Id}";
+
+    public static bool MentionsRolloverIntent(string userPrompt)
+    {
+        if (string.IsNullOrWhiteSpace(userPrompt))
+        {
+            return false;
+        }
+
+        var prompt = userPrompt.ToLowerInvariant();
+        return prompt.Contains("rollover", StringComparison.Ordinal) ||
+               prompt.Contains("roll over", StringComparison.Ordinal);
+    }
+
+    public static bool TryExtractRolloverTargetOdds(string userPrompt, out double targetOdds)
+    {
+        targetOdds = 0;
+
+        if (string.IsNullOrWhiteSpace(userPrompt))
+        {
+            return false;
+        }
+
+        var oddsText = RolloverTargetOddsRegex().Match(userPrompt).Groups["odds"].Value;
+        if (string.IsNullOrWhiteSpace(oddsText))
+        {
+            oddsText = GenericOddsRegex().Match(userPrompt).Groups["odds"].Value;
+        }
+
+        if (string.IsNullOrWhiteSpace(oddsText))
+        {
+            oddsText = BareOddsRegex().Match(userPrompt).Groups["odds"].Value;
+        }
+
+        if (string.IsNullOrWhiteSpace(oddsText))
+        {
+            return false;
+        }
+
+        return double.TryParse(
+                   oddsText.Replace(',', '.'),
+                   NumberStyles.AllowDecimalPoint,
+                   CultureInfo.InvariantCulture,
+                   out targetOdds) &&
+               targetOdds >= 1.05 &&
+               targetOdds <= 100.0;
+    }
 
     public static string ToCartMarket(Prediction prediction)
     {
@@ -130,11 +192,16 @@ public static partial class AiChatContextBuilder
         return $"I couldn't find a matching team, league, or fixture for \"{cleanedPrompt}\" in today's published predictions.";
     }
 
-    private static AiChatContextCandidate CreateCandidate(Prediction prediction)
+    private static AiChatContextCandidate CreateCandidate(Prediction prediction, AiChatCandidatePricing? pricing)
     {
         var confidence = prediction.ConfidenceScore ?? prediction.RawConfidenceScore ?? 0m;
         var rawConfidence = prediction.RawConfidenceScore ?? prediction.ConfidenceScore ?? 0m;
         var searchableText = $"{prediction.HomeTeam} {prediction.AwayTeam} {prediction.League}";
+        var marketProbability = pricing?.MarketProbability;
+        var modelProbability = (double)confidence;
+        var edgePoints = marketProbability is > 0
+            ? Math.Round((modelProbability - marketProbability.Value) * 100d, 2)
+            : (double?)null;
 
         return new AiChatContextCandidate
         {
@@ -153,6 +220,10 @@ public static partial class AiChatContextBuilder
             CalibratorUsed = prediction.CalibratorUsed,
             WasPublished = prediction.WasPublished,
             MarginAboveThreshold = Math.Round((double)confidence - prediction.ThresholdUsed, 4),
+            MarketProbability = marketProbability,
+            EstimatedOdds = pricing?.EstimatedDecimalOdds,
+            EdgePoints = edgePoints,
+            FixtureKey = $"{prediction.League}|{prediction.HomeTeam}|{prediction.AwayTeam}|{prediction.Time}",
             SearchTokens = Tokenize(searchableText)
         };
     }
@@ -160,11 +231,13 @@ public static partial class AiChatContextBuilder
     private static RankedCandidate CreateRankedCandidate(
         AiChatContextCandidate candidate,
         HashSet<string> promptTokens,
-        HashSet<string> marketFilters)
+        HashSet<string> marketFilters,
+        bool isRolloverRequest)
     {
         var entityMatches = candidate.SearchTokens.Intersect(promptTokens, StringComparer.OrdinalIgnoreCase).Count();
         var score = (double)(candidate.ConfidenceScore ?? decimal.Zero) * 100d;
         score += candidate.MarginAboveThreshold * 150d;
+        score += (candidate.EdgePoints ?? 0d) * 3d;
 
         if (marketFilters.Count > 0)
         {
@@ -175,6 +248,11 @@ public static partial class AiChatContextBuilder
         {
             score += candidate.PredictionCategory == "StraightWin" ? 20d : 0d;
             score -= candidate.PredictionCategory == "Draw" ? 10d : 0d;
+
+            if (candidate.EstimatedOdds is > 0)
+            {
+                score += candidate.EstimatedOdds <= 1.65 ? 12d : Math.Max(-18d, 12d - ((candidate.EstimatedOdds.Value - 1.65d) * 20d));
+            }
         }
 
         if (promptTokens.Contains("value"))
@@ -182,9 +260,24 @@ public static partial class AiChatContextBuilder
             score += candidate.MarginAboveThreshold * 120d;
         }
 
+        if (isRolloverRequest && candidate.EstimatedOdds is > 0)
+        {
+            score += candidate.EstimatedOdds <= 1.85 ? 8d : 4d;
+        }
+
         score += entityMatches * 40d;
 
         return new RankedCandidate(candidate, score, entityMatches);
+    }
+
+    private static int ResolveSelectionLimit(int limit, int requestedCandidateCount)
+    {
+        if (requestedCandidateCount <= 0)
+        {
+            return limit;
+        }
+
+        return Math.Min(Math.Max(requestedCandidateCount, 1), Math.Min(limit, MaxRequestedCandidates));
     }
 
     private static HashSet<string> DetectMarketFilters(HashSet<string> promptTokens)
@@ -261,6 +354,24 @@ public static partial class AiChatContextBuilder
         }
 
         return slices;
+    }
+
+    private static int ExtractGenericRequestedCount(string userPrompt, IReadOnlyList<RequestedMarketSlice> requestedMarketSlices)
+    {
+        if (requestedMarketSlices.Count > 0 || string.IsNullOrWhiteSpace(userPrompt))
+        {
+            return 0;
+        }
+
+        var match = GenericPickCountRegex().Match(userPrompt);
+        if (!match.Success)
+        {
+            return 0;
+        }
+
+        return int.TryParse(match.Groups["count"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var count) && count > 0
+            ? Math.Min(count, MaxRequestedCandidates)
+            : 0;
     }
 
     private static string? NormalizeRequestedMarket(string rawMarket)
@@ -349,6 +460,21 @@ public static partial class AiChatContextBuilder
         RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex RequestedMarketSliceRegex();
 
+    [GeneratedRegex("(?<count>\\d{1,3})\\s*(?:strong|safe|safer|best|top)?\\s*(?:pick|picks|game|games|match|matches|leg|legs)\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex GenericPickCountRegex();
+
+    [GeneratedRegex("roll\\s*over|rollover", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex RolloverIntentRegex();
+
+    [GeneratedRegex("(?:roll\\s*over|rollover)(?:\\s*(?:of|to|target|around|about))?\\s*(?<odds>\\d{1,3}(?:[\\.,]\\d{1,2})?)\\s*odds?", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex RolloverTargetOddsRegex();
+
+    [GeneratedRegex("\\b(?<odds>\\d{1,3}(?:[\\.,]\\d{1,2})?)\\s*odds?\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex GenericOddsRegex();
+
+    [GeneratedRegex("^\\s*(?<odds>\\d{1,3}(?:[\\.,]\\d{1,2})?)\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex BareOddsRegex();
+
     public sealed class AiChatContextSelection
     {
         public IReadOnlyList<AiChatContextCandidate> Candidates { get; init; } = [];
@@ -356,6 +482,9 @@ public static partial class AiChatContextBuilder
         public bool NoRelevantMatchesFound { get; init; }
         public IReadOnlyList<RequestedMarketSlice> RequestedMarketSlices { get; init; } = [];
         public int RequestedCandidateCount { get; init; }
+        public bool IsRolloverRequest { get; init; }
+        public double? RequestedCombinedOdds { get; init; }
+        public bool NeedsRolloverTargetOdds { get; init; }
     }
 
     public sealed class AiChatContextCandidate
@@ -375,7 +504,17 @@ public static partial class AiChatContextBuilder
         public string CalibratorUsed { get; init; } = string.Empty;
         public bool WasPublished { get; init; }
         public double MarginAboveThreshold { get; init; }
+        public double? MarketProbability { get; init; }
+        public double? EstimatedOdds { get; init; }
+        public double? EdgePoints { get; init; }
         internal HashSet<string> SearchTokens { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+        internal string FixtureKey { get; init; } = string.Empty;
+    }
+
+    public sealed class AiChatCandidatePricing
+    {
+        public double? MarketProbability { get; init; }
+        public double? EstimatedDecimalOdds { get; init; }
     }
 
     public sealed record RequestedMarketSlice(string PredictionCategory, int Count)
