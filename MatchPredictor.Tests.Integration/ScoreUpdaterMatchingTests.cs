@@ -450,7 +450,7 @@ public class ScoreUpdaterMatchingTests
             {
                 BttsScoreThreshold = 0.55,
                 OverTwoGoalsStrongThreshold = 0.58,
-                DrawStrongThreshold = 0.54,
+                DrawStrongThreshold = 0.30,
                 HomeWinStrong = 0.68,
                 AwayWinStrong = 0.70
             }),
