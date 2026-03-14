@@ -214,6 +214,76 @@ public class ScoreUpdaterMatchingTests
     }
 
     [Fact]
+    public async Task RunScoreUpdaterAsync_PrefersFinishedFlashScoreSnapshotOverEarlierLiveSnapshots()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoffLocal = DateTimeProvider.GetLocalTime().Date.AddHours(8);
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal);
+        var date = kickoffLocal.ToString("dd-MM-yyyy");
+
+        context.Predictions.Add(CreatePrediction(
+            date,
+            kickoffUtc,
+            "North District",
+            "Hong Kong Rangers",
+            "BothTeamsScore",
+            "BTTS",
+            "Hong Kong - Premier League"));
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                MatchScores =
+                [
+                    new MatchScore
+                    {
+                        MatchTime = kickoffUtc.AddMinutes(5),
+                        League = "HONG KONG: Premier League",
+                        HomeTeam = "North District",
+                        AwayTeam = "Hong Kong Rangers",
+                        Score = "0:0",
+                        BTTSLabel = false,
+                        IsLive = true
+                    },
+                    new MatchScore
+                    {
+                        MatchTime = kickoffUtc.AddMinutes(40),
+                        League = "HONG KONG: Premier League",
+                        HomeTeam = "North District",
+                        AwayTeam = "Hong Kong Rangers",
+                        Score = "2:1",
+                        BTTSLabel = true,
+                        IsLive = true
+                    },
+                    new MatchScore
+                    {
+                        MatchTime = kickoffUtc,
+                        League = "HONG KONG: Premier League",
+                        HomeTeam = "North District",
+                        AwayTeam = "Hong Kong Rangers",
+                        Score = "2:1",
+                        BTTSLabel = true,
+                        IsLive = false
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var prediction = await context.Predictions.SingleAsync();
+        Assert.Equal("2:1", prediction.ActualScore);
+        Assert.Equal("BTTS", prediction.ActualOutcome);
+        Assert.False(prediction.IsLive);
+    }
+
+    [Fact]
     public async Task RunScoreUpdaterAsync_BackfillsUnresolvedPredictionFromPreviousDay()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
@@ -350,40 +420,329 @@ public class ScoreUpdaterMatchingTests
     }
 
     [Fact]
-    public async Task RunScoreUpdaterAsync_SettlesStaleLivePredictionFromStoredScore()
+    public async Task RunScoreUpdaterAsync_RefreshesSettledScoreWhenFinalSourceScoreChanges()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoff = DateTimeProvider.GetLocalTime().AddHours(-5);
+        var kickoff = DateTimeProvider.GetLocalTime().Date.AddHours(7);
         var date = kickoff.ToString("dd-MM-yyyy");
 
         context.Predictions.Add(new Prediction
         {
             Date = date,
             Time = kickoff.ToString("HH:mm"),
-            MatchDateTime = null,
-            League = "Australia - Test League",
-            HomeTeam = "Belmont Swansea United",
-            AwayTeam = "Weston Workers",
+            MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            League = "Japan - J League",
+            HomeTeam = "Kashima Antlers",
+            AwayTeam = "Kawasaki Frontale",
             PredictionCategory = "BothTeamsScore",
-            PredictedOutcome = "BTTS",
-            ActualScore = "2:4",
-            ActualOutcome = null,
+            PredictedOutcome = "No BTTS",
+            ActualScore = "0:0",
+            ActualOutcome = "No BTTS",
+            IsLive = false
+        });
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                MatchScores =
+                [
+                    new MatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+                        League = "JAPAN: J1 League",
+                        HomeTeam = "Kashima Antlers",
+                        AwayTeam = "Kawasaki Frontale",
+                        Score = "1:0",
+                        BTTSLabel = false,
+                        IsLive = false
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var prediction = await context.Predictions.SingleAsync();
+        Assert.Equal("1:0", prediction.ActualScore);
+        Assert.Equal("No BTTS", prediction.ActualOutcome);
+        Assert.False(prediction.IsLive);
+    }
+
+    [Fact]
+    public async Task RunScoreUpdaterAsync_ReconcilesExactFinishedSourceForStaleLivePredictions()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = DateTimeProvider.GetLocalTime().Date.AddHours(9);
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoff);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        context.Predictions.AddRange(
+            new Prediction
+            {
+                Date = date,
+                Time = kickoff.ToString("HH:mm"),
+                MatchDateTime = kickoffUtc,
+                League = "Australia - New South Wales League 1",
+                HomeTeam = "Bulls Academy",
+                AwayTeam = "Prospect United",
+                PredictionCategory = "BothTeamsScore",
+                PredictedOutcome = "No BTTS",
+                ActualScore = "5:0",
+                ActualOutcome = null,
+                IsLive = true
+            },
+            new Prediction
+            {
+                Date = date,
+                Time = kickoff.ToString("HH:mm"),
+                MatchDateTime = kickoffUtc,
+                League = "Australia - New South Wales League 1",
+                HomeTeam = "Bulls Academy",
+                AwayTeam = "Prospect United",
+                PredictionCategory = "Over2.5Goals",
+                PredictedOutcome = "Over 2.5",
+                ActualScore = "5:0",
+                ActualOutcome = null,
+                IsLive = true
+            });
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                MatchScores =
+                [
+                    new MatchScore
+                    {
+                        MatchTime = kickoffUtc,
+                        League = "AUSTRALIA: NSW League One",
+                        HomeTeam = "Bulls Academy",
+                        AwayTeam = "Prospect United",
+                        Score = "5:0",
+                        BTTSLabel = false,
+                        IsLive = false
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var predictions = await context.Predictions
+            .OrderBy(prediction => prediction.PredictionCategory)
+            .ToListAsync();
+
+        Assert.Collection(
+            predictions,
+            prediction =>
+            {
+                Assert.Equal("5:0", prediction.ActualScore);
+                Assert.Equal("No BTTS", prediction.ActualOutcome);
+                Assert.False(prediction.IsLive);
+            },
+            prediction =>
+            {
+                Assert.Equal("5:0", prediction.ActualScore);
+                Assert.Equal("Over 2.5", prediction.ActualOutcome);
+                Assert.False(prediction.IsLive);
+            });
+    }
+
+    [Fact]
+    public async Task RunScoreUpdaterAsync_ReconcilesExactFinishedSource_WhenKickoffTimeDriftsBeyondDefaultWindow()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoffLocal = DateTimeProvider.GetLocalTime().Date.AddHours(6).AddMinutes(15);
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal);
+        var date = kickoffLocal.ToString("dd-MM-yyyy");
+
+        context.Predictions.Add(new Prediction
+        {
+            Date = date,
+            Time = kickoffLocal.ToString("HH:mm"),
+            MatchDateTime = kickoffUtc,
+            League = "Australia - NPL Victoria",
+            HomeTeam = "Hume City",
+            AwayTeam = "Dandenong Thunder",
+            PredictionCategory = "Over2.5Goals",
+            PredictedOutcome = "Over 2.5",
+            ActualScore = "1:1",
+            ActualOutcome = "Under 2.5",
+            IsLive = false
+        });
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                MatchScores =
+                [
+                    new MatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoffLocal.AddMinutes(-75)),
+                        League = "AUSTRALIA: NPL Victoria",
+                        HomeTeam = "Hume City",
+                        AwayTeam = "Dandenong Thunder",
+                        Score = "3:1",
+                        BTTSLabel = true,
+                        IsLive = false
+                    },
+                    new MatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoffLocal.AddMinutes(-80)),
+                        League = "AUSTRALIA: NPL Victoria",
+                        HomeTeam = "Hume City",
+                        AwayTeam = "Dandenong Thunder",
+                        Score = "3:1",
+                        BTTSLabel = true,
+                        IsLive = false
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var prediction = await context.Predictions.SingleAsync();
+        Assert.Equal("3:1", prediction.ActualScore);
+        Assert.Equal("Over 2.5", prediction.ActualOutcome);
+        Assert.False(prediction.IsLive);
+    }
+
+    [Fact]
+    public async Task RunScoreUpdaterAsync_ReopensSettledPrediction_WhenOnlyLiveSourceSnapshotExists()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoffLocal = DateTimeProvider.GetLocalTime().Date.AddHours(6).AddMinutes(45);
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal);
+        var date = kickoffLocal.ToString("dd-MM-yyyy");
+
+        context.Predictions.Add(new Prediction
+        {
+            Date = date,
+            Time = kickoffLocal.ToString("HH:mm"),
+            MatchDateTime = kickoffUtc,
+            League = "Australia - Tasmania NPL",
+            HomeTeam = "Riverside Olympic",
+            AwayTeam = "Glenorchy Knights",
+            PredictionCategory = "StraightWin",
+            PredictedOutcome = "Home Win",
+            ActualScore = "2:0",
+            ActualOutcome = "Home Win",
+            IsLive = false
+        });
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                MatchScores =
+                [
+                    new MatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoffLocal.AddMinutes(95)),
+                        League = "AUSTRALIA: Tasmania NPL",
+                        HomeTeam = "Riverside Olympic",
+                        AwayTeam = "Glenorchy Knights",
+                        Score = "2:0",
+                        BTTSLabel = false,
+                        IsLive = true
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var prediction = await context.Predictions.SingleAsync();
+        Assert.True(prediction.IsLive);
+        Assert.Equal("2:0", prediction.ActualScore);
+        Assert.Null(prediction.ActualOutcome);
+    }
+
+    [Fact]
+    public async Task RunScoreUpdaterAsync_PrefersLatestLiveSnapshot_WhenExactPairHasMultipleLiveCandidates()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoffLocal = DateTimeProvider.GetLocalTime().Date.AddHours(6).AddMinutes(45);
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal);
+        var date = kickoffLocal.ToString("dd-MM-yyyy");
+
+        context.Predictions.Add(new Prediction
+        {
+            Date = date,
+            Time = kickoffLocal.ToString("HH:mm"),
+            MatchDateTime = kickoffUtc,
+            League = "Australia - Tasmania NPL",
+            HomeTeam = "Riverside Olympic",
+            AwayTeam = "Glenorchy Knights",
+            PredictionCategory = "StraightWin",
+            PredictedOutcome = "Home Win",
             IsLive = true
         });
 
         await context.SaveChangesAsync();
 
-        var service = CreateAnalyzerService(context, new StubWebScraperService());
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                MatchScores =
+                [
+                    new MatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoffLocal.AddMinutes(5)),
+                        League = "AUSTRALIA: Tasmania NPL",
+                        HomeTeam = "Riverside Olympic",
+                        AwayTeam = "Glenorchy Knights",
+                        Score = "0:0",
+                        BTTSLabel = false,
+                        IsLive = true
+                    },
+                    new MatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoffLocal.AddMinutes(95)),
+                        League = "Australia - Tasmania NPL",
+                        HomeTeam = "Riverside Olympic",
+                        AwayTeam = "Glenorchy Knights",
+                        Score = "2:0",
+                        BTTSLabel = false,
+                        IsLive = true
+                    }
+                ]
+            });
 
         await service.RunScoreUpdaterAsync();
 
         var prediction = await context.Predictions.SingleAsync();
-        Assert.False(prediction.IsLive);
-        Assert.Equal("BTTS", prediction.ActualOutcome);
+        Assert.True(prediction.IsLive);
+        Assert.Equal("2:0", prediction.ActualScore);
+        Assert.Null(prediction.ActualOutcome);
     }
 
     private static Prediction CreatePrediction(

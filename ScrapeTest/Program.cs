@@ -52,9 +52,9 @@ services.AddHttpClient("SportyBet", client => client.Timeout = TimeSpan.FromSeco
 services.AddDistributedMemoryCache();
 services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
 services.AddScoped<IWebScraperService, WebScraperService>();
-if (mode == RunnerMode.Score)
+if (mode is RunnerMode.Score or RunnerMode.ScoreBackfill)
 {
-    // Score mode never reads the workbook, so avoid requiring an EPPlus license.
+    // Score-only modes never read the workbook, so avoid requiring an EPPlus license.
     services.AddScoped<IExtractFromExcel, NoOpExtractFromExcel>();
 }
 else

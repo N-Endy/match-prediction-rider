@@ -4,6 +4,7 @@ using HtmlAgilityPack;
 using Jint;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OpenQA.Selenium;
@@ -165,8 +166,8 @@ public partial class WebScraperService : IWebScraperService
                             var away = split[1].Trim();
 
                             DateTime matchTime;
-                            try { matchTime = ParseTime(currentTime); }
-                            catch { matchTime = DateTime.UtcNow; } // Live matches may not have a parseable time
+                            try { matchTime = ParseScoreMatchTime(currentTime, isLive); }
+                            catch { matchTime = DateTime.UtcNow; } // Live matches may not expose a kickoff time in the listing
                             
                             matchScores.Add(new MatchScore
                             {
@@ -790,15 +791,45 @@ public partial class WebScraperService : IWebScraperService
                h > 0 && a > 0; // Check that both teams scored
     }
     
-    private DateTime ParseTime(string time)
+    private DateTime ParseScoreMatchTime(string rawTime, bool isLive)
     {
-        var today = DateTime.UtcNow.Date;
-        var parsed = DateTime.ParseExact($"{today:dd-MM-yyyy} {time}", "dd-MM-yyyy HH:mm", CultureInfo.InvariantCulture);
-        return DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
+        if (isLive)
+        {
+            return DateTime.UtcNow;
+        }
+
+        var nowLocal = DateTimeProvider.GetLocalTime();
+        var extractedTime = ExtractClockTime(rawTime);
+        var parsedLocal = DateTime.ParseExact(
+            $"{nowLocal:dd-MM-yyyy} {extractedTime}",
+            "dd-MM-yyyy HH:mm",
+            CultureInfo.InvariantCulture);
+
+        // FlashScore's mobile summary mixes prior-day finished rows with today's slate.
+        if (parsedLocal > nowLocal.AddHours(2))
+        {
+            parsedLocal = parsedLocal.AddDays(-1);
+        }
+
+        return DateTimeProvider.ConvertLocalToUtc(parsedLocal);
+    }
+
+    private static string ExtractClockTime(string rawTime)
+    {
+        var match = ClockRegex().Match(rawTime ?? string.Empty);
+        if (!match.Success)
+        {
+            throw new FormatException($"Could not extract a kickoff time from '{rawTime}'.");
+        }
+
+        return match.Value;
     }
 
     [GeneratedRegex(@"^\d{1,2}:\d{1,2}")]
     private static partial Regex MyRegex();
+
+    [GeneratedRegex(@"\d{1,2}:\d{2}")]
+    private static partial Regex ClockRegex();
     
     private static void SetHeadlessViewport(ChromeOptions options)
     {
