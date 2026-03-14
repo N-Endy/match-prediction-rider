@@ -21,6 +21,8 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<BetaCalibrationProfile> BetaCalibrationProfiles => Set<BetaCalibrationProfile>();
     public DbSet<ThresholdProfile> ThresholdProfiles => Set<ThresholdProfile>();
     public DbSet<PromotionHistory> PromotionHistories => Set<PromotionHistory>();
+    public DbSet<VisitorSession> VisitorSessions => Set<VisitorSession>();
+    public DbSet<UserActivityEvent> UserActivityEvents => Set<UserActivityEvent>();
     // Required by IDataProtectionKeyContext
     public DbSet<DataProtectionKey> DataProtectionKeys { get; set; }
 
@@ -75,6 +77,19 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
         modelBuilder.Entity<PromotionHistory>(entity =>
         {
             entity.HasIndex(e => new { e.EffectiveAt, e.Market });
+        });
+
+        modelBuilder.Entity<VisitorSession>(entity =>
+        {
+            entity.HasIndex(e => e.VisitorId);
+            entity.HasIndex(e => e.SessionId).IsUnique();
+            entity.HasIndex(e => e.LastSeenAt);
+        });
+
+        modelBuilder.Entity<UserActivityEvent>(entity =>
+        {
+            entity.HasIndex(e => new { e.CreatedAt, e.EventType });
+            entity.HasIndex(e => new { e.SessionId, e.CreatedAt });
         });
     }
 }

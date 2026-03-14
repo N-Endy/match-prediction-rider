@@ -1,5 +1,6 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Web.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace MatchPredictor.Web.Api;
@@ -9,13 +10,15 @@ namespace MatchPredictor.Web.Api;
 public class AiChatController : ControllerBase
 {
     private readonly IAiAdvisorService _aiService;
+    private readonly IUserTrackingService _userTrackingService;
     private readonly ILogger<AiChatController> _logger;
     private const string AuthCookieName = "MP_AI_AUTH";
     private const string SessionCookieName = "MP_AI_CHAT_SESSION";
 
-    public AiChatController(IAiAdvisorService aiService, ILogger<AiChatController> logger)
+    public AiChatController(IAiAdvisorService aiService, IUserTrackingService userTrackingService, ILogger<AiChatController> logger)
     {
         _aiService = aiService;
+        _userTrackingService = userTrackingService;
         _logger = logger;
     }
 
@@ -50,6 +53,19 @@ public class AiChatController : ControllerBase
             }
 
             var response = await _aiService.GetAdviceAsync(request.Message, sessionId, ct);
+
+            await _userTrackingService.TrackEventAsync(
+                HttpContext,
+                "ai_chat_request",
+                "/aichat",
+                new Dictionary<string, string?>
+                {
+                    ["promptLength"] = request.Message.Length.ToString(),
+                    ["actionCount"] = response.Actions.Count.ToString(),
+                    ["showBookAll"] = response.ShowBookAll.ToString()
+                },
+                ct);
+
             return Ok(response);
         }
         catch (Exception ex)

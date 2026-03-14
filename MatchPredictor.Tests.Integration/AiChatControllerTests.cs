@@ -2,6 +2,7 @@ using System.Text.Json;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Web.Api;
+using MatchPredictor.Web.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -14,7 +15,7 @@ public class AiChatControllerTests
     [Fact]
     public async Task Chat_WithoutAuthCookie_ReturnsUnauthorized()
     {
-        var controller = new AiChatController(new FakeAiAdvisorService(), NullLogger<AiChatController>.Instance)
+        var controller = new AiChatController(new FakeAiAdvisorService(), new FakeUserTrackingService(), NullLogger<AiChatController>.Instance)
         {
             ControllerContext = new ControllerContext
             {
@@ -37,6 +38,7 @@ public class AiChatControllerTests
 
         var controller = new AiChatController(
             new FakeAiAdvisorService { ExceptionToThrow = new InvalidOperationException("sensitive internals") },
+            new FakeUserTrackingService(),
             NullLogger<AiChatController>.Instance)
         {
             ControllerContext = new ControllerContext
@@ -74,5 +76,22 @@ public class AiChatControllerTests
 
         public Task<string> AnalyzeValueBetsAsync(string payload, CancellationToken ct = default) =>
             Task.FromResult(string.Empty);
+    }
+
+    private sealed class FakeUserTrackingService : IUserTrackingService
+    {
+        public Task EnsureTrackingContextAsync(HttpContext httpContext, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task TrackPageViewAsync(HttpContext httpContext, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task TrackEventAsync(
+            HttpContext httpContext,
+            string eventType,
+            string? pagePath = null,
+            IReadOnlyDictionary<string, string?>? metadata = null,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken ct = default) =>
+            Task.FromResult(new UsageSnapshot());
     }
 }

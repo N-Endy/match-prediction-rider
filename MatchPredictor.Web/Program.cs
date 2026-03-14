@@ -15,6 +15,8 @@ using Serilog;
 using Polly;
 using Polly.Extensions.Http;
 using MatchPredictor.Web.Filters;
+using MatchPredictor.Web.Middleware;
+using MatchPredictor.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -56,6 +58,7 @@ builder.Services.AddScoped<ISportyBetBookingService>(provider => provider.GetReq
 builder.Services.AddScoped<ISourceMarketPricingService>(provider => provider.GetRequiredService<SportyBetBookingService>());
 builder.Services.AddScoped<IAiAdvisorService, AiAdvisorService>();
 builder.Services.AddScoped<IValueBetsService, ValueBetsService>();
+builder.Services.AddScoped<IUserTrackingService, UserTrackingService>();
 
 // Controllers for API endpoints (booking, AI chat)
 builder.Services.AddControllers();
@@ -248,7 +251,9 @@ if (!app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseStaticFiles();
+app.UseMiddleware<AdminUsageBasicAuthMiddleware>();
 app.UseRouting();
+app.UseMiddleware<UserTrackingMiddleware>();
 
 app.UseAuthorization();
 

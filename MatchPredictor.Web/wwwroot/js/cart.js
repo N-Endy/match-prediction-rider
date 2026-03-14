@@ -31,6 +31,11 @@ function addToCart(match) {
     }
     cart.push(match);
     saveCart(cart);
+    window.matchPredictorTracking?.track('add_to_cart', {
+        market: match.market || '',
+        prediction: match.prediction || '',
+        league: match.league || ''
+    });
     showToast('Added to betslip');
 }
 
@@ -42,9 +47,13 @@ function removeFromCart(index) {
 }
 
 function clearCart() {
+    const count = getCart().length;
     localStorage.removeItem(CART_KEY);
     updateCartBadge();
     renderCartItems();
+    if (count > 0) {
+        window.matchPredictorTracking?.track('clear_cart', { count: String(count) });
+    }
 }
 
 // ── Badge ──
@@ -77,6 +86,9 @@ function openCartModal() {
     if (modal) {
         modal.classList.add('open');
         renderCartItems();
+        window.matchPredictorTracking?.track('open_betslip', {
+            count: String(getCart().length)
+        });
     }
 }
 
@@ -195,7 +207,14 @@ async function bookGames() {
 }
 
 function copyBookingCode(code) {
-    navigator.clipboard.writeText(code).then(() => showToast('Copied!')).catch(() => showToast('Copy failed'));
+    navigator.clipboard.writeText(code)
+        .then(() => {
+            window.matchPredictorTracking?.track('copy_booking_code', {
+                hasCode: String(Boolean(code))
+            });
+            showToast('Copied!');
+        })
+        .catch(() => showToast('Copy failed'));
 }
 
 // ── Init ──

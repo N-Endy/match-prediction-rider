@@ -15,6 +15,7 @@ public class CartJsTests
         var engine = new Engine();
         engine.Execute("""
             var __storage = {};
+            var window = { matchPredictorTracking: { track: function() {} } };
             var localStorage = {
                 getItem: function(key) { return Object.prototype.hasOwnProperty.call(__storage, key) ? __storage[key] : null; },
                 setItem: function(key, value) { __storage[key] = String(value); },
@@ -52,5 +53,17 @@ public class CartJsTests
         Assert.Equal(2, items.Count);
         Assert.Equal("BTTS", items[0].GetProperty("market").GetString());
         Assert.Equal("Over2.5", items[1].GetProperty("market").GetString());
+    }
+
+    [Fact]
+    public void CartScript_TracksKeyClientSideEvents()
+    {
+        var script = File.ReadAllText(
+            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/wwwroot/js/cart.js");
+
+        Assert.Contains("matchPredictorTracking?.track('add_to_cart'", script);
+        Assert.Contains("matchPredictorTracking?.track('clear_cart'", script);
+        Assert.Contains("matchPredictorTracking?.track('open_betslip'", script);
+        Assert.Contains("matchPredictorTracking?.track('copy_booking_code'", script);
     }
 }

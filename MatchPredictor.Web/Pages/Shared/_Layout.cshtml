@@ -124,6 +124,33 @@
     });
 </script>
 
+<script>
+    window.matchPredictorTracking = {
+        track(eventType, metadata) {
+            if (!eventType) {
+                return;
+            }
+
+            const payload = JSON.stringify({
+                eventType,
+                pagePath: window.location.pathname,
+                metadata: metadata || {}
+            });
+
+            try {
+                fetch('/api/tracking/event', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: payload,
+                    keepalive: true
+                }).catch(() => {});
+            } catch {
+                // Tracking should never interrupt the page flow.
+            }
+        }
+    };
+</script>
+
 <!-- Floating Cart Button -->
 <button class="mp-cart-fab" id="cartFab" onclick="openCartModal()" aria-label="Open cart">
     🛒

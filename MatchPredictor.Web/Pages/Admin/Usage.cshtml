@@ -1,0 +1,209 @@
+@page "/admin/usage"
+@model MatchPredictor.Web.Pages.Admin.UsageModel
+
+@{
+    ViewData["Title"] = "Usage Dashboard";
+}
+
+<div class="mp-container">
+    <div class="mp-page-header">
+        <div class="mp-page-title">
+            <div class="mp-page-title-icon" style="background: rgba(16, 185, 129, 0.12);">👥</div>
+            <h1>Usage Dashboard</h1>
+        </div>
+    </div>
+
+    <div class="mp-usage-intro">
+        <p>First-party anonymous usage from your own database. This view tracks visitors, sessions, page views, AI Chat usage, betslip actions, and booking outcomes.</p>
+        <p class="mp-usage-note">Endpoint: <code>/admin/usage</code></p>
+    </div>
+
+    <div class="mp-stat-grid">
+        <div class="mp-stat-card">
+            <div class="mp-stat-label">Visitors 24h</div>
+            <div class="mp-stat-value mp-stat-figure">@Model.UsageSnapshot.UniqueVisitorsLast24Hours</div>
+        </div>
+        <div class="mp-stat-card">
+            <div class="mp-stat-label">Visitors 7d</div>
+            <div class="mp-stat-value mp-stat-figure">@Model.UsageSnapshot.UniqueVisitorsLast7Days</div>
+        </div>
+        <div class="mp-stat-card">
+            <div class="mp-stat-label">Sessions 7d</div>
+            <div class="mp-stat-value mp-stat-figure">@Model.UsageSnapshot.SessionsLast7Days</div>
+        </div>
+        <div class="mp-stat-card">
+            <div class="mp-stat-label">Page Views 7d</div>
+            <div class="mp-stat-value mp-stat-figure">@Model.UsageSnapshot.PageViewsLast7Days</div>
+        </div>
+        <div class="mp-stat-card">
+            <div class="mp-stat-label">AI Chat 7d</div>
+            <div class="mp-stat-value mp-stat-figure">@Model.UsageSnapshot.AiChatRequestsLast7Days</div>
+        </div>
+        <div class="mp-stat-card">
+            <div class="mp-stat-label">Cart Adds 7d</div>
+            <div class="mp-stat-value mp-stat-figure">@Model.UsageSnapshot.CartAddsLast7Days</div>
+        </div>
+        <div class="mp-stat-card">
+            <div class="mp-stat-label">Booking Attempts 7d</div>
+            <div class="mp-stat-value mp-stat-figure">@Model.UsageSnapshot.BookingAttemptsLast7Days</div>
+        </div>
+        <div class="mp-stat-card">
+            <div class="mp-stat-label">Successful Bookings 7d</div>
+            <div class="mp-stat-value mp-stat-figure">@Model.UsageSnapshot.SuccessfulBookingsLast7Days</div>
+        </div>
+    </div>
+
+    <div class="mp-category-stats">
+        <h3 style="margin-bottom: 1.25rem; font-size: 1.1rem; color: white;">Top Pages Last 7 Days</h3>
+        @if (Model.UsageSnapshot.TopPagesLast7Days.Any())
+        {
+            foreach (var usagePage in Model.UsageSnapshot.TopPagesLast7Days)
+            {
+                <div class="mp-category-row">
+                    <div class="mp-cat-header">
+                        <span class="mp-cat-name">@usagePage.Path</span>
+                        <span class="mp-cat-details">
+                            <span class="mp-cat-metric"><strong>@usagePage.Count</strong></span>
+                            <span class="mp-cat-metric">views</span>
+                        </span>
+                    </div>
+                    <div class="mp-progress-track">
+                        <div class="mp-progress-fill" style="width: @(Math.Min(100, usagePage.Count * 10))%"></div>
+                    </div>
+                </div>
+            }
+        }
+        else
+        {
+            <div class="mp-market-empty">No tracked page views yet.</div>
+        }
+    </div>
+</div>
+
+@section Scripts {
+<style>
+    .mp-usage-intro {
+        margin-bottom: 1.5rem;
+        color: var(--text-muted);
+        line-height: 1.6;
+    }
+
+    .mp-usage-note {
+        margin-top: 0.5rem;
+        font-size: 0.9rem;
+    }
+
+    .mp-stat-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 1.5rem;
+        margin-bottom: 2rem;
+    }
+    
+    .mp-stat-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-lg);
+        padding: 1.5rem;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 0.5rem;
+        transition: transform 0.2s;
+    }
+
+    .mp-stat-card:hover {
+        transform: translateY(-2px);
+    }
+
+    .mp-stat-value {
+        font-size: 2.5rem;
+        font-weight: 700;
+        margin: 0;
+        font-family: monospace;
+        line-height: 1;
+    }
+
+    .mp-stat-figure {
+        font-variant-numeric: tabular-nums;
+        font-feature-settings: "tnum" 1;
+        min-height: 2.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+    }
+
+    .mp-stat-label {
+        color: var(--text-muted);
+        font-size: 0.9rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .mp-category-stats {
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-lg);
+        padding: 1.5rem;
+    }
+
+    .mp-category-row {
+        margin-bottom: 1.5rem;
+    }
+
+    .mp-category-row:last-child {
+        margin-bottom: 0;
+    }
+
+    .mp-cat-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: baseline;
+        gap: 1rem;
+        margin-bottom: 0.5rem;
+        font-size: 0.9rem;
+    }
+
+    .mp-cat-name {
+        font-weight: 600;
+        color: white;
+    }
+
+    .mp-cat-details {
+        color: var(--text-muted);
+        display: inline-flex;
+        align-items: baseline;
+        justify-content: flex-end;
+        gap: 0.5rem;
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+        font-feature-settings: "tnum" 1;
+    }
+
+    .mp-cat-metric {
+        display: inline-flex;
+        align-items: baseline;
+    }
+
+    .mp-progress-track {
+        height: 8px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 4px;
+        overflow: hidden;
+    }
+
+    .mp-progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #10b981, #3b82f6);
+        border-radius: 4px;
+        transition: width 1s ease-in-out;
+    }
+
+    .mp-market-empty {
+        color: var(--text-muted);
+    }
+</style>
+}
