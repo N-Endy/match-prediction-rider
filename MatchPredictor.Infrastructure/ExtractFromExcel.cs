@@ -63,7 +63,7 @@ public class ExtractFromExcel : IExtractFromExcel
         return Path.Combine(downloadFolder, fileName);
     }
     
-    public IEnumerable<MatchData> ExtractMatchDatasetFromFile()
+    public IEnumerable<MatchData> ExtractMatchDatasetFromFile(DateTime? targetLocalDate = null)
     {
         var extractedData = new List<MatchData>();
         var filePath = GetFilePath();
@@ -110,7 +110,7 @@ public class ExtractFromExcel : IExtractFromExcel
             ValidateExpectedHeaders(worksheet);
 
             var rowCount = worksheet.Dimension.Rows;
-            var today = DateTimeProvider.GetLocalTime().Date;
+            var targetDate = (targetLocalDate ?? DateTimeProvider.GetLocalTime()).Date;
 
             for (var row = 2; row <= rowCount; row++)
             {
@@ -129,7 +129,7 @@ public class ExtractFromExcel : IExtractFromExcel
                     continue;
                 }
 
-                if (matchDateTime.Date != today)
+                if (matchDateTime.Date != targetDate)
                     continue;
 
                 var matchData = new MatchData

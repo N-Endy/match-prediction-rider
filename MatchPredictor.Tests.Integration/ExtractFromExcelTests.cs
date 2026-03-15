@@ -16,17 +16,15 @@ public class ExtractFromExcelTests
         var resourcesDir = Path.Combine(tempRoot, "Resources");
         Directory.CreateDirectory(resourcesDir);
 
-        var originalCurrentDirectory = Directory.GetCurrentDirectory();
         try
         {
-            Directory.SetCurrentDirectory(tempRoot);
             var workbookPath = Path.Combine(resourcesDir, "test-predictions.xlsx");
             CreateWorkbook(workbookPath);
 
             var configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    ["ScrapingValues:PredictionsFileName"] = "test-predictions.xlsx",
+                    ["ScrapingValues:PredictionsFileName"] = workbookPath,
                     ["EPPlus:ExcelPackage:License"] = "NonCommercialPersonal:Tests"
                 })
                 .Build();
@@ -45,7 +43,43 @@ public class ExtractFromExcelTests
         }
         finally
         {
-            Directory.SetCurrentDirectory(originalCurrentDirectory);
+            if (Directory.Exists(tempRoot))
+                Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ExtractMatchDatasetFromFile_AllowsTargetDateSelection_ForTomorrowPrewarm()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"matchpredictor-excel-{Guid.NewGuid():N}");
+        var resourcesDir = Path.Combine(tempRoot, "Resources");
+        Directory.CreateDirectory(resourcesDir);
+
+        try
+        {
+            var workbookPath = Path.Combine(resourcesDir, "test-predictions.xlsx");
+            CreateWorkbook(workbookPath);
+
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ScrapingValues:PredictionsFileName"] = workbookPath,
+                    ["EPPlus:ExcelPackage:License"] = "NonCommercialPersonal:Tests"
+                })
+                .Build();
+
+            var extractor = new ExtractFromExcel(configuration, NullLogger<ExtractFromExcel>.Instance);
+            var targetTomorrow = DateTimeProvider.GetLocalTime().Date.AddDays(1);
+
+            var matches = extractor.ExtractMatchDatasetFromFile(targetTomorrow).ToList();
+
+            var match = Assert.Single(matches);
+            Assert.Equal("Tomorrow FC", match.HomeTeam);
+            Assert.Equal("Later FC", match.AwayTeam);
+            Assert.Equal(targetTomorrow.ToString("dd-MM-yyyy"), match.Date);
+        }
+        finally
+        {
             if (Directory.Exists(tempRoot))
                 Directory.Delete(tempRoot, recursive: true);
         }

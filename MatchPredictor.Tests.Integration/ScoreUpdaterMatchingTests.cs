@@ -838,7 +838,7 @@ public class ScoreUpdaterMatchingTests
 
     private sealed class StubExtractFromExcel : IExtractFromExcel
     {
-        public IEnumerable<MatchData> ExtractMatchDatasetFromFile() => [];
+        public IEnumerable<MatchData> ExtractMatchDatasetFromFile(DateTime? targetLocalDate = null) => [];
     }
 
     private sealed class StubRegressionPredictorService : IRegressionPredictorService

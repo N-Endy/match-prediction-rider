@@ -226,5 +226,5 @@ enum RunnerMode
 
 sealed class NoOpExtractFromExcel : IExtractFromExcel
 {
-    public IEnumerable<MatchData> ExtractMatchDatasetFromFile() => [];
+    public IEnumerable<MatchData> ExtractMatchDatasetFromFile(DateTime? targetLocalDate = null) => [];
 }

@@ -159,12 +159,45 @@ using (var scope = app.Services.CreateScope())
 
     // Remove the temporary noon job if it exists
     recurringJobs.RemoveIfExists("prediction-generation-job-noon");
+    recurringJobs.RemoveIfExists("prediction-prewarm-job");
+    recurringJobs.RemoveIfExists("prediction-generation-post-analysis-job");
+    recurringJobs.RemoveIfExists("prediction-generation-refresh-job");
     recurringJobs.RemoveIfExists("score-backfill-job");
+
+    recurringJobs.AddOrUpdate<IAnalyzerService>(
+        "prediction-prewarm-job",
+        service => service.ExtractDataAndSyncDatabaseAsync(1),
+        "40 23 * * *", // 11:40 PM WAT provisional tomorrow card before midnight
+        new RecurringJobOptions
+        {
+            TimeZone = watTimeZone
+        }
+    );
 
     recurringJobs.AddOrUpdate<IAnalyzerService>(
         "prediction-generation-job",
         service => service.ExtractDataAndSyncDatabaseAsync(),
-        "30 2,4,12,16 * * *", // 2:30 AM, 4:30 AM, 12:30 PM, 4:30 PM WAT
+        "35 0 * * *", // 12:35 AM WAT first pass after daily analysis
+        new RecurringJobOptions
+        {
+            TimeZone = watTimeZone
+        }
+    );
+
+    recurringJobs.AddOrUpdate<IAnalyzerService>(
+        "prediction-generation-post-analysis-job",
+        service => service.ExtractDataAndSyncDatabaseAsync(),
+        "30 4 * * *", // 4:30 AM WAT early-morning refresh
+        new RecurringJobOptions
+        {
+            TimeZone = watTimeZone
+        }
+    );
+
+    recurringJobs.AddOrUpdate<IAnalyzerService>(
+        "prediction-generation-refresh-job",
+        service => service.ExtractDataAndSyncDatabaseAsync(),
+        "30 12,16 * * *", // 12:30 PM and 4:30 PM WAT refreshes
         new RecurringJobOptions
         {
             TimeZone = watTimeZone
@@ -194,7 +227,7 @@ using (var scope = app.Services.CreateScope())
     recurringJobs.AddOrUpdate<IAnalyzerService>(
         "daily-analysis-job",
         service => service.RunDailyAnalysisAsync(),
-        "0 3 * * *", // Daily at 3:00 AM WAT (after 2:30 AM data sync ensures fresh data)
+        "20 0 * * *", // Daily at 12:20 AM WAT (after 12:17 AM score backfill, before first prediction generation)
         new RecurringJobOptions
         {
             TimeZone = watTimeZone
@@ -226,10 +259,14 @@ using (var scope = app.Services.CreateScope())
         
         if (!hasTodayPredictions)
         {
-            logger.LogInformation("No predictions found for today. Triggering initial data scraping...");
+            logger.LogInformation("No predictions found for today. Queuing daily analysis followed by initial data scraping...");
             var backgroundJobs = scope.ServiceProvider.GetRequiredService<IBackgroundJobClient>();
-            backgroundJobs.Enqueue<IAnalyzerService>(service => service.ExtractDataAndSyncDatabaseAsync());
-            logger.LogInformation("✅ Initial scraping job queued successfully.");
+            var analysisJobId = backgroundJobs.Enqueue<IAnalyzerService>(service => service.RunDailyAnalysisAsync());
+            backgroundJobs.ContinueJobWith<IAnalyzerService>(
+                analysisJobId,
+                service => service.ExtractDataAndSyncDatabaseAsync(),
+                JobContinuationOptions.OnlyOnSucceededState);
+            logger.LogInformation("✅ Initial daily analysis and scraping jobs queued successfully.");
         }
         else
         {

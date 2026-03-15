@@ -12,6 +12,75 @@ namespace MatchPredictor.Tests.Integration;
 public class AnalyzerServiceBackfillTests
 {
     [Fact]
+    public async Task GeneratePredictionsAsync_TargetDate_UsesMatchingDayFixturesOnly()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var today = DateTime.UtcNow.Date;
+        var tomorrow = today.AddDays(1);
+        var tomorrowString = tomorrow.ToString("dd-MM-yyyy");
+
+        context.MatchDatas.AddRange(
+            new MatchData
+            {
+                Date = today.ToString("dd-MM-yyyy"),
+                Time = "18:00",
+                League = "League",
+                HomeTeam = "Today FC",
+                AwayTeam = "Current FC",
+                MatchDateTime = today.AddHours(17)
+            },
+            new MatchData
+            {
+                Date = tomorrowString,
+                Time = "09:00",
+                League = "League",
+                HomeTeam = "Tomorrow FC",
+                AwayTeam = "Future FC",
+                MatchDateTime = tomorrow.AddHours(8)
+            });
+
+        await context.SaveChangesAsync();
+
+        var dataAnalyzer = new StubDataAnalyzerService();
+        var service = new AnalyzerService(
+            dataAnalyzer,
+            new StubWebScraperService(),
+            context,
+            new StubExtractFromExcel(),
+            new StubRegressionPredictorService(),
+            new StubCalibrationService(),
+            new StubThresholdTuningService(),
+            new StubSourceMarketPricingService(),
+            Options.Create(new PredictionSettings
+            {
+                BttsScoreThreshold = 0.55,
+                OverTwoGoalsStrongThreshold = 0.58,
+                DrawStrongThreshold = 0.30,
+                HomeWinStrong = 0.68,
+                AwayWinStrong = 0.70
+            }),
+            NullLogger<AnalyzerService>.Instance);
+
+        await service.GeneratePredictionsAsync(tomorrowString);
+
+        var selectedHomeTeams = dataAnalyzer.LastMatchSelection.Select(match => match.HomeTeam).ToList();
+        var selectedHomeTeam = Assert.Single(selectedHomeTeams);
+        Assert.Equal("Tomorrow FC", selectedHomeTeam);
+
+        var savedPrediction = await context.Predictions.SingleAsync();
+        Assert.Equal(tomorrowString, savedPrediction.Date);
+        Assert.Equal("Tomorrow FC", savedPrediction.HomeTeam);
+
+        var savedForecast = await context.ForecastObservations.SingleAsync();
+        Assert.Equal(tomorrowString, savedForecast.Date);
+        Assert.Equal("Tomorrow FC", savedForecast.HomeTeam);
+    }
+
+    [Fact]
     public async Task BackfillDecisionProvenanceAsync_FillsUnknownPredictionAndForecastMetadata()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
@@ -91,8 +160,40 @@ public class AnalyzerServiceBackfillTests
 
     private sealed class StubDataAnalyzerService : IDataAnalyzerService
     {
-        public IReadOnlyList<PredictionCandidate> BuildForecastCandidates(IEnumerable<MatchData> matches) => [];
-        public IReadOnlyList<PredictionCandidate> SelectPublishedPredictions(IEnumerable<PredictionCandidate> forecastCandidates) => [];
+        public List<MatchData> LastMatchSelection { get; } = [];
+
+        public IReadOnlyList<PredictionCandidate> BuildForecastCandidates(IEnumerable<MatchData> matches)
+        {
+            var selectedMatches = matches.ToList();
+            LastMatchSelection.Clear();
+            LastMatchSelection.AddRange(selectedMatches);
+
+            return selectedMatches.Select(match => new PredictionCandidate
+            {
+                Market = PredictionMarket.HomeWin,
+                Date = match.Date ?? string.Empty,
+                Time = match.Time ?? string.Empty,
+                MatchDateTime = match.MatchDateTime,
+                League = match.League ?? string.Empty,
+                HomeTeam = match.HomeTeam ?? string.Empty,
+                AwayTeam = match.AwayTeam ?? string.Empty,
+                PredictionCategory = "StraightWin",
+                PredictedOutcome = "Home Win",
+                RawProbability = 0.72,
+                CalibratedProbability = 0.74,
+                CalibratorUsed = "Bucket"
+            }).ToList();
+        }
+
+        public IReadOnlyList<PredictionCandidate> SelectPublishedPredictions(IEnumerable<PredictionCandidate> forecastCandidates) =>
+            forecastCandidates.Select(candidate =>
+            {
+                candidate.WasPublished = true;
+                candidate.ThresholdUsed = 0.68;
+                candidate.ThresholdSource = "Configured";
+                return candidate;
+            }).ToList();
+
         public IReadOnlyList<PredictionCandidate> BothTeamsScore(IEnumerable<MatchData> matches) => [];
         public IReadOnlyList<PredictionCandidate> OverTwoGoals(IEnumerable<MatchData> matches) => [];
         public IReadOnlyList<PredictionCandidate> Draw(IEnumerable<MatchData> matches) => [];
@@ -108,7 +209,7 @@ public class AnalyzerServiceBackfillTests
 
     private sealed class StubExtractFromExcel : IExtractFromExcel
     {
-        public IEnumerable<MatchData> ExtractMatchDatasetFromFile() => [];
+        public IEnumerable<MatchData> ExtractMatchDatasetFromFile(DateTime? targetLocalDate = null) => [];
     }
 
     private sealed class StubRegressionPredictorService : IRegressionPredictorService

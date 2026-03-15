@@ -4,5 +4,5 @@ namespace MatchPredictor.Domain.Interfaces;
 
 public interface IExtractFromExcel
 {
-    IEnumerable<MatchData> ExtractMatchDatasetFromFile();
+    IEnumerable<MatchData> ExtractMatchDatasetFromFile(DateTime? targetLocalDate = null);
 }

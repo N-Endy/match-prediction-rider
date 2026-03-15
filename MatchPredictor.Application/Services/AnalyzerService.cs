@@ -54,24 +54,39 @@ public class AnalyzerService  : IAnalyzerService
     }
 
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
-    public async Task ExtractDataAndSyncDatabaseAsync()
+    public async Task ExtractDataAndSyncDatabaseAsync(int predictionDayOffset = 0)
     {
-        _logger.LogInformation("Starting data extraction process...");
+        var targetLocalDate = DateTimeProvider.GetLocalTime().Date.AddDays(predictionDayOffset);
+        var targetDateString = targetLocalDate.ToString("dd-MM-yyyy", CultureInfo.InvariantCulture);
+
+        _logger.LogInformation(
+            "Starting data extraction process for target date {TargetDate} (day offset {PredictionDayOffset}).",
+            targetDateString,
+            predictionDayOffset);
         try
         {
             await _webScraperService.ScrapeMatchDataAsync();
             _logger.LogInformation("✅ Web scraping for match data completed successfully.");
 
-            var scraped = _excelExtract.ExtractMatchDatasetFromFile().ToList();
+            var scraped = _excelExtract.ExtractMatchDatasetFromFile(targetLocalDate).ToList();
             IReadOnlyList<SourceMarketFixture> sourceMarketFixtures = [];
-            try
+            if (predictionDayOffset == 0)
             {
-                sourceMarketFixtures = await _sourceMarketPricingService.GetTodaySourceMarketFixturesAsync();
-                _logger.LogInformation("Fetched {Count} source market fixtures for BTTS enrichment.", sourceMarketFixtures.Count);
+                try
+                {
+                    sourceMarketFixtures = await _sourceMarketPricingService.GetTodaySourceMarketFixturesAsync();
+                    _logger.LogInformation("Fetched {Count} source market fixtures for BTTS enrichment.", sourceMarketFixtures.Count);
+                }
+                catch (Exception sourceMarketEx)
+                {
+                    _logger.LogWarning(sourceMarketEx, "⚠️ Failed to fetch source market fixtures for BTTS enrichment. Continuing with workbook-only data.");
+                }
             }
-            catch (Exception sourceMarketEx)
+            else
             {
-                _logger.LogWarning(sourceMarketEx, "⚠️ Failed to fetch source market fixtures for BTTS enrichment. Continuing with workbook-only data.");
+                _logger.LogInformation(
+                    "Skipping BTTS source market enrichment for target date {TargetDate} because live source pricing is only fetched for the current day.",
+                    targetDateString);
             }
 
             try
@@ -143,11 +158,11 @@ public class AnalyzerService  : IAnalyzerService
                 _logger.LogError(e, "❌ Failed to save match data to database.");
                 throw;
             }
-            _logger.LogInformation($"Extracted and saved {scraped.Count} matches to DB.");
+            _logger.LogInformation("Extracted and saved {Count} matches to DB for target date {TargetDate}.", scraped.Count, targetDateString);
 
             // Chain the next job: Generate predictions only after data is successfully synced
-            BackgroundJob.Enqueue<IAnalyzerService>(service => service.GeneratePredictionsAsync());
-            _logger.LogInformation("Queued GeneratePredictionsAsync background job.");
+            BackgroundJob.Enqueue<IAnalyzerService>(service => service.GeneratePredictionsAsync(targetDateString));
+            _logger.LogInformation("Queued GeneratePredictionsAsync background job for target date {TargetDate}.", targetDateString);
         }
         catch (Exception ex)
         {
@@ -158,17 +173,18 @@ public class AnalyzerService  : IAnalyzerService
     }
 
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
-    public async Task GeneratePredictionsAsync()
+    public async Task GeneratePredictionsAsync(string? targetDate = null)
     {
-        _logger.LogInformation("Starting prediction generation process...");
+        var targetDateString = ResolveTargetDateString(targetDate);
+
+        _logger.LogInformation("Starting prediction generation process for target date {TargetDate}.", targetDateString);
         try
         {
             await BackfillStoredPredictionTimesAsync(7);
             await BackfillDecisionProvenanceAsync(30);
 
-            var todayStr = DateTimeProvider.GetLocalTime().ToString("dd-MM-yyyy");
             var matches = await _dbContext.MatchDatas
-                .Where(match => match.Date == todayStr)
+                .Where(match => match.Date == targetDateString)
                 .ToListAsync();
 
             var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates(matches);
@@ -177,8 +193,8 @@ public class AnalyzerService  : IAnalyzerService
             await SaveForecastObservations(forecastCandidates, publishedCandidates);
             await SavePredictions(publishedCandidates);
             
-            _logger.LogInformation("✅ Predictions calculated and saved successfully.");
-            await LogScrapingStatus("Success", "✅ Prediction generation completed successfully.");
+            _logger.LogInformation("✅ Predictions calculated and saved successfully for target date {TargetDate}.", targetDateString);
+            await LogScrapingStatus("Success", $"✅ Prediction generation completed successfully for {targetDateString}.");
         }
         catch (Exception ex)
         {
@@ -346,6 +362,26 @@ public class AnalyzerService  : IAnalyzerService
         {
             _logger.LogError(ex, "Failed to write scraping log.");
         }
+    }
+
+    private static string ResolveTargetDateString(string? targetDate)
+    {
+        if (string.IsNullOrWhiteSpace(targetDate))
+        {
+            return DateTimeProvider.GetLocalTime().ToString("dd-MM-yyyy", CultureInfo.InvariantCulture);
+        }
+
+        if (DateTime.TryParseExact(
+                targetDate.Trim(),
+                ["dd-MM-yyyy", "d-M-yyyy", "yyyy-MM-dd"],
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var parsedDate))
+        {
+            return parsedDate.ToString("dd-MM-yyyy", CultureInfo.InvariantCulture);
+        }
+
+        throw new FormatException($"Invalid target date format: '{targetDate}'. Expected dd-MM-yyyy.");
     }
 
     private void EnrichSourceMarketProbabilities(MatchData match, IReadOnlyList<SourceMarketFixture> sourceMarketFixtures)
