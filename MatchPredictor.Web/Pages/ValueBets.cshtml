@@ -26,11 +26,12 @@
     </div>
 
     <div id="valueBetsSummary" style="display: none; margin-bottom: 1.5rem;"></div>
+    <div id="valueBetsWarnings" style="display: none; margin-bottom: 1rem;"></div>
 
     <!-- Error State -->
     <div id="errorState" style="display: none; text-align: center; padding: 4rem 1rem; background: #fff3f3; color: #dc3545; border-radius: 12px; border: 1px solid #ffdcdc;">
-        <h3 id="errorMessage" style="margin-bottom: 0.5rem; color: #dc3545;">Failed to load AI Value Bets</h3>
-        <p>There was an error communicating with the AI service. Please refresh the page to try again.</p>
+        <h3 id="errorMessage" style="margin-bottom: 0.5rem; color: #dc3545;">Failed to load Value Bets</h3>
+        <p id="errorDescription">There was an error loading value bets. Please refresh the page to try again.</p>
     </div>
 
     <!-- Results Grid -->
@@ -46,13 +47,25 @@
             const noBetsState = document.getElementById('noBetsState');
             const errorState = document.getElementById('errorState');
             const errorMessage = document.getElementById('errorMessage');
+            const errorDescription = document.getElementById('errorDescription');
             const grid = document.getElementById('valueBetsGrid');
+            const warnings = document.getElementById('valueBetsWarnings');
 
             try {
                 const response = await fetch('/api/valuebets');
                 
                 if (!response.ok) {
-                    throw new Error('Failed to load Value Bets data from the server.');
+                    let serverMessage = 'Failed to load Value Bets data from the server.';
+                    try {
+                        const errorPayload = await response.json();
+                        if (errorPayload?.message) {
+                            serverMessage = errorPayload.message;
+                        }
+                    } catch {
+                        // ignore JSON parse failures and use the fallback message
+                    }
+
+                    throw new Error(serverMessage);
                 }
 
                 const report = await response.json();
@@ -60,6 +73,7 @@
                 
                 loadingState.style.display = 'none';
                 renderSummary(report);
+                renderWarnings(report);
 
                 if (!valueBets || valueBets.length === 0) {
                     noBetsState.style.display = 'block';
@@ -169,7 +183,23 @@
             } catch (error) {
                 console.error('Value Bets Error:', error);
                 loadingState.style.display = 'none';
+                errorMessage.textContent = 'Failed to load Value Bets';
+                errorDescription.textContent = error?.message || 'There was an error loading value bets. Please refresh the page to try again.';
                 errorState.style.display = 'block';
+            }
+
+            function renderWarnings(report) {
+                const warningItems = Array.isArray(report?.warnings) ? report.warnings.filter(Boolean) : [];
+                if (!warnings || warningItems.length === 0) {
+                    return;
+                }
+
+                warnings.innerHTML = warningItems.map(message => `
+                    <div class="mp-analytics-note" style="border-left: 4px solid #f59e0b; background: rgba(245, 158, 11, 0.08); margin-bottom: 0.75rem;">
+                        ${escapeHtml(message)}
+                    </div>
+                `).join('');
+                warnings.style.display = 'block';
             }
         });
 

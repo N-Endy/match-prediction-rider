@@ -83,80 +83,95 @@ public class ValueBetsService : IValueBetsService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to load source market fixtures for Value Bets. Falling back to stored source probabilities only.");
+            AddWarning(report, "Live source pricing is unavailable right now. Using the latest stored sync pricing where possible.");
         }
 
         var candidateBets = new List<ValueBetCandidate>();
 
         foreach (var match in upcomingMatches)
         {
-            var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates([match]);
-            report.ConsideredCandidateCount += forecastCandidates.Count;
-            var pricedCandidates = new List<ValueBetCandidate>();
-            var sourceFixture = SourceMarketFixtureMatcher.FindBestFixture(
-                sourceMarketFixtures,
-                match.HomeTeam,
-                match.AwayTeam,
-                match.League,
-                ResolveScheduledUtc(match));
-
-            foreach (var forecastCandidate in forecastCandidates)
+            try
             {
-                if (!TryGetMarketProbability(
-                        match,
-                        sourceFixture,
-                        forecastCandidate.Market,
-                        out var marketProbability,
-                        out var pricingSource,
-                        out var oddsFreshness))
+                var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates([match]);
+                report.ConsideredCandidateCount += forecastCandidates.Count;
+                var pricedCandidates = new List<ValueBetCandidate>();
+                var sourceFixture = SourceMarketFixtureMatcher.FindBestFixture(
+                    sourceMarketFixtures,
+                    match.HomeTeam,
+                    match.AwayTeam,
+                    match.League,
+                    ResolveScheduledUtc(match));
+
+                foreach (var forecastCandidate in forecastCandidates)
                 {
-                    IncrementExclusion(exclusionCounts, "no_source_price");
-                    continue;
+                    if (!TryGetMarketProbability(
+                            match,
+                            sourceFixture,
+                            forecastCandidate.Market,
+                            out var marketProbability,
+                            out var pricingSource,
+                            out var oddsFreshness))
+                    {
+                        IncrementExclusion(exclusionCounts, "no_source_price");
+                        continue;
+                    }
+
+                    var thresholdDecision = ResolveThresholdDecision(forecastCandidate.Market);
+                    var calibratedProbability = Math.Clamp(forecastCandidate.CalibratedProbability, 0.0, 1.0);
+                    if (calibratedProbability < thresholdDecision.Threshold)
+                    {
+                        IncrementExclusion(exclusionCounts, "below_threshold");
+                        continue;
+                    }
+
+                    var edge = calibratedProbability - marketProbability;
+                    if (edge < _settings.ValueBetMinimumEdge)
+                    {
+                        IncrementExclusion(exclusionCounts, "insufficient_edge");
+                        continue;
+                    }
+
+                    pricedCandidates.Add(new ValueBetCandidate
+                    {
+                        CandidateKey = BuildCandidateKey(
+                            forecastCandidate.Date,
+                            forecastCandidate.Time,
+                            forecastCandidate.League,
+                            forecastCandidate.HomeTeam,
+                            forecastCandidate.AwayTeam,
+                            forecastCandidate.PredictionCategory,
+                            forecastCandidate.PredictedOutcome),
+                        League = forecastCandidate.League,
+                        HomeTeam = forecastCandidate.HomeTeam,
+                        AwayTeam = forecastCandidate.AwayTeam,
+                        KickoffTime = forecastCandidate.Time,
+                        PredictionCategory = forecastCandidate.PredictionCategory,
+                        PredictedOutcome = forecastCandidate.PredictedOutcome,
+                        MathematicalProbability = calibratedProbability,
+                        MarketProbability = marketProbability,
+                        Edge = edge,
+                        ThresholdUsed = thresholdDecision.Threshold,
+                        ThresholdSource = thresholdDecision.ThresholdSource,
+                        CalibratorUsed = forecastCandidate.CalibratorUsed,
+                        PricingSource = pricingSource,
+                        OddsFreshness = oddsFreshness,
+                        EdgeSource = BuildEdgeSource(calibratedProbability, marketProbability)
+                    });
                 }
 
-                var thresholdDecision = ResolveThresholdDecision(forecastCandidate.Market);
-                var calibratedProbability = Math.Clamp(forecastCandidate.CalibratedProbability, 0.0, 1.0);
-                if (calibratedProbability < thresholdDecision.Threshold)
-                {
-                    IncrementExclusion(exclusionCounts, "below_threshold");
-                    continue;
-                }
-
-                var edge = calibratedProbability - marketProbability;
-                if (edge < _settings.ValueBetMinimumEdge)
-                {
-                    IncrementExclusion(exclusionCounts, "insufficient_edge");
-                    continue;
-                }
-
-                pricedCandidates.Add(new ValueBetCandidate
-                {
-                    CandidateKey = BuildCandidateKey(
-                        forecastCandidate.Date,
-                        forecastCandidate.Time,
-                        forecastCandidate.League,
-                        forecastCandidate.HomeTeam,
-                        forecastCandidate.AwayTeam,
-                        forecastCandidate.PredictionCategory,
-                        forecastCandidate.PredictedOutcome),
-                    League = forecastCandidate.League,
-                    HomeTeam = forecastCandidate.HomeTeam,
-                    AwayTeam = forecastCandidate.AwayTeam,
-                    KickoffTime = forecastCandidate.Time,
-                    PredictionCategory = forecastCandidate.PredictionCategory,
-                    PredictedOutcome = forecastCandidate.PredictedOutcome,
-                    MathematicalProbability = calibratedProbability,
-                    MarketProbability = marketProbability,
-                    Edge = edge,
-                    ThresholdUsed = thresholdDecision.Threshold,
-                    ThresholdSource = thresholdDecision.ThresholdSource,
-                    CalibratorUsed = forecastCandidate.CalibratorUsed,
-                    PricingSource = pricingSource,
-                    OddsFreshness = oddsFreshness,
-                    EdgeSource = BuildEdgeSource(calibratedProbability, marketProbability)
-                });
+                candidateBets.AddRange(SelectBestMatchCandidates(pricedCandidates));
             }
-
-            candidateBets.AddRange(SelectBestMatchCandidates(pricedCandidates));
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Skipping Value Bets analysis for {HomeTeam} vs {AwayTeam} in {League} because its data could not be processed safely.",
+                    match.HomeTeam,
+                    match.AwayTeam,
+                    match.League);
+                IncrementExclusion(exclusionCounts, "processing_error");
+                AddWarning(report, "Some fixtures were skipped because their source data could not be processed safely. Showing the value bets that were still available.");
+            }
         }
 
         var topCandidates = candidateBets
@@ -207,6 +222,7 @@ public class ValueBetsService : IValueBetsService
                 if (aiResponseJson.StartsWith("❌") || aiResponseJson.StartsWith("⏳") || aiResponseJson.StartsWith("⚠️"))
                 {
                     _logger.LogWarning("AI Advisor returned an error/warning for Value Bets: {Message}", aiResponseJson);
+                    AddWarning(report, "AI notes are temporarily unavailable. Showing deterministic value bets instead.");
                 }
                 else
                 {
@@ -224,6 +240,7 @@ public class ValueBetsService : IValueBetsService
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Falling back to deterministic Value Bet justifications after AI processing failed.");
+                AddWarning(report, "AI notes are temporarily unavailable. Showing deterministic value bets instead.");
             }
         }
 
@@ -389,7 +406,8 @@ public class ValueBetsService : IValueBetsService
         {
             ["no_source_price"] = 0,
             ["below_threshold"] = 0,
-            ["insufficient_edge"] = 0
+            ["insufficient_edge"] = 0,
+            ["processing_error"] = 0
         };
     }
 
@@ -404,7 +422,8 @@ public class ValueBetsService : IValueBetsService
         [
             CreateExclusionStat(counts, "no_source_price", "No source price", "The match was skipped because no usable market probability was available for that market."),
             CreateExclusionStat(counts, "below_threshold", "Below threshold", "The calibrated model probability never cleared the market's publish threshold."),
-            CreateExclusionStat(counts, "insufficient_edge", "Below edge floor", "The model leaned the right way, but not enough above the source market to count as value.")
+            CreateExclusionStat(counts, "insufficient_edge", "Below edge floor", "The model leaned the right way, but not enough above the source market to count as value."),
+            CreateExclusionStat(counts, "processing_error", "Skipped by data issue", "The match was skipped because its source data could not be processed safely.")
         ];
     }
 
@@ -441,6 +460,16 @@ public class ValueBetsService : IValueBetsService
 
         return $"{candidate.PredictedOutcome} is priced below our calibrated view: model {modelPct:F1}% vs market {marketPct:F1}% (+{edgePct:F1} pts). " +
                $"It clears the {thresholdDescriptor} {thresholdPct:F1}% threshold with the {candidate.CalibratorUsed} calibrator.";
+    }
+
+    private static void AddWarning(ValueBetReportDto report, string message)
+    {
+        if (report.Warnings.Contains(message, StringComparer.Ordinal))
+        {
+            return;
+        }
+
+        report.Warnings.Add(message);
     }
 
     private static Dictionary<string, string> ParseAiJustifications(string aiResponseJson)

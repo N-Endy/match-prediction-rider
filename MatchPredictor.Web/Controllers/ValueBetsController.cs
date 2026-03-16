@@ -1,4 +1,6 @@
 using MatchPredictor.Domain.Interfaces;
+using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.AspNetCore.Mvc;
 
 namespace MatchPredictor.Web.Controllers;
@@ -27,7 +29,14 @@ public class ValueBetsController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to fetch Value Bets");
-            return StatusCode(500, new { message = "An error occurred while fetching value bets." });
+            return Ok(new ValueBetReportDto
+            {
+                GeneratedAtLocal = DateTimeProvider.GetLocalTime(),
+                Warnings =
+                [
+                    "Value Bets could not be fully loaded right now. Please refresh in a moment."
+                ]
+            });
         }
     }
 }

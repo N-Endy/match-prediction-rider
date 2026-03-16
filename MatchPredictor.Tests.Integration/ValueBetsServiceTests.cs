@@ -21,15 +21,15 @@ public class ValueBetsServiceTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoff = DateTimeProvider.GetLocalTime().AddHours(2);
-        var date = kickoff.ToString("dd-MM-yyyy");
+        var kickoff = GetUpcomingKickoffForToday(2);
+        var date = DateTimeProvider.GetLocalDate().ToString("dd-MM-yyyy");
         var time = kickoff.ToString("HH:mm");
 
         context.MatchDatas.Add(new MatchData
         {
             Date = date,
             Time = time,
-            MatchLocalDate = DateOnly.FromDateTime(kickoff),
+            MatchLocalDate = DateTimeProvider.GetLocalDate(),
             MatchLocalTime = TimeOnly.FromDateTime(kickoff),
             MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
             FixtureKey = "test-league|alpha|beta",
@@ -129,15 +129,15 @@ public class ValueBetsServiceTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoff = DateTimeProvider.GetLocalTime().AddHours(3);
-        var date = kickoff.ToString("dd-MM-yyyy");
+        var kickoff = GetUpcomingKickoffForToday(3);
+        var date = DateTimeProvider.GetLocalDate().ToString("dd-MM-yyyy");
         var time = kickoff.ToString("HH:mm");
 
         context.MatchDatas.Add(new MatchData
         {
             Date = date,
             Time = time,
-            MatchLocalDate = DateOnly.FromDateTime(kickoff),
+            MatchLocalDate = DateTimeProvider.GetLocalDate(),
             MatchLocalTime = TimeOnly.FromDateTime(kickoff),
             MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
             FixtureKey = "test-league|gamma|delta",
@@ -201,15 +201,15 @@ public class ValueBetsServiceTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoff = DateTimeProvider.GetLocalTime().AddHours(4);
-        var date = kickoff.ToString("dd-MM-yyyy");
+        var kickoff = GetUpcomingKickoffForToday(4);
+        var date = DateTimeProvider.GetLocalDate().ToString("dd-MM-yyyy");
         var time = kickoff.ToString("HH:mm");
 
         context.MatchDatas.Add(new MatchData
         {
             Date = date,
             Time = time,
-            MatchLocalDate = DateOnly.FromDateTime(kickoff),
+            MatchLocalDate = DateTimeProvider.GetLocalDate(),
             MatchLocalTime = TimeOnly.FromDateTime(kickoff),
             MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
             FixtureKey = "england-premier-league|alpha-fc|beta-united",
@@ -252,8 +252,8 @@ public class ValueBetsServiceTests
                     new SourceMarketFixture
                     {
                         League = "England - Premier League",
-                        HomeTeam = "Alpha",
-                        AwayTeam = "Beta Utd",
+                        HomeTeam = "Alpha FC",
+                        AwayTeam = "Beta United",
                         MatchTimeUtc = DateTimeProvider.ConvertLocalToUtc(kickoff),
                         BttsYesProbability = 0.55,
                         BttsNoProbability = 0.45
@@ -285,15 +285,15 @@ public class ValueBetsServiceTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoff = DateTimeProvider.GetLocalTime().AddHours(2);
-        var date = kickoff.ToString("dd-MM-yyyy");
+        var kickoff = GetUpcomingKickoffForToday(2);
+        var date = DateTimeProvider.GetLocalDate().ToString("dd-MM-yyyy");
         var time = kickoff.ToString("HH:mm");
 
         context.MatchDatas.Add(new MatchData
         {
             Date = date,
             Time = time,
-            MatchLocalDate = DateOnly.FromDateTime(kickoff),
+            MatchLocalDate = DateTimeProvider.GetLocalDate(),
             MatchLocalTime = TimeOnly.FromDateTime(kickoff),
             MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
             FixtureKey = "test-league|alpha|beta",
@@ -355,6 +355,91 @@ public class ValueBetsServiceTests
         Assert.Contains(report.ExclusionBreakdown, item => item.Key == "insufficient_edge" && item.Count == 1);
     }
 
+    [Fact]
+    public async Task GetValueBetReportAsync_SkipsBrokenFixture_AndReturnsRemainingValueBets()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetUpcomingKickoffForToday(2);
+        var date = DateTimeProvider.GetLocalDate().ToString("dd-MM-yyyy");
+        var time = kickoff.ToString("HH:mm");
+
+        context.MatchDatas.AddRange(
+            new MatchData
+            {
+                Date = date,
+                Time = time,
+                MatchLocalDate = DateTimeProvider.GetLocalDate(),
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+                FixtureKey = "test-league|alpha|beta",
+                League = "Test League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                HomeWin = 0.60,
+                Draw = 0.25,
+                AwayWin = 0.15,
+                OverTwoGoals = 0.52,
+                UnderTwoGoals = 0.48
+            },
+            new MatchData
+            {
+                Date = date,
+                Time = time,
+                MatchLocalDate = DateTimeProvider.GetLocalDate(),
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+                FixtureKey = "test-league|broken|fixture",
+                League = "Test League",
+                HomeTeam = "Broken",
+                AwayTeam = "Fixture",
+                HomeWin = 0.51,
+                Draw = 0.26,
+                AwayWin = 0.23,
+                OverTwoGoals = 0.53,
+                UnderTwoGoals = 0.47
+            });
+
+        await context.SaveChangesAsync();
+
+        var analyzer = new FakeDataAnalyzerService();
+        analyzer.Seed(
+            "Alpha",
+            "Beta",
+            [
+                CreateCandidate(PredictionMarket.HomeWin, "StraightWin", "Home Win", 0.60, 0.69)
+            ]);
+        analyzer.SeedException("Broken", "Fixture", new InvalidOperationException("bad fixture"));
+
+        var service = new ValueBetsService(
+            context,
+            analyzer,
+            new FakeThresholdTuningService
+            {
+                Decisions =
+                {
+                    [PredictionMarket.HomeWin] = new ThresholdDecision { Threshold = 0.68, ThresholdSource = "Configured" }
+                }
+            },
+            new FakeAiAdvisorService(_ => "{\"picks\":[]}"),
+            new FakeSourceMarketPricingService(),
+            Options.Create(new PredictionSettings
+            {
+                HomeWinStrong = 0.68,
+                ValueBetMinimumEdge = 0.03
+            }),
+            NullLogger<ValueBetsService>.Instance);
+
+        var report = await service.GetValueBetReportAsync();
+
+        Assert.Single(report.Bets);
+        Assert.Contains(report.Warnings, warning => warning.Contains("skipped", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(report.ExclusionBreakdown, item => item.Key == "processing_error" && item.Count == 1);
+    }
+
     private static PredictionCandidate CreateCandidate(
         PredictionMarket market,
         string category,
@@ -381,18 +466,43 @@ public class ValueBetsServiceTests
         };
     }
 
+    private static DateTime GetUpcomingKickoffForToday(int preferredOffsetHours)
+    {
+        var now = DateTimeProvider.GetLocalTime();
+        var kickoff = now.AddHours(preferredOffsetHours);
+
+        if (kickoff.Date == now.Date)
+        {
+            return kickoff;
+        }
+
+        // Keep test fixtures in today's card even when the suite runs late at night.
+        return now.AddMinutes(10);
+    }
+
     private sealed class FakeDataAnalyzerService : IDataAnalyzerService
     {
         private readonly Dictionary<string, IReadOnlyList<PredictionCandidate>> _candidates = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Exception> _exceptions = new(StringComparer.OrdinalIgnoreCase);
 
         public void Seed(string homeTeam, string awayTeam, IReadOnlyList<PredictionCandidate> candidates)
         {
             _candidates[BuildKey(homeTeam, awayTeam)] = candidates;
         }
 
+        public void SeedException(string homeTeam, string awayTeam, Exception exception)
+        {
+            _exceptions[BuildKey(homeTeam, awayTeam)] = exception;
+        }
+
         public IReadOnlyList<PredictionCandidate> BuildForecastCandidates(IEnumerable<MatchData> matches)
         {
             var match = Assert.Single(matches);
+            if (_exceptions.TryGetValue(BuildKey(match.HomeTeam ?? string.Empty, match.AwayTeam ?? string.Empty), out var exception))
+            {
+                throw exception;
+            }
+
             return _candidates[BuildKey(match.HomeTeam ?? string.Empty, match.AwayTeam ?? string.Empty)];
         }
 

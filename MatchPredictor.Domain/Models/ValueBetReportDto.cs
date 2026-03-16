@@ -5,6 +5,7 @@ public class ValueBetReportDto
     public DateTime GeneratedAtLocal { get; set; }
     public int ConsideredCandidateCount { get; set; }
     public int IncludedCandidateCount { get; set; }
+    public List<string> Warnings { get; set; } = [];
     public List<ValueBetExclusionStat> ExclusionBreakdown { get; set; } = [];
     public List<ValueBetDto> Bets { get; set; } = [];
 }
