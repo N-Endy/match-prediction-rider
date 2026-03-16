@@ -28,6 +28,9 @@ public class AnalyzerServiceBackfillTests
             {
                 Date = today.ToString("dd-MM-yyyy"),
                 Time = "18:00",
+                MatchLocalDate = DateOnly.FromDateTime(today),
+                MatchLocalTime = new TimeOnly(18, 0),
+                FixtureKey = "today-league|today-fc|current-fc",
                 League = "League",
                 HomeTeam = "Today FC",
                 AwayTeam = "Current FC",
@@ -37,6 +40,9 @@ public class AnalyzerServiceBackfillTests
             {
                 Date = tomorrowString,
                 Time = "09:00",
+                MatchLocalDate = DateOnly.FromDateTime(tomorrow),
+                MatchLocalTime = new TimeOnly(9, 0),
+                FixtureKey = "tomorrow-league|tomorrow-fc|future-fc",
                 League = "League",
                 HomeTeam = "Tomorrow FC",
                 AwayTeam = "Future FC",
@@ -74,10 +80,19 @@ public class AnalyzerServiceBackfillTests
         var savedPrediction = await context.Predictions.SingleAsync();
         Assert.Equal(tomorrowString, savedPrediction.Date);
         Assert.Equal("Tomorrow FC", savedPrediction.HomeTeam);
+        Assert.Equal(DateOnly.FromDateTime(tomorrow), savedPrediction.MatchLocalDate);
+        Assert.True(savedPrediction.IsCurrentRevision);
+        Assert.NotEqual(Guid.Empty, savedPrediction.PredictionRunId);
 
         var savedForecast = await context.ForecastObservations.SingleAsync();
         Assert.Equal(tomorrowString, savedForecast.Date);
         Assert.Equal("Tomorrow FC", savedForecast.HomeTeam);
+        Assert.Equal(DateOnly.FromDateTime(tomorrow), savedForecast.MatchLocalDate);
+        Assert.True(savedForecast.IsCurrentRevision);
+
+        var predictionRun = await context.PredictionRuns.SingleAsync();
+        Assert.Equal("prediction_generation", predictionRun.RunKind);
+        Assert.True(predictionRun.Succeeded);
     }
 
     [Fact]
@@ -94,6 +109,9 @@ public class AnalyzerServiceBackfillTests
         {
             Date = today,
             Time = "18:00",
+            MatchLocalDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            MatchLocalTime = new TimeOnly(18, 0),
+            FixtureKey = "league|alpha|beta",
             League = "League",
             HomeTeam = "Alpha",
             AwayTeam = "Beta",
@@ -102,13 +120,19 @@ public class AnalyzerServiceBackfillTests
             CalibratorUsed = "Unknown",
             ThresholdSource = "Unknown",
             ThresholdUsed = 0,
-            WasPublished = false
+            WasPublished = false,
+            PredictionRunId = Guid.NewGuid(),
+            RunLabel = "00:35 WAT",
+            RunReason = "legacy"
         });
 
         context.ForecastObservations.Add(new ForecastObservation
         {
             Date = today,
             Time = "18:00",
+            MatchLocalDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            MatchLocalTime = new TimeOnly(18, 0),
+            FixtureKey = "league|alpha|beta",
             League = "League",
             HomeTeam = "Alpha",
             AwayTeam = "Beta",
@@ -119,7 +143,10 @@ public class AnalyzerServiceBackfillTests
             CalibratorUsed = "Unknown",
             ThresholdSource = "Unknown",
             ThresholdUsed = 0,
-            IsPublished = true
+            IsPublished = true,
+            PredictionRunId = Guid.NewGuid(),
+            RunLabel = "00:35 WAT",
+            RunReason = "legacy"
         });
 
         await context.SaveChangesAsync();
@@ -158,6 +185,222 @@ public class AnalyzerServiceBackfillTests
         Assert.Equal(0.58, forecast.ThresholdUsed, 3);
     }
 
+    [Fact]
+    public async Task GeneratePredictionsAsync_PreservesHistoricalRevisions_AndMarksLatestCurrent()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var targetDate = DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(1));
+        var targetDateString = targetDate.ToString("dd-MM-yyyy");
+
+        context.MatchDatas.Add(new MatchData
+        {
+            Date = targetDateString,
+            Time = "10:00",
+            MatchLocalDate = targetDate,
+            MatchLocalTime = new TimeOnly(10, 0),
+            MatchDateTime = targetDate.ToDateTime(new TimeOnly(9, 0), DateTimeKind.Utc),
+            FixtureKey = "league|alpha|beta",
+            League = "League",
+            HomeTeam = "Alpha",
+            AwayTeam = "Beta"
+        });
+
+        await context.SaveChangesAsync();
+
+        var service = new AnalyzerService(
+            new StubDataAnalyzerService(),
+            new StubWebScraperService(),
+            context,
+            new StubExtractFromExcel(),
+            new StubRegressionPredictorService(),
+            new StubCalibrationService(),
+            new StubThresholdTuningService(),
+            new StubSourceMarketPricingService(),
+            Options.Create(new PredictionSettings
+            {
+                BttsScoreThreshold = 0.55,
+                OverTwoGoalsStrongThreshold = 0.58,
+                DrawStrongThreshold = 0.30,
+                HomeWinStrong = 0.68,
+                AwayWinStrong = 0.70
+            }),
+            NullLogger<AnalyzerService>.Instance);
+
+        await service.GeneratePredictionsAsync(targetDateString, "initial");
+        await service.GeneratePredictionsAsync(targetDateString, "refresh");
+
+        var predictions = await context.Predictions
+            .OrderBy(prediction => prediction.RevisionNumber)
+            .ToListAsync();
+        var forecasts = await context.ForecastObservations
+            .OrderBy(forecast => forecast.RevisionNumber)
+            .ToListAsync();
+        var runs = await context.PredictionRuns
+            .OrderBy(run => run.StartedAtUtc)
+            .ToListAsync();
+
+        Assert.Equal(2, predictions.Count);
+        Assert.Equal(new[] { 1, 2 }, predictions.Select(prediction => prediction.RevisionNumber).ToArray());
+        Assert.False(predictions[0].IsCurrentRevision);
+        Assert.True(predictions[1].IsCurrentRevision);
+        Assert.Equal("initial", predictions[0].RunReason);
+        Assert.Equal("refresh", predictions[1].RunReason);
+        Assert.NotNull(predictions[0].SupersededAt);
+
+        Assert.Equal(2, forecasts.Count);
+        Assert.Equal(new[] { 1, 2 }, forecasts.Select(forecast => forecast.RevisionNumber).ToArray());
+        Assert.False(forecasts[0].IsCurrentRevision);
+        Assert.True(forecasts[1].IsCurrentRevision);
+
+        Assert.Equal(2, runs.Count);
+        Assert.All(runs, run => Assert.True(run.Succeeded));
+    }
+
+    [Fact]
+    public async Task GeneratePredictionsAsync_DeduplicatesDuplicateFixtureRowsBeforeSaving()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var targetDate = DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(1));
+        var targetDateString = targetDate.ToString("dd-MM-yyyy");
+        var kickoff = targetDate.ToDateTime(new TimeOnly(10, 0), DateTimeKind.Utc);
+
+        context.MatchDatas.AddRange(
+            new MatchData
+            {
+                Date = targetDateString,
+                Time = "11:00",
+                MatchLocalDate = targetDate,
+                MatchLocalTime = new TimeOnly(11, 0),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|alpha|beta",
+                League = "League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                HomeWin = 0.55,
+                Draw = 0.24,
+                AwayWin = 0.21
+            },
+            new MatchData
+            {
+                Date = targetDateString,
+                Time = "11:00",
+                MatchLocalDate = targetDate,
+                MatchLocalTime = new TimeOnly(11, 0),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|alpha|beta",
+                League = "League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                HomeWin = 0.54,
+                Draw = 0.25,
+                AwayWin = 0.21
+            });
+
+        await context.SaveChangesAsync();
+
+        var dataAnalyzer = new StubDataAnalyzerService();
+        var service = new AnalyzerService(
+            dataAnalyzer,
+            new StubWebScraperService(),
+            context,
+            new StubExtractFromExcel(),
+            new StubRegressionPredictorService(),
+            new StubCalibrationService(),
+            new StubThresholdTuningService(),
+            new StubSourceMarketPricingService(),
+            Options.Create(new PredictionSettings
+            {
+                BttsScoreThreshold = 0.55,
+                OverTwoGoalsStrongThreshold = 0.58,
+                DrawStrongThreshold = 0.30,
+                HomeWinStrong = 0.68,
+                AwayWinStrong = 0.70
+            }),
+            NullLogger<AnalyzerService>.Instance);
+
+        await service.GeneratePredictionsAsync(targetDateString, "dedupe-test");
+
+        Assert.Single(dataAnalyzer.LastMatchSelection);
+        Assert.Single(await context.ForecastObservations.ToListAsync());
+        Assert.Single(await context.Predictions.ToListAsync());
+    }
+
+    [Fact]
+    public async Task RunDailyAnalysisAsync_RebuildsSourceQualityProfiles()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = DateTime.UtcNow.Date.AddHours(18);
+        var localDate = DateOnly.FromDateTime(kickoff);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        context.Predictions.Add(new Prediction
+        {
+            Date = date,
+            Time = "18:00",
+            MatchLocalDate = localDate,
+            MatchLocalTime = new TimeOnly(18, 0),
+            MatchDateTime = kickoff,
+            FixtureKey = "league|alpha|beta",
+            League = "League",
+            HomeTeam = "Alpha",
+            AwayTeam = "Beta",
+            PredictionCategory = "StraightWin",
+            PredictedOutcome = "Home Win",
+            ActualScore = "2:1",
+            ActualOutcome = "Home Win",
+            IsLive = false,
+            IsCurrentRevision = true
+        });
+
+        context.MatchScores.Add(new MatchScore
+        {
+            MatchTime = kickoff,
+            League = "League",
+            HomeTeam = "Alpha",
+            AwayTeam = "Beta",
+            Score = "2:1",
+            BTTSLabel = true,
+            IsLive = false
+        });
+
+        await context.SaveChangesAsync();
+
+        var service = new AnalyzerService(
+            new StubDataAnalyzerService(),
+            new StubWebScraperService(),
+            context,
+            new StubExtractFromExcel(),
+            new StubRegressionPredictorService(),
+            new StubCalibrationService(),
+            new StubThresholdTuningService(),
+            new StubSourceMarketPricingService(),
+            Options.Create(new PredictionSettings
+            {
+                BttsScoreThreshold = 0.55,
+                OverTwoGoalsStrongThreshold = 0.58,
+                DrawStrongThreshold = 0.30,
+                HomeWinStrong = 0.68,
+                AwayWinStrong = 0.70
+            }),
+            NullLogger<AnalyzerService>.Instance);
+
+        await service.RunDailyAnalysisAsync();
+
+        Assert.NotEmpty(await context.SourceQualityProfiles.ToListAsync());
+    }
+
     private sealed class StubDataAnalyzerService : IDataAnalyzerService
     {
         public List<MatchData> LastMatchSelection { get; } = [];
@@ -173,7 +416,10 @@ public class AnalyzerServiceBackfillTests
                 Market = PredictionMarket.HomeWin,
                 Date = match.Date ?? string.Empty,
                 Time = match.Time ?? string.Empty,
+                MatchLocalDate = match.MatchLocalDate ?? DateOnly.ParseExact(match.Date ?? string.Empty, "dd-MM-yyyy"),
+                MatchLocalTime = match.MatchLocalTime,
                 MatchDateTime = match.MatchDateTime,
+                FixtureKey = match.FixtureKey,
                 League = match.League ?? string.Empty,
                 HomeTeam = match.HomeTeam ?? string.Empty,
                 AwayTeam = match.AwayTeam ?? string.Empty,

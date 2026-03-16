@@ -21,8 +21,8 @@ public class ValueBetsController : ControllerBase
     {
         try
         {
-            var valueBets = await _valueBetsService.GetTopValueBetsAsync(60, ct);
-            return Ok(valueBets);
+            var report = await _valueBetsService.GetValueBetReportAsync(60, ct);
+            return Ok(report);
         }
         catch (Exception ex)
         {

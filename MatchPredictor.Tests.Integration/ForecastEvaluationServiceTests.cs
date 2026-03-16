@@ -15,11 +15,19 @@ public class ForecastEvaluationServiceTests
         {
             new Prediction
             {
+                MatchLocalDate = DateOnly.FromDateTime(DateTime.UtcNow.Date.AddHours(18)),
+                MatchLocalTime = new TimeOnly(18, 0),
+                MatchDateTime = DateTime.UtcNow.Date.AddHours(17),
+                FixtureKey = "league|fixture|one",
+                League = "League",
+                HomeTeam = "Home",
+                AwayTeam = "Away",
                 PredictionCategory = "BothTeamsScore",
                 PredictedOutcome = "BTTS",
                 ActualOutcome = "BTTS",
                 IsLive = false,
-                ConfidenceScore = 0.80m
+                ConfidenceScore = 0.80m,
+                CreatedAt = DateTime.UtcNow.Date.AddHours(15)
             }
         };
 
@@ -51,6 +59,111 @@ public class ForecastEvaluationServiceTests
             (market.CalibratedDecomposition.Reliability - market.CalibratedDecomposition.Resolution + market.CalibratedDecomposition.Uncertainty)) < 0.000001);
     }
 
+    [Fact]
+    public void CalculateStats_UsesPointInTimePredictionAndForecastRevisions()
+    {
+        var service = new ForecastEvaluationService();
+        var kickoff = DateTime.UtcNow.Date.AddHours(18);
+        var localDate = DateOnly.FromDateTime(kickoff);
+        const string fixtureKey = "league|alpha|beta";
+
+        var predictions = new[]
+        {
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = new TimeOnly(18, 0),
+                MatchDateTime = kickoff,
+                FixtureKey = fixtureKey,
+                League = "League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                PredictionCategory = "BothTeamsScore",
+                PredictedOutcome = "BTTS",
+                ActualOutcome = "BTTS",
+                ConfidenceScore = 0.62m,
+                IsLive = false,
+                RevisionNumber = 1,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = new TimeOnly(18, 0),
+                MatchDateTime = kickoff,
+                FixtureKey = fixtureKey,
+                League = "League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                PredictionCategory = "BothTeamsScore",
+                PredictedOutcome = "No BTTS",
+                ActualOutcome = "BTTS",
+                ConfidenceScore = 0.90m,
+                IsLive = false,
+                RevisionNumber = 2,
+                CreatedAt = kickoff.AddHours(1)
+            }
+        };
+
+        var forecasts = new[]
+        {
+            new ForecastObservation
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = new TimeOnly(18, 0),
+                MatchDateTime = kickoff,
+                FixtureKey = fixtureKey,
+                League = "League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                Market = PredictionMarket.BothTeamsScore,
+                PredictedOutcome = "BTTS",
+                RawProbability = 0.62,
+                CalibratedProbability = 0.66,
+                CalibratorUsed = "Bucket",
+                ThresholdSource = "Configured",
+                ThresholdUsed = 0.55,
+                OutcomeOccurred = true,
+                IsSettled = true,
+                IsPublished = true,
+                RevisionNumber = 1,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            new ForecastObservation
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = new TimeOnly(18, 0),
+                MatchDateTime = kickoff,
+                FixtureKey = fixtureKey,
+                League = "League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                Market = PredictionMarket.BothTeamsScore,
+                PredictedOutcome = "No BTTS",
+                RawProbability = 0.12,
+                CalibratedProbability = 0.18,
+                CalibratorUsed = "Beta",
+                ThresholdSource = "Tuned",
+                ThresholdUsed = 0.60,
+                OutcomeOccurred = false,
+                IsSettled = true,
+                IsPublished = true,
+                RevisionNumber = 2,
+                CreatedAt = kickoff.AddHours(1)
+            }
+        };
+
+        var stats = service.CalculateStats(predictions, forecasts);
+        var market = Assert.Single(stats.ForecastMarketStats);
+
+        Assert.Equal(1, stats.TotalPredictions);
+        Assert.Equal(1, stats.CompletedPredictions);
+        Assert.Equal(1, stats.CorrectPredictions);
+        Assert.Equal(1, stats.SettledForecasts);
+        Assert.Contains(market.CalibratorEraStats, era => era.Era == "Bucket" && era.Count == 1);
+        Assert.DoesNotContain(market.CalibratorEraStats, era => era.Era == "Beta");
+    }
+
     private static ForecastObservation CreateForecast(
         double rawProbability,
         double calibratedProbability,
@@ -63,6 +176,10 @@ public class ForecastEvaluationServiceTests
         {
             Date = "12-03-2026",
             Time = "18:00",
+            MatchLocalDate = new DateOnly(2026, 3, 12),
+            MatchLocalTime = new TimeOnly(18, 0),
+            MatchDateTime = new DateTime(2026, 3, 12, 17, 0, 0, DateTimeKind.Utc),
+            FixtureKey = Guid.NewGuid().ToString("N"),
             League = "League",
             HomeTeam = Guid.NewGuid().ToString("N"),
             AwayTeam = Guid.NewGuid().ToString("N"),
@@ -75,7 +192,8 @@ public class ForecastEvaluationServiceTests
             ThresholdUsed = 0.55,
             OutcomeOccurred = occurred,
             IsSettled = true,
-            IsPublished = isPublished
+            IsPublished = isPublished,
+            CreatedAt = new DateTime(2026, 3, 12, 15, 0, 0, DateTimeKind.Utc)
         };
     }
 }

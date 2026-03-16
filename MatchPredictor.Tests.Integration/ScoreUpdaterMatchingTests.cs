@@ -434,7 +434,10 @@ public class ScoreUpdaterMatchingTests
         {
             Date = date,
             Time = kickoff.ToString("HH:mm"),
+            MatchLocalDate = DateOnly.FromDateTime(kickoff),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoff),
             MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            FixtureKey = "japan-j-league|kashima-antlers|kawasaki-frontale",
             League = "Japan - J League",
             HomeTeam = "Kashima Antlers",
             AwayTeam = "Kawasaki Frontale",
@@ -491,7 +494,10 @@ public class ScoreUpdaterMatchingTests
             {
                 Date = date,
                 Time = kickoff.ToString("HH:mm"),
+                MatchLocalDate = DateOnly.FromDateTime(kickoff),
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
                 MatchDateTime = kickoffUtc,
+                FixtureKey = "australia-nsw-league-one|bulls-academy|prospect-united",
                 League = "Australia - New South Wales League 1",
                 HomeTeam = "Bulls Academy",
                 AwayTeam = "Prospect United",
@@ -505,7 +511,10 @@ public class ScoreUpdaterMatchingTests
             {
                 Date = date,
                 Time = kickoff.ToString("HH:mm"),
+                MatchLocalDate = DateOnly.FromDateTime(kickoff),
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
                 MatchDateTime = kickoffUtc,
+                FixtureKey = "australia-nsw-league-one|bulls-academy|prospect-united",
                 League = "Australia - New South Wales League 1",
                 HomeTeam = "Bulls Academy",
                 AwayTeam = "Prospect United",
@@ -575,7 +584,10 @@ public class ScoreUpdaterMatchingTests
         {
             Date = date,
             Time = kickoffLocal.ToString("HH:mm"),
+            MatchLocalDate = DateOnly.FromDateTime(kickoffLocal),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoffLocal),
             MatchDateTime = kickoffUtc,
+            FixtureKey = "australia-npl-victoria|hume-city|dandenong-thunder",
             League = "Australia - NPL Victoria",
             HomeTeam = "Hume City",
             AwayTeam = "Dandenong Thunder",
@@ -641,7 +653,10 @@ public class ScoreUpdaterMatchingTests
         {
             Date = date,
             Time = kickoffLocal.ToString("HH:mm"),
+            MatchLocalDate = DateOnly.FromDateTime(kickoffLocal),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoffLocal),
             MatchDateTime = kickoffUtc,
+            FixtureKey = "australia-tasmania-npl|riverside-olympic|glenorchy-knights",
             League = "Australia - Tasmania NPL",
             HomeTeam = "Riverside Olympic",
             AwayTeam = "Glenorchy Knights",
@@ -697,7 +712,10 @@ public class ScoreUpdaterMatchingTests
         {
             Date = date,
             Time = kickoffLocal.ToString("HH:mm"),
+            MatchLocalDate = DateOnly.FromDateTime(kickoffLocal),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoffLocal),
             MatchDateTime = kickoffUtc,
+            FixtureKey = "australia-tasmania-npl|riverside-olympic|glenorchy-knights",
             League = "Australia - Tasmania NPL",
             HomeTeam = "Riverside Olympic",
             AwayTeam = "Glenorchy Knights",
@@ -745,6 +763,96 @@ public class ScoreUpdaterMatchingTests
         Assert.Null(prediction.ActualOutcome);
     }
 
+    [Fact]
+    public async Task RunScoreUpdaterAsync_PrefersHigherQualitySourceWhenExactFinishedScoresConflict()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoffLocal = DateTimeProvider.GetLocalTime().Date.AddHours(14);
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal);
+        var date = kickoffLocal.ToString("dd-MM-yyyy");
+
+        context.Predictions.Add(CreatePrediction(
+            date,
+            kickoffUtc,
+            "Alpha FC",
+            "Beta FC",
+            "StraightWin",
+            "Home Win",
+            "League"));
+
+        context.SourceQualityProfiles.AddRange(
+            new SourceQualityProfile
+            {
+                SourceName = "FlashScore",
+                LeagueKey = "all",
+                LeagueLabel = "All Leagues",
+                TimeBucketKey = "all",
+                TimeBucketLabel = "All Kickoffs",
+                SampleCount = 12,
+                FinishedCoverageCount = 10,
+                ExactScoreMatchCount = 6,
+                LiveOnlyCount = 1,
+                ReliabilityScore = 0.46
+            },
+            new SourceQualityProfile
+            {
+                SourceName = "AiScore",
+                LeagueKey = "all",
+                LeagueLabel = "All Leagues",
+                TimeBucketKey = "all",
+                TimeBucketLabel = "All Kickoffs",
+                SampleCount = 12,
+                FinishedCoverageCount = 11,
+                ExactScoreMatchCount = 10,
+                LiveOnlyCount = 0,
+                ReliabilityScore = 0.88
+            });
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                MatchScores =
+                [
+                    new MatchScore
+                    {
+                        MatchTime = kickoffUtc,
+                        League = "League",
+                        HomeTeam = "Alpha FC",
+                        AwayTeam = "Beta FC",
+                        Score = "1:0",
+                        BTTSLabel = false,
+                        IsLive = false
+                    }
+                ],
+                AiScoreMatchScores =
+                [
+                    new AiScoreMatchScore
+                    {
+                        MatchTime = kickoffUtc,
+                        League = "League",
+                        HomeTeam = "Alpha FC",
+                        AwayTeam = "Beta FC",
+                        Score = "3:1",
+                        BTTSLabel = true,
+                        IsLive = false
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var prediction = await context.Predictions.SingleAsync();
+        Assert.Equal("3:1", prediction.ActualScore);
+        Assert.Equal("Home Win", prediction.ActualOutcome);
+    }
+
     private static Prediction CreatePrediction(
         string date,
         DateTime kickoff,
@@ -754,11 +862,21 @@ public class ScoreUpdaterMatchingTests
         string predictedOutcome,
         string league = "Spain LaLiga")
     {
+        var kickoffUtc = kickoff.Kind == DateTimeKind.Utc
+            ? kickoff
+            : DateTimeProvider.ConvertLocalToUtc(DateTime.SpecifyKind(kickoff, DateTimeKind.Unspecified));
+        var kickoffLocal = kickoff.Kind == DateTimeKind.Utc
+            ? DateTimeProvider.ConvertUtcToLocal(kickoff)
+            : kickoff;
+
         return new Prediction
         {
             Date = date,
-            Time = kickoff.ToString("HH:mm"),
-            MatchDateTime = kickoff,
+            Time = kickoffLocal.ToString("HH:mm"),
+            MatchLocalDate = DateOnly.FromDateTime(kickoffLocal),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoffLocal),
+            MatchDateTime = kickoffUtc,
+            FixtureKey = $"{league.Trim().ToLowerInvariant()}|{homeTeam.Trim().ToLowerInvariant()}|{awayTeam.Trim().ToLowerInvariant()}",
             League = league,
             HomeTeam = homeTeam,
             AwayTeam = awayTeam,
@@ -778,11 +896,21 @@ public class ScoreUpdaterMatchingTests
         string actualScore,
         string league = "Australia - Test League")
     {
+        var kickoffUtc = kickoff.Kind == DateTimeKind.Utc
+            ? kickoff
+            : DateTimeProvider.ConvertLocalToUtc(DateTime.SpecifyKind(kickoff, DateTimeKind.Unspecified));
+        var kickoffLocal = kickoff.Kind == DateTimeKind.Utc
+            ? DateTimeProvider.ConvertUtcToLocal(kickoff)
+            : kickoff;
+
         return new Prediction
         {
             Date = date,
-            Time = kickoff.ToString("HH:mm"),
-            MatchDateTime = kickoff,
+            Time = kickoffLocal.ToString("HH:mm"),
+            MatchLocalDate = DateOnly.FromDateTime(kickoffLocal),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoffLocal),
+            MatchDateTime = kickoffUtc,
+            FixtureKey = $"{league.Trim().ToLowerInvariant()}|{homeTeam.Trim().ToLowerInvariant()}|{awayTeam.Trim().ToLowerInvariant()}",
             League = league,
             HomeTeam = homeTeam,
             AwayTeam = awayTeam,

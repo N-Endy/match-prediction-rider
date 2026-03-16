@@ -69,7 +69,7 @@ public class DataAnalyzerService : IDataAnalyzerService
         foreach (var matchGroup in forecasts
                      .Where(candidate => candidate.Market is PredictionMarket.HomeWin or PredictionMarket.AwayWin)
                      .GroupBy(candidate => (
-                         candidate.Date,
+                         candidate.MatchLocalDate,
                          candidate.HomeTeam,
                          candidate.AwayTeam,
                          candidate.League)))
@@ -147,13 +147,22 @@ public class DataAnalyzerService : IDataAnalyzerService
         var date = match.Date?.Trim() ?? string.Empty;
         var time = match.Time?.Trim() ?? string.Empty;
         DateTime? utcDateTime = match.MatchDateTime;
+        var matchLocalDate = match.MatchLocalDate;
+        var matchLocalTime = match.MatchLocalTime;
 
-        if (utcDateTime is null)
+        if (utcDateTime is null || !matchLocalDate.HasValue)
         {
-            var normalizedDateTime = DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time);
-            date = normalizedDateTime.date;
-            time = normalizedDateTime.time;
+            var normalizedDateTime = DateTimeProvider.ParseCanonicalMatchDateTime(match.Date, match.Time);
+            date = DateTimeProvider.FormatLocalDate(normalizedDateTime.localDate);
+            time = DateTimeProvider.FormatLocalTime(normalizedDateTime.localTime);
             utcDateTime = normalizedDateTime.utcDateTime;
+            matchLocalDate = normalizedDateTime.localDate;
+            matchLocalTime = normalizedDateTime.localTime;
+        }
+        else
+        {
+            date = DateTimeProvider.FormatLocalDate(matchLocalDate.Value);
+            time = matchLocalTime.HasValue ? DateTimeProvider.FormatLocalTime(matchLocalTime.Value) : time;
         }
 
         return new PredictionCandidate
@@ -161,7 +170,10 @@ public class DataAnalyzerService : IDataAnalyzerService
             Market = market,
             Date = date,
             Time = time,
+            MatchLocalDate = matchLocalDate ?? DateOnly.ParseExact(date, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture),
+            MatchLocalTime = matchLocalTime,
             MatchDateTime = utcDateTime,
+            FixtureKey = string.Empty,
             League = match.League?.Trim() ?? string.Empty,
             HomeTeam = match.HomeTeam?.Trim() ?? string.Empty,
             AwayTeam = match.AwayTeam?.Trim() ?? string.Empty,

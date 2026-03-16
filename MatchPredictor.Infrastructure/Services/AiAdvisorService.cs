@@ -14,7 +14,7 @@ namespace MatchPredictor.Infrastructure.Services;
 
 /// <summary>
 /// AI advisor using Groq via the OpenAI-compatible chat completions API.
-/// The AI Chat path is grounded to today's published predictions and returns
+/// The AI Chat path is grounded to the recent published prediction window and returns
 /// a structured response so the UI never has to parse actions from prose.
 /// </summary>
 public class AiAdvisorService : IAiAdvisorService
@@ -70,16 +70,29 @@ public class AiAdvisorService : IAiAdvisorService
             normalizedPrompt = effectivePrompt;
         }
 
-        var predictions = await LoadUpcomingPublishedPredictionsAsync(ct);
+        var predictions = await LoadPublishedPredictionsForChatAsync(ct);
+
+        if (AiChatContextBuilder.IsContextFollowUpPrompt(normalizedPrompt) &&
+            sessionState.LastContextPredictionIds.Count > 0)
+        {
+            var contextualPredictions = predictions
+                .Where(prediction => sessionState.LastContextPredictionIds.Contains(prediction.Id))
+                .ToList();
+
+            if (contextualPredictions.Count > 0)
+            {
+                predictions = contextualPredictions;
+            }
+        }
 
         if (predictions.Count == 0)
         {
             var noPredictions = new AiChatResponse
             {
-                Message = "No predictions are available for today right now. Predictions refresh throughout the day, so please check back soon."
+                Message = "No published predictions are available in the recent card window right now. Let the sync refresh, then try again."
             };
 
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noPredictions, ct);
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noPredictions, null, ct);
             return noPredictions;
         }
 
@@ -88,7 +101,7 @@ public class AiAdvisorService : IAiAdvisorService
         if (IsBookingFollowUp(normalizedPrompt, sessionState))
         {
             var followUp = BuildBookingFollowUpResponse(predictions, sessionState.LastRecommendedActionKeys);
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, followUp, ct);
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, followUp, null, ct);
             return followUp;
         }
 
@@ -108,7 +121,7 @@ public class AiAdvisorService : IAiAdvisorService
                 ]
             };
 
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, askForTargetOdds, ct);
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, askForTargetOdds, selection, ct);
             return askForTargetOdds;
         }
 
@@ -119,25 +132,36 @@ public class AiAdvisorService : IAiAdvisorService
                 Message = AiChatContextBuilder.BuildNoRelevantMatchesMessage(normalizedPrompt)
             };
 
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noMatchResponse, ct);
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noMatchResponse, selection, ct);
             return noMatchResponse;
         }
 
         if (selection.Candidates.Count == 0)
         {
+            if (string.Equals(selection.DateScopeLabel, "Today's bookable card", StringComparison.OrdinalIgnoreCase))
+            {
+                var noTodayCard = new AiChatResponse
+                {
+                    Message = "No predictions are available for today's card right now. Recent settled matches are available, but there are no bookable picks left in the current window."
+                };
+
+                await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noTodayCard, selection, ct);
+                return noTodayCard;
+            }
+
             var emptySelection = new AiChatResponse
             {
                 Message = "I couldn't find a useful slice of today's card for that request. Try asking for BTTS, Over 2.5, Draw, or Straight Win picks."
             };
 
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, emptySelection, ct);
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, emptySelection, selection, ct);
             return emptySelection;
         }
 
         if (selection.IsRolloverRequest && selection.RequestedCombinedOdds is > 0)
         {
             var rolloverResponse = BuildRolloverResponse(normalizedPrompt, selection);
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, rolloverResponse, ct);
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, rolloverResponse, selection, ct);
             return rolloverResponse;
         }
 
@@ -154,7 +178,7 @@ public class AiAdvisorService : IAiAdvisorService
             maxTokens: 1400);
 
         var parsed = ParseAiChatResponse(rawResponse, selection, normalizedPrompt);
-        await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, parsed, ct);
+        await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, parsed, selection, ct);
         return parsed;
     }
 
@@ -169,18 +193,19 @@ public class AiAdvisorService : IAiAdvisorService
         return await CallGroqAsync(apiKey, systemPrompt, payload, null, ct, jsonMode: true);
     }
 
-    private async Task<List<Prediction>> LoadUpcomingPublishedPredictionsAsync(CancellationToken ct)
+    private async Task<List<Prediction>> LoadPublishedPredictionsForChatAsync(CancellationToken ct)
     {
         var nowLocal = DateTimeProvider.GetLocalTime();
-        var todayStr = nowLocal.ToString("dd-MM-yyyy", CultureInfo.InvariantCulture);
-        var nowUtc = DateTime.UtcNow;
+        var todayLocalDate = DateOnly.FromDateTime(nowLocal);
+        var earliestLocalDate = todayLocalDate.AddDays(-7);
 
         return await _dbContext.Predictions
             .AsNoTracking()
-            .Where(prediction => prediction.Date == todayStr && prediction.WasPublished)
-            .Where(prediction => prediction.MatchDateTime == null || prediction.MatchDateTime >= nowUtc)
-            .OrderByDescending(prediction => prediction.ConfidenceScore)
-            .ThenBy(prediction => prediction.MatchDateTime)
+            .Where(prediction => prediction.IsCurrentRevision && prediction.WasPublished)
+            .Where(prediction => prediction.MatchLocalDate >= earliestLocalDate && prediction.MatchLocalDate <= todayLocalDate)
+            .OrderByDescending(prediction => prediction.MatchLocalDate)
+            .ThenByDescending(prediction => prediction.MatchDateTime)
+            .ThenByDescending(prediction => prediction.MatchLocalTime)
             .ToListAsync(ct);
     }
 
@@ -194,29 +219,29 @@ public class AiAdvisorService : IAiAdvisorService
         }
 
         var dates = predictions
-            .Select(prediction => prediction.Date)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(prediction => prediction.MatchLocalDate)
+            .Distinct()
             .ToList();
 
         var matchDatas = await _dbContext.MatchDatas
             .AsNoTracking()
-            .Where(match => match.Date != null && dates.Contains(match.Date))
+            .Where(match => match.MatchLocalDate.HasValue && dates.Contains(match.MatchLocalDate.Value))
             .ToListAsync(ct);
 
         var byFixtureAndLeague = matchDatas
-            .GroupBy(match => BuildPredictionMatchKey(match.Date, match.League, match.HomeTeam, match.AwayTeam, includeLeague: true))
+            .GroupBy(match => BuildPredictionMatchKey(match.MatchLocalDate, match.FixtureKey, match.League, match.HomeTeam, match.AwayTeam, includeLeague: true))
             .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
 
         var byFixture = matchDatas
-            .GroupBy(match => BuildPredictionMatchKey(match.Date, null, match.HomeTeam, match.AwayTeam, includeLeague: false))
+            .GroupBy(match => BuildPredictionMatchKey(match.MatchLocalDate, match.FixtureKey, null, match.HomeTeam, match.AwayTeam, includeLeague: false))
             .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
 
         var pricingByPredictionId = new Dictionary<int, AiChatContextBuilder.AiChatCandidatePricing>();
 
         foreach (var prediction in predictions)
         {
-            var leagueKey = BuildPredictionMatchKey(prediction.Date, prediction.League, prediction.HomeTeam, prediction.AwayTeam, includeLeague: true);
-            var fixtureKey = BuildPredictionMatchKey(prediction.Date, null, prediction.HomeTeam, prediction.AwayTeam, includeLeague: false);
+            var leagueKey = BuildPredictionMatchKey(prediction.MatchLocalDate, prediction.FixtureKey, prediction.League, prediction.HomeTeam, prediction.AwayTeam, includeLeague: true);
+            var fixtureKey = BuildPredictionMatchKey(prediction.MatchLocalDate, prediction.FixtureKey, null, prediction.HomeTeam, prediction.AwayTeam, includeLeague: false);
 
             MatchData? matchData = null;
             if (byFixtureAndLeague.TryGetValue(leagueKey, out var leagueMatches))
@@ -278,15 +303,27 @@ public class AiAdvisorService : IAiAdvisorService
     }
 
     private static string BuildPredictionMatchKey(
-        string? date,
+        DateOnly? localDate,
+        string? fixtureKey,
         string? league,
         string? homeTeam,
         string? awayTeam,
         bool includeLeague)
     {
+        if (!string.IsNullOrWhiteSpace(fixtureKey))
+        {
+            var normalizedFixtureKey = NormalizeKeyPart(fixtureKey);
+            if (!includeLeague)
+            {
+                return normalizedFixtureKey;
+            }
+
+            return string.Join("|", NormalizeKeyPart(league), normalizedFixtureKey);
+        }
+
         var parts = new List<string>
         {
-            NormalizeKeyPart(date),
+            NormalizeKeyPart(localDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
             NormalizeKeyPart(homeTeam),
             NormalizeKeyPart(awayTeam)
         };
@@ -308,10 +345,10 @@ public class AiAdvisorService : IAiAdvisorService
 
     private static MatchData? SelectBestMatchData(IEnumerable<MatchData> candidates, Prediction prediction)
     {
-        var predictionTime = NormalizeKeyPart(prediction.Time);
+        var predictionTime = prediction.MatchLocalTime ?? DateTimeProvider.ParseLocalTimeOrNull(prediction.Time);
 
         return candidates
-            .OrderBy(match => NormalizeKeyPart(match.Time) == predictionTime ? 0 : 1)
+            .OrderBy(match => (match.MatchLocalTime ?? DateTimeProvider.ParseLocalTimeOrNull(match.Time)) == predictionTime ? 0 : 1)
             .ThenBy(match => Math.Abs((match.MatchDateTime - prediction.MatchDateTime)?.TotalMinutes ?? 0))
             .FirstOrDefault();
     }
@@ -553,6 +590,7 @@ public class AiAdvisorService : IAiAdvisorService
             - If a team, league, or fixture is not in the supplied candidates, say so plainly.
             - Do not invent injuries, lineups, bookmaker odds, expected goals, form streaks, motivation, or weather unless those fields are explicitly present.
             - If marketProbability, estimatedDecimalOdds, or modelEdgePoints are present, you may use them. Otherwise say the pricing is unavailable.
+            - If a candidate includes actualScore or actualOutcome, you may explain why it settled green/red using only those fields.
 
             PICKING RULES:
             - "Best" and "safe" picks should lean on higher calibrated confidence, stronger margin above threshold, and positive modelEdgePoints when available.
@@ -566,6 +604,7 @@ public class AiAdvisorService : IAiAdvisorService
             ACTION RULES:
             - The payload includes opaque ActionKeys for the currently available candidates.
             - You may only return ActionKeys that appear in the payload.
+            - Only return ActionKeys for candidates where canBook is true.
             - If you do not want to recommend a candidate, omit its ActionKey.
             - If fewer than 2 candidates are recommended, showBookAll should be false.
             - If the user asks to book the picks and there is more than one suitable candidate, prefer showBookAll = true.
@@ -639,6 +678,7 @@ public class AiAdvisorService : IAiAdvisorService
             question = userPrompt,
             availablePredictionCount = selection.TotalAvailableCount,
             requestedPredictionCount = selection.RequestedCandidateCount,
+            dateScope = selection.DateScopeLabel,
             requestedMarkets = selection.RequestedMarketSlices.Select(slice => new
             {
                 market = slice.DisplayName,
@@ -648,12 +688,17 @@ public class AiAdvisorService : IAiAdvisorService
             {
                 candidate.ActionKey,
                 candidate.PredictionId,
+                matchDate = candidate.MatchLocalDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 candidate.League,
                 candidate.KickoffTime,
                 candidate.HomeTeam,
                 candidate.AwayTeam,
                 candidate.PredictionCategory,
                 candidate.PredictedOutcome,
+                candidate.MatchState,
+                candidate.ActualScore,
+                candidate.ActualOutcome,
+                candidate.CanBook,
                 calibratedConfidence = candidate.ConfidenceScore,
                 rawConfidence = candidate.RawConfidenceScore,
                 candidate.MarginAboveThreshold,
@@ -709,7 +754,9 @@ public class AiAdvisorService : IAiAdvisorService
         var explanationsByKey = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var recommendation in recommendationStream)
         {
-            if (!lookup.ContainsKey(recommendation.ActionKey) || actionKeys.Contains(recommendation.ActionKey, StringComparer.OrdinalIgnoreCase))
+            if (!lookup.ContainsKey(recommendation.ActionKey) ||
+                !lookup[recommendation.ActionKey].CanBook ||
+                actionKeys.Contains(recommendation.ActionKey, StringComparer.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -728,7 +775,7 @@ public class AiAdvisorService : IAiAdvisorService
         {
             foreach (var candidate in selection.Candidates)
             {
-                if (actionKeys.Contains(candidate.ActionKey, StringComparer.OrdinalIgnoreCase))
+                if (!candidate.CanBook || actionKeys.Contains(candidate.ActionKey, StringComparer.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -765,6 +812,7 @@ public class AiAdvisorService : IAiAdvisorService
         }
 
         return selection.Candidates
+            .Where(candidate => candidate.CanBook)
             .Take(Math.Min(selection.RequestedCandidateCount, MaxRecommendedActions))
             .Select(candidate => CreateAction(candidate, BuildDefaultActionExplanation(candidate)))
             .ToList();
@@ -849,6 +897,10 @@ public class AiAdvisorService : IAiAdvisorService
             HomeTeam = candidate.HomeTeam,
             AwayTeam = candidate.AwayTeam,
             League = candidate.League,
+            MatchDateLabel = candidate.MatchLocalDate.ToString("dd MMM", CultureInfo.InvariantCulture),
+            KickoffTime = candidate.KickoffTime,
+            Status = candidate.MatchState,
+            ActualScore = candidate.ActualScore,
             Market = candidate.PredictionCategory switch
             {
                 "BothTeamsScore" => "BTTS",
@@ -860,12 +912,17 @@ public class AiAdvisorService : IAiAdvisorService
             ModelProbability = candidate.ConfidenceScore is decimal confidence ? (double)confidence : null,
             MarketProbability = candidate.MarketProbability,
             EdgePoints = candidate.EdgePoints,
-            EstimatedOdds = candidate.EstimatedOdds
+            EstimatedOdds = candidate.EstimatedOdds,
+            CanBook = candidate.CanBook
         };
     }
 
     private static AiChatAction CreateAction(Prediction prediction, string? explanation = null)
     {
+        var isLive = prediction.IsLive &&
+                     (!prediction.MatchDateTime.HasValue || prediction.MatchDateTime.Value.AddMinutes(200) >= DateTime.UtcNow);
+        var status = isLive ? "Live" : string.IsNullOrWhiteSpace(prediction.ActualScore) ? "Upcoming" : "Finished";
+
         return new AiChatAction
         {
             ActionKey = AiChatContextBuilder.CreateActionKey(prediction),
@@ -873,10 +930,15 @@ public class AiAdvisorService : IAiAdvisorService
             HomeTeam = prediction.HomeTeam,
             AwayTeam = prediction.AwayTeam,
             League = prediction.League,
+            MatchDateLabel = prediction.MatchLocalDate.ToString("dd MMM", CultureInfo.InvariantCulture),
+            KickoffTime = prediction.MatchLocalTime?.ToString("HH:mm", CultureInfo.InvariantCulture) ?? prediction.Time,
+            Status = status,
+            ActualScore = prediction.ActualScore,
             Market = AiChatContextBuilder.ToCartMarket(prediction),
             Prediction = prediction.PredictedOutcome,
             Explanation = explanation ?? BuildDefaultActionExplanation(prediction),
-            ModelProbability = prediction.ConfidenceScore is decimal confidence ? (double)confidence : prediction.RawConfidenceScore is decimal raw ? (double)raw : null
+            ModelProbability = prediction.ConfidenceScore is decimal confidence ? (double)confidence : prediction.RawConfidenceScore is decimal raw ? (double)raw : null,
+            CanBook = status == "Upcoming"
         };
     }
 
@@ -909,6 +971,7 @@ public class AiAdvisorService : IAiAdvisorService
         AiChatSessionState state,
         string userPrompt,
         AiChatResponse response,
+        AiChatContextBuilder.AiChatContextSelection? selection,
         CancellationToken ct)
     {
         state.History.Add(new ChatHistoryItem { Role = "user", Content = NormalizeHistoryContent(userPrompt) });
@@ -920,6 +983,10 @@ public class AiAdvisorService : IAiAdvisorService
             .Select(action => action.ActionKey)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+        state.LastContextPredictionIds = selection?.Candidates
+            .Select(candidate => candidate.PredictionId)
+            .Distinct()
+            .ToList() ?? [];
 
         var payload = JsonSerializer.Serialize(state);
         await _cache.SetStringAsync(

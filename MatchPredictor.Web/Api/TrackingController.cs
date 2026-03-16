@@ -1,10 +1,12 @@
 using MatchPredictor.Web.Services;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
 
 namespace MatchPredictor.Web.Api;
 
 [ApiController]
 [Route("api/tracking")]
+[EnableRateLimiting(RateLimitPolicies.Tracking)]
 public class TrackingController : ControllerBase
 {
     private readonly IUserTrackingService _userTrackingService;

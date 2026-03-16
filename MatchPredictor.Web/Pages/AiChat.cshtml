@@ -11,6 +11,14 @@
             <div class="mp-page-title-icon" style="background: rgba(99, 102, 241, 0.1);">🤖</div>
             <h1>AI Prediction Advisor</h1>
         </div>
+        @if (Model.IsAuthenticated)
+        {
+            <form method="post" asp-page-handler="Logout">
+                <button type="submit" class="mp-book-btn" style="width: auto; padding: 0.65rem 1rem; border-radius: var(--radius-md);">
+                    Log Out
+                </button>
+            </form>
+        }
     </div>
 
 @if (!Model.IsAuthenticated)
@@ -48,11 +56,12 @@ else
             <div class="mp-chat-message mp-chat-ai">
                 <div class="mp-chat-avatar">🤖</div>
                 <div class="mp-chat-bubble">
-                    <p>Hello! I'm Nelson, your grounded prediction advisor. I only work from today's MatchPredictor card, so every pick I discuss comes from the predictions currently in the system.</p>
+                    <p>Hello! I'm Nelson, your grounded prediction advisor. I work from MatchPredictor's current card plus the recent published prediction history, so I can talk about today's picks and recent settled matches without guessing.</p>
                     <p style="margin-top: 0.5rem; font-size: 0.85rem; opacity: 0.7;">Try asking:</p>
                     <ul style="font-size: 0.85rem; opacity: 0.7; margin: 0.25rem 0 0 1rem;">
                         <li>"Give me 10 of the best BTTS predictions"</li>
                         <li>"Pick 5 safe straight wins"</li>
+                        <li>"Tell me about Arsenal yesterday"</li>
                         <li>"Give me 3 strong picks and add them to the slip"</li>
                         <li>"I'm doing a rollover of 2 odds. Give me your strong picks for today"</li>
                     </ul>
@@ -62,7 +71,7 @@ else
 
         <div class="mp-chat-input-area">
             <input type="text" id="chatInput" class="mp-chat-input"
-                   placeholder="Ask about today's predictions..."
+                   placeholder="Ask about today's picks or a recent settled match..."
                    autocomplete="off" />
             <button id="chatSendBtn" class="mp-chat-send-btn" onclick="sendChatMessage()">
                 Send
@@ -154,10 +163,17 @@ else
                 meta.style.fontSize = '0.75rem';
                 meta.style.opacity = '0.72';
                 const metaParts = [
-                    action.league || 'Today',
+                    action.matchDateLabel || 'Today',
+                    action.league || 'Card',
                     action.market || 'Market',
                     action.prediction || 'Pick'
                 ];
+                if (action.kickoffTime) {
+                    metaParts.push(action.kickoffTime);
+                }
+                if (action.status) {
+                    metaParts.push(action.status);
+                }
                 if (Number.isFinite(Number(action.estimatedOdds))) {
                     metaParts.push(`~${Number(action.estimatedOdds).toFixed(2)} odds`);
                 }
@@ -194,23 +210,34 @@ else
                     card.appendChild(explanation);
                 }
 
-                const btn = document.createElement('button');
-                btn.className = 'mp-add-cart-btn mp-btn-sm';
-                btn.style.display = 'inline-flex';
-                btn.style.alignItems = 'center';
-                btn.style.justifyContent = 'center';
-                btn.style.marginTop = '0.7rem';
-                btn.style.padding = '6px 12px';
-                btn.style.fontSize = '0.78rem';
-                btn.style.borderRadius = '8px';
-                btn.style.lineHeight = '1';
-                btn.textContent = `+ Add ${action.market}`;
-                btn.dataset.home = action.homeTeam || '';
-                btn.dataset.away = action.awayTeam || '';
-                btn.dataset.league = action.league || '';
-                btn.dataset.market = action.market || '';
-                btn.dataset.prediction = action.prediction || '';
-                card.appendChild(btn);
+                if (action.actualScore) {
+                    const settledScore = document.createElement('div');
+                    settledScore.style.marginTop = '0.55rem';
+                    settledScore.style.fontSize = '0.8rem';
+                    settledScore.style.opacity = '0.82';
+                    settledScore.textContent = `Final score: ${action.actualScore}`;
+                    card.appendChild(settledScore);
+                }
+
+                if (action.canBook !== false) {
+                    const btn = document.createElement('button');
+                    btn.className = 'mp-add-cart-btn mp-btn-sm';
+                    btn.style.display = 'inline-flex';
+                    btn.style.alignItems = 'center';
+                    btn.style.justifyContent = 'center';
+                    btn.style.marginTop = '0.7rem';
+                    btn.style.padding = '6px 12px';
+                    btn.style.fontSize = '0.78rem';
+                    btn.style.borderRadius = '8px';
+                    btn.style.lineHeight = '1';
+                    btn.textContent = `+ Add ${action.market}`;
+                    btn.dataset.home = action.homeTeam || '';
+                    btn.dataset.away = action.awayTeam || '';
+                    btn.dataset.league = action.league || '';
+                    btn.dataset.market = action.market || '';
+                    btn.dataset.prediction = action.prediction || '';
+                    card.appendChild(btn);
+                }
                 actions.appendChild(card);
             });
 

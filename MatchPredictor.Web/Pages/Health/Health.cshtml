@@ -1,19 +1,177 @@
-@page
+@page "/ops/health"
+@using MatchPredictor.Web.Pages.Health
 @model MatchPredictor.Web.Pages.Health.Health
 
 @{
-    Layout = null;
+    ViewData["Title"] = "Operational Health";
+
+    string BadgeColors(HealthLevel level) => level switch
+    {
+        HealthLevel.Healthy => "background: rgba(16,185,129,0.12); color: var(--accent-emerald); border: 1px solid rgba(16,185,129,0.24);",
+        HealthLevel.Stale => "background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.24);",
+        HealthLevel.Failed => "background: rgba(244,63,94,0.12); color: var(--accent-rose); border: 1px solid rgba(244,63,94,0.24);",
+        _ => "background: rgba(148,163,184,0.12); color: var(--text-muted); border: 1px solid rgba(148,163,184,0.2);"
+    };
 }
 
-<!DOCTYPE html>
+<div class="mp-container">
+    <div class="mp-page-header">
+        <div class="mp-page-title">
+            <div class="mp-page-title-icon" style="background: rgba(14, 165, 233, 0.12);">🩺</div>
+            <h1>Operational Health</h1>
+        </div>
+        <div class="mp-match-count" style="margin: 0;">
+            <span class="mp-live-dot"></span>
+            Generated @Model.Snapshot.GeneratedAtLocal.ToString("dd MMM yyyy, hh:mm tt")
+        </div>
+    </div>
 
-<html>
-<head>
-    <title></title>
-</head>
-<body>
-<div>
-    
+    <div class="mp-predictions-list" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem;">
+        <div class="mp-prediction-card">
+            <div class="mp-match-info">
+                <div class="mp-match-league">Overall</div>
+                <div style="font-size: 1.6rem; font-weight: 700; margin-top: 0.4rem;">@(Model.Snapshot.IsHealthy ? "Healthy" : "Attention Needed")</div>
+            </div>
+            <span class="mp-prediction-badge" style="@(Model.Snapshot.IsHealthy ? BadgeColors(HealthLevel.Healthy) : BadgeColors(HealthLevel.Failed))">
+                @(Model.Snapshot.IsHealthy ? "OK" : "Action")
+            </span>
+        </div>
+
+        <div class="mp-prediction-card">
+            <div class="mp-match-info">
+                <div class="mp-match-league">Predictions Today</div>
+                <div style="font-size: 1.6rem; font-weight: 700; margin-top: 0.4rem;">@Model.Snapshot.PredictionsToday</div>
+                <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.35rem;">
+                    Live rows: @Model.Snapshot.LivePredictionsToday
+                </div>
+            </div>
+            <span class="mp-prediction-badge" style="@(Model.Snapshot.PredictionCoverageExpected && Model.Snapshot.PredictionsToday == 0 ? BadgeColors(HealthLevel.Failed) : BadgeColors(HealthLevel.Healthy))">
+                @(Model.Snapshot.PredictionCoverageExpected ? "Coverage Check" : "Pre-window")
+            </span>
+        </div>
+
+        <div class="mp-prediction-card">
+            <div class="mp-match-info">
+                <div class="mp-match-league">Startup</div>
+                <div style="font-size: 0.95rem; margin-top: 0.5rem;">Database: @(Model.Snapshot.DatabaseInitialized ? "Ready" : "Not Ready")</div>
+                <div style="font-size: 0.95rem; margin-top: 0.2rem;">Hangfire: @(Model.Snapshot.HangfireInitialized ? "Ready" : "Not Ready")</div>
+                <div style="font-size: 0.95rem; margin-top: 0.2rem;">Jobs: @(Model.Snapshot.RecurringJobsRegistered ? "Registered" : "Missing")</div>
+            </div>
+            <span class="mp-prediction-badge" style="@(string.IsNullOrWhiteSpace(Model.Snapshot.StartupError) ? BadgeColors(HealthLevel.Healthy) : BadgeColors(HealthLevel.Failed))">
+                @(string.IsNullOrWhiteSpace(Model.Snapshot.StartupError) ? "Ready" : "Error")
+            </span>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Model.Snapshot.StartupError))
+    {
+        <div class="mp-prediction-card" style="margin-top: 1rem; border-left: 3px solid var(--accent-rose);">
+            <div class="mp-match-info">
+                <div class="mp-match-league">Startup Error</div>
+                <div style="margin-top: 0.5rem; color: var(--text-secondary);">@Model.Snapshot.StartupError</div>
+            </div>
+        </div>
+    }
+
+    <div class="mp-page-header" style="margin-top: 2rem;">
+        <div class="mp-page-title">
+            <div class="mp-page-title-icon" style="background: rgba(16, 185, 129, 0.12);">📈</div>
+            <h2 style="margin: 0;">Job Signals</h2>
+        </div>
+    </div>
+
+    <div class="mp-predictions-list" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
+        @foreach (var signal in Model.Snapshot.Signals)
+        {
+            <div class="mp-prediction-card" style="border-left: 3px solid @(signal.Level == HealthLevel.Healthy ? "var(--accent-emerald)" : signal.Level == HealthLevel.Stale ? "#f59e0b" : signal.Level == HealthLevel.Failed ? "var(--accent-rose)" : "var(--border-color)");">
+                <div class="mp-match-info">
+                    <div class="mp-match-league">
+                        @signal.Name
+                        <span class="mp-time">Lag cap @signal.MaxLagMinutes min</span>
+                    </div>
+                    <div style="font-size: 0.9rem; margin-top: 0.5rem;">
+                        Last success:
+                        <strong>@(signal.LastSuccessfulLocal?.ToString("dd MMM yyyy, hh:mm tt") ?? "Never")</strong>
+                    </div>
+                    <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.35rem;">
+                        Last seen: @(signal.LastSeenLocal?.ToString("dd MMM yyyy, hh:mm tt") ?? "No signal yet")
+                    </div>
+                    <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
+                        Current lag: @(signal.LagMinutes?.ToString("0.0") ?? "--") min
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(signal.LatestMessage))
+                    {
+                        <div style="font-size: 0.84rem; color: var(--text-secondary); margin-top: 0.65rem; line-height: 1.5;">
+                            @signal.LatestMessage
+                        </div>
+                    }
+                </div>
+                <span class="mp-prediction-badge" style="@BadgeColors(signal.Level)">
+                    @signal.Level
+                </span>
+            </div>
+        }
+    </div>
+
+    <div class="mp-page-header" style="margin-top: 2rem;">
+        <div class="mp-page-title">
+            <div class="mp-page-title-icon" style="background: rgba(245, 158, 11, 0.12);">🧭</div>
+            <h2 style="margin: 0;">Source Quality</h2>
+        </div>
+    </div>
+
+    <div class="mp-predictions-list" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem;">
+        @foreach (var profile in Model.Snapshot.SourceQualityProfiles)
+        {
+            var qualityLevel = profile.ReliabilityScore >= 0.75
+                ? HealthLevel.Healthy
+                : profile.ReliabilityScore >= 0.55
+                    ? HealthLevel.Stale
+                    : HealthLevel.Failed;
+
+            <div class="mp-prediction-card">
+                <div class="mp-match-info">
+                    <div class="mp-match-league">@profile.SourceName</div>
+                    <div style="font-size: 1.5rem; font-weight: 700; margin-top: 0.4rem;">@($"{profile.ReliabilityScore:P0}")</div>
+                    <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.35rem;">
+                        Match rate @profile.ExactScoreMatchRate.ToString("P0") • Coverage @profile.FinishedCoverageRate.ToString("P0")
+                    </div>
+                    <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
+                        Live-only @profile.LiveOnlyRate.ToString("P0") • Avg offset @profile.AverageKickoffOffsetMinutes.ToString("0") min
+                    </div>
+                </div>
+                <span class="mp-prediction-badge" style="@BadgeColors(qualityLevel)">
+                    @qualityLevel
+                </span>
+            </div>
+        }
+    </div>
+
+    @if (Model.Snapshot.WeakestSourceProfiles.Any())
+    {
+        <div class="mp-prediction-card" style="margin-top: 1rem;">
+            <div class="mp-match-info">
+                <div class="mp-match-league">Weak Source Buckets</div>
+                <div style="display: grid; gap: 0.75rem; margin-top: 0.9rem;">
+                    @foreach (var profile in Model.Snapshot.WeakestSourceProfiles)
+                    {
+                        <div style="display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; border-bottom: 1px solid rgba(148,163,184,0.12); padding-bottom: 0.75rem;">
+                            <div>
+                                <div style="font-weight: 600;">@profile.SourceName · @profile.LeagueLabel</div>
+                                <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
+                                    @profile.TimeBucketLabel · @profile.SampleCount samples
+                                </div>
+                            </div>
+                            <div style="text-align: right;">
+                                <div style="font-weight: 600; color: var(--text-primary);">@($"{profile.ReliabilityScore:P0}")</div>
+                                <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
+                                    Match @profile.ExactScoreMatchRate.ToString("P0"), live-only @profile.LiveOnlyRate.ToString("P0")
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    }
 </div>
-</body>
-</html>

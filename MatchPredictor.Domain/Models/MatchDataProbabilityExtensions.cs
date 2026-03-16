@@ -80,4 +80,39 @@ public static class MatchDataProbabilityExtensions
         normalized = (match.BttsYes / total, match.BttsNo / total);
         return true;
     }
+
+    public static bool TryGetNormalizedAhZeroPair(this MatchData match, out (double home, double away) normalized)
+    {
+        return TryGetNormalizedPair(match.AhZeroHome, match.AhZeroAway, out normalized);
+    }
+
+    public static bool TryGetNormalizedAhMinusHalfPair(this MatchData match, out (double home, double away) normalized)
+    {
+        return TryGetNormalizedPair(match.AhMinusHalfHome, match.AhMinusHalfAway, out normalized);
+    }
+
+    public static bool TryGetNormalizedAhMinusOnePair(this MatchData match, out (double home, double away) normalized)
+    {
+        return TryGetNormalizedPair(match.AhMinusOneHome, match.AhMinusOneAway, out normalized);
+    }
+
+    public static bool TryGetNormalizedAhPlusHalfPair(this MatchData match, out (double home, double away) normalized)
+    {
+        return TryGetNormalizedPair(match.AhPlusHalfHome, match.AhPlusHalfAway, out normalized);
+    }
+
+    private static bool TryGetNormalizedPair(double home, double away, out (double home, double away) normalized)
+    {
+        normalized = default;
+
+        if (home <= 0 || away <= 0)
+            return false;
+
+        var total = home + away;
+        if (total <= 0)
+            return false;
+
+        normalized = (home / total, away / total);
+        return true;
+    }
 }

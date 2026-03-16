@@ -5,7 +5,10 @@ public class PredictionCandidate
     public PredictionMarket Market { get; set; }
     public string Date { get; set; } = string.Empty;
     public string Time { get; set; } = string.Empty;
+    public DateOnly MatchLocalDate { get; set; }
+    public TimeOnly? MatchLocalTime { get; set; }
     public DateTime? MatchDateTime { get; set; }
+    public string FixtureKey { get; set; } = string.Empty;
     public string League { get; set; } = string.Empty;
     public string HomeTeam { get; set; } = string.Empty;
     public string AwayTeam { get; set; } = string.Empty;

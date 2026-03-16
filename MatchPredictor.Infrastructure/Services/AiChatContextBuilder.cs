@@ -11,14 +11,24 @@ public static partial class AiChatContextBuilder
 
     private static readonly HashSet<string> GenericPromptTokens = new(StringComparer.OrdinalIgnoreCase)
     {
-        "a", "about", "acca", "accumulator", "add", "all", "analysis", "analyse", "analyze", "any", "another",
+        "a", "about", "acca", "accumulator", "add", "all", "analysis", "analyse", "analyze", "any", "another", "are",
         "and", "away", "banker", "bankers", "best", "bet", "bets", "book", "booking", "both", "btts", "can", "chat",
         "combo", "day", "days", "doing", "draw", "for", "game", "games", "give", "goals", "good", "help", "home", "i", "in", "into", "is",
         "it", "leg", "legs", "list", "match", "matches", "me", "need", "odd", "odds", "of", "on", "open", "over", "pick", "picks",
-        "prediction", "predictions", "safe", "safer", "score", "show", "slip", "some", "straight", "strong",
+        "prediction", "predictions", "recent", "result", "results", "safe", "safer", "score", "settle", "settled", "show", "slip", "some", "straight", "strong",
         "straightwin", "straightwins", "stronger", "rollover", "teams", "the", "them", "these", "this", "those", "ticket", "to",
-        "today", "top", "value",
-        "want", "what", "which", "win", "wins", "with", "you", "your"
+        "today", "top", "value", "why", "won", "yesterday",
+        "want", "what", "which", "win", "wins", "with", "you", "your", "red", "green", "finished", "lost", "landed", "did"
+    };
+
+    private static readonly HashSet<string> RecommendationTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "best", "safe", "safer", "strong", "stronger", "top", "pick", "picks", "list", "show", "give"
+    };
+
+    private static readonly HashSet<string> SettlementTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "finished", "settle", "settled", "result", "results", "red", "green", "won", "lost", "landed"
     };
 
     public static AiChatContextSelection BuildSelection(
@@ -29,13 +39,14 @@ public static partial class AiChatContextBuilder
         int limit = 40)
     {
         var nowLocal = DateTimeProvider.ConvertUtcToLocal(nowUtc);
-        var todayStr = nowLocal.ToString("dd-MM-yyyy", CultureInfo.InvariantCulture);
+        var todayLocalDate = DateOnly.FromDateTime(nowLocal);
+        var recentStartDate = todayLocalDate.AddDays(-7);
         var isRolloverRequest = MentionsRolloverIntent(userPrompt);
         var hasTargetCombinedOdds = TryExtractRolloverTargetOdds(userPrompt, out var requestedCombinedOdds);
         var candidates = predictions
-            .Where(prediction => prediction.Date == todayStr && prediction.WasPublished)
-            .Where(prediction => prediction.MatchDateTime is null || prediction.MatchDateTime >= nowUtc)
-            .Select(prediction => CreateCandidate(prediction, pricingByPredictionId?.GetValueOrDefault(prediction.Id)))
+            .Where(prediction => prediction.IsCurrentRevision && prediction.WasPublished)
+            .Where(prediction => prediction.MatchLocalDate >= recentStartDate && prediction.MatchLocalDate <= todayLocalDate)
+            .Select(prediction => CreateCandidate(prediction, pricingByPredictionId?.GetValueOrDefault(prediction.Id), nowUtc, todayLocalDate))
             .ToList();
 
         if (candidates.Count == 0)
@@ -54,6 +65,12 @@ public static partial class AiChatContextBuilder
         var specificTokens = promptTokens
             .Where(token => !GenericPromptTokens.Contains(token))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var selectionIntent = DetectSelectionIntent(
+            promptTokens,
+            specificTokens.Count > 0,
+            requestedMarketSlices.Count > 0,
+            genericRequestedCount,
+            isRolloverRequest);
         var requestedCandidateCount = requestedMarketSlices.Sum(slice => slice.Count);
         if (requestedCandidateCount == 0 && genericRequestedCount > 0)
         {
@@ -61,7 +78,8 @@ public static partial class AiChatContextBuilder
         }
 
         var ranked = candidates
-            .Select(candidate => CreateRankedCandidate(candidate, promptTokens, marketFilters, isRolloverRequest))
+            .Where(candidate => MatchesSelectionIntent(candidate, selectionIntent, todayLocalDate))
+            .Select(candidate => CreateRankedCandidate(candidate, promptTokens, marketFilters, isRolloverRequest, selectionIntent, todayLocalDate))
             .ToList();
 
         if (specificTokens.Count > 0)
@@ -81,7 +99,8 @@ public static partial class AiChatContextBuilder
                     RequestedCandidateCount = requestedCandidateCount,
                     IsRolloverRequest = isRolloverRequest,
                     RequestedCombinedOdds = hasTargetCombinedOdds ? requestedCombinedOdds : null,
-                    NeedsRolloverTargetOdds = isRolloverRequest && !hasTargetCombinedOdds
+                    NeedsRolloverTargetOdds = isRolloverRequest && !hasTargetCombinedOdds,
+                    DateScopeLabel = selectionIntent.DisplayLabel
                 };
             }
 
@@ -119,7 +138,8 @@ public static partial class AiChatContextBuilder
             RequestedCandidateCount = requestedCandidateCount,
             IsRolloverRequest = isRolloverRequest,
             RequestedCombinedOdds = hasTargetCombinedOdds ? requestedCombinedOdds : null,
-            NeedsRolloverTargetOdds = isRolloverRequest && !hasTargetCombinedOdds
+            NeedsRolloverTargetOdds = isRolloverRequest && !hasTargetCombinedOdds,
+            DateScopeLabel = selectionIntent.DisplayLabel
         };
     }
 
@@ -186,13 +206,36 @@ public static partial class AiChatContextBuilder
         var cleanedPrompt = userPrompt.Trim();
         if (string.IsNullOrWhiteSpace(cleanedPrompt))
         {
-            return "I couldn't find that in today's published predictions. Ask about a team, league, or market that appears on today's card.";
+            return "I couldn't find that in the current published prediction window. Ask about a team, league, market, or recent fixture that appears on the card.";
         }
 
-        return $"I couldn't find a matching team, league, or fixture for \"{cleanedPrompt}\" in today's published predictions.";
+        return $"I couldn't find a matching team, league, or fixture for \"{cleanedPrompt}\" in the current published prediction window.";
     }
 
-    private static AiChatContextCandidate CreateCandidate(Prediction prediction, AiChatCandidatePricing? pricing)
+    public static bool IsContextFollowUpPrompt(string userPrompt)
+    {
+        if (string.IsNullOrWhiteSpace(userPrompt))
+        {
+            return false;
+        }
+
+        var prompt = userPrompt.ToLowerInvariant();
+        return (prompt.Contains("this", StringComparison.Ordinal) ||
+                prompt.Contains("that", StringComparison.Ordinal) ||
+                prompt.Contains("it", StringComparison.Ordinal) ||
+                prompt.Contains("them", StringComparison.Ordinal)) &&
+               (prompt.Contains("settle", StringComparison.Ordinal) ||
+                prompt.Contains("result", StringComparison.Ordinal) ||
+                prompt.Contains("red", StringComparison.Ordinal) ||
+                prompt.Contains("green", StringComparison.Ordinal) ||
+                prompt.Contains("why", StringComparison.Ordinal));
+    }
+
+    private static AiChatContextCandidate CreateCandidate(
+        Prediction prediction,
+        AiChatCandidatePricing? pricing,
+        DateTime nowUtc,
+        DateOnly todayLocalDate)
     {
         var confidence = prediction.ConfidenceScore ?? prediction.RawConfidenceScore ?? 0m;
         var rawConfidence = prediction.RawConfidenceScore ?? prediction.ConfidenceScore ?? 0m;
@@ -202,23 +245,35 @@ public static partial class AiChatContextBuilder
         var edgePoints = marketProbability is > 0
             ? Math.Round((modelProbability - marketProbability.Value) * 100d, 2)
             : (double?)null;
+        var isLive = prediction.IsLive &&
+                     (!prediction.MatchDateTime.HasValue || prediction.MatchDateTime.Value.AddMinutes(200) >= nowUtc);
+        var isFinished = !isLive && !string.IsNullOrWhiteSpace(prediction.ActualScore);
+        var isUpcoming = !isLive && !isFinished;
+        var hasNotStarted = !prediction.MatchDateTime.HasValue || prediction.MatchDateTime.Value >= nowUtc;
+        var canBook = prediction.MatchLocalDate == todayLocalDate && isUpcoming && hasNotStarted;
+        var matchState = isLive ? "Live" : isFinished ? "Finished" : "Upcoming";
 
         return new AiChatContextCandidate
         {
             ActionKey = CreateActionKey(prediction),
             PredictionId = prediction.Id,
+            MatchLocalDate = prediction.MatchLocalDate,
             League = prediction.League,
-            KickoffTime = prediction.Time,
+            KickoffTime = prediction.MatchLocalTime?.ToString("HH:mm", CultureInfo.InvariantCulture) ?? prediction.Time,
             HomeTeam = prediction.HomeTeam,
             AwayTeam = prediction.AwayTeam,
             PredictionCategory = prediction.PredictionCategory,
             PredictedOutcome = prediction.PredictedOutcome,
+            ActualScore = prediction.ActualScore,
+            ActualOutcome = prediction.ActualOutcome,
             ConfidenceScore = confidence,
             RawConfidenceScore = rawConfidence,
             ThresholdUsed = prediction.ThresholdUsed,
             ThresholdSource = prediction.ThresholdSource,
             CalibratorUsed = prediction.CalibratorUsed,
             WasPublished = prediction.WasPublished,
+            MatchState = matchState,
+            CanBook = canBook,
             MarginAboveThreshold = Math.Round((double)confidence - prediction.ThresholdUsed, 4),
             MarketProbability = marketProbability,
             EstimatedOdds = pricing?.EstimatedDecimalOdds,
@@ -232,16 +287,30 @@ public static partial class AiChatContextBuilder
         AiChatContextCandidate candidate,
         HashSet<string> promptTokens,
         HashSet<string> marketFilters,
-        bool isRolloverRequest)
+        bool isRolloverRequest,
+        SelectionIntent selectionIntent,
+        DateOnly todayLocalDate)
     {
         var entityMatches = candidate.SearchTokens.Intersect(promptTokens, StringComparer.OrdinalIgnoreCase).Count();
         var score = (double)(candidate.ConfidenceScore ?? decimal.Zero) * 100d;
         score += candidate.MarginAboveThreshold * 150d;
         score += (candidate.EdgePoints ?? 0d) * 3d;
+        score += GetDateRecencyBoost(candidate.MatchLocalDate, todayLocalDate);
+        score += candidate.CanBook ? 8d : 0d;
 
         if (marketFilters.Count > 0)
         {
             score += marketFilters.Contains(candidate.PredictionCategory) ? 50d : -200d;
+        }
+
+        if (selectionIntent.Scope == DateScope.RecentFinished && candidate.MatchState == "Finished")
+        {
+            score += 16d;
+        }
+
+        if (selectionIntent.Scope == DateScope.Yesterday && candidate.MatchLocalDate == todayLocalDate.AddDays(-1))
+        {
+            score += 22d;
         }
 
         if (promptTokens.Contains("safe") || promptTokens.Contains("banker") || promptTokens.Contains("bankers"))
@@ -268,6 +337,77 @@ public static partial class AiChatContextBuilder
         score += entityMatches * 40d;
 
         return new RankedCandidate(candidate, score, entityMatches);
+    }
+
+    private static double GetDateRecencyBoost(DateOnly matchDate, DateOnly todayLocalDate)
+    {
+        var daysBack = todayLocalDate.DayNumber - matchDate.DayNumber;
+        return daysBack switch
+        {
+            <= 0 => 10d,
+            1 => 7d,
+            2 => 4d,
+            3 => 2d,
+            _ => Math.Max(0d, 1d - ((daysBack - 3) * 0.25d))
+        };
+    }
+
+    private static SelectionIntent DetectSelectionIntent(
+        HashSet<string> promptTokens,
+        bool hasSpecificTokens,
+        bool hasRequestedMarketSlices,
+        int genericRequestedCount,
+        bool isRolloverRequest)
+    {
+        if (promptTokens.Contains("yesterday"))
+        {
+            return new SelectionIntent(DateScope.Yesterday, BookableOnly: false, DisplayLabel: "Yesterday");
+        }
+
+        var asksForSettlementReview = promptTokens.Overlaps(SettlementTokens) ||
+                                      promptTokens.Contains("score") ||
+                                      promptTokens.Contains("scores");
+
+        if (asksForSettlementReview)
+        {
+            return new SelectionIntent(DateScope.RecentFinished, BookableOnly: false, DisplayLabel: "Recent finished");
+        }
+
+        var genericRecommendationRequest = !hasSpecificTokens ||
+                                           hasRequestedMarketSlices ||
+                                           genericRequestedCount > 0 ||
+                                           isRolloverRequest ||
+                                           promptTokens.Overlaps(RecommendationTokens);
+
+        if (genericRecommendationRequest)
+        {
+            return new SelectionIntent(DateScope.Today, BookableOnly: true, DisplayLabel: "Today's bookable card");
+        }
+
+        if (promptTokens.Contains("today"))
+        {
+            return new SelectionIntent(DateScope.Today, BookableOnly: false, DisplayLabel: "Today");
+        }
+
+        return new SelectionIntent(DateScope.RecentWindow, BookableOnly: false, DisplayLabel: "Recent card");
+    }
+
+    private static bool MatchesSelectionIntent(AiChatContextCandidate candidate, SelectionIntent intent, DateOnly todayLocalDate)
+    {
+        var yesterday = todayLocalDate.AddDays(-1);
+
+        if (intent.BookableOnly && !candidate.CanBook)
+        {
+            return false;
+        }
+
+        return intent.Scope switch
+        {
+            DateScope.Today => candidate.MatchLocalDate == todayLocalDate,
+            DateScope.Yesterday => candidate.MatchLocalDate == yesterday,
+            DateScope.RecentFinished => candidate.MatchState == "Finished",
+            _ => true
+        };
     }
 
     private static int ResolveSelectionLimit(int limit, int requestedCandidateCount)
@@ -485,24 +625,30 @@ public static partial class AiChatContextBuilder
         public bool IsRolloverRequest { get; init; }
         public double? RequestedCombinedOdds { get; init; }
         public bool NeedsRolloverTargetOdds { get; init; }
+        public string DateScopeLabel { get; init; } = "Current card";
     }
 
     public sealed class AiChatContextCandidate
     {
         public string ActionKey { get; init; } = string.Empty;
         public int PredictionId { get; init; }
+        public DateOnly MatchLocalDate { get; init; }
         public string League { get; init; } = string.Empty;
         public string KickoffTime { get; init; } = string.Empty;
         public string HomeTeam { get; init; } = string.Empty;
         public string AwayTeam { get; init; } = string.Empty;
         public string PredictionCategory { get; init; } = string.Empty;
         public string PredictedOutcome { get; init; } = string.Empty;
+        public string? ActualScore { get; init; }
+        public string? ActualOutcome { get; init; }
         public decimal? ConfidenceScore { get; init; }
         public decimal? RawConfidenceScore { get; init; }
         public double ThresholdUsed { get; init; }
         public string ThresholdSource { get; init; } = string.Empty;
         public string CalibratorUsed { get; init; } = string.Empty;
         public bool WasPublished { get; init; }
+        public string MatchState { get; init; } = "Upcoming";
+        public bool CanBook { get; init; }
         public double MarginAboveThreshold { get; init; }
         public double? MarketProbability { get; init; }
         public double? EstimatedOdds { get; init; }
@@ -531,5 +677,15 @@ public static partial class AiChatContextBuilder
 
     private sealed record RankedCandidate(AiChatContextCandidate Candidate, double Score, int EntityMatchCount)
     {
+    }
+
+    private sealed record SelectionIntent(DateScope Scope, bool BookableOnly, string DisplayLabel);
+
+    private enum DateScope
+    {
+        Today,
+        Yesterday,
+        RecentFinished,
+        RecentWindow
     }
 }

@@ -2,6 +2,7 @@ using System.Text;
 using MatchPredictor.Web.Middleware;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace MatchPredictor.Tests.Integration;
@@ -36,6 +37,21 @@ public class AdminUsageBasicAuthMiddlewareTests
         Assert.NotEqual(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
     }
 
+    [Fact]
+    public async Task InvokeAsync_WhenCredentialsAreMissing_ReturnsServiceUnavailable()
+    {
+        var middleware = new AdminUsageBasicAuthMiddleware(
+            _ => Task.CompletedTask,
+            new ConfigurationBuilder().Build(),
+            NullLogger<AdminUsageBasicAuthMiddleware>.Instance);
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/admin/usage";
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, context.Response.StatusCode);
+    }
+
     private static AdminUsageBasicAuthMiddleware CreateMiddleware(Action? onNext = null)
     {
         var configuration = new ConfigurationBuilder()
@@ -52,6 +68,7 @@ public class AdminUsageBasicAuthMiddlewareTests
                 onNext?.Invoke();
                 return Task.CompletedTask;
             },
-            configuration);
+            configuration,
+            NullLogger<AdminUsageBasicAuthMiddleware>.Instance);
     }
 }

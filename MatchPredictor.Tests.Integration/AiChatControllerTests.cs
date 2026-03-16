@@ -15,7 +15,11 @@ public class AiChatControllerTests
     [Fact]
     public async Task Chat_WithoutAuthCookie_ReturnsUnauthorized()
     {
-        var controller = new AiChatController(new FakeAiAdvisorService(), new FakeUserTrackingService(), NullLogger<AiChatController>.Instance)
+        var controller = new AiChatController(
+            new FakeAiAdvisorService(),
+            new FakeAiChatAuthTicketService(),
+            new FakeUserTrackingService(),
+            NullLogger<AiChatController>.Instance)
         {
             ControllerContext = new ControllerContext
             {
@@ -34,10 +38,10 @@ public class AiChatControllerTests
     public async Task Chat_WhenServiceThrows_ReturnsGeneric500WithoutInternalDetails()
     {
         var httpContext = new DefaultHttpContext();
-        httpContext.Request.Headers.Cookie = "MP_AI_AUTH=ok";
 
         var controller = new AiChatController(
             new FakeAiAdvisorService { ExceptionToThrow = new InvalidOperationException("sensitive internals") },
+            new FakeAiChatAuthTicketService { IsValid = true, SessionId = "session-123" },
             new FakeUserTrackingService(),
             NullLogger<AiChatController>.Instance)
         {
@@ -55,6 +59,27 @@ public class AiChatControllerTests
         var payload = JsonSerializer.Serialize(failure.Value);
         Assert.Contains("temporarily unavailable", payload);
         Assert.DoesNotContain("sensitive internals", payload);
+    }
+
+    [Fact]
+    public async Task Chat_WithTamperedAuthTicket_ReturnsUnauthorized()
+    {
+        var controller = new AiChatController(
+            new FakeAiAdvisorService(),
+            new FakeAiChatAuthTicketService { IsValid = false },
+            new FakeUserTrackingService(),
+            NullLogger<AiChatController>.Instance)
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext()
+            }
+        };
+
+        var result = await controller.Chat(new ChatRequest { Message = "Hello" }, CancellationToken.None);
+
+        var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
+        Assert.Equal(StatusCodes.Status401Unauthorized, unauthorized.StatusCode);
     }
 
     private sealed class FakeAiAdvisorService : IAiAdvisorService
@@ -93,5 +118,25 @@ public class AiChatControllerTests
 
         public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken ct = default) =>
             Task.FromResult(new UsageSnapshot());
+    }
+
+    private sealed class FakeAiChatAuthTicketService : IAiChatAuthTicketService
+    {
+        public bool IsValid { get; init; }
+        public string? SessionId { get; init; }
+
+        public bool TryValidate(HttpContext httpContext, out string? sessionId)
+        {
+            sessionId = IsValid ? SessionId ?? "session-1" : null;
+            return IsValid;
+        }
+
+        public bool IsAuthenticated(HttpContext httpContext) => IsValid;
+
+        public string SignIn(HttpContext httpContext) => SessionId ?? "session-1";
+
+        public void SignOut(HttpContext httpContext)
+        {
+        }
     }
 }

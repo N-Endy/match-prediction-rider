@@ -85,6 +85,20 @@ public class UserTrackingServiceTests
         Assert.Equal(0, await context.UserActivityEvents.CountAsync());
     }
 
+    [Fact]
+    public async Task TrackPageViewAsync_DoesNotThrow_WhenRequestIsCanceled()
+    {
+        await using var context = CreateContext();
+        var service = new UserTrackingService(context, NullLogger<UserTrackingService>.Instance);
+        var httpContext = CreateHttpContext("/analytics");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await service.TrackPageViewAsync(httpContext, cts.Token);
+
+        Assert.Equal(0, await context.UserActivityEvents.CountAsync());
+    }
+
     private static ApplicationDbContext CreateContext()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()

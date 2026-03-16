@@ -41,6 +41,10 @@ public class UserTrackingService : IUserTrackingService
         {
             await EnsureTrackingContextCoreAsync(httpContext, ct);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested || httpContext.RequestAborted.IsCancellationRequested)
+        {
+            _logger.LogDebug("Skipped tracking context initialization because the request for {Path} was canceled.", httpContext.Request.Path);
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to initialize tracking context for path {Path}.", httpContext.Request.Path);
@@ -75,6 +79,10 @@ public class UserTrackingService : IUserTrackingService
             });
 
             await _dbContext.SaveChangesAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested || httpContext.RequestAborted.IsCancellationRequested)
+        {
+            _logger.LogDebug("Skipped page view tracking because the request for {Path} was canceled.", httpContext.Request.Path);
         }
         catch (Exception ex)
         {
@@ -113,6 +121,10 @@ public class UserTrackingService : IUserTrackingService
             });
 
             await _dbContext.SaveChangesAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested || httpContext.RequestAborted.IsCancellationRequested)
+        {
+            _logger.LogDebug("Skipped tracking event {EventType} because the request for {Path} was canceled.", eventType, pagePath ?? httpContext.Request.Path.Value);
         }
         catch (Exception ex)
         {

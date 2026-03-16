@@ -8,6 +8,7 @@ using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Npgsql;
 
 namespace MatchPredictor.Application.Services;
 
@@ -17,6 +18,10 @@ public class AnalyzerService  : IAnalyzerService
     private const int HistoricalScoreBackfillLookbackDays = 14;
     private const double ExactFinishedRepairWindowMinutes = 65d;
     private const double ExtendedExactFinishedRepairWindowMinutes = 240d;
+    private const string DataSyncEventName = "data_sync";
+    private const string PredictionGenerationEventName = "prediction_generation";
+    private const string DailyAnalysisEventName = "daily_analysis";
+    private const string SourceQualityEventName = "source_quality";
 
     private readonly IDataAnalyzerService _dataAnalyzerService;
     private readonly IWebScraperService _webScraperService;
@@ -54,10 +59,11 @@ public class AnalyzerService  : IAnalyzerService
     }
 
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
-    public async Task ExtractDataAndSyncDatabaseAsync(int predictionDayOffset = 0)
+    public async Task ExtractDataAndSyncDatabaseAsync(int predictionDayOffset = 0, string? runReason = null)
     {
-        var targetLocalDate = DateTimeProvider.GetLocalTime().Date.AddDays(predictionDayOffset);
-        var targetDateString = targetLocalDate.ToString("dd-MM-yyyy", CultureInfo.InvariantCulture);
+        var targetLocalDateTime = DateTimeProvider.GetLocalTime().Date.AddDays(predictionDayOffset);
+        var targetLocalDate = DateOnly.FromDateTime(targetLocalDateTime);
+        var targetDateString = DateTimeProvider.FormatLocalDate(targetLocalDate);
 
         _logger.LogInformation(
             "Starting data extraction process for target date {TargetDate} (day offset {PredictionDayOffset}).",
@@ -68,7 +74,7 @@ public class AnalyzerService  : IAnalyzerService
             await _webScraperService.ScrapeMatchDataAsync();
             _logger.LogInformation("✅ Web scraping for match data completed successfully.");
 
-            var scraped = _excelExtract.ExtractMatchDatasetFromFile(targetLocalDate).ToList();
+            var scraped = _excelExtract.ExtractMatchDatasetFromFile(targetLocalDateTime).ToList();
             IReadOnlyList<SourceMarketFixture> sourceMarketFixtures = [];
             if (predictionDayOffset == 0)
             {
@@ -92,32 +98,29 @@ public class AnalyzerService  : IAnalyzerService
             try
             {
                 var existingMatches = await _dbContext.MatchDatas
-                    .Where(m => scraped.Select(s => s.Date).Distinct().Contains(m.Date!))
+                    .Where(m => m.MatchLocalDate == targetLocalDate)
                     .ToListAsync();
 
                 var existingMatchLookup = existingMatches
                     .GroupBy(m => (
-                        Home: (m.HomeTeam ?? string.Empty).Trim().ToLowerInvariant(),
-                        Away: (m.AwayTeam ?? string.Empty).Trim().ToLowerInvariant(),
-                        League: (m.League ?? string.Empty).Trim().ToLowerInvariant(),
-                        Date: m.Date ?? string.Empty,
-                        Time: m.Time ?? string.Empty))
+                        FixtureKey: m.FixtureKey ?? string.Empty,
+                        Time: m.MatchLocalTime ?? DateTimeProvider.ParseLocalTimeOrNull(m.Time)))
                     .ToDictionary(group => group.Key, group => group.First());
 
                 foreach (var match in scraped)
                 {
-                    var properDateTime = DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time);
-                    match.Date = properDateTime.date;
-                    match.Time = properDateTime.time;
-                    match.MatchDateTime = properDateTime.utcDateTime;
+                    var canonicalKickoff = DateTimeProvider.ParseCanonicalMatchDateTime(match.Date, match.Time);
+                    match.Date = DateTimeProvider.FormatLocalDate(canonicalKickoff.localDate);
+                    match.Time = DateTimeProvider.FormatLocalTime(canonicalKickoff.localTime);
+                    match.MatchLocalDate = canonicalKickoff.localDate;
+                    match.MatchLocalTime = canonicalKickoff.localTime;
+                    match.MatchDateTime = canonicalKickoff.utcDateTime;
+                    match.FixtureKey = FixtureIdentityFactory.FromMatchData(match).FixtureKey;
                     EnrichSourceMarketProbabilities(match, sourceMarketFixtures);
 
                     var key = (
-                        Home: (match.HomeTeam ?? string.Empty).Trim().ToLowerInvariant(),
-                        Away: (match.AwayTeam ?? string.Empty).Trim().ToLowerInvariant(),
-                        League: (match.League ?? string.Empty).Trim().ToLowerInvariant(),
-                        Date: match.Date ?? string.Empty,
-                        Time: match.Time ?? string.Empty);
+                        FixtureKey: match.FixtureKey,
+                        Time: match.MatchLocalTime);
 
                     if (existingMatchLookup.TryGetValue(key, out var existing))
                     {
@@ -142,7 +145,10 @@ public class AnalyzerService  : IAnalyzerService
                         existing.AhPlusHalfAway = match.AhPlusHalfAway;
                         existing.BttsYes = match.BttsYes;
                         existing.BttsNo = match.BttsNo;
+                        existing.MatchLocalDate = match.MatchLocalDate;
+                        existing.MatchLocalTime = match.MatchLocalTime;
                         existing.MatchDateTime = match.MatchDateTime;
+                        existing.FixtureKey = match.FixtureKey;
                     }
                     else
                     {
@@ -161,45 +167,80 @@ public class AnalyzerService  : IAnalyzerService
             _logger.LogInformation("Extracted and saved {Count} matches to DB for target date {TargetDate}.", scraped.Count, targetDateString);
 
             // Chain the next job: Generate predictions only after data is successfully synced
-            BackgroundJob.Enqueue<IAnalyzerService>(service => service.GeneratePredictionsAsync(targetDateString));
+            var normalizedRunReason = string.IsNullOrWhiteSpace(runReason)
+                ? (predictionDayOffset > 0 ? "prewarm" : "scheduled-sync")
+                : runReason.Trim();
+            BackgroundJob.Enqueue<IAnalyzerService>(service => service.GeneratePredictionsAsync(targetDateString, normalizedRunReason));
             _logger.LogInformation("Queued GeneratePredictionsAsync background job for target date {TargetDate}.", targetDateString);
+            await LogScrapingStatus(
+                DataSyncEventName,
+                "Success",
+                $"✅ Data sync completed successfully for {targetDateString} ({scraped.Count} matches).");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "❌ An error occurred during data scraping and sync.");
-            await LogScrapingStatus("Failed", $"Sync Error: {ex.Message}");
+            await LogScrapingStatus(DataSyncEventName, "Failed", $"Sync Error: {ex.Message}");
             throw;
         }
     }
 
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
-    public async Task GeneratePredictionsAsync(string? targetDate = null)
+    public async Task GeneratePredictionsAsync(string? targetDate = null, string? runReason = null)
     {
         var targetDateString = ResolveTargetDateString(targetDate);
+        var targetLocalDate = ParseTargetLocalDate(targetDateString);
+        var normalizedRunReason = string.IsNullOrWhiteSpace(runReason) ? "prediction-generation" : runReason.Trim();
 
         _logger.LogInformation("Starting prediction generation process for target date {TargetDate}.", targetDateString);
         try
         {
             await BackfillStoredPredictionTimesAsync(7);
+            await BackfillCanonicalFixtureFieldsAsync(7);
             await BackfillDecisionProvenanceAsync(30);
 
             var matches = await _dbContext.MatchDatas
-                .Where(match => match.Date == targetDateString)
+                .Where(match => match.MatchLocalDate == targetLocalDate)
                 .ToListAsync();
 
-            var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates(matches);
-            var publishedCandidates = _dataAnalyzerService.SelectPublishedPredictions(forecastCandidates);
+            foreach (var match in matches)
+            {
+                ApplyCanonicalFixtureIdentity(match);
+            }
 
-            await SaveForecastObservations(forecastCandidates, publishedCandidates);
-            await SavePredictions(publishedCandidates);
+            var generationMatches = DeduplicateMatchesForGeneration(matches, targetDateString);
+
+            var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates(generationMatches).ToList();
+            foreach (var candidate in forecastCandidates)
+            {
+                ApplyCanonicalFixtureIdentity(candidate);
+            }
+            forecastCandidates = DeduplicateForecastCandidates(forecastCandidates, targetDateString);
+
+            var publishedCandidates = _dataAnalyzerService.SelectPublishedPredictions(forecastCandidates).ToList();
+            foreach (var candidate in publishedCandidates)
+            {
+                ApplyCanonicalFixtureIdentity(candidate);
+            }
+            publishedCandidates = DeduplicatePublishedCandidates(publishedCandidates, targetDateString);
+
+            var predictionRun = await CreatePredictionRunAsync(targetLocalDate, normalizedRunReason, forecastCandidates, publishedCandidates);
+            await SaveForecastObservations(forecastCandidates, publishedCandidates, predictionRun);
+            await SavePredictions(publishedCandidates, predictionRun);
+            predictionRun.Succeeded = true;
+            predictionRun.CompletedAtUtc = DateTime.UtcNow;
+            await _dbContext.SaveChangesAsync();
             
             _logger.LogInformation("✅ Predictions calculated and saved successfully for target date {TargetDate}.", targetDateString);
-            await LogScrapingStatus("Success", $"✅ Prediction generation completed successfully for {targetDateString}.");
+            await LogScrapingStatus(
+                PredictionGenerationEventName,
+                "Success",
+                $"✅ Prediction generation completed successfully for {targetDateString}.");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "❌ An error occurred during prediction calculations.");
-            await LogScrapingStatus("Failed", $"Prediction Gen Error: {ex.Message}");
+            await LogScrapingStatus(PredictionGenerationEventName, "Failed", $"Prediction Gen Error: {ex.Message}");
             throw;
         }
     }
@@ -246,13 +287,17 @@ public class AnalyzerService  : IAnalyzerService
                 normalizedRunLabel);
 
             await LogScrapingStatus(
+                GetScoreUpdateEventName(normalizedRunLabel),
                 "Success",
                 $"✅ {normalizedRunLabel} score updating completed successfully for the last {normalizedLookbackDays} day(s).");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "❌ An error occurred during score updating.");
-            await LogScrapingStatus("Failed", $"Score Update Error: {ex.Message}");
+            await LogScrapingStatus(
+                GetScoreUpdateEventName(normalizedRunLabel),
+                "Failed",
+                $"Score Update Error: {ex.Message}");
             throw;
         }
     }
@@ -303,6 +348,18 @@ public class AnalyzerService  : IAnalyzerService
             _logger.LogWarning(ex, "⚠️ Threshold tuning rebuild failed, continuing with regression predictions.");
         }
 
+        try
+        {
+            await RebuildSourceQualityProfilesAsync();
+            _logger.LogInformation("✅ Source quality rebuild completed.");
+            await LogScrapingStatus(SourceQualityEventName, "Success", "✅ Source quality profiles rebuilt successfully.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Source quality rebuild failed, continuing with regression predictions.");
+            await LogScrapingStatus(SourceQualityEventName, "Failed", $"Source quality rebuild error: {ex.Message}");
+        }
+
         // ── Step 2: Download fresh data and generate regression predictions ──
         try
         {
@@ -318,9 +375,9 @@ public class AnalyzerService  : IAnalyzerService
             catch (Exception dlEx)
             {
                 _logger.LogWarning(dlEx, "⚠️ Fresh Excel download failed. Falling back to database data.");
-                var todayStr = DateTimeProvider.GetLocalTime().ToString("dd-MM-yyyy");
+                var todayDate = DateTimeProvider.GetLocalDate();
                 scraped = await _dbContext.MatchDatas
-                    .Where(match => match.Date == todayStr)
+                    .Where(match => match.MatchLocalDate == todayDate)
                     .ToListAsync();
             }
 
@@ -335,22 +392,26 @@ public class AnalyzerService  : IAnalyzerService
                 _logger.LogInformation("✅ Regression-based predictions saved ({Count} matches, {PredCount} predictions).", scraped.Count, regressionPredictions.Count());
             }
 
-            await LogScrapingStatus("Success", "✅ Daily analysis completed successfully.");
+            await LogScrapingStatus(DailyAnalysisEventName, "Success", "✅ Daily analysis completed successfully.");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "❌ An error occurred during regression prediction generation.");
-            await LogScrapingStatus("Failed", $"Daily Analysis Error: {ex.Message}");
+            await LogScrapingStatus(DailyAnalysisEventName, "Failed", $"Daily Analysis Error: {ex.Message}");
             throw;
         }
     }
 
-    private async Task LogScrapingStatus(string status, string message)
+    private static string GetScoreUpdateEventName(string runLabel) =>
+        $"score_update_{(string.IsNullOrWhiteSpace(runLabel) ? "recent" : runLabel.Trim().ToLowerInvariant())}";
+
+    private async Task LogScrapingStatus(string eventName, string status, string message)
     {
         try
         {
             var log = new ScrapingLog
             {
+                EventName = string.IsNullOrWhiteSpace(eventName) ? "general" : eventName.Trim().ToLowerInvariant(),
                 Timestamp = DateTime.UtcNow,
                 Status = status,
                 Message = message
@@ -384,6 +445,11 @@ public class AnalyzerService  : IAnalyzerService
         throw new FormatException($"Invalid target date format: '{targetDate}'. Expected dd-MM-yyyy.");
     }
 
+    private static DateOnly ParseTargetLocalDate(string targetDate)
+    {
+        return DateOnly.ParseExact(targetDate, "dd-MM-yyyy", CultureInfo.InvariantCulture);
+    }
+
     private void EnrichSourceMarketProbabilities(MatchData match, IReadOnlyList<SourceMarketFixture> sourceMarketFixtures)
     {
         if (sourceMarketFixtures.Count == 0)
@@ -409,20 +475,20 @@ public class AnalyzerService  : IAnalyzerService
 
     private async Task UpdatePredictionsWithActualResults(int lookbackDays, string runLabel)
     {
-        var today = DateTimeProvider.GetLocalTime().Date;
+        var today = DateOnly.FromDateTime(DateTimeProvider.GetLocalTime());
         var earliestSettlementDate = today.AddDays(-lookbackDays);
         var settlementDates = Enumerable.Range(0, lookbackDays + 1)
-            .Select(offset => earliestSettlementDate.AddDays(offset).ToString("dd-MM-yyyy"))
-            .ToHashSet(StringComparer.Ordinal);
+            .Select(offset => earliestSettlementDate.AddDays(offset))
+            .ToHashSet();
 
-        var startOfWindowUtc = DateTimeProvider.ConvertLocalToUtc(earliestSettlementDate);
-        var endOfWindowUtc = DateTimeProvider.ConvertLocalToUtc(today.AddDays(1));
+        var startOfWindowUtc = DateTimeProvider.ConvertLocalToUtc(earliestSettlementDate.ToDateTime(new TimeOnly(0, 0), DateTimeKind.Unspecified));
+        var endOfWindowUtc = DateTimeProvider.ConvertLocalToUtc(today.AddDays(1).ToDateTime(new TimeOnly(0, 0), DateTimeKind.Unspecified));
 
         var predictionsForSettlement = await _dbContext.Predictions
-            .Where(p => settlementDates.Contains(p.Date))
+            .Where(p => settlementDates.Contains(p.MatchLocalDate))
             .ToListAsync();
         var forecastsForSettlement = await _dbContext.ForecastObservations
-            .Where(f => settlementDates.Contains(f.Date))
+            .Where(f => settlementDates.Contains(f.MatchLocalDate))
             .ToListAsync();
 
         foreach (var prediction in predictionsForSettlement)
@@ -431,6 +497,7 @@ public class AnalyzerService  : IAnalyzerService
         }
 
         var settlementFixtures = BuildSettlementFixtureGroups(predictionsForSettlement, forecastsForSettlement);
+        var sourceQualityLookup = await LoadSourceQualityLookupAsync();
 
         // ── Primary: FlashScore (faster final-status updates) ──
         var scores = await _dbContext.MatchScores
@@ -484,7 +551,8 @@ public class AnalyzerService  : IAnalyzerService
                     score => score.AwayTeam,
                     score => score.League,
                     score => score.MatchTime,
-                    score => score.IsLive);
+                    score => score.IsLive,
+                    score => GetSourceQualityReliability(sourceQualityLookup, "FlashScore", score.League, score.MatchTime));
 
                 if (flashMatch != null &&
                     IsReciprocalFixtureMatch(
@@ -566,7 +634,8 @@ public class AnalyzerService  : IAnalyzerService
                     score => score.AwayTeam,
                     score => score.League,
                     score => score.MatchTime,
-                    score => score.IsLive);
+                    score => score.IsLive,
+                    score => GetSourceQualityReliability(sourceQualityLookup, "AiScore", score.League, score.MatchTime));
 
                 if (aiMatch != null &&
                     IsReciprocalFixtureMatch(
@@ -587,8 +656,8 @@ public class AnalyzerService  : IAnalyzerService
             }
         }
 
-        ApplyExactFinishedSourceRepairs(settlementFixtures, consolidatedFlashScores, consolidatedAiScores);
-        ApplyExactLiveSourceReopens(settlementFixtures, consolidatedFlashScores, consolidatedAiScores);
+        ApplyExactFinishedSourceRepairs(settlementFixtures, consolidatedFlashScores, consolidatedAiScores, sourceQualityLookup);
+        ApplyExactLiveSourceReopens(settlementFixtures, consolidatedFlashScores, consolidatedAiScores, sourceQualityLookup);
 
         // ── Matching Statistics & Diagnostics ──
         var matchedCount = predictionsForSettlement.Count(p => !string.IsNullOrEmpty(p.ActualScore));
@@ -632,30 +701,35 @@ public class AnalyzerService  : IAnalyzerService
         IEnumerable<Prediction> predictions,
         IEnumerable<ForecastObservation> forecasts)
     {
-        var fixtures = new Dictionary<(string Date, string Home, string Away, string League, long MatchTimeTicks), SettlementFixtureGroup>();
+        var fixtures = new Dictionary<(DateOnly Date, string FixtureKey, long MatchTimeTicks), SettlementFixtureGroup>();
 
         foreach (var prediction in predictions)
         {
-            var scheduledMatchTime = ResolveScheduledMatchTime(prediction.Date, prediction.Time, prediction.MatchDateTime);
-            var scoreKey = CreateScoreFixtureKey(prediction.Date, prediction.HomeTeam, prediction.AwayTeam, prediction.League);
-            var fixtureKey = (
-                prediction.Date ?? string.Empty,
-                scoreKey.Home,
-                scoreKey.Away,
-                scoreKey.League,
+            var localDate = prediction.MatchLocalDate != default
+                ? prediction.MatchLocalDate
+                : DateTimeProvider.ParseLocalDateOrNull(prediction.Date) ?? DateOnly.MinValue;
+            var scheduledMatchTime = ResolveScheduledMatchTime(localDate, prediction.MatchLocalTime, prediction.MatchDateTime);
+            var canonicalFixtureKey = string.IsNullOrWhiteSpace(prediction.FixtureKey)
+                ? FixtureIdentityFactory.FromPrediction(prediction).FixtureKey
+                : prediction.FixtureKey;
+            var groupKey = (
+                localDate,
+                canonicalFixtureKey,
                 scheduledMatchTime?.Ticks ?? 0L);
 
-            if (!fixtures.TryGetValue(fixtureKey, out var fixture))
+            if (!fixtures.TryGetValue(groupKey, out var fixture))
             {
                 fixture = new SettlementFixtureGroup
                 {
-                    Date = prediction.Date ?? string.Empty,
+                    MatchLocalDate = localDate,
+                    Date = localDate == DateOnly.MinValue ? prediction.Date ?? string.Empty : DateTimeProvider.FormatLocalDate(localDate),
                     HomeTeam = prediction.HomeTeam ?? string.Empty,
                     AwayTeam = prediction.AwayTeam ?? string.Empty,
                     League = prediction.League ?? string.Empty,
+                    FixtureKey = groupKey.Item2,
                     ScheduledMatchTimeUtc = scheduledMatchTime
                 };
-                fixtures[fixtureKey] = fixture;
+                fixtures[groupKey] = fixture;
             }
 
             fixture.Predictions.Add(prediction);
@@ -663,23 +737,28 @@ public class AnalyzerService  : IAnalyzerService
 
         foreach (var forecast in forecasts)
         {
-            var scheduledMatchTime = ResolveScheduledMatchTime(forecast.Date, forecast.Time, forecast.MatchDateTime);
-            var scoreKey = CreateScoreFixtureKey(forecast.Date, forecast.HomeTeam, forecast.AwayTeam, forecast.League);
+            var localDate = forecast.MatchLocalDate != default
+                ? forecast.MatchLocalDate
+                : DateTimeProvider.ParseLocalDateOrNull(forecast.Date) ?? DateOnly.MinValue;
+            var scheduledMatchTime = ResolveScheduledMatchTime(localDate, forecast.MatchLocalTime, forecast.MatchDateTime);
+            var forecastFixtureKey = string.IsNullOrWhiteSpace(forecast.FixtureKey)
+                ? FixtureIdentityFactory.FromForecast(forecast).FixtureKey
+                : forecast.FixtureKey;
             var fixtureKey = (
-                forecast.Date ?? string.Empty,
-                scoreKey.Home,
-                scoreKey.Away,
-                scoreKey.League,
+                localDate,
+                forecastFixtureKey,
                 scheduledMatchTime?.Ticks ?? 0L);
 
             if (!fixtures.TryGetValue(fixtureKey, out var fixture))
             {
                 fixture = new SettlementFixtureGroup
                 {
-                    Date = forecast.Date ?? string.Empty,
+                    MatchLocalDate = localDate,
+                    Date = localDate == DateOnly.MinValue ? forecast.Date ?? string.Empty : DateTimeProvider.FormatLocalDate(localDate),
                     HomeTeam = forecast.HomeTeam ?? string.Empty,
                     AwayTeam = forecast.AwayTeam ?? string.Empty,
                     League = forecast.League ?? string.Empty,
+                    FixtureKey = fixtureKey.Item2,
                     ScheduledMatchTimeUtc = scheduledMatchTime
                 };
                 fixtures[fixtureKey] = fixture;
@@ -722,7 +801,8 @@ public class AnalyzerService  : IAnalyzerService
     private void ApplyExactFinishedSourceRepairs(
         IEnumerable<SettlementFixtureGroup> fixtures,
         IReadOnlyList<MatchScore> flashScores,
-        IReadOnlyList<AiScoreMatchScore> aiScores)
+        IReadOnlyList<AiScoreMatchScore> aiScores,
+        IReadOnlyDictionary<(string SourceName, string LeagueKey, string TimeBucketKey), SourceQualityProfile> sourceQualityLookup)
     {
         var flashIndex = BuildExactFinishedCandidateIndex(
             flashScores.Where(score => !score.IsLive),
@@ -740,19 +820,27 @@ public class AnalyzerService  : IAnalyzerService
 
         foreach (var fixture in fixtures)
         {
-            object? resolved = FindExactFinishedSourceCandidate(
+            var flashResolved = FindExactFinishedSourceCandidate(
                 fixture,
                 flashIndex,
                 score => score.MatchTime,
                 score => score.League,
-                score => score.Score);
+                score => score.Score,
+                score => GetSourceQualityReliability(sourceQualityLookup, "FlashScore", score.League, score.MatchTime));
 
-            resolved ??= FindExactFinishedSourceCandidate(
+            var aiResolved = FindExactFinishedSourceCandidate(
                 fixture,
                 aiIndex,
                 score => score.MatchTime,
                 score => score.League,
-                score => score.Score);
+                score => score.Score,
+                score => GetSourceQualityReliability(sourceQualityLookup, "AiScore", score.League, score.MatchTime));
+
+            object? resolved = ChooseBestExactSourceCandidate(
+                fixture,
+                flashResolved,
+                aiResolved,
+                sourceQualityLookup);
 
             if (resolved is null)
             {
@@ -785,7 +873,8 @@ public class AnalyzerService  : IAnalyzerService
     private void ApplyExactLiveSourceReopens(
         IEnumerable<SettlementFixtureGroup> fixtures,
         IReadOnlyList<MatchScore> flashScores,
-        IReadOnlyList<AiScoreMatchScore> aiScores)
+        IReadOnlyList<AiScoreMatchScore> aiScores,
+        IReadOnlyDictionary<(string SourceName, string LeagueKey, string TimeBucketKey), SourceQualityProfile> sourceQualityLookup)
     {
         var flashFinishedIndex = BuildExactFinishedCandidateIndex(
             flashScores.Where(score => !score.IsLive),
@@ -820,28 +909,37 @@ public class AnalyzerService  : IAnalyzerService
                     flashFinishedIndex,
                     score => score.MatchTime,
                     score => score.League,
-                    score => score.Score) is not null ||
+                    score => score.Score,
+                    score => GetSourceQualityReliability(sourceQualityLookup, "FlashScore", score.League, score.MatchTime)) is not null ||
                 FindExactFinishedSourceCandidate(
                     fixture,
                     aiFinishedIndex,
                     score => score.MatchTime,
                     score => score.League,
-                    score => score.Score) is not null;
+                    score => score.Score,
+                    score => GetSourceQualityReliability(sourceQualityLookup, "AiScore", score.League, score.MatchTime)) is not null;
 
             if (hasFinishedSource)
             {
                 continue;
             }
 
-            object? resolved = FindLatestExactLiveSourceCandidate(
+            var flashResolved = FindLatestExactLiveSourceCandidate(
                 fixture,
                 flashLiveIndex,
-                score => score.MatchTime);
+                score => score.MatchTime,
+                score => GetSourceQualityReliability(sourceQualityLookup, "FlashScore", score.League, score.MatchTime));
 
-            resolved ??= FindLatestExactLiveSourceCandidate(
+            var aiResolved = FindLatestExactLiveSourceCandidate(
                 fixture,
                 aiLiveIndex,
-                score => score.MatchTime);
+                score => score.MatchTime,
+                score => GetSourceQualityReliability(sourceQualityLookup, "AiScore", score.League, score.MatchTime));
+
+            object? resolved = ChooseBestLiveSourceCandidate(
+                flashResolved,
+                aiResolved,
+                sourceQualityLookup);
 
             if (resolved is null)
             {
@@ -949,7 +1047,8 @@ public class AnalyzerService  : IAnalyzerService
         IReadOnlyDictionary<(string Date, string HomeKey, string AwayKey), List<T>> candidateIndex,
         Func<T, DateTime?> matchTimeSelector,
         Func<T, string?> leagueSelector,
-        Func<T, string?> scoreSelector)
+        Func<T, string?> scoreSelector,
+        Func<T, double>? qualityScoreSelector = null)
         where T : class
     {
         var key = (
@@ -971,7 +1070,8 @@ public class AnalyzerService  : IAnalyzerService
                         matchTimeSelector(candidate),
                         0d,
                         ScoreMatchingHelper.GetLeagueMatchScore(fixture.League, leagueSelector(candidate)),
-                        scoreSelector(candidate)))
+                        scoreSelector(candidate),
+                        qualityScoreSelector?.Invoke(candidate) ?? 0.5))
                     .OrderByDescending(candidate => candidate.MatchTime ?? DateTime.MinValue)
                     .ToList());
         }
@@ -984,8 +1084,10 @@ public class AnalyzerService  : IAnalyzerService
                     ? Math.Abs((matchTimeSelector(candidate)!.Value - fixture.ScheduledMatchTimeUtc.Value).TotalMinutes)
                     : double.MaxValue,
                 ScoreMatchingHelper.GetLeagueMatchScore(fixture.League, leagueSelector(candidate)),
-                scoreSelector(candidate)))
+                scoreSelector(candidate),
+                qualityScoreSelector?.Invoke(candidate) ?? 0.5))
             .OrderBy(candidate => candidate.MinutesApart)
+            .ThenByDescending(candidate => candidate.QualityScore)
             .ThenByDescending(candidate => candidate.LeagueScore)
             .ThenByDescending(candidate => candidate.MatchTime ?? DateTime.MinValue)
             .ToList();
@@ -996,7 +1098,8 @@ public class AnalyzerService  : IAnalyzerService
     private static T? FindLatestExactLiveSourceCandidate<T>(
         SettlementFixtureGroup fixture,
         IReadOnlyDictionary<(string Date, string HomeKey, string AwayKey), List<T>> candidateIndex,
-        Func<T, DateTime?> matchTimeSelector)
+        Func<T, DateTime?> matchTimeSelector,
+        Func<T, double>? qualityScoreSelector = null)
         where T : class
     {
         var key = (
@@ -1010,7 +1113,8 @@ public class AnalyzerService  : IAnalyzerService
         }
 
         return candidates
-            .OrderByDescending(candidate => matchTimeSelector(candidate) ?? DateTime.MinValue)
+            .OrderByDescending(candidate => qualityScoreSelector?.Invoke(candidate) ?? 0.5)
+            .ThenByDescending(candidate => matchTimeSelector(candidate) ?? DateTime.MinValue)
             .FirstOrDefault();
     }
     
@@ -1357,13 +1461,13 @@ public class AnalyzerService  : IAnalyzerService
 
     public async Task BackfillStoredPredictionTimesAsync(int lookbackDays = 90)
     {
-        var today = DateTimeProvider.GetLocalTime().Date;
+        var today = DateTimeProvider.GetLocalDate();
         var dates = Enumerable.Range(0, Math.Max(lookbackDays, 0) + 1)
-            .Select(offset => today.AddDays(-offset).ToString("dd-MM-yyyy"))
-            .ToHashSet(StringComparer.Ordinal);
+            .Select(offset => today.AddDays(-offset))
+            .ToHashSet();
 
         var matches = await _dbContext.MatchDatas
-            .Where(match => match.Date != null && dates.Contains(match.Date))
+            .Where(match => match.MatchLocalDate.HasValue && dates.Contains(match.MatchLocalDate.Value))
             .ToListAsync();
 
         if (matches.Count == 0)
@@ -1372,16 +1476,16 @@ public class AnalyzerService  : IAnalyzerService
         }
 
         var predictions = await _dbContext.Predictions
-            .Where(prediction => dates.Contains(prediction.Date))
+            .Where(prediction => dates.Contains(prediction.MatchLocalDate))
             .ToListAsync();
 
         var forecasts = await _dbContext.ForecastObservations
-            .Where(forecast => dates.Contains(forecast.Date))
+            .Where(forecast => dates.Contains(forecast.MatchLocalDate))
             .ToListAsync();
 
         var matchLookup = matches
             .GroupBy(match => (
-                Date: match.Date ?? string.Empty,
+                Date: match.MatchLocalDate ?? default,
                 Home: Norm(match.HomeTeam),
                 Away: Norm(match.AwayTeam),
                 League: Norm(match.League)))
@@ -1399,7 +1503,7 @@ public class AnalyzerService  : IAnalyzerService
 
         foreach (var prediction in predictions)
         {
-            var matched = FindMatchingMatchData(prediction.Date, prediction.HomeTeam, prediction.AwayTeam, prediction.League, prediction.MatchDateTime, matchLookup, teamLookup);
+            var matched = FindMatchingMatchData(prediction.MatchLocalDate, prediction.HomeTeam, prediction.AwayTeam, prediction.League, prediction.MatchDateTime, matchLookup, teamLookup);
             if (matched != null && ApplyStoredTime(prediction, matched))
             {
                 updatedPredictions++;
@@ -1408,7 +1512,7 @@ public class AnalyzerService  : IAnalyzerService
 
         foreach (var forecast in forecasts)
         {
-            var matched = FindMatchingMatchData(forecast.Date, forecast.HomeTeam, forecast.AwayTeam, forecast.League, forecast.MatchDateTime, matchLookup, teamLookup);
+            var matched = FindMatchingMatchData(forecast.MatchLocalDate, forecast.HomeTeam, forecast.AwayTeam, forecast.League, forecast.MatchDateTime, matchLookup, teamLookup);
             if (matched != null && ApplyStoredTime(forecast, matched))
             {
                 updatedForecasts++;
@@ -1425,16 +1529,73 @@ public class AnalyzerService  : IAnalyzerService
         }
     }
 
+    private async Task BackfillCanonicalFixtureFieldsAsync(int lookbackDays = 90)
+    {
+        var today = DateTimeProvider.GetLocalDate();
+        var dates = Enumerable.Range(0, Math.Max(lookbackDays, 0) + 1)
+            .Select(offset => today.AddDays(-offset))
+            .ToHashSet();
+
+        var matches = await _dbContext.MatchDatas
+            .Where(match =>
+                (match.MatchLocalDate.HasValue && dates.Contains(match.MatchLocalDate.Value)) ||
+                (!match.MatchLocalDate.HasValue && match.Date != null))
+            .ToListAsync();
+        var predictions = await _dbContext.Predictions
+            .Where(prediction => dates.Contains(prediction.MatchLocalDate) || prediction.MatchLocalDate == default)
+            .ToListAsync();
+        var forecasts = await _dbContext.ForecastObservations
+            .Where(forecast => dates.Contains(forecast.MatchLocalDate) || forecast.MatchLocalDate == default)
+            .ToListAsync();
+
+        var updatedMatches = 0;
+        foreach (var match in matches)
+        {
+            if (ApplyCanonicalFixtureIdentity(match))
+            {
+                updatedMatches++;
+            }
+        }
+
+        var updatedPredictions = 0;
+        foreach (var prediction in predictions)
+        {
+            if (ApplyCanonicalFixtureIdentity(prediction))
+            {
+                updatedPredictions++;
+            }
+        }
+
+        var updatedForecasts = 0;
+        foreach (var forecast in forecasts)
+        {
+            if (ApplyCanonicalFixtureIdentity(forecast))
+            {
+                updatedForecasts++;
+            }
+        }
+
+        if (updatedMatches > 0 || updatedPredictions > 0 || updatedForecasts > 0)
+        {
+            await _dbContext.SaveChangesAsync();
+            _logger.LogInformation(
+                "Backfilled canonical fixture fields for {MatchCount} match rows, {PredictionCount} predictions, and {ForecastCount} forecasts.",
+                updatedMatches,
+                updatedPredictions,
+                updatedForecasts);
+        }
+    }
+
     public async Task BackfillDecisionProvenanceAsync(int lookbackDays = 90)
     {
-        var today = DateTimeProvider.GetLocalTime().Date;
+        var today = DateTimeProvider.GetLocalDate();
         var dates = Enumerable.Range(0, Math.Max(lookbackDays, 0) + 1)
-            .Select(offset => today.AddDays(-offset).ToString("dd-MM-yyyy"))
-            .ToHashSet(StringComparer.Ordinal);
+            .Select(offset => today.AddDays(-offset))
+            .ToHashSet();
 
         var predictions = await _dbContext.Predictions
             .Where(prediction =>
-                dates.Contains(prediction.Date) &&
+                dates.Contains(prediction.MatchLocalDate) &&
                 (string.IsNullOrEmpty(prediction.CalibratorUsed) ||
                  prediction.CalibratorUsed == "Unknown" ||
                  string.IsNullOrEmpty(prediction.ThresholdSource) ||
@@ -1445,7 +1606,7 @@ public class AnalyzerService  : IAnalyzerService
 
         var forecasts = await _dbContext.ForecastObservations
             .Where(forecast =>
-                dates.Contains(forecast.Date) &&
+                dates.Contains(forecast.MatchLocalDate) &&
                 (string.IsNullOrEmpty(forecast.CalibratorUsed) ||
                  forecast.CalibratorUsed == "Unknown" ||
                  string.IsNullOrEmpty(forecast.ThresholdSource) ||
@@ -1486,154 +1647,160 @@ public class AnalyzerService  : IAnalyzerService
         }
     }
     
-    private async Task SavePredictions(IEnumerable<PredictionCandidate> candidates)
+    private async Task SavePredictions(IEnumerable<PredictionCandidate> candidates, PredictionRun predictionRun)
     {
-        var candidateList = candidates.ToList();
+        var candidateList = DeduplicatePublishedCandidates(candidates, predictionRun.TargetLocalDate.ToString("dd-MM-yyyy"));
         if (!candidateList.Any()) return;
 
-        // 2. Extract unique dates to fetch existing records in ONE bulk query
-        var uniqueDates = candidateList.Select(c => c.Date).Distinct().ToList();
-
-        var existingPredictions = await _dbContext.Predictions
-            .Where(p => uniqueDates.Contains(p.Date))
+        var targetDate = predictionRun.TargetLocalDate;
+        var currentPredictions = await _dbContext.Predictions
+            .Where(p => p.MatchLocalDate == targetDate && p.IsCurrentRevision)
+            .ToListAsync();
+        var historicalPredictions = await _dbContext.Predictions
+            .Where(p => p.MatchLocalDate == targetDate)
             .ToListAsync();
 
-        // 3. Create a Dictionary for O(1) memory lookups
-        var existingDict = existingPredictions
-            .GroupBy(p => (
-                Home: (p.HomeTeam ?? "").Trim().ToLowerInvariant(), 
-                Away: (p.AwayTeam ?? "").Trim().ToLowerInvariant(), 
-                League: (p.League ?? "").Trim().ToLowerInvariant(), 
-                Date: p.Date,
-                Category: p.PredictionCategory))
-            .ToDictionary(g => g.Key, g => g.First());
+        var currentByKey = currentPredictions
+            .GroupBy(prediction => (prediction.FixtureKey, prediction.PredictionCategory))
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .OrderByDescending(prediction => prediction.RevisionNumber)
+                    .ThenByDescending(prediction => prediction.CreatedAt)
+                    .ThenByDescending(prediction => prediction.Id)
+                    .First());
+        var revisionByKey = historicalPredictions
+            .GroupBy(prediction => (prediction.FixtureKey, prediction.PredictionCategory))
+            .ToDictionary(group => group.Key, group => group.Max(prediction => prediction.RevisionNumber));
 
-        // 4. Loop through the memory collection, not the database
-        foreach (var candidate in candidateList)
+        foreach (var existingRecord in currentPredictions)
         {
-            var homeTeam = candidate.HomeTeam ?? "N/A";
-            var awayTeam = candidate.AwayTeam ?? "N/A";
-            var league = candidate.League ?? "N/A";
-
-            var key = (
-                Home: homeTeam.Trim().ToLowerInvariant(),
-                Away: awayTeam.Trim().ToLowerInvariant(),
-                League: league.Trim().ToLowerInvariant(),
-                Date: candidate.Date,
-                Category: candidate.PredictionCategory);
-
-            if (existingDict.TryGetValue(key, out var existingRecord))
-            {
-                // UPDATE SCENARIO
-
-                if (existingRecord.Time != candidate.Time || existingRecord.MatchDateTime != candidate.MatchDateTime)
-                {
-                    existingRecord.Time = candidate.Time;
-                    existingRecord.MatchDateTime = candidate.MatchDateTime;
-                }
-
-                if (existingRecord.PredictedOutcome != candidate.PredictedOutcome)
-                {
-                    existingRecord.PredictedOutcome = candidate.PredictedOutcome;
-                }
-
-                existingRecord.RawConfidenceScore = Math.Round((decimal)candidate.RawProbability, 4);
-                existingRecord.ConfidenceScore = Math.Round((decimal)candidate.CalibratedProbability, 4);
-                existingRecord.CalibratorUsed = candidate.CalibratorUsed;
-                existingRecord.ThresholdUsed = Math.Round(candidate.ThresholdUsed, 4);
-                existingRecord.ThresholdSource = candidate.ThresholdSource;
-                existingRecord.WasPublished = candidate.WasPublished;
-            }
-            else
-            {
-                // INSERT SCENARIO
-                var prediction = new Prediction
-                {
-                    HomeTeam = homeTeam.Trim(),
-                    AwayTeam = awayTeam.Trim(),
-                    League = league.Trim(),
-                    PredictionCategory = candidate.PredictionCategory,
-                    PredictedOutcome = candidate.PredictedOutcome,
-                    RawConfidenceScore = Math.Round((decimal)candidate.RawProbability, 4),
-                    ConfidenceScore = Math.Round((decimal)candidate.CalibratedProbability, 4),
-                    CalibratorUsed = candidate.CalibratorUsed,
-                    ThresholdUsed = Math.Round(candidate.ThresholdUsed, 4),
-                    ThresholdSource = candidate.ThresholdSource,
-                    WasPublished = candidate.WasPublished,
-                    Date = candidate.Date,
-                    Time = candidate.Time,
-                    MatchDateTime = candidate.MatchDateTime
-                };
-
-                _dbContext.Predictions.Add(prediction);
-                existingDict[key] = prediction;
-            }
+            existingRecord.IsCurrentRevision = false;
+            existingRecord.SupersededAt = DateTime.UtcNow;
         }
 
-        // 5. Save all inserts and updates in a single transaction
+        foreach (var candidate in candidateList)
+        {
+            var currentKey = (candidate.FixtureKey, candidate.PredictionCategory);
+            currentByKey.TryGetValue(currentKey, out var currentRecord);
+            var nextRevision = revisionByKey.TryGetValue(currentKey, out var revisionNumber)
+                ? revisionNumber + 1
+                : 1;
+
+            _dbContext.Predictions.Add(new Prediction
+            {
+                HomeTeam = candidate.HomeTeam.Trim(),
+                AwayTeam = candidate.AwayTeam.Trim(),
+                League = candidate.League.Trim(),
+                PredictionCategory = candidate.PredictionCategory,
+                PredictedOutcome = candidate.PredictedOutcome,
+                RawConfidenceScore = Math.Round((decimal)candidate.RawProbability, 4),
+                ConfidenceScore = Math.Round((decimal)candidate.CalibratedProbability, 4),
+                CalibratorUsed = candidate.CalibratorUsed,
+                ThresholdUsed = Math.Round(candidate.ThresholdUsed, 4),
+                ThresholdSource = candidate.ThresholdSource,
+                WasPublished = candidate.WasPublished,
+                Date = candidate.Date,
+                Time = candidate.Time,
+                MatchLocalDate = candidate.MatchLocalDate,
+                MatchLocalTime = candidate.MatchLocalTime,
+                MatchDateTime = candidate.MatchDateTime,
+                FixtureKey = candidate.FixtureKey,
+                PredictionRunId = predictionRun.Id,
+                RunLabel = predictionRun.RunLabel,
+                RunReason = predictionRun.RunReason,
+                RevisionNumber = nextRevision,
+                IsCurrentRevision = true,
+                ActualOutcome = currentRecord?.ActualOutcome,
+                ActualScore = currentRecord?.ActualScore,
+                IsLive = currentRecord?.IsLive ?? false
+            });
+        }
+
         await _dbContext.SaveChangesAsync();
     }
 
     private async Task SaveForecastObservations(
         IEnumerable<PredictionCandidate> forecastCandidates,
-        IEnumerable<PredictionCandidate> publishedCandidates)
+        IEnumerable<PredictionCandidate> publishedCandidates,
+        PredictionRun predictionRun)
     {
-        var forecastList = forecastCandidates.ToList();
+        var forecastList = DeduplicateForecastCandidates(
+            forecastCandidates,
+            predictionRun.TargetLocalDate.ToString("dd-MM-yyyy"));
         if (!forecastList.Any()) return;
 
         var publishedKeys = publishedCandidates
             .Select(GetCandidateObservationKey)
             .ToHashSet(StringComparer.Ordinal);
 
-        var uniqueDates = forecastList.Select(candidate => candidate.Date).Distinct().ToList();
-        var existingForecasts = await _dbContext.ForecastObservations
-            .Where(forecast => uniqueDates.Contains(forecast.Date))
+        var targetDate = predictionRun.TargetLocalDate;
+        var currentForecasts = await _dbContext.ForecastObservations
+            .Where(forecast => forecast.MatchLocalDate == targetDate && forecast.IsCurrentRevision)
+            .ToListAsync();
+        var historicalForecasts = await _dbContext.ForecastObservations
+            .Where(forecast => forecast.MatchLocalDate == targetDate)
             .ToListAsync();
 
-        var existingDict = existingForecasts
+        var currentByKey = currentForecasts
             .GroupBy(GetObservationKey)
-            .ToDictionary(group => group.Key, group => group.First());
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .OrderByDescending(forecast => forecast.RevisionNumber)
+                    .ThenByDescending(forecast => forecast.CreatedAt)
+                    .ThenByDescending(forecast => forecast.Id)
+                    .First());
+        var revisionByKey = historicalForecasts
+            .GroupBy(GetObservationKey)
+            .ToDictionary(group => group.Key, group => group.Max(forecast => forecast.RevisionNumber));
+
+        foreach (var existingRecord in currentForecasts)
+        {
+            existingRecord.IsCurrentRevision = false;
+            existingRecord.SupersededAt = DateTime.UtcNow;
+        }
 
         foreach (var candidate in forecastList)
         {
             var key = GetCandidateObservationKey(candidate);
             var isPublished = publishedKeys.Contains(key);
+            currentByKey.TryGetValue(key, out var currentRecord);
+            var nextRevision = revisionByKey.TryGetValue(key, out var revisionNumber)
+                ? revisionNumber + 1
+                : 1;
 
-            if (existingDict.TryGetValue(key, out var existingRecord))
+            _dbContext.ForecastObservations.Add(new ForecastObservation
             {
-                existingRecord.Time = candidate.Time;
-                existingRecord.MatchDateTime = candidate.MatchDateTime;
-                existingRecord.PredictedOutcome = candidate.PredictedOutcome;
-                existingRecord.RawProbability = candidate.RawProbability;
-                existingRecord.CalibratedProbability = candidate.CalibratedProbability;
-                existingRecord.IsPublished = isPublished;
-                existingRecord.CalibratorUsed = candidate.CalibratorUsed;
-                existingRecord.ThresholdUsed = Math.Round(candidate.ThresholdUsed, 4);
-                existingRecord.ThresholdSource = candidate.ThresholdSource;
-            }
-            else
-            {
-                var observation = new ForecastObservation
-                {
-                    Date = candidate.Date,
-                    Time = candidate.Time,
-                    MatchDateTime = candidate.MatchDateTime,
-                    League = candidate.League,
-                    HomeTeam = candidate.HomeTeam,
-                    AwayTeam = candidate.AwayTeam,
-                    Market = candidate.Market,
-                    PredictedOutcome = candidate.PredictedOutcome,
-                    RawProbability = candidate.RawProbability,
-                    CalibratedProbability = candidate.CalibratedProbability,
-                    CalibratorUsed = candidate.CalibratorUsed,
-                    ThresholdUsed = Math.Round(candidate.ThresholdUsed, 4),
-                    ThresholdSource = candidate.ThresholdSource,
-                    IsPublished = isPublished
-                };
-
-                _dbContext.ForecastObservations.Add(observation);
-                existingDict[key] = observation;
-            }
+                Date = candidate.Date,
+                Time = candidate.Time,
+                MatchLocalDate = candidate.MatchLocalDate,
+                MatchLocalTime = candidate.MatchLocalTime,
+                MatchDateTime = candidate.MatchDateTime,
+                FixtureKey = candidate.FixtureKey,
+                League = candidate.League,
+                HomeTeam = candidate.HomeTeam,
+                AwayTeam = candidate.AwayTeam,
+                Market = candidate.Market,
+                PredictedOutcome = candidate.PredictedOutcome,
+                RawProbability = candidate.RawProbability,
+                CalibratedProbability = candidate.CalibratedProbability,
+                CalibratorUsed = candidate.CalibratorUsed,
+                ThresholdUsed = Math.Round(candidate.ThresholdUsed, 4),
+                ThresholdSource = candidate.ThresholdSource,
+                IsPublished = isPublished,
+                PredictionRunId = predictionRun.Id,
+                RunLabel = predictionRun.RunLabel,
+                RunReason = predictionRun.RunReason,
+                RevisionNumber = nextRevision,
+                IsCurrentRevision = true,
+                ActualOutcome = currentRecord?.ActualOutcome,
+                ActualScore = currentRecord?.ActualScore,
+                OutcomeOccurred = currentRecord?.OutcomeOccurred,
+                IsLive = currentRecord?.IsLive ?? false,
+                IsSettled = currentRecord?.IsSettled ?? false,
+                SettledAt = currentRecord?.SettledAt
+            });
         }
 
         await _dbContext.SaveChangesAsync();
@@ -1641,12 +1808,197 @@ public class AnalyzerService  : IAnalyzerService
 
     private static string GetObservationKey(ForecastObservation forecast)
     {
-        return $"{forecast.Date}|{Norm(forecast.HomeTeam)}|{Norm(forecast.AwayTeam)}|{Norm(forecast.League)}|{forecast.Market}";
+        return $"{ResolveFixtureKey(forecast.FixtureKey, forecast.MatchLocalDate, forecast.League, forecast.HomeTeam, forecast.AwayTeam)}|{forecast.Market}";
     }
 
     private static string GetCandidateObservationKey(PredictionCandidate candidate)
     {
-        return $"{candidate.Date}|{Norm(candidate.HomeTeam)}|{Norm(candidate.AwayTeam)}|{Norm(candidate.League)}|{candidate.Market}";
+        return $"{ResolveFixtureKey(candidate.FixtureKey, candidate.MatchLocalDate, candidate.League, candidate.HomeTeam, candidate.AwayTeam)}|{candidate.Market}";
+    }
+
+    private static string GetCandidatePredictionKey(PredictionCandidate candidate)
+    {
+        return $"{ResolveFixtureKey(candidate.FixtureKey, candidate.MatchLocalDate, candidate.League, candidate.HomeTeam, candidate.AwayTeam)}|{candidate.PredictionCategory}";
+    }
+
+    private List<MatchData> DeduplicateMatchesForGeneration(IEnumerable<MatchData> matches, string targetDate)
+    {
+        return DeduplicateItems(
+            matches,
+            GetMatchIdentityKey,
+            SelectPreferredMatchData,
+            duplicateGroups =>
+            {
+                _logger.LogWarning(
+                    "Deduplicated {DuplicateGroupCount} duplicate match fixture groups before prediction generation for {TargetDate}. Samples: {Samples}",
+                    duplicateGroups.Count,
+                    targetDate,
+                    FormatDuplicateSamples(duplicateGroups.Select(group => group.First()), DescribeMatchData));
+            });
+    }
+
+    private List<PredictionCandidate> DeduplicateForecastCandidates(IEnumerable<PredictionCandidate> candidates, string targetDate)
+    {
+        return DeduplicateItems(
+            candidates,
+            GetCandidateObservationKey,
+            SelectPreferredCandidate,
+            duplicateGroups =>
+            {
+                _logger.LogWarning(
+                    "Deduplicated {DuplicateGroupCount} duplicate forecast candidate groups for {TargetDate}. Samples: {Samples}",
+                    duplicateGroups.Count,
+                    targetDate,
+                    FormatDuplicateSamples(duplicateGroups.Select(group => group.First()), DescribeCandidate));
+            });
+    }
+
+    private List<PredictionCandidate> DeduplicatePublishedCandidates(IEnumerable<PredictionCandidate> candidates, string targetDate)
+    {
+        return DeduplicateItems(
+            candidates,
+            GetCandidatePredictionKey,
+            SelectPreferredCandidate,
+            duplicateGroups =>
+            {
+                _logger.LogWarning(
+                    "Deduplicated {DuplicateGroupCount} duplicate published prediction groups for {TargetDate}. Samples: {Samples}",
+                    duplicateGroups.Count,
+                    targetDate,
+                    FormatDuplicateSamples(duplicateGroups.Select(group => group.First()), DescribeCandidate));
+            });
+    }
+
+    private static List<T> DeduplicateItems<T>(
+        IEnumerable<T> items,
+        Func<T, string> keySelector,
+        Func<IEnumerable<T>, T> winnerSelector,
+        Action<List<IGrouping<string, T>>> logDuplicates)
+    {
+        var groups = items
+            .GroupBy(keySelector, StringComparer.Ordinal)
+            .ToList();
+
+        var duplicateGroups = groups
+            .Where(group => group.Count() > 1)
+            .ToList();
+
+        if (duplicateGroups.Count > 0)
+        {
+            logDuplicates(duplicateGroups);
+        }
+
+        return groups
+            .Select(winnerSelector)
+            .ToList();
+    }
+
+    private static PredictionCandidate SelectPreferredCandidate(IEnumerable<PredictionCandidate> candidates)
+    {
+        return candidates
+            .OrderByDescending(candidate => candidate.WasPublished)
+            .ThenByDescending(candidate => candidate.CalibratedProbability)
+            .ThenByDescending(candidate => candidate.RawProbability)
+            .ThenByDescending(candidate => candidate.ThresholdUsed)
+            .ThenByDescending(candidate => candidate.MatchDateTime ?? DateTime.MinValue)
+            .ThenByDescending(candidate => candidate.MatchLocalTime ?? TimeOnly.MinValue)
+            .First();
+    }
+
+    private static MatchData SelectPreferredMatchData(IEnumerable<MatchData> matches)
+    {
+        return matches
+            .OrderByDescending(GetMatchDataCompletenessScore)
+            .ThenByDescending(match => match.MatchDateTime ?? DateTime.MinValue)
+            .ThenByDescending(match => match.Id)
+            .First();
+    }
+
+    private static int GetMatchDataCompletenessScore(MatchData match)
+    {
+        var score = 0;
+        score += !string.IsNullOrWhiteSpace(match.FixtureKey) ? 4 : 0;
+        score += match.MatchDateTime.HasValue ? 3 : 0;
+        score += match.MatchLocalTime.HasValue ? 1 : 0;
+        score += CountPositive(
+            match.HomeWin,
+            match.Draw,
+            match.AwayWin,
+            match.OverTwoGoals,
+            match.UnderTwoGoals,
+            match.OverThreeGoals,
+            match.UnderThreeGoals,
+            match.BttsYes,
+            match.BttsNo,
+            match.OverOneGoal,
+            match.OverOnePointFive,
+            match.UnderOnePointFive,
+            match.AhZeroHome,
+            match.AhZeroAway,
+            match.AhMinusHalfHome,
+            match.AhMinusHalfAway,
+            match.AhMinusOneHome,
+            match.AhMinusOneAway,
+            match.AhPlusHalfHome,
+            match.AhPlusHalfAway);
+        return score;
+    }
+
+    private static int CountPositive(params double[] values)
+    {
+        return values.Count(value => value > 0);
+    }
+
+    private static string GetMatchIdentityKey(MatchData match)
+    {
+        return ResolveFixtureKey(
+            match.FixtureKey,
+            match.MatchLocalDate,
+            match.League,
+            match.HomeTeam,
+            match.AwayTeam);
+    }
+
+    private static string ResolveFixtureKey(
+        string? fixtureKey,
+        DateOnly? localDate,
+        string? league,
+        string? homeTeam,
+        string? awayTeam)
+    {
+        if (!string.IsNullOrWhiteSpace(fixtureKey))
+        {
+            return fixtureKey.Trim();
+        }
+
+        return string.Join(
+            "|",
+            localDate?.ToString("yyyy-MM-dd") ?? "unknown-date",
+            NormalizeFixtureKeyPart(league),
+            NormalizeFixtureKeyPart(homeTeam),
+            NormalizeFixtureKeyPart(awayTeam));
+    }
+
+    private static string NormalizeFixtureKeyPart(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? "unknown"
+            : value.Trim().ToLowerInvariant();
+    }
+
+    private static string FormatDuplicateSamples<T>(IEnumerable<T> items, Func<T, string> formatter)
+    {
+        return string.Join("; ", items.Take(5).Select(formatter));
+    }
+
+    private static string DescribeCandidate(PredictionCandidate candidate)
+    {
+        return $"{candidate.HomeTeam} vs {candidate.AwayTeam} [{candidate.League}] {candidate.PredictionCategory}/{candidate.Market} key={candidate.FixtureKey} cal={candidate.CalibratedProbability:F3}";
+    }
+
+    private static string DescribeMatchData(MatchData match)
+    {
+        return $"{match.HomeTeam} vs {match.AwayTeam} [{match.League}] key={match.FixtureKey} time={match.Time} score={GetMatchDataCompletenessScore(match)}";
     }
 
     private bool ApplyDecisionBackfill(Prediction prediction, PredictionMarket market)
@@ -1807,26 +2159,20 @@ public class AnalyzerService  : IAnalyzerService
             ScoreMatchingHelper.CreateLeagueLookupKey(league));
     }
 
-    private static DateTime? ResolveScheduledMatchTime(string? date, string? time, DateTime? matchDateTime)
+    private static DateTime? ResolveScheduledMatchTime(DateOnly? localDate, TimeOnly? localTime, DateTime? matchDateTime)
     {
         if (matchDateTime.HasValue)
         {
             return matchDateTime.Value;
         }
 
-        if (string.IsNullOrWhiteSpace(date) || string.IsNullOrWhiteSpace(time))
+        if (!localDate.HasValue || !localTime.HasValue)
         {
             return null;
         }
 
-        return DateTime.TryParseExact(
-            $"{date} {time}",
-            ["dd-MM-yyyy HH:mm", "dd-MM-yyyy H:mm"],
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.None,
-            out var parsed)
-            ? DateTimeProvider.ConvertLocalToUtc(parsed)
-            : null;
+        var localDateTime = localDate.Value.ToDateTime(localTime.Value);
+        return DateTimeProvider.ConvertLocalToUtc(localDateTime);
     }
 
     private static double GetMatchTimeScore(DateTime? targetMatchTime, DateTime? candidateMatchTime)
@@ -1854,7 +2200,8 @@ public class AnalyzerService  : IAnalyzerService
         Func<T, string> awaySelector,
         Func<T, string?> leagueSelector,
         Func<T, DateTime?> matchTimeSelector,
-        Func<T, bool> isLiveSelector)
+        Func<T, bool> isLiveSelector,
+        Func<T, double>? qualityScoreSelector = null)
         where T : class
     {
         var targetHomeKey = ScoreMatchingHelper.CreateTeamLookupKey(homeTeam, league);
@@ -1886,7 +2233,8 @@ public class AnalyzerService  : IAnalyzerService
                     awaySelector,
                     leagueSelector,
                     matchTimeSelector,
-                    isLiveSelector);
+                    isLiveSelector,
+                    qualityScoreSelector);
         }
 
         if (exactCandidates.Count == 1 && string.IsNullOrWhiteSpace(targetDate))
@@ -1906,7 +2254,8 @@ public class AnalyzerService  : IAnalyzerService
             awaySelector,
             leagueSelector,
             matchTimeSelector,
-            isLiveSelector);
+            isLiveSelector,
+            qualityScoreSelector);
     }
 
     private static T? SelectBestFixtureCandidate<T>(
@@ -1919,7 +2268,8 @@ public class AnalyzerService  : IAnalyzerService
         Func<T, string> awaySelector,
         Func<T, string?> leagueSelector,
         Func<T, DateTime?> matchTimeSelector,
-        Func<T, bool> isLiveSelector)
+        Func<T, bool> isLiveSelector,
+        Func<T, double>? qualityScoreSelector = null)
     {
         var scoredCandidates = new List<(T Candidate, double BaseScore, double TotalScore, bool ExactPair)>();
 
@@ -1938,7 +2288,8 @@ public class AnalyzerService  : IAnalyzerService
             var leagueScore = ScoreMatchingHelper.GetLeagueMatchScore(league, candidateLeague);
             var timeScore = GetMatchTimeScore(targetMatchTime, matchTimeSelector(candidate));
             var statusScore = isLiveSelector(candidate) ? 0.0 : 0.30;
-            var totalScore = baseScore + (exactPair ? 0.20 : 0.0) + (leagueScore * 0.15) + (timeScore * 0.10) + statusScore;
+            var qualityScore = qualityScoreSelector?.Invoke(candidate) ?? 0.5;
+            var totalScore = baseScore + (exactPair ? 0.20 : 0.0) + (leagueScore * 0.15) + (timeScore * 0.10) + statusScore + ((qualityScore - 0.5) * 0.10);
 
             scoredCandidates.Add((candidate, baseScore, totalScore, exactPair));
         }
@@ -2137,9 +2488,367 @@ public class AnalyzerService  : IAnalyzerService
             : score.Trim().Replace(" ", string.Empty, StringComparison.Ordinal);
     }
 
+    private object? ChooseBestExactSourceCandidate(
+        SettlementFixtureGroup fixture,
+        MatchScore? flashCandidate,
+        AiScoreMatchScore? aiCandidate,
+        IReadOnlyDictionary<(string SourceName, string LeagueKey, string TimeBucketKey), SourceQualityProfile> sourceQualityLookup)
+    {
+        if (flashCandidate is null)
+        {
+            return aiCandidate;
+        }
+
+        if (aiCandidate is null)
+        {
+            return flashCandidate;
+        }
+
+        var flashScore = GetExactSourceCandidateRank(
+            fixture,
+            "FlashScore",
+            flashCandidate.League,
+            flashCandidate.MatchTime,
+            sourceQualityLookup);
+        var aiScore = GetExactSourceCandidateRank(
+            fixture,
+            "AiScore",
+            aiCandidate.League,
+            aiCandidate.MatchTime,
+            sourceQualityLookup);
+
+        return aiScore - flashScore >= 0.05 ? aiCandidate : flashCandidate;
+    }
+
+    private object? ChooseBestLiveSourceCandidate(
+        MatchScore? flashCandidate,
+        AiScoreMatchScore? aiCandidate,
+        IReadOnlyDictionary<(string SourceName, string LeagueKey, string TimeBucketKey), SourceQualityProfile> sourceQualityLookup)
+    {
+        if (flashCandidate is null)
+        {
+            return aiCandidate;
+        }
+
+        if (aiCandidate is null)
+        {
+            return flashCandidate;
+        }
+
+        var flashReliability = GetSourceQualityReliability(sourceQualityLookup, "FlashScore", flashCandidate.League, flashCandidate.MatchTime);
+        var aiReliability = GetSourceQualityReliability(sourceQualityLookup, "AiScore", aiCandidate.League, aiCandidate.MatchTime);
+
+        if (aiReliability - flashReliability >= 0.08)
+        {
+            return aiCandidate;
+        }
+
+        return aiReliability > flashReliability &&
+               aiCandidate.MatchTime >= flashCandidate.MatchTime
+            ? aiCandidate
+            : flashCandidate;
+    }
+
+    private double GetExactSourceCandidateRank(
+        SettlementFixtureGroup fixture,
+        string sourceName,
+        string? candidateLeague,
+        DateTime? candidateMatchTimeUtc,
+        IReadOnlyDictionary<(string SourceName, string LeagueKey, string TimeBucketKey), SourceQualityProfile> sourceQualityLookup)
+    {
+        var reliability = GetSourceQualityReliability(sourceQualityLookup, sourceName, candidateLeague, candidateMatchTimeUtc);
+        var leagueScore = ScoreMatchingHelper.GetLeagueMatchScore(fixture.League, candidateLeague);
+        var timeScore = GetMatchTimeScore(fixture.ScheduledMatchTimeUtc, candidateMatchTimeUtc);
+        return (reliability * 0.55) + (timeScore * 0.30) + (leagueScore * 0.15);
+    }
+
+    private async Task RebuildSourceQualityProfilesAsync(int lookbackDays = 30)
+    {
+        var today = DateOnly.FromDateTime(DateTimeProvider.GetLocalTime());
+        var earliestSettlementDate = today.AddDays(-Math.Max(lookbackDays, 1));
+        var startOfWindowUtc = DateTimeProvider.ConvertLocalToUtc(
+            earliestSettlementDate.ToDateTime(new TimeOnly(0, 0), DateTimeKind.Unspecified));
+        var endOfWindowUtc = DateTimeProvider.ConvertLocalToUtc(
+            today.AddDays(1).ToDateTime(new TimeOnly(0, 0), DateTimeKind.Unspecified));
+
+        var settledPredictions = await _dbContext.Predictions
+            .AsNoTracking()
+            .Where(prediction =>
+                prediction.IsCurrentRevision &&
+                prediction.MatchLocalDate >= earliestSettlementDate &&
+                !prediction.IsLive &&
+                !string.IsNullOrWhiteSpace(prediction.ActualScore))
+            .ToListAsync();
+
+        if (settledPredictions.Count == 0)
+        {
+            await ReplaceSourceQualityProfilesAsync([]);
+            return;
+        }
+
+        var fixtures = BuildSettlementFixtureGroups(settledPredictions, []);
+        var flashScores = await _dbContext.MatchScores
+            .AsNoTracking()
+            .Where(score => score.MatchTime >= startOfWindowUtc && score.MatchTime < endOfWindowUtc)
+            .ToListAsync();
+        var aiScores = await _dbContext.AiScoreMatchScores
+            .AsNoTracking()
+            .Where(score => score.MatchTime >= startOfWindowUtc && score.MatchTime < endOfWindowUtc)
+            .ToListAsync();
+
+        var flashFinishedIndex = BuildExactFinishedCandidateIndex(
+            flashScores.Where(score => !score.IsLive),
+            score => score.HomeTeam,
+            score => score.AwayTeam,
+            score => score.MatchTime,
+            score => score.League);
+        var flashLiveIndex = BuildExactFinishedCandidateIndex(
+            flashScores.Where(score => score.IsLive),
+            score => score.HomeTeam,
+            score => score.AwayTeam,
+            score => score.MatchTime,
+            score => score.League);
+        var aiFinishedIndex = BuildExactFinishedCandidateIndex(
+            aiScores.Where(score => !score.IsLive),
+            score => score.HomeTeam,
+            score => score.AwayTeam,
+            score => score.MatchTime,
+            score => score.League);
+        var aiLiveIndex = BuildExactFinishedCandidateIndex(
+            aiScores.Where(score => score.IsLive),
+            score => score.HomeTeam,
+            score => score.AwayTeam,
+            score => score.MatchTime,
+            score => score.League);
+
+        var accumulators = new Dictionary<(string SourceName, string LeagueKey, string TimeBucketKey), SourceQualityAccumulator>();
+
+        foreach (var fixture in fixtures)
+        {
+            var settledScore = fixture.Predictions
+                .Select(prediction => NormalizeSettledScore(prediction.ActualScore))
+                .FirstOrDefault(score => !string.IsNullOrWhiteSpace(score));
+
+            if (string.IsNullOrWhiteSpace(settledScore))
+            {
+                continue;
+            }
+
+            RecordSourceQualitySample(
+                accumulators,
+                "FlashScore",
+                fixture,
+                FindExactFinishedSourceCandidate(
+                    fixture,
+                    flashFinishedIndex,
+                    score => score.MatchTime,
+                    score => score.League,
+                    score => score.Score),
+                FindLatestExactLiveSourceCandidate(
+                    fixture,
+                    flashLiveIndex,
+                    score => score.MatchTime),
+                score => score.Score,
+                score => score.MatchTime,
+                settledScore);
+
+            RecordSourceQualitySample(
+                accumulators,
+                "AiScore",
+                fixture,
+                FindExactFinishedSourceCandidate(
+                    fixture,
+                    aiFinishedIndex,
+                    score => score.MatchTime,
+                    score => score.League,
+                    score => score.Score),
+                FindLatestExactLiveSourceCandidate(
+                    fixture,
+                    aiLiveIndex,
+                    score => score.MatchTime),
+                score => score.Score,
+                score => score.MatchTime,
+                settledScore);
+        }
+
+        var nowUtc = DateTime.UtcNow;
+        var profiles = accumulators.Values
+            .Select(accumulator => accumulator.ToProfile(nowUtc))
+            .Where(profile => profile.SampleCount > 0)
+            .ToList();
+
+        await ReplaceSourceQualityProfilesAsync(profiles);
+    }
+
+    private void RecordSourceQualitySample<T>(
+        IDictionary<(string SourceName, string LeagueKey, string TimeBucketKey), SourceQualityAccumulator> accumulators,
+        string sourceName,
+        SettlementFixtureGroup fixture,
+        T? finishedCandidate,
+        T? liveCandidate,
+        Func<T, string?> scoreSelector,
+        Func<T, DateTime?> matchTimeSelector,
+        string settledScore)
+        where T : class
+    {
+        var exactLeagueKey = NormalizeLeagueKey(fixture.League);
+        var timeBucket = GetTimeBucket(fixture.ScheduledMatchTimeUtc);
+        var applicableKeys = new[]
+        {
+            (SourceName: sourceName, LeagueKey: exactLeagueKey, TimeBucketKey: timeBucket.Key),
+            (SourceName: sourceName, LeagueKey: exactLeagueKey, TimeBucketKey: "all"),
+            (SourceName: sourceName, LeagueKey: "all", TimeBucketKey: timeBucket.Key),
+            (SourceName: sourceName, LeagueKey: "all", TimeBucketKey: "all")
+        };
+
+        foreach (var key in applicableKeys)
+        {
+            if (!accumulators.TryGetValue(key, out var accumulator))
+            {
+                accumulator = new SourceQualityAccumulator(
+                    key.SourceName,
+                    key.LeagueKey,
+                    key.LeagueKey == "all" ? "All Leagues" : fixture.League,
+                    key.TimeBucketKey,
+                    key.TimeBucketKey == "all" ? "All Kickoffs" : timeBucket.Label);
+                accumulators[key] = accumulator;
+            }
+
+            accumulator.RecordSample(
+                finishedCandidate is not null,
+                finishedCandidate is not null &&
+                string.Equals(NormalizeSettledScore(scoreSelector(finishedCandidate)), settledScore, StringComparison.Ordinal),
+                finishedCandidate is null && liveCandidate is not null,
+                finishedCandidate is not null && fixture.ScheduledMatchTimeUtc.HasValue && matchTimeSelector(finishedCandidate).HasValue
+                    ? Math.Abs((matchTimeSelector(finishedCandidate)!.Value - fixture.ScheduledMatchTimeUtc.Value).TotalMinutes)
+                    : null);
+        }
+    }
+
+    private async Task ReplaceSourceQualityProfilesAsync(IReadOnlyCollection<SourceQualityProfile> profiles)
+    {
+        try
+        {
+            await _dbContext.SourceQualityProfiles.ExecuteDeleteAsync();
+        }
+        catch (InvalidOperationException)
+        {
+            var existingProfiles = await _dbContext.SourceQualityProfiles.ToListAsync();
+            _dbContext.SourceQualityProfiles.RemoveRange(existingProfiles);
+        }
+        catch (PostgresException ex) when (IsMissingSourceQualityTable(ex))
+        {
+            _logger.LogWarning(
+                "Skipping source quality profile refresh because the SourceQualityProfiles table is missing. Apply the latest EF migration to enable this feature.");
+            return;
+        }
+
+        if (profiles.Count > 0)
+        {
+            await _dbContext.SourceQualityProfiles.AddRangeAsync(profiles);
+        }
+
+        await _dbContext.SaveChangesAsync();
+    }
+
+    private async Task<Dictionary<(string SourceName, string LeagueKey, string TimeBucketKey), SourceQualityProfile>> LoadSourceQualityLookupAsync()
+    {
+        List<SourceQualityProfile> profiles;
+        try
+        {
+            profiles = await _dbContext.SourceQualityProfiles
+                .AsNoTracking()
+                .ToListAsync();
+        }
+        catch (PostgresException ex) when (IsMissingSourceQualityTable(ex))
+        {
+            _logger.LogWarning(
+                "Source quality lookup is unavailable because the SourceQualityProfiles table is missing. The score updater will continue without source-quality weighting until the latest EF migration is applied.");
+            return [];
+        }
+
+        return profiles.ToDictionary(
+            profile => (
+                SourceName: NormalizeSourceName(profile.SourceName),
+                LeagueKey: string.IsNullOrWhiteSpace(profile.LeagueKey) ? "all" : profile.LeagueKey.Trim().ToLowerInvariant(),
+                TimeBucketKey: string.IsNullOrWhiteSpace(profile.TimeBucketKey) ? "all" : profile.TimeBucketKey.Trim().ToLowerInvariant()),
+            profile => profile);
+    }
+
+    private static double GetSourceQualityReliability(
+        IReadOnlyDictionary<(string SourceName, string LeagueKey, string TimeBucketKey), SourceQualityProfile> sourceQualityLookup,
+        string sourceName,
+        string? league,
+        DateTime? kickoffUtc)
+    {
+        if (sourceQualityLookup.Count == 0)
+        {
+            return 0.5;
+        }
+
+        var normalizedSource = NormalizeSourceName(sourceName);
+        var leagueKey = NormalizeLeagueKey(league);
+        var timeBucketKey = GetTimeBucket(kickoffUtc).Key;
+
+        foreach (var key in new[]
+                 {
+                     (normalizedSource, leagueKey, timeBucketKey),
+                     (normalizedSource, leagueKey, "all"),
+                     (normalizedSource, "all", timeBucketKey),
+                     (normalizedSource, "all", "all")
+                 })
+        {
+            if (sourceQualityLookup.TryGetValue(key, out var profile) && profile.SampleCount >= 4)
+            {
+                return Math.Clamp(profile.ReliabilityScore, 0.0, 1.0);
+            }
+        }
+
+        return 0.5;
+    }
+
+    private static (string Key, string Label) GetTimeBucket(DateTime? kickoffUtc)
+    {
+        if (!kickoffUtc.HasValue)
+        {
+            return ("all", "All Kickoffs");
+        }
+
+        var localHour = DateTimeProvider.ConvertUtcToLocal(kickoffUtc.Value).Hour;
+        return localHour switch
+        {
+            < 6 => ("night", "00:00-05:59"),
+            < 12 => ("morning", "06:00-11:59"),
+            < 18 => ("afternoon", "12:00-17:59"),
+            _ => ("evening", "18:00-23:59")
+        };
+    }
+
+    private static string NormalizeSourceName(string sourceName)
+    {
+        return string.IsNullOrWhiteSpace(sourceName)
+            ? "unknown"
+            : sourceName.Trim().ToLowerInvariant();
+    }
+
+    private static string NormalizeLeagueKey(string? league)
+    {
+        return string.IsNullOrWhiteSpace(league)
+            ? "unknown"
+            : league.Trim().ToLowerInvariant();
+    }
+
+    private static bool IsMissingSourceQualityTable(PostgresException ex)
+    {
+        return ex.SqlState == PostgresErrorCodes.UndefinedTable &&
+               string.Equals(ex.TableName, "SourceQualityProfiles", StringComparison.Ordinal);
+    }
+
     private sealed class SettlementFixtureGroup
     {
         public string Date { get; init; } = string.Empty;
+        public DateOnly MatchLocalDate { get; init; }
+        public string FixtureKey { get; init; } = string.Empty;
         public string HomeTeam { get; init; } = string.Empty;
         public string AwayTeam { get; init; } = string.Empty;
         public string League { get; init; } = string.Empty;
@@ -2153,8 +2862,97 @@ public class AnalyzerService  : IAnalyzerService
         DateTime? MatchTime,
         double MinutesApart,
         double LeagueScore,
-        string? Score)
+        string? Score,
+        double QualityScore)
         where T : class;
+
+    private sealed class SourceQualityAccumulator
+    {
+        private double _kickoffOffsetTotal;
+        private int _kickoffOffsetCount;
+
+        public SourceQualityAccumulator(
+            string sourceName,
+            string leagueKey,
+            string leagueLabel,
+            string timeBucketKey,
+            string timeBucketLabel)
+        {
+            SourceName = sourceName;
+            LeagueKey = leagueKey;
+            LeagueLabel = leagueLabel;
+            TimeBucketKey = timeBucketKey;
+            TimeBucketLabel = timeBucketLabel;
+        }
+
+        public string SourceName { get; }
+        public string LeagueKey { get; }
+        public string LeagueLabel { get; }
+        public string TimeBucketKey { get; }
+        public string TimeBucketLabel { get; }
+        public int SampleCount { get; private set; }
+        public int FinishedCoverageCount { get; private set; }
+        public int ExactScoreMatchCount { get; private set; }
+        public int LiveOnlyCount { get; private set; }
+
+        public void RecordSample(bool hasFinishedSource, bool exactScoreMatch, bool isLiveOnly, double? kickoffOffsetMinutes)
+        {
+            SampleCount++;
+
+            if (hasFinishedSource)
+            {
+                FinishedCoverageCount++;
+            }
+
+            if (exactScoreMatch)
+            {
+                ExactScoreMatchCount++;
+            }
+
+            if (isLiveOnly)
+            {
+                LiveOnlyCount++;
+            }
+
+            if (kickoffOffsetMinutes.HasValue)
+            {
+                _kickoffOffsetTotal += kickoffOffsetMinutes.Value;
+                _kickoffOffsetCount++;
+            }
+        }
+
+        public SourceQualityProfile ToProfile(DateTime updatedAtUtc)
+        {
+            var coverageRate = SampleCount > 0 ? FinishedCoverageCount / (double)SampleCount : 0.0;
+            var matchRate = FinishedCoverageCount > 0 ? ExactScoreMatchCount / (double)FinishedCoverageCount : 0.0;
+            var liveOnlyRate = SampleCount > 0 ? LiveOnlyCount / (double)SampleCount : 0.0;
+            var avgOffset = _kickoffOffsetCount > 0 ? _kickoffOffsetTotal / _kickoffOffsetCount : 0.0;
+            var offsetPenalty = Math.Clamp(avgOffset / 180.0, 0.0, 1.0);
+            var reliability = Math.Clamp(
+                (matchRate * 0.55) +
+                (coverageRate * 0.30) +
+                ((1.0 - liveOnlyRate) * 0.15) -
+                (offsetPenalty * 0.10),
+                0.0,
+                1.0);
+
+            return new SourceQualityProfile
+            {
+                SourceName = SourceName,
+                LeagueKey = LeagueKey,
+                LeagueLabel = LeagueLabel,
+                TimeBucketKey = TimeBucketKey,
+                TimeBucketLabel = TimeBucketLabel,
+                SampleCount = SampleCount,
+                FinishedCoverageCount = FinishedCoverageCount,
+                ExactScoreMatchCount = ExactScoreMatchCount,
+                LiveOnlyCount = LiveOnlyCount,
+                AverageKickoffOffsetMinutes = avgOffset,
+                ReliabilityScore = reliability,
+                LastUpdated = updatedAtUtc
+            };
+        }
+    }
 
     private sealed class FixtureCandidateIndex<T>
         where T : class
@@ -2240,12 +3038,12 @@ public class AnalyzerService  : IAnalyzerService
     }
 
     private static MatchData? FindMatchingMatchData(
-        string date,
+        DateOnly date,
         string homeTeam,
         string awayTeam,
         string league,
         DateTime? matchDateTime,
-        IReadOnlyDictionary<(string Date, string Home, string Away, string League), MatchData> datedMatches,
+        IReadOnlyDictionary<(DateOnly Date, string Home, string Away, string League), MatchData> datedMatches,
         IReadOnlyDictionary<(string Home, string Away, string League), List<MatchData>> teamMatches)
     {
         var datedKey = (
@@ -2303,6 +3101,24 @@ public class AnalyzerService  : IAnalyzerService
             updated = true;
         }
 
+        if (match.MatchLocalDate.HasValue && prediction.MatchLocalDate != match.MatchLocalDate.Value)
+        {
+            prediction.MatchLocalDate = match.MatchLocalDate.Value;
+            updated = true;
+        }
+
+        if (prediction.MatchLocalTime != match.MatchLocalTime)
+        {
+            prediction.MatchLocalTime = match.MatchLocalTime;
+            updated = true;
+        }
+
+        if (!string.Equals(prediction.FixtureKey, match.FixtureKey, StringComparison.Ordinal))
+        {
+            prediction.FixtureKey = match.FixtureKey;
+            updated = true;
+        }
+
         return updated;
     }
 
@@ -2328,7 +3144,257 @@ public class AnalyzerService  : IAnalyzerService
             updated = true;
         }
 
+        if (match.MatchLocalDate.HasValue && forecast.MatchLocalDate != match.MatchLocalDate.Value)
+        {
+            forecast.MatchLocalDate = match.MatchLocalDate.Value;
+            updated = true;
+        }
+
+        if (forecast.MatchLocalTime != match.MatchLocalTime)
+        {
+            forecast.MatchLocalTime = match.MatchLocalTime;
+            updated = true;
+        }
+
+        if (!string.Equals(forecast.FixtureKey, match.FixtureKey, StringComparison.Ordinal))
+        {
+            forecast.FixtureKey = match.FixtureKey;
+            updated = true;
+        }
+
         return updated;
+    }
+
+    private static bool ApplyCanonicalFixtureIdentity(MatchData match)
+    {
+        var identity = FixtureIdentityFactory.FromMatchData(match);
+        var updated = false;
+
+        if (identity.MatchLocalDate.HasValue && match.MatchLocalDate != identity.MatchLocalDate)
+        {
+            match.MatchLocalDate = identity.MatchLocalDate;
+            updated = true;
+        }
+
+        if (match.MatchLocalTime != identity.MatchLocalTime)
+        {
+            match.MatchLocalTime = identity.MatchLocalTime;
+            updated = true;
+        }
+
+        if (identity.MatchLocalDate.HasValue)
+        {
+            var legacyDate = DateTimeProvider.FormatLocalDate(identity.MatchLocalDate.Value);
+            if (!string.Equals(match.Date, legacyDate, StringComparison.Ordinal))
+            {
+                match.Date = legacyDate;
+                updated = true;
+            }
+        }
+
+        if (identity.MatchLocalTime.HasValue)
+        {
+            var legacyTime = DateTimeProvider.FormatLocalTime(identity.MatchLocalTime.Value);
+            if (!string.Equals(match.Time, legacyTime, StringComparison.Ordinal))
+            {
+                match.Time = legacyTime;
+                updated = true;
+            }
+        }
+
+        if (!string.Equals(match.FixtureKey, identity.FixtureKey, StringComparison.Ordinal))
+        {
+            match.FixtureKey = identity.FixtureKey;
+            updated = true;
+        }
+
+        return updated;
+    }
+
+    private static bool ApplyCanonicalFixtureIdentity(Prediction prediction)
+    {
+        var identity = FixtureIdentityFactory.FromPrediction(prediction);
+        var updated = false;
+
+        if (prediction.MatchLocalDate == default && identity.MatchLocalDate.HasValue)
+        {
+            prediction.MatchLocalDate = identity.MatchLocalDate.Value;
+            updated = true;
+        }
+
+        if (prediction.MatchLocalTime != identity.MatchLocalTime)
+        {
+            prediction.MatchLocalTime = identity.MatchLocalTime;
+            updated = true;
+        }
+
+        if (prediction.MatchLocalDate != default)
+        {
+            var legacyDate = DateTimeProvider.FormatLocalDate(prediction.MatchLocalDate);
+            if (!string.Equals(prediction.Date, legacyDate, StringComparison.Ordinal))
+            {
+                prediction.Date = legacyDate;
+                updated = true;
+            }
+        }
+
+        if (prediction.MatchLocalTime.HasValue)
+        {
+            var legacyTime = DateTimeProvider.FormatLocalTime(prediction.MatchLocalTime.Value);
+            if (!string.Equals(prediction.Time, legacyTime, StringComparison.Ordinal))
+            {
+                prediction.Time = legacyTime;
+                updated = true;
+            }
+        }
+
+        if (!string.Equals(prediction.FixtureKey, identity.FixtureKey, StringComparison.Ordinal))
+        {
+            prediction.FixtureKey = identity.FixtureKey;
+            updated = true;
+        }
+
+        return updated;
+    }
+
+    private static bool ApplyCanonicalFixtureIdentity(ForecastObservation forecast)
+    {
+        var identity = FixtureIdentityFactory.FromForecast(forecast);
+        var updated = false;
+
+        if (forecast.MatchLocalDate == default && identity.MatchLocalDate.HasValue)
+        {
+            forecast.MatchLocalDate = identity.MatchLocalDate.Value;
+            updated = true;
+        }
+
+        if (forecast.MatchLocalTime != identity.MatchLocalTime)
+        {
+            forecast.MatchLocalTime = identity.MatchLocalTime;
+            updated = true;
+        }
+
+        if (forecast.MatchLocalDate != default)
+        {
+            var legacyDate = DateTimeProvider.FormatLocalDate(forecast.MatchLocalDate);
+            if (!string.Equals(forecast.Date, legacyDate, StringComparison.Ordinal))
+            {
+                forecast.Date = legacyDate;
+                updated = true;
+            }
+        }
+
+        if (forecast.MatchLocalTime.HasValue)
+        {
+            var legacyTime = DateTimeProvider.FormatLocalTime(forecast.MatchLocalTime.Value);
+            if (!string.Equals(forecast.Time, legacyTime, StringComparison.Ordinal))
+            {
+                forecast.Time = legacyTime;
+                updated = true;
+            }
+        }
+
+        if (!string.Equals(forecast.FixtureKey, identity.FixtureKey, StringComparison.Ordinal))
+        {
+            forecast.FixtureKey = identity.FixtureKey;
+            updated = true;
+        }
+
+        return updated;
+    }
+
+    private static bool ApplyCanonicalFixtureIdentity(PredictionCandidate candidate)
+    {
+        var localDate = candidate.MatchLocalDate != default
+            ? candidate.MatchLocalDate
+            : DateTimeProvider.ParseLocalDateOrNull(candidate.Date) ?? default;
+        var localTime = candidate.MatchLocalTime ?? DateTimeProvider.ParseLocalTimeOrNull(candidate.Time);
+        var matchDateTime = candidate.MatchDateTime;
+
+        if (matchDateTime is null && localDate != default)
+        {
+            var inferredLocalDateTime = localDate.ToDateTime(localTime ?? new TimeOnly(0, 0), DateTimeKind.Unspecified);
+            matchDateTime = DateTimeProvider.ConvertLocalToUtc(inferredLocalDateTime);
+        }
+
+        var identity = FixtureIdentityFactory.Build(
+            candidate.HomeTeam,
+            candidate.AwayTeam,
+            candidate.League,
+            localDate == default ? null : localDate,
+            localTime,
+            matchDateTime);
+
+        var updated = false;
+
+        if (candidate.MatchLocalDate == default && localDate != default)
+        {
+            candidate.MatchLocalDate = localDate;
+            updated = true;
+        }
+
+        if (candidate.MatchLocalTime != localTime)
+        {
+            candidate.MatchLocalTime = localTime;
+            updated = true;
+        }
+
+        if (candidate.MatchDateTime != matchDateTime)
+        {
+            candidate.MatchDateTime = matchDateTime;
+            updated = true;
+        }
+
+        if (candidate.MatchLocalDate != default)
+        {
+            var legacyDate = DateTimeProvider.FormatLocalDate(candidate.MatchLocalDate);
+            if (!string.Equals(candidate.Date, legacyDate, StringComparison.Ordinal))
+            {
+                candidate.Date = legacyDate;
+                updated = true;
+            }
+        }
+
+        if (candidate.MatchLocalTime.HasValue)
+        {
+            var legacyTime = DateTimeProvider.FormatLocalTime(candidate.MatchLocalTime.Value);
+            if (!string.Equals(candidate.Time, legacyTime, StringComparison.Ordinal))
+            {
+                candidate.Time = legacyTime;
+                updated = true;
+            }
+        }
+
+        if (!string.Equals(candidate.FixtureKey, identity.FixtureKey, StringComparison.Ordinal))
+        {
+            candidate.FixtureKey = identity.FixtureKey;
+            updated = true;
+        }
+
+        return updated;
+    }
+
+    private async Task<PredictionRun> CreatePredictionRunAsync(
+        DateOnly targetLocalDate,
+        string runReason,
+        IReadOnlyCollection<PredictionCandidate> forecastCandidates,
+        IReadOnlyCollection<PredictionCandidate> publishedCandidates)
+    {
+        var localNow = DateTimeProvider.GetLocalTime();
+        var predictionRun = new PredictionRun
+        {
+            TargetLocalDate = targetLocalDate,
+            RunKind = "prediction_generation",
+            RunLabel = $"{localNow:HH:mm} WAT",
+            RunReason = runReason,
+            ForecastCount = forecastCandidates.Count,
+            PublishedPredictionCount = publishedCandidates.Count,
+            StartedAtUtc = DateTime.UtcNow
+        };
+
+        await _dbContext.PredictionRuns.AddAsync(predictionRun);
+        await _dbContext.SaveChangesAsync();
+        return predictionRun;
     }
 
 }

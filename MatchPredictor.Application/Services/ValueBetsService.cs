@@ -42,18 +42,37 @@ public class ValueBetsService : IValueBetsService
 
     public async Task<IEnumerable<ValueBetDto>> GetTopValueBetsAsync(int limit = 60, CancellationToken ct = default)
     {
+        var report = await GetValueBetReportAsync(limit, ct);
+        return report.Bets;
+    }
+
+    public async Task<ValueBetReportDto> GetValueBetReportAsync(int limit = 60, CancellationToken ct = default)
+    {
         var now = DateTimeProvider.GetLocalTime();
-        var todayStr = now.ToString("dd-MM-yyyy");
-        var currentTime = now.ToString("HH:mm");
+        var todayLocalDate = DateOnly.FromDateTime(now);
+        var nowUtc = DateTime.UtcNow;
+        var currentLocalTime = TimeOnly.FromDateTime(now);
+        var exclusionCounts = CreateExclusionCountMap();
+        var report = new ValueBetReportDto
+        {
+            GeneratedAtLocal = now
+        };
 
         var upcomingMatches = await _dbContext.MatchDatas
-            .Where(m => m.Date == todayStr && string.Compare(m.Time, currentTime) >= 0)
+            .AsNoTracking()
+            .Where(m => m.MatchLocalDate == todayLocalDate)
+            .Where(m =>
+                (m.MatchDateTime.HasValue && m.MatchDateTime.Value >= nowUtc) ||
+                (!m.MatchDateTime.HasValue && m.MatchLocalTime.HasValue && m.MatchLocalTime.Value >= currentLocalTime))
+            .OrderBy(m => m.MatchDateTime)
+            .ThenBy(m => m.MatchLocalTime)
             .ToListAsync(ct);
 
         if (!upcomingMatches.Any())
         {
             _logger.LogInformation("No upcoming matches available for Value Bets today.");
-            return Enumerable.Empty<ValueBetDto>();
+            report.ExclusionBreakdown = BuildExclusionBreakdown(exclusionCounts);
+            return report;
         }
 
         IReadOnlyList<SourceMarketFixture> sourceMarketFixtures = [];
@@ -71,6 +90,7 @@ public class ValueBetsService : IValueBetsService
         foreach (var match in upcomingMatches)
         {
             var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates([match]);
+            report.ConsideredCandidateCount += forecastCandidates.Count;
             var pricedCandidates = new List<ValueBetCandidate>();
             var sourceFixture = SourceMarketFixtureMatcher.FindBestFixture(
                 sourceMarketFixtures,
@@ -81,17 +101,32 @@ public class ValueBetsService : IValueBetsService
 
             foreach (var forecastCandidate in forecastCandidates)
             {
-                if (!TryGetMarketProbability(match, sourceFixture, forecastCandidate.Market, out var marketProbability))
+                if (!TryGetMarketProbability(
+                        match,
+                        sourceFixture,
+                        forecastCandidate.Market,
+                        out var marketProbability,
+                        out var pricingSource,
+                        out var oddsFreshness))
+                {
+                    IncrementExclusion(exclusionCounts, "no_source_price");
                     continue;
+                }
 
                 var thresholdDecision = ResolveThresholdDecision(forecastCandidate.Market);
                 var calibratedProbability = Math.Clamp(forecastCandidate.CalibratedProbability, 0.0, 1.0);
                 if (calibratedProbability < thresholdDecision.Threshold)
+                {
+                    IncrementExclusion(exclusionCounts, "below_threshold");
                     continue;
+                }
 
                 var edge = calibratedProbability - marketProbability;
                 if (edge < _settings.ValueBetMinimumEdge)
+                {
+                    IncrementExclusion(exclusionCounts, "insufficient_edge");
                     continue;
+                }
 
                 pricedCandidates.Add(new ValueBetCandidate
                 {
@@ -114,7 +149,10 @@ public class ValueBetsService : IValueBetsService
                     Edge = edge,
                     ThresholdUsed = thresholdDecision.Threshold,
                     ThresholdSource = thresholdDecision.ThresholdSource,
-                    CalibratorUsed = forecastCandidate.CalibratorUsed
+                    CalibratorUsed = forecastCandidate.CalibratorUsed,
+                    PricingSource = pricingSource,
+                    OddsFreshness = oddsFreshness,
+                    EdgeSource = BuildEdgeSource(calibratedProbability, marketProbability)
                 });
             }
 
@@ -130,7 +168,8 @@ public class ValueBetsService : IValueBetsService
 
         if (!topCandidates.Any())
         {
-            return Enumerable.Empty<ValueBetDto>();
+            report.ExclusionBreakdown = BuildExclusionBreakdown(exclusionCounts);
+            return report;
         }
 
         foreach (var candidate in topCandidates)
@@ -188,7 +227,10 @@ public class ValueBetsService : IValueBetsService
             }
         }
 
-        return topCandidates.Select(candidate => candidate.ToDto()).ToList();
+        report.IncludedCandidateCount = topCandidates.Count;
+        report.ExclusionBreakdown = BuildExclusionBreakdown(exclusionCounts);
+        report.Bets = topCandidates.Select(candidate => candidate.ToDto()).ToList();
+        return report;
     }
 
     private IEnumerable<ValueBetCandidate> SelectBestMatchCandidates(IEnumerable<ValueBetCandidate> candidates)
@@ -232,12 +274,18 @@ public class ValueBetsService : IValueBetsService
         MatchData match,
         SourceMarketFixture? sourceFixture,
         PredictionMarket market,
-        out double marketProbability)
+        out double marketProbability,
+        out string pricingSource,
+        out string oddsFreshness)
     {
         marketProbability = 0.0;
+        pricingSource = string.Empty;
+        oddsFreshness = string.Empty;
 
         if (TryGetLiveMarketProbability(sourceFixture, market, out marketProbability))
         {
+            pricingSource = "Live source pull";
+            oddsFreshness = "Fresh from today's source pricing pull.";
             return true;
         }
 
@@ -255,18 +303,24 @@ public class ValueBetsService : IValueBetsService
                 PredictionMarket.AwayWin => oneX2.away,
                 _ => 0.0
             };
+            pricingSource = "Stored sync snapshot";
+            oddsFreshness = "Using the latest stored sync pricing for this fixture.";
             return true;
         }
 
         if (market == PredictionMarket.Over25Goals && match.TryGetNormalizedOver25Pair(out var overUnder25))
         {
             marketProbability = overUnder25.over25;
+            pricingSource = "Stored sync snapshot";
+            oddsFreshness = "Using the latest stored sync pricing for this fixture.";
             return true;
         }
 
         if (market == PredictionMarket.BothTeamsScore && match.TryGetNormalizedBttsPair(out var bttsPair))
         {
             marketProbability = bttsPair.yes;
+            pricingSource = "Stored sync snapshot";
+            oddsFreshness = "Using the latest stored sync pricing for this fixture.";
             return true;
         }
 
@@ -295,6 +349,12 @@ public class ValueBetsService : IValueBetsService
             return match.MatchDateTime.Value;
         }
 
+        if (match.MatchLocalDate.HasValue)
+        {
+            var localTime = match.MatchLocalTime ?? DateTimeProvider.ParseLocalTimeOrNull(match.Time) ?? new TimeOnly(0, 0);
+            return DateTimeProvider.ConvertLocalToUtc(match.MatchLocalDate.Value.ToDateTime(localTime, DateTimeKind.Unspecified));
+        }
+
         return DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time).utcDateTime;
     }
 
@@ -321,6 +381,52 @@ public class ValueBetsService : IValueBetsService
     private static string NormalizeKeyPart(string? value)
     {
         return value?.Trim().ToLowerInvariant() ?? string.Empty;
+    }
+
+    private static Dictionary<string, int> CreateExclusionCountMap()
+    {
+        return new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["no_source_price"] = 0,
+            ["below_threshold"] = 0,
+            ["insufficient_edge"] = 0
+        };
+    }
+
+    private static void IncrementExclusion(IDictionary<string, int> counts, string key)
+    {
+        counts[key] = counts.TryGetValue(key, out var current) ? current + 1 : 1;
+    }
+
+    private static List<ValueBetExclusionStat> BuildExclusionBreakdown(IReadOnlyDictionary<string, int> counts)
+    {
+        return
+        [
+            CreateExclusionStat(counts, "no_source_price", "No source price", "The match was skipped because no usable market probability was available for that market."),
+            CreateExclusionStat(counts, "below_threshold", "Below threshold", "The calibrated model probability never cleared the market's publish threshold."),
+            CreateExclusionStat(counts, "insufficient_edge", "Below edge floor", "The model leaned the right way, but not enough above the source market to count as value.")
+        ];
+    }
+
+    private static ValueBetExclusionStat CreateExclusionStat(
+        IReadOnlyDictionary<string, int> counts,
+        string key,
+        string label,
+        string description)
+    {
+        counts.TryGetValue(key, out var count);
+        return new ValueBetExclusionStat
+        {
+            Key = key,
+            Label = label,
+            Description = description,
+            Count = count
+        };
+    }
+
+    private static string BuildEdgeSource(double modelProbability, double marketProbability)
+    {
+        return $"Model {(modelProbability * 100):F1}% vs market {(marketProbability * 100):F1}%";
     }
 
     private static string BuildFallbackJustification(ValueBetCandidate candidate)
@@ -390,6 +496,9 @@ public class ValueBetsService : IValueBetsService
         public double ThresholdUsed { get; init; }
         public string ThresholdSource { get; init; } = "Configured";
         public string CalibratorUsed { get; init; } = "Bucket";
+        public string PricingSource { get; init; } = "Stored sync snapshot";
+        public string OddsFreshness { get; init; } = "Using the latest stored sync pricing for this fixture.";
+        public string EdgeSource { get; init; } = string.Empty;
         public string AiJustification { get; set; } = string.Empty;
 
         public ValueBetDto ToDto()
@@ -408,6 +517,9 @@ public class ValueBetsService : IValueBetsService
                 ThresholdUsed = ThresholdUsed,
                 ThresholdSource = ThresholdSource,
                 CalibratorUsed = CalibratorUsed,
+                PricingSource = PricingSource,
+                OddsFreshness = OddsFreshness,
+                EdgeSource = EdgeSource,
                 AiJustification = AiJustification
             };
         }

@@ -20,6 +20,7 @@ public class AnalyticsModel : PageModel
     public AnalyticsStats YesterdayStats { get; set; } = new();
     public AnalyticsStats Last3DaysStats { get; set; } = new();
     public AnalyticsStats Last7DaysStats { get; set; } = new();
+    public AnalyticsLiveConfigSnapshot CurrentLiveConfig { get; set; } = new();
 
     public AnalyticsModel(
         ApplicationDbContext db,
@@ -50,23 +51,18 @@ public class AnalyticsModel : PageModel
 
     private async Task LoadAnalyticsDataAsync()
     {
-        var today = DateTimeProvider.GetLocalTime().Date;
-
-        var dateStringsToday = new[] { today.ToString("dd-MM-yyyy") };
-        var dateStringsYesterday = new[] { today.AddDays(-1).ToString("dd-MM-yyyy") };
-        var dateStringsLast3 = Enumerable.Range(0, 3).Select(i => today.AddDays(-i).ToString("dd-MM-yyyy")).ToArray();
-        var dateStringsLast7 = Enumerable.Range(0, 7).Select(i => today.AddDays(-i).ToString("dd-MM-yyyy")).ToArray();
-        var dateSetToday = new HashSet<DateTime>([today]);
-        var dateSetYesterday = new HashSet<DateTime>([today.AddDays(-1)]);
+        var today = DateOnly.FromDateTime(DateTimeProvider.GetLocalTime());
+        var dateSetToday = new HashSet<DateOnly>([today]);
+        var dateSetYesterday = new HashSet<DateOnly>([today.AddDays(-1)]);
         var dateSetLast3 = Enumerable.Range(0, 3).Select(i => today.AddDays(-i)).ToHashSet();
         var dateSetLast7 = Enumerable.Range(0, 7).Select(i => today.AddDays(-i)).ToHashSet();
 
         var last7Predictions = await _db.Predictions
-            .Where(prediction => dateStringsLast7.Contains(prediction.Date))
+            .Where(prediction => dateSetLast7.Contains(prediction.MatchLocalDate))
             .ToListAsync();
 
         var last7Forecasts = await _db.ForecastObservations
-            .Where(forecast => dateStringsLast7.Contains(forecast.Date))
+            .Where(forecast => dateSetLast7.Contains(forecast.MatchLocalDate))
             .ToListAsync();
         var thresholdProfiles = await _db.ThresholdProfiles
             .AsNoTracking()
@@ -81,26 +77,32 @@ public class AnalyticsModel : PageModel
             .ToListAsync();
 
         TodayStats = _forecastEvaluationService.CalculateStats(
-            last7Predictions.Where(prediction => dateStringsToday.Contains(prediction.Date)),
-            last7Forecasts.Where(forecast => dateStringsToday.Contains(forecast.Date)));
+            last7Predictions.Where(prediction => dateSetToday.Contains(prediction.MatchLocalDate)),
+            last7Forecasts.Where(forecast => dateSetToday.Contains(forecast.MatchLocalDate)));
         EnrichForecastStats(TodayStats, thresholdProfiles, betaProfiles);
         TodayStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetToday);
 
         YesterdayStats = _forecastEvaluationService.CalculateStats(
-            last7Predictions.Where(prediction => dateStringsYesterday.Contains(prediction.Date)),
-            last7Forecasts.Where(forecast => dateStringsYesterday.Contains(forecast.Date)));
+            last7Predictions.Where(prediction => dateSetYesterday.Contains(prediction.MatchLocalDate)),
+            last7Forecasts.Where(forecast => dateSetYesterday.Contains(forecast.MatchLocalDate)));
         EnrichForecastStats(YesterdayStats, thresholdProfiles, betaProfiles);
         YesterdayStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetYesterday);
 
         Last3DaysStats = _forecastEvaluationService.CalculateStats(
-            last7Predictions.Where(prediction => dateStringsLast3.Contains(prediction.Date)),
-            last7Forecasts.Where(forecast => dateStringsLast3.Contains(forecast.Date)));
+            last7Predictions.Where(prediction => dateSetLast3.Contains(prediction.MatchLocalDate)),
+            last7Forecasts.Where(forecast => dateSetLast3.Contains(forecast.MatchLocalDate)));
         EnrichForecastStats(Last3DaysStats, thresholdProfiles, betaProfiles);
         Last3DaysStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetLast3);
 
         Last7DaysStats = _forecastEvaluationService.CalculateStats(last7Predictions, last7Forecasts);
         EnrichForecastStats(Last7DaysStats, thresholdProfiles, betaProfiles);
         Last7DaysStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetLast7);
+
+        CurrentLiveConfig = BuildLiveConfigSnapshot(
+            thresholdProfiles,
+            betaProfiles,
+            recentPromotionHistory,
+            DateTimeProvider.GetLocalTime());
 
         DefaultTabId = SelectDefaultTab();
     }
@@ -160,12 +162,62 @@ public class AnalyticsModel : PageModel
         return "7days";
     }
 
+    private AnalyticsLiveConfigSnapshot BuildLiveConfigSnapshot(
+        IReadOnlyDictionary<PredictionMarket, ThresholdProfile> thresholdProfiles,
+        IReadOnlyDictionary<PredictionMarket, BetaCalibrationProfile> betaProfiles,
+        IReadOnlyList<PromotionHistory> recentPromotionHistory,
+        DateTime generatedAtLocal)
+    {
+        var markets = Enum.GetValues<PredictionMarket>()
+            .OrderBy(market => market)
+            .Select(market =>
+            {
+                var fallbackThreshold = GetFallbackThreshold(market);
+                thresholdProfiles.TryGetValue(market, out var thresholdProfile);
+                betaProfiles.TryGetValue(market, out var betaProfile);
+
+                return new LiveMarketConfigStat
+                {
+                    Market = market,
+                    MarketName = market.ToDisplayName(),
+                    FallbackThreshold = fallbackThreshold,
+                    ActiveThreshold = thresholdProfile?.IsPromoted == true ? thresholdProfile.Threshold : fallbackThreshold,
+                    ThresholdSource = thresholdProfile?.IsPromoted == true ? "Tuned" : "Configured",
+                    ThresholdSampleCount = thresholdProfile?.SampleCount ?? 0,
+                    ThresholdHitRate = thresholdProfile?.HitRate ?? 0.0,
+                    ThresholdPublishedPerWeek = thresholdProfile?.PublishedPerWeek ?? 0.0,
+                    ThresholdBrierScore = thresholdProfile?.BrierScore ?? 0.0,
+                    ThresholdLastUpdated = thresholdProfile?.LastUpdated,
+                    ActiveCalibrator = betaProfile?.IsRecommended == true ? "Beta" : "Bucket",
+                    BetaBaselineBrierScore = betaProfile?.BaselineBrierScore,
+                    BetaValidationBrierScore = betaProfile?.ValidationBrierScore,
+                    BetaImprovement = betaProfile?.Improvement,
+                    BetaRecommended = betaProfile?.IsRecommended ?? false,
+                    BetaTrainingSampleCount = betaProfile?.TrainingSampleCount,
+                    BetaValidationSampleCount = betaProfile?.ValidationSampleCount,
+                    BetaLastUpdated = betaProfile?.LastUpdated
+                };
+            })
+            .ToList();
+
+        return new AnalyticsLiveConfigSnapshot
+        {
+            GeneratedAtLocal = generatedAtLocal,
+            Markets = markets,
+            PromotionTimeline = BuildPromotionTimeline(
+                recentPromotionHistory,
+                recentPromotionHistory
+                    .Select(history => DateOnly.FromDateTime(DateTimeProvider.ConvertUtcToLocal(history.EffectiveAt)))
+                    .ToHashSet())
+        };
+    }
+
     private static List<PromotionTimelineItem> BuildPromotionTimeline(
         IEnumerable<PromotionHistory> promotionHistory,
-        IReadOnlySet<DateTime> localDates)
+        IReadOnlySet<DateOnly> localDates)
     {
         return promotionHistory
-            .Where(history => localDates.Contains(DateTimeProvider.ConvertUtcToLocal(history.EffectiveAt).Date))
+            .Where(history => localDates.Contains(DateOnly.FromDateTime(DateTimeProvider.ConvertUtcToLocal(history.EffectiveAt))))
             .OrderByDescending(history => history.EffectiveAt)
             .Select(history =>
             {

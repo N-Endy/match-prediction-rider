@@ -1,26 +1,27 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.Configuration;
+using MatchPredictor.Web.Services;
 
 namespace MatchPredictor.Web.Pages;
 
 public class AiChatModel : PageModel
 {
-    private const string AuthCookieName = "MP_AI_AUTH";
-    private const string SessionCookieName = "MP_AI_CHAT_SESSION";
     private readonly IConfiguration _config;
+    private readonly IAiChatAuthTicketService _authTicketService;
     public bool IsAuthenticated { get; set; }
     [BindProperty] public string? Password { get; set; }
     public string? ErrorMessage { get; set; }
 
-    public AiChatModel(IConfiguration config)
+    public AiChatModel(IConfiguration config, IAiChatAuthTicketService authTicketService)
     {
         _config = config;
+        _authTicketService = authTicketService;
     }
 
     public void OnGet()
     {
-        IsAuthenticated = Request.Cookies.ContainsKey(AuthCookieName);
+        IsAuthenticated = _authTicketService.IsAuthenticated(HttpContext);
     }
 
     public IActionResult OnPost()
@@ -29,29 +30,18 @@ public class AiChatModel : PageModel
         
         if (!string.IsNullOrEmpty(validPassword) && Password == validPassword)
         {
-            Response.Cookies.Append(AuthCookieName, "true", new CookieOptions
-            {
-                Expires = DateTime.UtcNow.AddDays(30),
-                HttpOnly = true,
-                Secure = Request.IsHttps,
-                SameSite = SameSiteMode.Strict
-            });
-
-            if (!Request.Cookies.ContainsKey(SessionCookieName))
-            {
-                Response.Cookies.Append(SessionCookieName, Guid.NewGuid().ToString("N"), new CookieOptions
-                {
-                    HttpOnly = true,
-                    Secure = Request.IsHttps,
-                    SameSite = SameSiteMode.Strict
-                });
-            }
-
+            _authTicketService.SignIn(HttpContext);
             return RedirectToPage();
         }
 
         ErrorMessage = "Incorrect password.";
         IsAuthenticated = false;
         return Page();
+    }
+
+    public IActionResult OnPostLogout()
+    {
+        _authTicketService.SignOut(HttpContext);
+        return RedirectToPage();
     }
 }

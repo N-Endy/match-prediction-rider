@@ -74,7 +74,7 @@ public class ThresholdTuningServiceTests
             context,
             now,
             PredictionMarket.Draw,
-            60,
+            45,
             0.60,
             true,
             "BalancedWin");
@@ -82,8 +82,8 @@ public class ThresholdTuningServiceTests
             context,
             now.AddMinutes(-1),
             PredictionMarket.Draw,
-            30,
-            0.52,
+            45,
+            0.60,
             false,
             "BalancedLoss");
 
@@ -146,6 +146,75 @@ public class ThresholdTuningServiceTests
         Assert.Equal(0.58, history.NewNumericValue.GetValueOrDefault(), 3);
     }
 
+    [Fact]
+    public async Task RebuildProfilesAsync_UsesPointInTimeForecastRevisionPerFixture()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = DateTime.UtcNow.Date.AddHours(18);
+
+        for (var index = 0; index < 50; index++)
+        {
+            var fixtureKickoff = kickoff.AddDays(-index);
+            context.ForecastObservations.Add(new ForecastObservation
+            {
+                Date = fixtureKickoff.ToString("dd-MM-yyyy"),
+                Time = "18:00",
+                MatchLocalDate = DateOnly.FromDateTime(fixtureKickoff),
+                MatchLocalTime = new TimeOnly(18, 0),
+                MatchDateTime = fixtureKickoff,
+                FixtureKey = $"league|fixture-{index}",
+                League = "League",
+                HomeTeam = $"Home{index}",
+                AwayTeam = $"Away{index}",
+                Market = PredictionMarket.BothTeamsScore,
+                PredictedOutcome = "BTTS",
+                RawProbability = 0.70,
+                CalibratedProbability = 0.72,
+                OutcomeOccurred = true,
+                IsSettled = true,
+                RevisionNumber = 1,
+                CreatedAt = fixtureKickoff.AddHours(-2),
+                SettledAt = fixtureKickoff.AddHours(2)
+            });
+        }
+
+        context.ForecastObservations.Add(new ForecastObservation
+        {
+            Date = kickoff.ToString("dd-MM-yyyy"),
+            Time = "18:00",
+            MatchLocalDate = DateOnly.FromDateTime(kickoff),
+            MatchLocalTime = new TimeOnly(18, 0),
+            MatchDateTime = kickoff,
+            FixtureKey = "league|fixture-0",
+            League = "League",
+            HomeTeam = "Home0",
+            AwayTeam = "Away0",
+            Market = PredictionMarket.BothTeamsScore,
+            PredictedOutcome = "BTTS",
+            RawProbability = 0.22,
+            CalibratedProbability = 0.24,
+            OutcomeOccurred = false,
+            IsSettled = true,
+            RevisionNumber = 2,
+            CreatedAt = kickoff.AddHours(1),
+            SettledAt = kickoff.AddHours(2)
+        });
+
+        await context.SaveChangesAsync();
+
+        var service = CreateService(context);
+
+        await service.RebuildProfilesAsync();
+
+        var profile = await context.ThresholdProfiles.SingleAsync(p => p.Market == PredictionMarket.BothTeamsScore);
+
+        Assert.Equal(50, profile.TrainingSampleCount + profile.ValidationSampleCount);
+    }
+
     private static ThresholdTuningService CreateService(ApplicationDbContext context)
     {
         return new ThresholdTuningService(
@@ -171,10 +240,15 @@ public class ThresholdTuningServiceTests
     {
         for (var index = 0; index < count; index++)
         {
+            var fixtureKickoff = now.AddDays(-index).Date.AddHours(18);
             context.ForecastObservations.Add(new ForecastObservation
             {
-                Date = now.AddDays(-index).ToString("dd-MM-yyyy"),
+                Date = fixtureKickoff.ToString("dd-MM-yyyy"),
                 Time = "18:00",
+                MatchLocalDate = DateOnly.FromDateTime(fixtureKickoff),
+                MatchLocalTime = new TimeOnly(18, 0),
+                MatchDateTime = fixtureKickoff,
+                FixtureKey = $"league|{prefix.ToLowerInvariant()}|{index}",
                 League = "League",
                 HomeTeam = $"{prefix}Home{index}",
                 AwayTeam = $"{prefix}Away{index}",
@@ -189,8 +263,8 @@ public class ThresholdTuningServiceTests
                 CalibratedProbability = calibratedProbability,
                 OutcomeOccurred = occurred,
                 IsSettled = true,
-                CreatedAt = now.AddDays(-index),
-                SettledAt = now.AddDays(-index)
+                CreatedAt = fixtureKickoff.AddHours(-2),
+                SettledAt = fixtureKickoff.AddHours(2)
             });
         }
     }

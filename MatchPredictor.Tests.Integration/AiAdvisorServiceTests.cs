@@ -144,6 +144,8 @@ public class AiAdvisorServiceTests
         {
             Date = DateTimeProvider.GetLocalTime().ToString("dd-MM-yyyy"),
             Time = DateTimeProvider.GetLocalTime().AddHours(-2).ToString("HH:mm"),
+            MatchLocalDate = DateOnly.FromDateTime(DateTimeProvider.GetLocalTime()),
+            MatchLocalTime = TimeOnly.FromDateTime(DateTimeProvider.GetLocalTime().AddHours(-2)),
             MatchDateTime = DateTime.UtcNow.AddMinutes(-30),
             League = "England - Premier League",
             HomeTeam = "Arsenal",
@@ -155,7 +157,8 @@ public class AiAdvisorServiceTests
             ThresholdUsed = 0.55,
             ThresholdSource = "Configured",
             CalibratorUsed = "Bucket",
-            WasPublished = true
+            WasPublished = true,
+            IsCurrentRevision = true
         });
 
         await context.SaveChangesAsync();
@@ -165,7 +168,7 @@ public class AiAdvisorServiceTests
 
         var response = await service.GetAdviceAsync("What are the best BTTS picks?", "session-5");
 
-        Assert.Contains("No predictions are available for today", response.Message);
+        Assert.Contains("No predictions are available", response.Message);
         Assert.Equal(0, handler.CallCount);
     }
 
@@ -202,6 +205,113 @@ public class AiAdvisorServiceTests
         Assert.All(response.Actions, action => Assert.False(string.IsNullOrWhiteSpace(action.Explanation)));
         Assert.True(response.ShowBookAll);
         Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_CanAnswerAboutYesterdayFixtureWithoutReturningBookingActions()
+    {
+        await using var context = CreateContext();
+        var yesterdayLocal = DateTimeProvider.GetLocalTime().AddDays(-1);
+
+        context.Predictions.Add(new Prediction
+        {
+            Date = yesterdayLocal.ToString("dd-MM-yyyy"),
+            Time = yesterdayLocal.AddHours(18).ToString("HH:mm"),
+            MatchLocalDate = DateOnly.FromDateTime(yesterdayLocal),
+            MatchLocalTime = TimeOnly.FromDateTime(yesterdayLocal.AddHours(18)),
+            MatchDateTime = DateTimeProvider.ConvertLocalToUtc(yesterdayLocal.AddHours(18)),
+            League = "England - Premier League",
+            HomeTeam = "Arsenal",
+            AwayTeam = "Chelsea",
+            PredictionCategory = "StraightWin",
+            PredictedOutcome = "Home Win",
+            ConfidenceScore = 0.76m,
+            RawConfidenceScore = 0.73m,
+            ThresholdUsed = 0.68,
+            ThresholdSource = "Configured",
+            CalibratorUsed = "Bucket",
+            WasPublished = true,
+            IsCurrentRevision = true,
+            ActualScore = "2:1",
+            ActualOutcome = "Home Win",
+            IsLive = false
+        });
+
+        await context.SaveChangesAsync();
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse("""
+                {
+                  "message": "Arsenal beat Chelsea 2:1 yesterday, so that Home Win settled green.",
+                  "recommendations": [],
+                  "showBookAll": false
+                }
+                """));
+
+        var service = CreateService(context, handler);
+        var response = await service.GetAdviceAsync("Tell me about Arsenal yesterday", "session-yesterday");
+
+        Assert.Contains("2:1", response.Message);
+        Assert.Empty(response.Actions);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_UsesLastContext_ForSettlementFollowUp()
+    {
+        await using var context = CreateContext();
+        var yesterdayLocal = DateTimeProvider.GetLocalTime().AddDays(-1);
+
+        context.Predictions.Add(new Prediction
+        {
+            Date = yesterdayLocal.ToString("dd-MM-yyyy"),
+            Time = yesterdayLocal.AddHours(18).ToString("HH:mm"),
+            MatchLocalDate = DateOnly.FromDateTime(yesterdayLocal),
+            MatchLocalTime = TimeOnly.FromDateTime(yesterdayLocal.AddHours(18)),
+            MatchDateTime = DateTimeProvider.ConvertLocalToUtc(yesterdayLocal.AddHours(18)),
+            League = "England - Premier League",
+            HomeTeam = "Arsenal",
+            AwayTeam = "Chelsea",
+            PredictionCategory = "StraightWin",
+            PredictedOutcome = "Home Win",
+            ConfidenceScore = 0.76m,
+            RawConfidenceScore = 0.73m,
+            ThresholdUsed = 0.68,
+            ThresholdSource = "Configured",
+            CalibratorUsed = "Bucket",
+            WasPublished = true,
+            IsCurrentRevision = true,
+            ActualScore = "0:1",
+            ActualOutcome = "Away Win",
+            IsLive = false
+        });
+
+        await context.SaveChangesAsync();
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse("""
+                {
+                  "message": "Arsenal lost 0:1 to Chelsea yesterday.",
+                  "recommendations": [],
+                  "showBookAll": false
+                }
+                """),
+            BuildGroqResponse("""
+                {
+                  "message": "It settled red because the pick was Home Win but Chelsea won 1:0 away.",
+                  "recommendations": [],
+                  "showBookAll": false
+                }
+                """));
+
+        var cache = new TestDistributedCache();
+        var service = CreateService(context, handler, cache);
+
+        var first = await service.GetAdviceAsync("Tell me about Arsenal yesterday", "session-context");
+        var second = await service.GetAdviceAsync("Why did this settle red?", "session-context");
+
+        Assert.Contains("0:1", first.Message);
+        Assert.Contains("settled red", second.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, handler.CallCount);
     }
 
     [Fact]
@@ -326,6 +436,8 @@ public class AiAdvisorServiceTests
             {
                 Date = date,
                 Time = kickoffTime,
+                MatchLocalDate = DateOnly.FromDateTime(localNow),
+                MatchLocalTime = TimeOnly.FromDateTime(localNow.AddMinutes(30)),
                 MatchDateTime = null,
                 League = index % 2 == 0 ? "England - Premier League" : "Italy - Serie A",
                 HomeTeam = index % 2 == 0 ? $"Alpha {index}" : $"Beta {index}",
@@ -337,7 +449,8 @@ public class AiAdvisorServiceTests
                 ThresholdUsed = index % 2 == 0 ? 0.68 : 0.55,
                 ThresholdSource = "Configured",
                 CalibratorUsed = "Bucket",
-                WasPublished = true
+                WasPublished = true,
+                IsCurrentRevision = true
             })
             .ToList();
 
@@ -359,6 +472,8 @@ public class AiAdvisorServiceTests
             {
                 Date = date,
                 Time = kickoffTime,
+                MatchLocalDate = DateOnly.FromDateTime(localNow),
+                MatchLocalTime = TimeOnly.FromDateTime(localNow.AddMinutes(30)),
                 MatchDateTime = null,
                 League = spec.League,
                 HomeTeam = spec.HomeTeam,
@@ -370,7 +485,8 @@ public class AiAdvisorServiceTests
                 ThresholdUsed = spec.ThresholdUsed,
                 ThresholdSource = "Configured",
                 CalibratorUsed = "Bucket",
-                WasPublished = true
+                WasPublished = true,
+                IsCurrentRevision = true
             })
             .ToList();
 
@@ -396,6 +512,8 @@ public class AiAdvisorServiceTests
         {
             Date = spec.Prediction.Date,
             Time = spec.Prediction.Time,
+            MatchLocalDate = spec.Prediction.MatchLocalDate,
+            MatchLocalTime = spec.Prediction.MatchLocalTime,
             MatchDateTime = spec.Prediction.MatchDateTime,
             League = spec.Prediction.League,
             HomeTeam = spec.Prediction.HomeTeam,

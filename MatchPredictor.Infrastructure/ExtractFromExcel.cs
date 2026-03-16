@@ -136,6 +136,8 @@ public class ExtractFromExcel : IExtractFromExcel
                 {
                     Date = matchDateTime.ToString("dd-MM-yyyy", CultureInfo.InvariantCulture),
                     Time = matchDateTime.ToString("HH:mm", CultureInfo.InvariantCulture),
+                    MatchLocalDate = DateOnly.FromDateTime(matchDateTime),
+                    MatchLocalTime = TimeOnly.FromDateTime(matchDateTime),
                     League = worksheet.Cells[row, 4].Value?.ToString(),
                     HomeTeam = worksheet.Cells[row, 2].Value?.ToString(),
                     AwayTeam = worksheet.Cells[row, 3].Value?.ToString(),
@@ -159,7 +161,6 @@ public class ExtractFromExcel : IExtractFromExcel
                     AhPlusHalfHome = ParseProbability(worksheet.Cells[row, 71].Value),
                     AhPlusHalfAway = ParseProbability(worksheet.Cells[row, 72].Value)
                 };
-
                 matchData.NormalizeSourceProbabilities();
                 extractedData.Add(matchData);
             }

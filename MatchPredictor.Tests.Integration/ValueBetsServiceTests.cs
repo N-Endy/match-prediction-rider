@@ -29,6 +29,10 @@ public class ValueBetsServiceTests
         {
             Date = date,
             Time = time,
+            MatchLocalDate = DateOnly.FromDateTime(kickoff),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+            MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            FixtureKey = "test-league|alpha|beta",
             League = "Test League",
             HomeTeam = "Alpha",
             AwayTeam = "Beta",
@@ -133,6 +137,10 @@ public class ValueBetsServiceTests
         {
             Date = date,
             Time = time,
+            MatchLocalDate = DateOnly.FromDateTime(kickoff),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+            MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            FixtureKey = "test-league|gamma|delta",
             League = "Test League",
             HomeTeam = "Gamma",
             AwayTeam = "Delta",
@@ -201,7 +209,10 @@ public class ValueBetsServiceTests
         {
             Date = date,
             Time = time,
+            MatchLocalDate = DateOnly.FromDateTime(kickoff),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoff),
             MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            FixtureKey = "england-premier-league|alpha-fc|beta-united",
             League = "England - Premier League",
             HomeTeam = "Alpha FC",
             AwayTeam = "Beta United",
@@ -264,6 +275,84 @@ public class ValueBetsServiceTests
         Assert.Equal(0.63, btts.MathematicalProbability, 3);
         Assert.Equal(0.55, btts.MarketProbability, 3);
         Assert.Equal(0.08, btts.Edge, 3);
+    }
+
+    [Fact]
+    public async Task GetValueBetReportAsync_ReturnsExclusionBreakdown_AndPricingFreshness()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = DateTimeProvider.GetLocalTime().AddHours(2);
+        var date = kickoff.ToString("dd-MM-yyyy");
+        var time = kickoff.ToString("HH:mm");
+
+        context.MatchDatas.Add(new MatchData
+        {
+            Date = date,
+            Time = time,
+            MatchLocalDate = DateOnly.FromDateTime(kickoff),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+            MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            FixtureKey = "test-league|alpha|beta",
+            League = "Test League",
+            HomeTeam = "Alpha",
+            AwayTeam = "Beta",
+            HomeWin = 0.60,
+            Draw = 0.25,
+            AwayWin = 0.15,
+            OverTwoGoals = 0.52,
+            UnderTwoGoals = 0.48,
+            BttsYes = 0.56,
+            BttsNo = 0.44
+        });
+
+        await context.SaveChangesAsync();
+
+        var analyzer = new FakeDataAnalyzerService();
+        analyzer.Seed(
+            "Alpha",
+            "Beta",
+            [
+                CreateCandidate(PredictionMarket.HomeWin, "StraightWin", "Home Win", 0.60, 0.69),
+                CreateCandidate(PredictionMarket.Over25Goals, "Over2.5Goals", "Over 2.5", 0.52, 0.54),
+                CreateCandidate(PredictionMarket.AwayWin, "StraightWin", "Away Win", 0.15, 0.17)
+            ]);
+
+        var service = new ValueBetsService(
+            context,
+            analyzer,
+            new FakeThresholdTuningService
+            {
+                Decisions =
+                {
+                    [PredictionMarket.HomeWin] = new ThresholdDecision { Threshold = 0.68, ThresholdSource = "Configured" },
+                    [PredictionMarket.Over25Goals] = new ThresholdDecision { Threshold = 0.58, ThresholdSource = "Configured" },
+                    [PredictionMarket.AwayWin] = new ThresholdDecision { Threshold = 0.16, ThresholdSource = "Configured" }
+                }
+            },
+            new FakeAiAdvisorService(_ => "{\"picks\":[]}"),
+            new FakeSourceMarketPricingService(),
+            Options.Create(new PredictionSettings
+            {
+                HomeWinStrong = 0.68,
+                AwayWinStrong = 0.70,
+                OverTwoGoalsStrongThreshold = 0.58,
+                ValueBetMinimumEdge = 0.03
+            }),
+            NullLogger<ValueBetsService>.Instance);
+
+        var report = await service.GetValueBetReportAsync();
+
+        Assert.Equal(3, report.ConsideredCandidateCount);
+        Assert.Single(report.Bets);
+        Assert.Equal("Stored sync snapshot", report.Bets[0].PricingSource);
+        Assert.Contains("latest stored sync pricing", report.Bets[0].OddsFreshness, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Model 69.0% vs market 60.0%", report.Bets[0].EdgeSource);
+        Assert.Contains(report.ExclusionBreakdown, item => item.Key == "below_threshold" && item.Count == 1);
+        Assert.Contains(report.ExclusionBreakdown, item => item.Key == "insufficient_edge" && item.Count == 1);
     }
 
     private static PredictionCandidate CreateCandidate(

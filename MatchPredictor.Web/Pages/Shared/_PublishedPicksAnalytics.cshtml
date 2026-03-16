@@ -1,0 +1,65 @@
+@model MatchPredictor.Domain.Models.AnalyticsStats
+
+@{
+    var accClass = Model.OverallAccuracy >= 0.70 ? "acc-high" :
+                   Model.OverallAccuracy >= 0.50 ? "acc-med" : "acc-low";
+}
+
+<div class="mp-stat-grid">
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Published Picks</div>
+        <div class="mp-stat-value mp-stat-figure">@Model.TotalPredictions</div>
+    </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Settled Picks</div>
+        <div class="mp-stat-value mp-stat-figure">@Model.CompletedPredictions</div>
+    </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Correct Picks</div>
+        <div class="mp-stat-value mp-stat-figure">@Model.CorrectPredictions</div>
+    </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Win Rate</div>
+        <div class="mp-stat-value mp-stat-figure @accClass">
+            @(Model.CompletedPredictions > 0 ? (Model.OverallAccuracy * 100).ToString("F1") + "%" : "0.0%")
+        </div>
+    </div>
+</div>
+
+<div class="mp-analytics-note">
+    This section is about published picks only: how many went out, how many settled, and how often the pick itself was right.
+</div>
+
+@if (Model.CategoryStats.Any())
+{
+    <div class="mp-category-stats">
+        <h3 style="margin-bottom: 1.5rem; font-size: 1.1rem; color: white;">Published Picks by Concept</h3>
+
+        @foreach (var cat in Model.CategoryStats.Values.OrderByDescending(c => c.Total))
+        {
+            var catAccClass = cat.Accuracy >= 0.70 ? "acc-high" :
+                              cat.Accuracy >= 0.50 ? "acc-med" : "acc-low";
+            var fillWidth = cat.Total > 0 ? (cat.Accuracy * 100).ToString("F1") + "%" : "0%";
+
+            <div class="mp-category-row">
+                <div class="mp-cat-header">
+                    <span class="mp-cat-name">@cat.Category</span>
+                    <span class="mp-cat-details @catAccClass">
+                        <span class="mp-cat-metric"><strong>@fillWidth</strong></span>
+                        <span class="mp-cat-metric">(@cat.Correct / @cat.Total)</span>
+                        <span class="mp-cat-metric">Brier @cat.BrierScore.ToString("F3")</span>
+                    </span>
+                </div>
+                <div class="mp-progress-track">
+                    <div class="mp-progress-fill @catAccClass" style="width: @fillWidth"></div>
+                </div>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <div class="mp-market-empty">
+        No published pick performance is available in this range yet.
+    </div>
+}

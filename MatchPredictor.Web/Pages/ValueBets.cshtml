@@ -25,6 +25,8 @@
         <p style="color: var(--text-muted);">We only show markets where the calibrated model clears its threshold and still beats the source market by a real edge.</p>
     </div>
 
+    <div id="valueBetsSummary" style="display: none; margin-bottom: 1.5rem;"></div>
+
     <!-- Error State -->
     <div id="errorState" style="display: none; text-align: center; padding: 4rem 1rem; background: #fff3f3; color: #dc3545; border-radius: 12px; border: 1px solid #ffdcdc;">
         <h3 id="errorMessage" style="margin-bottom: 0.5rem; color: #dc3545;">Failed to load AI Value Bets</h3>
@@ -53,9 +55,11 @@
                     throw new Error('Failed to load Value Bets data from the server.');
                 }
 
-                const valueBets = await response.json();
+                const report = await response.json();
+                const valueBets = Array.isArray(report?.bets) ? report.bets : [];
                 
                 loadingState.style.display = 'none';
+                renderSummary(report);
 
                 if (!valueBets || valueBets.length === 0) {
                     noBetsState.style.display = 'block';
@@ -70,6 +74,10 @@
                     const edgeString = '+' + (bet.edge * 100).toFixed(1) + ' pts';
                     const thresholdString = (bet.thresholdUsed * 100).toFixed(1) + '%';
                     const thresholdSource = (bet.thresholdSource || 'Configured').toLowerCase();
+                    const marketKey =
+                        bet.predictionCategory === 'BothTeamsScore' ? 'BTTS' :
+                        bet.predictionCategory === 'Over2.5Goals' ? 'Over2.5' :
+                        'StraightWin';
                     
                     let badgeClass = 'mp-badge-combined'; 
                     if (bet.predictionCategory === 'BothTeamsScore') badgeClass = 'mp-badge-btts';
@@ -83,6 +91,12 @@
                         bet.predictionCategory === 'BothTeamsScore' ? 'BTTS' :
                         bet.predictionCategory === 'StraightWin' ? 'Straight Win' :
                         bet.predictionCategory;
+
+                    const insightChips = [
+                        bet.pricingSource ? `<span class="mp-insight-chip">${escapeHtml(bet.pricingSource)}</span>` : '',
+                        bet.oddsFreshness ? `<span class="mp-insight-chip">${escapeHtml(bet.oddsFreshness)}</span>` : '',
+                        bet.edgeSource ? `<span class="mp-insight-chip">${escapeHtml(bet.edgeSource)}</span>` : ''
+                    ].filter(Boolean).join('');
 
                     return `
                         <div class="mp-prediction-card" style="flex-direction: column; align-items: stretch; gap: 1rem; position: relative; overflow: hidden; border-top: 4px solid var(--accent-blue);">
@@ -107,7 +121,7 @@
                                             data-home="${bet.homeTeam}"
                                             data-away="${bet.awayTeam}"
                                             data-league="${bet.league}"
-                                            data-market="${bet.predictionCategory}"
+                                            data-market="${marketKey}"
                                             data-prediction="${bet.predictedOutcome}">
                                         Add Bet
                                     </button>
@@ -116,6 +130,7 @@
 
                             <!-- Bottom Row: AI Insights -->
                             <div style="background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.15); border-radius: 8px; padding: 1.25rem; margin-top: 0.5rem;">
+                                ${insightChips ? `<div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">${insightChips}</div>` : ''}
                                 
                                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 1rem; gap: 0.75rem;">
                                     <div>
@@ -157,6 +172,49 @@
                 errorState.style.display = 'block';
             }
         });
+
+        function renderSummary(report) {
+            const summary = document.getElementById('valueBetsSummary');
+            if (!summary || !report) {
+                return;
+            }
+
+            const generatedAt = report.generatedAtLocal
+                ? new Date(report.generatedAtLocal).toLocaleString()
+                : 'Awaiting fresh analysis';
+            const exclusionCards = Array.isArray(report.exclusionBreakdown)
+                ? report.exclusionBreakdown.map(item => `
+                    <div class="mp-stat-card" style="text-align: left; padding: 1rem;">
+                        <div class="mp-stat-label">${escapeHtml(item.label || 'Excluded')}</div>
+                        <div class="mp-stat-value mp-stat-value-compact" style="justify-content: flex-start;">${Number(item.count || 0)}</div>
+                        <div style="color: var(--text-muted); font-size: 0.82rem; line-height: 1.5;">${escapeHtml(item.description || '')}</div>
+                    </div>
+                `).join('')
+                : '';
+
+            summary.innerHTML = `
+                <div class="mp-stat-grid" style="margin-bottom: 1rem;">
+                    <div class="mp-stat-card">
+                        <div class="mp-stat-label">Markets Considered</div>
+                        <div class="mp-stat-value mp-stat-figure">${Number(report.consideredCandidateCount || 0)}</div>
+                    </div>
+                    <div class="mp-stat-card">
+                        <div class="mp-stat-label">Value Bets Returned</div>
+                        <div class="mp-stat-value mp-stat-figure">${Number(report.includedCandidateCount || 0)}</div>
+                    </div>
+                    <div class="mp-stat-card">
+                        <div class="mp-stat-label">Report Freshness</div>
+                        <div class="mp-stat-value mp-stat-value-compact" style="font-size: 1.05rem;">${escapeHtml(generatedAt)}</div>
+                    </div>
+                </div>
+                <div class="mp-analytics-note" style="margin-bottom: 1rem;">
+                    We only surface picks that clear the publish threshold and still beat the source market by a real edge. The cards below show where the market price came from and how fresh it is.
+                </div>
+                ${exclusionCards ? `<div class="mp-stat-grid">${exclusionCards}</div>` : ''}
+            `;
+
+            summary.style.display = 'block';
+        }
     </script>
     
     <style>

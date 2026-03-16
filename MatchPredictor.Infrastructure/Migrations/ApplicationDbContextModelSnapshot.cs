@@ -57,6 +57,10 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("MatchTime", "IsLive");
+
+                    b.HasIndex("MatchTime", "HomeTeam", "AwayTeam");
+
                     b.ToTable("AiScoreMatchScores");
                 });
 
@@ -141,9 +145,16 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("FixtureKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<string>("HomeTeam")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<bool>("IsCurrentRevision")
+                        .HasColumnType("boolean");
 
                     b.Property<bool>("IsLive")
                         .HasColumnType("boolean");
@@ -164,6 +175,12 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<DateTime?>("MatchDateTime")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateOnly>("MatchLocalDate")
+                        .HasColumnType("date");
+
+                    b.Property<TimeOnly?>("MatchLocalTime")
+                        .HasColumnType("time without time zone");
+
                     b.Property<bool?>("OutcomeOccurred")
                         .HasColumnType("boolean");
 
@@ -171,10 +188,27 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<Guid>("PredictionRunId")
+                        .HasColumnType("uuid");
+
                     b.Property<double>("RawProbability")
                         .HasColumnType("double precision");
 
+                    b.Property<int>("RevisionNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RunLabel")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("RunReason")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<DateTime?>("SettledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("SupersededAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("ThresholdSource")
@@ -190,8 +224,14 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Date", "HomeTeam", "AwayTeam", "League", "Market")
+                    b.HasIndex("PredictionRunId", "Market");
+
+                    b.HasIndex("FixtureKey", "IsCurrentRevision", "Market");
+
+                    b.HasIndex("PredictionRunId", "FixtureKey", "Market")
                         .IsUnique();
+
+                    b.HasIndex("MatchLocalDate", "IsCurrentRevision", "Market", "MatchLocalTime");
 
                     b.ToTable("ForecastObservations");
                 });
@@ -286,6 +326,10 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<double>("Draw")
                         .HasColumnType("double precision");
 
+                    b.Property<string>("FixtureKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<string>("HomeTeam")
                         .HasColumnType("text");
 
@@ -297,6 +341,12 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     b.Property<DateTime?>("MatchDateTime")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateOnly?>("MatchLocalDate")
+                        .HasColumnType("date");
+
+                    b.Property<TimeOnly?>("MatchLocalTime")
+                        .HasColumnType("time without time zone");
 
                     b.Property<double>("OverFourGoals")
                         .HasColumnType("double precision");
@@ -329,6 +379,12 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .HasColumnType("double precision");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("FixtureKey");
+
+                    b.HasIndex("MatchLocalDate", "League");
+
+                    b.HasIndex("MatchLocalDate", "MatchLocalTime");
 
                     b.ToTable("MatchDatas");
                 });
@@ -367,6 +423,10 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("MatchTime", "IsLive");
+
+                    b.HasIndex("MatchTime", "HomeTeam", "AwayTeam");
 
                     b.ToTable("MatchScores");
                 });
@@ -442,9 +502,16 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("FixtureKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<string>("HomeTeam")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<bool>("IsCurrentRevision")
+                        .HasColumnType("boolean");
 
                     b.Property<bool>("IsLive")
                         .HasColumnType("boolean");
@@ -456,6 +523,12 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<DateTime?>("MatchDateTime")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateOnly>("MatchLocalDate")
+                        .HasColumnType("date");
+
+                    b.Property<TimeOnly?>("MatchLocalTime")
+                        .HasColumnType("time without time zone");
+
                     b.Property<string>("PredictedOutcome")
                         .IsRequired()
                         .HasColumnType("text");
@@ -464,8 +537,25 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<Guid>("PredictionRunId")
+                        .HasColumnType("uuid");
+
                     b.Property<decimal?>("RawConfidenceScore")
                         .HasColumnType("numeric");
+
+                    b.Property<int>("RevisionNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RunLabel")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("RunReason")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("SupersededAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("ThresholdSource")
                         .IsRequired()
@@ -483,7 +573,63 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("FixtureKey", "IsCurrentRevision");
+
+                    b.HasIndex("PredictionRunId", "PredictionCategory");
+
+                    b.HasIndex("MatchLocalDate", "IsCurrentRevision", "League");
+
+                    b.HasIndex("PredictionRunId", "FixtureKey", "PredictionCategory")
+                        .IsUnique();
+
+                    b.HasIndex("MatchLocalDate", "IsCurrentRevision", "PredictionCategory", "MatchLocalTime");
+
                     b.ToTable("Predictions");
+                });
+
+            modelBuilder.Entity("MatchPredictor.Domain.Models.PredictionRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("CompletedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("ForecastCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("PublishedPredictionCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RunKind")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("RunLabel")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("RunReason")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("StartedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("Succeeded")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateOnly>("TargetLocalDate")
+                        .HasColumnType("date");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunKind", "StartedAtUtc");
+
+                    b.HasIndex("TargetLocalDate", "StartedAtUtc");
+
+                    b.ToTable("PredictionRuns");
                 });
 
             modelBuilder.Entity("MatchPredictor.Domain.Models.PromotionHistory", b =>
@@ -601,6 +747,13 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
+                    b.Property<string>("EventName")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasDefaultValue("general");
+
                     b.Property<string>("Message")
                         .HasColumnType("text");
 
@@ -613,7 +766,70 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("Timestamp");
+
+                    b.HasIndex("EventName", "Timestamp");
+
                     b.ToTable("ScrapingLogs");
+                });
+
+            modelBuilder.Entity("MatchPredictor.Domain.Models.SourceQualityProfile", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<double>("AverageKickoffOffsetMinutes")
+                        .HasColumnType("double precision");
+
+                    b.Property<int>("ExactScoreMatchCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("FinishedCoverageCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("LastUpdated")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LeagueKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("LeagueLabel")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("LiveOnlyCount")
+                        .HasColumnType("integer");
+
+                    b.Property<double>("ReliabilityScore")
+                        .HasColumnType("double precision");
+
+                    b.Property<int>("SampleCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SourceName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("TimeBucketKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("TimeBucketLabel")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SourceName", "LeagueKey", "TimeBucketKey")
+                        .IsUnique();
+
+                    b.HasIndex("SourceName", "ReliabilityScore");
+
+                    b.ToTable("SourceQualityProfiles");
                 });
 
             modelBuilder.Entity("MatchPredictor.Domain.Models.ThresholdProfile", b =>

@@ -39,6 +39,11 @@ public class UserTrackingMiddleware
             return;
         }
 
+        if (context.RequestAborted.IsCancellationRequested)
+        {
+            return;
+        }
+
         await userTrackingService.TrackPageViewAsync(context, context.RequestAborted);
     }
 }

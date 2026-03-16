@@ -14,6 +14,13 @@ public class AnalyticsStats
     public List<PromotionTimelineItem> PromotionTimeline { get; set; } = [];
 }
 
+public class AnalyticsLiveConfigSnapshot
+{
+    public DateTime GeneratedAtLocal { get; set; }
+    public List<LiveMarketConfigStat> Markets { get; set; } = [];
+    public List<PromotionTimelineItem> PromotionTimeline { get; set; } = [];
+}
+
 public class CategoryStat
 {
     public string Category { get; set; } = string.Empty;
@@ -87,4 +94,26 @@ public class PromotionTimelineItem
     public string Summary { get; set; } = string.Empty;
     public string Detail { get; set; } = string.Empty;
     public double? Improvement { get; set; }
+}
+
+public class LiveMarketConfigStat
+{
+    public PredictionMarket Market { get; set; }
+    public string MarketName { get; set; } = string.Empty;
+    public string ActiveCalibrator { get; set; } = "Bucket";
+    public double ActiveThreshold { get; set; }
+    public double FallbackThreshold { get; set; }
+    public string ThresholdSource { get; set; } = "Configured";
+    public int ThresholdSampleCount { get; set; }
+    public double ThresholdHitRate { get; set; }
+    public double ThresholdPublishedPerWeek { get; set; }
+    public double ThresholdBrierScore { get; set; }
+    public DateTime? ThresholdLastUpdated { get; set; }
+    public double? BetaBaselineBrierScore { get; set; }
+    public double? BetaValidationBrierScore { get; set; }
+    public double? BetaImprovement { get; set; }
+    public bool BetaRecommended { get; set; }
+    public int? BetaTrainingSampleCount { get; set; }
+    public int? BetaValidationSampleCount { get; set; }
+    public DateTime? BetaLastUpdated { get; set; }
 }

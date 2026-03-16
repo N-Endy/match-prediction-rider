@@ -1,0 +1,127 @@
+@model MatchPredictor.Domain.Models.AnalyticsLiveConfigSnapshot
+
+<div class="mp-analytics-note">
+    This section is about the configuration currently driving the app right now: active thresholds, active calibrators, and recent promotions.
+</div>
+
+<div class="mp-market-grid">
+    @foreach (var market in Model.Markets)
+    {
+        <article class="mp-market-card">
+            <div class="mp-market-header">
+                <div>
+                    <h4>@market.MarketName</h4>
+                    <p>Current live configuration</p>
+                </div>
+                <div class="mp-market-briers">
+                    <span>Base @market.FallbackThreshold.ToString("F2")</span>
+                    <span>Live @market.ActiveThreshold.ToString("F2")</span>
+                </div>
+            </div>
+
+            <div class="mp-market-meta">
+                <span class="mp-market-pill">
+                    <strong>@market.ThresholdSource threshold</strong>
+                    <em>@market.ActiveThreshold.ToString("F2")</em>
+                </span>
+                <span class="mp-market-pill">
+                    <strong>@market.ActiveCalibrator</strong>
+                    <em>calibrator</em>
+                </span>
+                @if (market.ThresholdSampleCount > 0)
+                {
+                    <span class="mp-market-pill">
+                        <strong>@market.ThresholdSampleCount</strong>
+                        <em>threshold picks</em>
+                    </span>
+                }
+            </div>
+
+            <div class="mp-market-metrics">
+                <div class="mp-market-metric-block">
+                    <span class="mp-market-metric-label">Hit Rate</span>
+                    <strong>@(market.ThresholdSampleCount > 0 ? $"{market.ThresholdHitRate * 100:F1}%" : "--")</strong>
+                </div>
+                <div class="mp-market-metric-block">
+                    <span class="mp-market-metric-label">Picks / Week</span>
+                    <strong>@(market.ThresholdSampleCount > 0 ? market.ThresholdPublishedPerWeek.ToString("F1") : "--")</strong>
+                </div>
+                <div class="mp-market-metric-block">
+                    <span class="mp-market-metric-label">Threshold Brier</span>
+                    <strong>@(market.ThresholdSampleCount > 0 ? market.ThresholdBrierScore.ToString("F3") : "--")</strong>
+                </div>
+            </div>
+
+            <div class="mp-market-beta">
+                <div class="mp-market-beta-header">
+                    <span>Beta Status</span>
+                    @if (market.BetaValidationBrierScore.HasValue)
+                    {
+                        <strong class="@(market.BetaRecommended ? "acc-high" : "acc-med")">
+                            @(market.BetaRecommended ? "Promoted" : "Tracking")
+                        </strong>
+                    }
+                    else
+                    {
+                        <strong class="acc-low">Insufficient Data</strong>
+                    }
+                </div>
+
+                @if (market.BetaValidationBrierScore.HasValue)
+                {
+                    <div class="mp-market-beta-grid">
+                        <span>Bucket @market.BetaBaselineBrierScore?.ToString("F3")</span>
+                        <span>Beta @market.BetaValidationBrierScore?.ToString("F3")</span>
+                        <span>Delta @market.BetaImprovement?.ToString("F3")</span>
+                        <span>Train @market.BetaTrainingSampleCount / Val @market.BetaValidationSampleCount</span>
+                    </div>
+                    @if (market.BetaLastUpdated.HasValue)
+                    {
+                        <p class="mp-market-beta-empty">
+                            Reviewed @market.BetaLastUpdated.Value.ToString("dd MMM yyyy")
+                        </p>
+                    }
+                }
+                else
+                {
+                    <p class="mp-market-beta-empty">
+                        Beta is still being evaluated and needs more settled forecast history before it can safely replace Bucket.
+                    </p>
+                }
+            </div>
+        </article>
+    }
+</div>
+
+<div class="mp-switch-log">
+    <h3 style="margin-bottom: 1.5rem; font-size: 1.1rem; color: white;">Recent Switch Timeline</h3>
+
+    @if (Model.PromotionTimeline.Any())
+    {
+        <div class="mp-switch-list">
+            @foreach (var item in Model.PromotionTimeline)
+            {
+                <article class="mp-switch-item">
+                    <div class="mp-switch-time">
+                        <strong>@item.EffectiveAt.ToString("dd MMM")</strong>
+                        <span>@item.EffectiveAt.ToString("HH:mm") WAT</span>
+                    </div>
+                    <div class="mp-switch-body">
+                        <div class="mp-switch-header">
+                            <span class="mp-switch-market">@item.MarketName</span>
+                            <span class="mp-switch-badge">@item.ChangeType</span>
+                        </div>
+                        <div class="mp-switch-summary">@item.Summary</div>
+                        <div class="mp-switch-detail">@item.Detail</div>
+                    </div>
+                </article>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="mp-market-empty">
+            No threshold or calibrator promotions have been recorded recently.
+        </div>
+    }
+</div>

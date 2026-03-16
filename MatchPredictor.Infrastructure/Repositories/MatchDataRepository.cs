@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 
 namespace MatchPredictor.Infrastructure.Repositories;
@@ -20,15 +21,14 @@ public class MatchDataRepository : IMatchDataRepository
 
     public async Task<List<MatchData>> GetMatchDataAsync(DateTime? date = null)
     {
-        var matchDate = date?.Date ?? DateTime.UtcNow.Date;
-        var matchDateString = matchDate.ToString("dd-MM-yyyy");
+        var matchLocalDate = DateOnly.FromDateTime(date ?? DateTimeProvider.GetLocalTime());
 
         return await _context.MatchDatas
-            .Where(m =>
-                (m.MatchDateTime.HasValue && m.MatchDateTime.Value.Date == matchDate) ||
-                (!m.MatchDateTime.HasValue && m.Date == matchDateString))
-            .OrderBy(m => m.MatchDateTime ?? DateTime.Parse(m.Date ?? matchDateString))
-            .ThenBy(m => m.Time)
+            .AsNoTracking()
+            .Where(m => m.MatchLocalDate == matchLocalDate)
+            .OrderBy(m => m.MatchDateTime ?? DateTimeProvider.ConvertLocalToUtc(
+                matchLocalDate.ToDateTime(m.MatchLocalTime ?? new TimeOnly(0, 0), DateTimeKind.Unspecified)))
+            .ThenBy(m => m.MatchLocalTime)
             .ThenBy(m => m.HomeTeam)
             .ToListAsync();
     }

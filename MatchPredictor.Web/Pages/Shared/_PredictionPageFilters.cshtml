@@ -1,0 +1,77 @@
+@model MatchPredictor.Web.Pages.Predictions.FilteredPredictionPageModel
+
+<form method="get" class="mp-prediction-toolbar">
+    <div class="mp-prediction-toolbar-grid">
+        <label class="mp-filter-field">
+            <span>Search</span>
+            <input type="search" name="Search" value="@Model.Search" placeholder="Team, league, or pick" class="mp-filter-input" />
+        </label>
+
+        <label class="mp-filter-field">
+            <span>League</span>
+            <select name="League" class="mp-filter-select">
+                <option value="">All leagues</option>
+                @foreach (var league in Model.LeagueOptions)
+                {
+                    <option value="@league" selected="@(string.Equals(Model.League, league, StringComparison.OrdinalIgnoreCase) ? "selected" : null)">@league</option>
+                }
+            </select>
+        </label>
+
+        <label class="mp-filter-field">
+            <span>Kickoff</span>
+            <select name="KickoffWindow" class="mp-filter-select">
+                <option value="all" selected="@(Model.KickoffWindow == "all" ? "selected" : null)">All day</option>
+                <option value="morning" selected="@(Model.KickoffWindow == "morning" ? "selected" : null)">Morning</option>
+                <option value="afternoon" selected="@(Model.KickoffWindow == "afternoon" ? "selected" : null)">Afternoon</option>
+                <option value="evening" selected="@(Model.KickoffWindow == "evening" ? "selected" : null)">Evening</option>
+                <option value="late" selected="@(Model.KickoffWindow == "late" ? "selected" : null)">Late night</option>
+            </select>
+        </label>
+
+        <label class="mp-filter-field">
+            <span>Status</span>
+            <select name="Status" class="mp-filter-select">
+                <option value="all" selected="@(Model.Status == "all" ? "selected" : null)">All states</option>
+                <option value="upcoming" selected="@(Model.Status == "upcoming" ? "selected" : null)">Upcoming</option>
+                <option value="live" selected="@(Model.Status == "live" ? "selected" : null)">Live</option>
+                <option value="finished" selected="@(Model.Status == "finished" ? "selected" : null)">Finished</option>
+            </select>
+        </label>
+
+        <label class="mp-filter-field">
+            <span>Confidence</span>
+            <select name="ConfidenceBand" class="mp-filter-select">
+                <option value="all" selected="@(Model.ConfidenceBand == "all" ? "selected" : null)">All levels</option>
+                <option value="watch" selected="@(Model.ConfidenceBand == "watch" ? "selected" : null)">60%+</option>
+                <option value="strong" selected="@(Model.ConfidenceBand == "strong" ? "selected" : null)">70%+</option>
+                <option value="elite" selected="@(Model.ConfidenceBand == "elite" ? "selected" : null)">80%+</option>
+            </select>
+        </label>
+    </div>
+
+    <div class="mp-prediction-toolbar-actions">
+        <button type="submit" class="mp-book-btn mp-toolbar-btn">Apply Filters</button>
+        <a class="mp-toolbar-reset" href="@Context.Request.Path">Reset</a>
+    </div>
+</form>
+
+<div class="mp-page-meta-strip">
+    <div class="mp-match-count">
+        <span class="mp-live-dot"></span>
+        @Model.VisibleMatchCount of @Model.TotalMatchCount match@(Model.TotalMatchCount != 1 ? "es" : "") shown
+    </div>
+
+    <div class="mp-page-freshness">
+        <strong>Last updated</strong>
+        <span>@MatchPredictor.Web.Helpers.PredictionDisplayHelper.FormatLastUpdated(Model.LastUpdatedLocal)</span>
+        @if (!string.IsNullOrWhiteSpace(Model.LatestRunLabel))
+        {
+            <span class="mp-freshness-pill">@Model.LatestRunLabel</span>
+        }
+        @if (!string.IsNullOrWhiteSpace(Model.LatestRunReason))
+        {
+            <span class="mp-freshness-note">@MatchPredictor.Web.Helpers.PredictionDisplayHelper.FormatRunReason(Model.LatestRunReason)</span>
+        }
+    </div>
+</div>

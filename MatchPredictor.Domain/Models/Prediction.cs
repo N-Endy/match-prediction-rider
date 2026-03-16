@@ -6,7 +6,10 @@ public class Prediction
     public int Id { get; set; }
     public string Date { get; set; } = null!;
     public string Time { get; set; } = null!;
+    public DateOnly MatchLocalDate { get; set; }
+    public TimeOnly? MatchLocalTime { get; set; }
     public DateTime? MatchDateTime { get; set; }
+    public string FixtureKey { get; set; } = string.Empty;
     public string League { get; set; } = null!;
     public string HomeTeam { get; set; } = null!;
     public string AwayTeam { get; set; } = null!;
@@ -21,5 +24,11 @@ public class Prediction
     public string? ActualOutcome { get; set; }
     public string? ActualScore { get; set; }
     public bool IsLive { get; set; }
+    public Guid PredictionRunId { get; set; }
+    public string RunLabel { get; set; } = string.Empty;
+    public string RunReason { get; set; } = string.Empty;
+    public bool IsCurrentRevision { get; set; } = true;
+    public int RevisionNumber { get; set; } = 1;
+    public DateTime? SupersededAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

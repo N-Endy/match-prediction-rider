@@ -1,0 +1,74 @@
+@model MatchPredictor.Domain.Models.Prediction
+
+@{
+    var nowUtc = DateTime.UtcNow;
+    var badgeClass = MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetPredictionBadgeClass(Model);
+    var badgeText = MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetPredictionBadgeText(Model);
+    var cartMarket = MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetCartMarket(Model);
+    var isActuallyLive = MatchPredictor.Web.Helpers.PredictionDisplayHelper.IsActuallyLive(Model, nowUtc);
+    var statusLabel = MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetStatusLabel(Model, nowUtc);
+}
+
+<div class="mp-prediction-card mp-prediction-card-rich">
+    <div class="mp-match-info">
+        <div class="mp-match-league">
+            @Model.League
+            <span class="mp-time">@MatchPredictor.Web.Helpers.PredictionDisplayHelper.FormatWatTime(Model)</span>
+            <span class="mp-state-pill mp-state-@statusLabel.ToLowerInvariant()">@statusLabel</span>
+        </div>
+        <div class="mp-match-teams">
+            @Model.HomeTeam
+            <span class="mp-vs">vs</span>
+            @Model.AwayTeam
+        </div>
+        <div class="mp-prediction-insights">
+            <span class="mp-insight-chip">@MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetConfidenceChip(Model)</span>
+            <span class="mp-insight-chip">@MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetThresholdChip(Model)</span>
+            <span class="mp-insight-chip">@MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetSourceChip(Model)</span>
+        </div>
+        <p class="mp-prediction-reason">@MatchPredictor.Web.Helpers.PredictionDisplayHelper.BuildPredictionReason(Model)</p>
+    </div>
+
+    <div class="mp-card-badges">
+        @if (!string.IsNullOrEmpty(Model.ActualScore))
+        {
+            var isCorrect = MatchPredictor.Web.Helpers.PredictionDisplayHelper.IsPredictionCorrect(Model);
+
+            if (isActuallyLive)
+            {
+                if (isCorrect)
+                {
+                    <span class="mp-score mp-score-correct"><span class="mp-live-indicator"></span>@Model.ActualScore</span>
+                }
+                else
+                {
+                    <span class="mp-score mp-score-live"><span class="mp-live-indicator"></span>@Model.ActualScore</span>
+                }
+            }
+            else
+            {
+                <span class="mp-score @(isCorrect ? "mp-score-correct" : "mp-score-incorrect")">
+                    @Model.ActualScore
+                </span>
+            }
+        }
+
+        <span class="mp-prediction-badge @badgeClass">@badgeText</span>
+        <button class="mp-add-cart-btn" title="Add Bet"
+                data-home="@Model.HomeTeam"
+                data-away="@Model.AwayTeam"
+                data-league="@Model.League"
+                data-market="@cartMarket"
+                data-prediction="@badgeText">
+            Add Bet
+        </button>
+        @if (isActuallyLive)
+        {
+            <button class="btn-watch-stream d-none" title="Watch Live Stream"
+                    data-home="@Model.HomeTeam"
+                    data-away="@Model.AwayTeam">
+                <i class="fas fa-play-circle stream-pulse-icon"></i> Watch Live
+            </button>
+        }
+    </div>
+</div>

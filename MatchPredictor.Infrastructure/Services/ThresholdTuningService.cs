@@ -67,6 +67,7 @@ public class ThresholdTuningService : IThresholdTuningService
                 forecast.OutcomeOccurred != null &&
                 (forecast.SettledAt ?? forecast.CreatedAt) >= cutoff)
             .ToListAsync();
+        var pointInTimeForecasts = PointInTimeBacktestingSelector.SelectForecasts(forecasts);
 
         var rebuiltProfiles = new List<ThresholdProfile>();
 
@@ -81,7 +82,7 @@ public class ThresholdTuningService : IThresholdTuningService
 
         foreach (var (market, fallbackThreshold) in markets)
         {
-            var marketForecasts = forecasts
+            var marketForecasts = pointInTimeForecasts
                 .Where(forecast => forecast.Market == market)
                 .OrderBy(forecast => forecast.SettledAt ?? forecast.CreatedAt)
                 .ToList();

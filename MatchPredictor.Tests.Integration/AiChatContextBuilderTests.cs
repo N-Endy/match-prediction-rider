@@ -1,3 +1,4 @@
+using System.Globalization;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Services;
 using MatchPredictor.Infrastructure.Utils;
@@ -193,6 +194,46 @@ public class AiChatContextBuilderTests
         Assert.Equal(3, selection.Candidates.Count);
     }
 
+    [Fact]
+    public void BuildSelection_FiltersToYesterday_WhenPromptMentionsYesterday()
+    {
+        var nowUtc = DateTime.UtcNow;
+        var predictions = new[]
+        {
+            CreatePrediction(1, "StraightWin", "Home Win", "Arsenal", "Chelsea", "England - Premier League", 0.78m, matchDateTimeUtc: nowUtc.AddHours(2)),
+            CreatePrediction(2, "StraightWin", "Home Win", "Arsenal", "Chelsea", "England - Premier League", 0.74m, matchDateTimeUtc: nowUtc.AddDays(-1), date: DateTimeProvider.GetLocalTime().AddDays(-1).ToString("dd-MM-yyyy"), actualScore: "2:1")
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Tell me about Arsenal yesterday",
+            nowUtc);
+
+        var candidate = Assert.Single(selection.Candidates);
+        Assert.Equal(2, candidate.PredictionId);
+        Assert.Equal("Finished", candidate.MatchState);
+    }
+
+    [Fact]
+    public void BuildSelection_ReturnsRecentFinishedMatches_ForSettlementQuestions()
+    {
+        var nowUtc = DateTime.UtcNow;
+        var predictions = new[]
+        {
+            CreatePrediction(1, "StraightWin", "Home Win", "Arsenal", "Chelsea", "England - Premier League", 0.78m, matchDateTimeUtc: nowUtc.AddHours(2)),
+            CreatePrediction(2, "BothTeamsScore", "BTTS", "Inter", "Milan", "Italy - Serie A", 0.75m, matchDateTimeUtc: nowUtc.AddDays(-1), date: DateTimeProvider.GetLocalTime().AddDays(-1).ToString("dd-MM-yyyy"), actualScore: "2:2")
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Why did this settle red?",
+            nowUtc);
+
+        var candidate = Assert.Single(selection.Candidates);
+        Assert.Equal(2, candidate.PredictionId);
+        Assert.Equal("Finished", candidate.MatchState);
+    }
+
     private static Prediction CreatePrediction(
         int id,
         string category,
@@ -203,15 +244,23 @@ public class AiChatContextBuilderTests
         decimal confidence,
         DateTime? matchDateTimeUtc = null,
         string? date = null,
-        double thresholdUsed = 0.55)
+        double thresholdUsed = 0.55,
+        string? actualScore = null)
     {
         var kickoffUtc = matchDateTimeUtc ?? DateTime.UtcNow.AddHours(2);
+        var localKickoff = DateTimeProvider.ConvertUtcToLocal(kickoffUtc);
+        var matchLocalDate = string.IsNullOrWhiteSpace(date)
+            ? DateOnly.FromDateTime(localKickoff)
+            : DateOnly.ParseExact(date, "dd-MM-yyyy", CultureInfo.InvariantCulture);
+        var matchLocalTime = TimeOnly.FromDateTime(localKickoff);
 
         return new Prediction
         {
             Id = id,
             Date = date ?? DateTimeProvider.GetLocalTime().ToString("dd-MM-yyyy"),
-            Time = DateTimeProvider.ConvertUtcToLocal(kickoffUtc).ToString("HH:mm"),
+            Time = localKickoff.ToString("HH:mm"),
+            MatchLocalDate = matchLocalDate,
+            MatchLocalTime = matchLocalTime,
             MatchDateTime = kickoffUtc,
             League = league,
             HomeTeam = homeTeam,
@@ -223,7 +272,9 @@ public class AiChatContextBuilderTests
             ThresholdUsed = thresholdUsed,
             ThresholdSource = "Configured",
             CalibratorUsed = "Bucket",
-            WasPublished = true
+            WasPublished = true,
+            IsCurrentRevision = true,
+            ActualScore = actualScore
         };
     }
 }

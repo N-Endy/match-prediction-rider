@@ -1,0 +1,185 @@
+@model MatchPredictor.Domain.Models.AnalyticsStats
+
+<div class="mp-stat-grid">
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Settled Forecasts</div>
+        <div class="mp-stat-value mp-stat-figure">@Model.SettledForecasts</div>
+    </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Raw Brier</div>
+        <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">
+            @(Model.SettledForecasts > 0 ? Model.RawBrierScore.ToString("F3") : "0.000")
+        </div>
+    </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Calibrated Brier</div>
+        <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">
+            @(Model.SettledForecasts > 0 ? Model.BrierScore.ToString("F3") : "0.000")
+        </div>
+    </div>
+</div>
+
+<div class="mp-analytics-note">
+    This section is about probability quality. Lower Brier is better, and curves closer to the diagonal are better calibrated.
+</div>
+
+<div class="mp-market-analytics">
+    @if (Model.ForecastMarketStats.Any())
+    {
+        <div class="mp-market-grid">
+            @foreach (var market in Model.ForecastMarketStats)
+            {
+                <article class="mp-market-card">
+                    <div class="mp-market-header">
+                        <div>
+                            <h4>@market.MarketName</h4>
+                            <p>@market.SettledCount settled forecasts</p>
+                        </div>
+                        <div class="mp-market-briers">
+                            <span>Raw @market.RawBrierScore.ToString("F3")</span>
+                            <span>Cal @market.CalibratedBrierScore.ToString("F3")</span>
+                        </div>
+                    </div>
+
+                    <div class="mp-market-metrics">
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Raw REL</span>
+                            <strong>@market.RawDecomposition.Reliability.ToString("F3")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Raw RES</span>
+                            <strong>@market.RawDecomposition.Resolution.ToString("F3")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Raw UNC</span>
+                            <strong>@market.RawDecomposition.Uncertainty.ToString("F3")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Cal REL</span>
+                            <strong>@market.CalibratedDecomposition.Reliability.ToString("F3")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Cal RES</span>
+                            <strong>@market.CalibratedDecomposition.Resolution.ToString("F3")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Cal UNC</span>
+                            <strong>@market.CalibratedDecomposition.Uncertainty.ToString("F3")</strong>
+                        </div>
+                    </div>
+
+                    <div class="mp-era-grid">
+                        <section class="mp-era-card">
+                            <div class="mp-market-beta-header">
+                                <span>Calibrator Eras</span>
+                            </div>
+                            @if (market.CalibratorEraStats.Any())
+                            {
+                                <div class="mp-era-row mp-era-row-head">
+                                    <span class="mp-era-name">Era</span>
+                                    <span class="mp-era-metric">Count</span>
+                                    <span class="mp-era-metric">Hit</span>
+                                    <span class="mp-era-metric">Brier</span>
+                                </div>
+                                foreach (var era in market.CalibratorEraStats)
+                                {
+                                    <div class="mp-era-row">
+                                        <span class="mp-era-name">@era.Era</span>
+                                        <span class="mp-era-metric">@era.Count</span>
+                                        <span class="mp-era-metric">@((era.HitRate * 100).ToString("F1"))%</span>
+                                        <span class="mp-era-metric">@era.BrierScore.ToString("F3")</span>
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                <p class="mp-market-beta-empty">No settled calibrator-era data yet.</p>
+                            }
+                        </section>
+
+                        <section class="mp-era-card">
+                            <div class="mp-market-beta-header">
+                                <span>Threshold Eras</span>
+                            </div>
+                            @if (market.ThresholdEraStats.Any())
+                            {
+                                <div class="mp-era-row mp-era-row-head">
+                                    <span class="mp-era-name">Era</span>
+                                    <span class="mp-era-metric">Count</span>
+                                    <span class="mp-era-metric">Hit</span>
+                                    <span class="mp-era-metric">Brier</span>
+                                </div>
+                                foreach (var era in market.ThresholdEraStats)
+                                {
+                                    <div class="mp-era-row">
+                                        <span class="mp-era-name">@era.Era</span>
+                                        <span class="mp-era-metric">@era.Count</span>
+                                        <span class="mp-era-metric">@((era.HitRate * 100).ToString("F1"))%</span>
+                                        <span class="mp-era-metric">@era.BrierScore.ToString("F3")</span>
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                <p class="mp-market-beta-empty">No published threshold-era data yet.</p>
+                            }
+                        </section>
+                    </div>
+
+                    @if (market.RawReliabilityCurve.Any() || market.CalibratedReliabilityCurve.Any())
+                    {
+                        <div class="mp-reliability-shell">
+                            <div class="mp-reliability-chart">
+                                <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Reliability curve for @market.MarketName">
+                                    <line x1="0" y1="100" x2="100" y2="0" class="mp-reliability-diagonal"></line>
+
+                                    @if (market.RawReliabilityCurve.Count == 1)
+                                    {
+                                        var point = market.RawReliabilityCurve[0];
+                                        <circle cx="@MatchPredictor.Web.Pages.AnalyticsModel.CurveX(point).ToString("F2", System.Globalization.CultureInfo.InvariantCulture)"
+                                                cy="@MatchPredictor.Web.Pages.AnalyticsModel.CurveY(point).ToString("F2", System.Globalization.CultureInfo.InvariantCulture)"
+                                                r="2.2"
+                                                class="mp-curve-point raw"></circle>
+                                    }
+                                    else if (market.RawReliabilityCurve.Count > 1)
+                                    {
+                                        <polyline points="@MatchPredictor.Web.Pages.AnalyticsModel.BuildCurvePoints(market.RawReliabilityCurve)" class="mp-reliability-line raw"></polyline>
+                                    }
+
+                                    @if (market.CalibratedReliabilityCurve.Count == 1)
+                                    {
+                                        var point = market.CalibratedReliabilityCurve[0];
+                                        <circle cx="@MatchPredictor.Web.Pages.AnalyticsModel.CurveX(point).ToString("F2", System.Globalization.CultureInfo.InvariantCulture)"
+                                                cy="@MatchPredictor.Web.Pages.AnalyticsModel.CurveY(point).ToString("F2", System.Globalization.CultureInfo.InvariantCulture)"
+                                                r="2.2"
+                                                class="mp-curve-point calibrated"></circle>
+                                    }
+                                    else if (market.CalibratedReliabilityCurve.Count > 1)
+                                    {
+                                        <polyline points="@MatchPredictor.Web.Pages.AnalyticsModel.BuildCurvePoints(market.CalibratedReliabilityCurve)" class="mp-reliability-line calibrated"></polyline>
+                                    }
+                                </svg>
+                            </div>
+                            <div class="mp-reliability-legend">
+                                <span><i class="mp-legend-swatch raw"></i> Raw</span>
+                                <span><i class="mp-legend-swatch calibrated"></i> Calibrated</span>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="mp-market-empty">
+                            Reliability points for this market will appear after enough settled forecasts are available in this range.
+                        </div>
+                    }
+                </article>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="mp-market-empty">
+            No settled forecast data is available for this date range yet, so the calibration view cannot be drawn.
+        </div>
+    }
+</div>

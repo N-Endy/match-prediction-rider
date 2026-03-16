@@ -9,7 +9,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
 
     public AnalyticsStats CalculateStats(IEnumerable<Prediction> predictions, IEnumerable<ForecastObservation> forecasts)
     {
-        var predictionList = predictions.ToList();
+        var predictionList = PointInTimeBacktestingSelector.SelectPredictions(predictions);
         var completedPredictions = predictionList
             .Where(prediction => !prediction.IsLive && !string.IsNullOrEmpty(prediction.ActualOutcome))
             .ToList();
@@ -47,7 +47,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
             };
         }
 
-        var settledForecasts = forecasts
+        var settledForecasts = PointInTimeBacktestingSelector.SelectForecasts(forecasts)
             .Where(forecast => forecast.IsSettled && forecast.OutcomeOccurred.HasValue)
             .ToList();
 

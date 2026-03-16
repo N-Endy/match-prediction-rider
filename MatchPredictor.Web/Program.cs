@@ -25,6 +25,8 @@ builder.Services.AddRazorPages();
 builder.Services.AddMemoryCache();
 builder.Services.AddHealthChecks();
 builder.Services.AddHttpClient();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<OperationalStartupState>();
 
 builder.Services.AddHttpClientServices();
 builder.Services.AddRedisMemoryCache(builder.Configuration);
@@ -59,9 +61,11 @@ builder.Services.AddScoped<ISourceMarketPricingService>(provider => provider.Get
 builder.Services.AddScoped<IAiAdvisorService, AiAdvisorService>();
 builder.Services.AddScoped<IValueBetsService, ValueBetsService>();
 builder.Services.AddScoped<IUserTrackingService, UserTrackingService>();
+builder.Services.AddScoped<IAiChatAuthTicketService, AiChatAuthTicketService>();
 
 // Controllers for API endpoints (booking, AI chat)
 builder.Services.AddControllers();
+builder.Services.AddMatchPredictorRateLimiting();
 
 // Configure data protection
 builder.Services.AddDataProtection()
@@ -121,6 +125,7 @@ using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
     var logger = services.GetRequiredService<ILogger<Program>>();
+    var startupState = services.GetRequiredService<OperationalStartupState>();
     
     try
     {
@@ -128,6 +133,7 @@ using (var scope = app.Services.CreateScope())
         var context = services.GetRequiredService<ApplicationDbContext>();
         await context.Database.MigrateAsync();
         logger.LogInformation("Database initialized successfully.");
+        startupState.MarkDatabaseInitialized();
         
         // Step 2: Initialize Hangfire storage
         var storage = services.GetRequiredService<JobStorage>();
@@ -137,11 +143,13 @@ using (var scope = app.Services.CreateScope())
         var stats = monitoringApi.GetStatistics();
         
         logger.LogInformation("✅ Hangfire initialized - Servers: {StatsServers}, Jobs: {StatsRecurring}", stats.Servers, stats.Recurring);
+        startupState.MarkHangfireInitialized();
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, "❌ Database initialization error: {ExMessage}", ex.Message);
-        // Don't throw - allow app to continue but log error
+        startupState.MarkInitializationFailed(ex.Message);
+        logger.LogCritical(ex, "❌ Startup aborted because database or Hangfire initialization failed.");
+        throw new InvalidOperationException("Application startup aborted because database initialization failed.", ex);
     }
 }
 
@@ -150,100 +158,111 @@ using (var scope = app.Services.CreateScope())
 {
     var recurringJobs = scope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    var startupState = scope.ServiceProvider.GetRequiredService<OperationalStartupState>();
 
-    // WAT (West Africa Time) = UTC+1, IANA timezone ID: Africa/Lagos
-    var watTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Africa/Lagos");
+    try
+    {
+        // WAT (West Africa Time) = UTC+1, IANA timezone ID: Africa/Lagos
+        var watTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Africa/Lagos");
 
-    // Remove the old combined job if it still exists in the Hangfire database
-    recurringJobs.RemoveIfExists("daily-prediction-job");
+        // Remove the old combined job if it still exists in the Hangfire database
+        recurringJobs.RemoveIfExists("daily-prediction-job");
 
-    // Remove the temporary noon job if it exists
-    recurringJobs.RemoveIfExists("prediction-generation-job-noon");
-    recurringJobs.RemoveIfExists("prediction-prewarm-job");
-    recurringJobs.RemoveIfExists("prediction-generation-post-analysis-job");
-    recurringJobs.RemoveIfExists("prediction-generation-refresh-job");
-    recurringJobs.RemoveIfExists("score-backfill-job");
+        // Remove the temporary noon job if it exists
+        recurringJobs.RemoveIfExists("prediction-generation-job-noon");
+        recurringJobs.RemoveIfExists("prediction-prewarm-job");
+        recurringJobs.RemoveIfExists("prediction-generation-post-analysis-job");
+        recurringJobs.RemoveIfExists("prediction-generation-refresh-job");
+        recurringJobs.RemoveIfExists("score-backfill-job");
 
-    recurringJobs.AddOrUpdate<IAnalyzerService>(
-        "prediction-prewarm-job",
-        service => service.ExtractDataAndSyncDatabaseAsync(1),
-        "40 23 * * *", // 11:40 PM WAT provisional tomorrow card before midnight
-        new RecurringJobOptions
-        {
-            TimeZone = watTimeZone
-        }
-    );
+        recurringJobs.AddOrUpdate<IAnalyzerService>(
+            "prediction-prewarm-job",
+            service => service.ExtractDataAndSyncDatabaseAsync(1),
+            "40 23 * * *", // 11:40 PM WAT provisional tomorrow card before midnight
+            new RecurringJobOptions
+            {
+                TimeZone = watTimeZone
+            }
+        );
 
-    recurringJobs.AddOrUpdate<IAnalyzerService>(
-        "prediction-generation-job",
-        service => service.ExtractDataAndSyncDatabaseAsync(),
-        "35 0 * * *", // 12:35 AM WAT first pass after daily analysis
-        new RecurringJobOptions
-        {
-            TimeZone = watTimeZone
-        }
-    );
+        recurringJobs.AddOrUpdate<IAnalyzerService>(
+            "prediction-generation-job",
+            service => service.ExtractDataAndSyncDatabaseAsync(),
+            "35 0 * * *", // 12:35 AM WAT first pass after daily analysis
+            new RecurringJobOptions
+            {
+                TimeZone = watTimeZone
+            }
+        );
 
-    recurringJobs.AddOrUpdate<IAnalyzerService>(
-        "prediction-generation-post-analysis-job",
-        service => service.ExtractDataAndSyncDatabaseAsync(),
-        "30 4 * * *", // 4:30 AM WAT early-morning refresh
-        new RecurringJobOptions
-        {
-            TimeZone = watTimeZone
-        }
-    );
+        recurringJobs.AddOrUpdate<IAnalyzerService>(
+            "prediction-generation-post-analysis-job",
+            service => service.ExtractDataAndSyncDatabaseAsync(),
+            "30 4 * * *", // 4:30 AM WAT early-morning refresh
+            new RecurringJobOptions
+            {
+                TimeZone = watTimeZone
+            }
+        );
 
-    recurringJobs.AddOrUpdate<IAnalyzerService>(
-        "prediction-generation-refresh-job",
-        service => service.ExtractDataAndSyncDatabaseAsync(),
-        "30 12,16 * * *", // 12:30 PM and 4:30 PM WAT refreshes
-        new RecurringJobOptions
-        {
-            TimeZone = watTimeZone
-        }
-    );
+        recurringJobs.AddOrUpdate<IAnalyzerService>(
+            "prediction-generation-refresh-job",
+            service => service.ExtractDataAndSyncDatabaseAsync(),
+            "30 12,16 * * *", // 12:30 PM and 4:30 PM WAT refreshes
+            new RecurringJobOptions
+            {
+                TimeZone = watTimeZone
+            }
+        );
 
-    recurringJobs.AddOrUpdate<IAnalyzerService>(
-        "score-update-job",
-        service => service.RunScoreUpdaterAsync(1, "recent"),
-        "*/5 * * * *", // Every 5 minutes for today's and yesterday's fixtures
-        new RecurringJobOptions
-        {
-            TimeZone = watTimeZone
-        }
-    );
+        recurringJobs.AddOrUpdate<IAnalyzerService>(
+            "score-update-job",
+            service => service.RunScoreUpdaterAsync(1, "recent"),
+            "*/5 * * * *", // Every 5 minutes for today's and yesterday's fixtures
+            new RecurringJobOptions
+            {
+                TimeZone = watTimeZone
+            }
+        );
 
-    recurringJobs.AddOrUpdate<IAnalyzerService>(
-        "score-backfill-job",
-        service => service.RunScoreUpdaterAsync(14, "backfill"),
-        "17 * * * *", // Hourly backfill for older unresolved fixtures
-        new RecurringJobOptions
-        {
-            TimeZone = watTimeZone
-        }
-    );
+        recurringJobs.AddOrUpdate<IAnalyzerService>(
+            "score-backfill-job",
+            service => service.RunScoreUpdaterAsync(14, "backfill"),
+            "17 * * * *", // Hourly backfill for older unresolved fixtures
+            new RecurringJobOptions
+            {
+                TimeZone = watTimeZone
+            }
+        );
 
-    recurringJobs.AddOrUpdate<IAnalyzerService>(
-        "daily-analysis-job",
-        service => service.RunDailyAnalysisAsync(),
-        "20 0 * * *", // Daily at 12:20 AM WAT (after 12:17 AM score backfill, before first prediction generation)
-        new RecurringJobOptions
-        {
-            TimeZone = watTimeZone
-        }
-    );
+        recurringJobs.AddOrUpdate<IAnalyzerService>(
+            "daily-analysis-job",
+            service => service.RunDailyAnalysisAsync(),
+            "20 0 * * *", // Daily at 12:20 AM WAT (after 12:17 AM score backfill, before first prediction generation)
+            new RecurringJobOptions
+            {
+                TimeZone = watTimeZone
+            }
+        );
 
-    recurringJobs.AddOrUpdate<IAnalyzerService>(
-        "cleanup-old-predictions",
-        service => service.CleanupOldPredictionsAndMatchDataAsync(),
-        "0 1 * * *", // Daily at 1:00 AM WAT
-        new RecurringJobOptions
-        {
-            TimeZone = watTimeZone
-        }
-    );
-    logger.LogInformation("✅ Recurring jobs registered successfully (WAT timezone).");
+        recurringJobs.AddOrUpdate<IAnalyzerService>(
+            "cleanup-old-predictions",
+            service => service.CleanupOldPredictionsAndMatchDataAsync(),
+            "0 1 * * *", // Daily at 1:00 AM WAT
+            new RecurringJobOptions
+            {
+                TimeZone = watTimeZone
+            }
+        );
+        startupState.MarkRecurringJobsRegistered();
+        logger.LogInformation("✅ Recurring jobs registered successfully (WAT timezone).");
+    }
+    catch (Exception ex)
+    {
+        startupState.MarkInitializationFailed(ex.Message);
+        logger.LogCritical(ex, "❌ Startup aborted because recurring Hangfire job registration failed.");
+        throw;
+    }
 }
 
 // Auto-trigger initial data scraping if no predictions exist for today
@@ -254,8 +273,8 @@ using (var scope = app.Services.CreateScope())
     
     try
     {
-        var today = DateTimeProvider.GetLocalTime().ToString("dd-MM-yyyy"); 
-        var hasTodayPredictions = await db.Predictions.AnyAsync(p => p.Date == today);
+        var today = DateOnly.FromDateTime(DateTimeProvider.GetLocalTime());
+        var hasTodayPredictions = await db.Predictions.AnyAsync(p => p.MatchLocalDate == today && p.IsCurrentRevision);
         
         if (!hasTodayPredictions)
         {
@@ -290,6 +309,7 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseMiddleware<AdminUsageBasicAuthMiddleware>();
 app.UseRouting();
+app.UseRateLimiter();
 app.UseMiddleware<UserTrackingMiddleware>();
 
 app.UseAuthorization();
@@ -304,8 +324,8 @@ app.UseHangfireDashboard("/hangfire", new DashboardOptions
         : new Hangfire.Dashboard.IDashboardAuthorizationFilter[]
         {
             new HangfireBasicAuthFilter(
-                builder.Configuration["Hangfire:Username"] ?? "admin",
-                builder.Configuration["Hangfire:Password"] ?? "changeme")
+                builder.Configuration["Hangfire:Username"],
+                builder.Configuration["Hangfire:Password"])
         }
 });
 

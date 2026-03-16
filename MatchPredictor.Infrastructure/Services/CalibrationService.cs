@@ -63,8 +63,9 @@ public class CalibrationService : ICalibrationService
                 p.IsSettled &&
                 p.OutcomeOccurred != null)
             .ToListAsync();
+        var pointInTimeForecasts = PointInTimeBacktestingSelector.SelectForecasts(settledForecasts);
 
-        var rebuiltProfiles = settledForecasts
+        var rebuiltProfiles = pointInTimeForecasts
             .GroupBy(x => new
             {
                 x.Market,
@@ -94,7 +95,7 @@ public class CalibrationService : ICalibrationService
             })
             .ToList();
 
-        var betaProfiles = BuildBetaCalibrationProfiles(settledForecasts);
+        var betaProfiles = BuildBetaCalibrationProfiles(pointInTimeForecasts);
         var promotionHistory = BuildPromotionHistory(previousCalibratorByMarket, betaProfiles);
 
         try

@@ -1,23 +1,29 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Web.Services;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
 
 namespace MatchPredictor.Web.Api;
 
 [ApiController]
 [Route("api/ai")]
+[EnableRateLimiting(RateLimitPolicies.AiChat)]
 public class AiChatController : ControllerBase
 {
     private readonly IAiAdvisorService _aiService;
+    private readonly IAiChatAuthTicketService _authTicketService;
     private readonly IUserTrackingService _userTrackingService;
     private readonly ILogger<AiChatController> _logger;
-    private const string AuthCookieName = "MP_AI_AUTH";
-    private const string SessionCookieName = "MP_AI_CHAT_SESSION";
 
-    public AiChatController(IAiAdvisorService aiService, IUserTrackingService userTrackingService, ILogger<AiChatController> logger)
+    public AiChatController(
+        IAiAdvisorService aiService,
+        IAiChatAuthTicketService authTicketService,
+        IUserTrackingService userTrackingService,
+        ILogger<AiChatController> logger)
     {
         _aiService = aiService;
+        _authTicketService = authTicketService;
         _userTrackingService = userTrackingService;
         _logger = logger;
     }
@@ -25,7 +31,7 @@ public class AiChatController : ControllerBase
     [HttpPost("chat")]
     public async Task<IActionResult> Chat([FromBody] ChatRequest request, CancellationToken ct)
     {
-        if (!Request.Cookies.ContainsKey(AuthCookieName))
+        if (!_authTicketService.TryValidate(HttpContext, out var sessionId))
         {
             return Unauthorized(new { message = "Unauthorized. Please authenticate on the AI Chat page." });
         }
@@ -37,22 +43,7 @@ public class AiChatController : ControllerBase
 
         try
         {
-            var sessionId = Request.Cookies.TryGetValue(SessionCookieName, out var existingSessionId) &&
-                            !string.IsNullOrWhiteSpace(existingSessionId)
-                ? existingSessionId
-                : Guid.NewGuid().ToString("N");
-
-            if (!Request.Cookies.ContainsKey(SessionCookieName))
-            {
-                Response.Cookies.Append(SessionCookieName, sessionId, new CookieOptions
-                {
-                    HttpOnly = true,
-                    Secure = Request.IsHttps,
-                    SameSite = SameSiteMode.Strict
-                });
-            }
-
-            var response = await _aiService.GetAdviceAsync(request.Message, sessionId, ct);
+            var response = await _aiService.GetAdviceAsync(request.Message, sessionId!, ct);
 
             await _userTrackingService.TrackEventAsync(
                 HttpContext,

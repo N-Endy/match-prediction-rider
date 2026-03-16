@@ -6,11 +6,16 @@ public class AdminUsageBasicAuthMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly IConfiguration _configuration;
+    private readonly ILogger<AdminUsageBasicAuthMiddleware> _logger;
 
-    public AdminUsageBasicAuthMiddleware(RequestDelegate next, IConfiguration configuration)
+    public AdminUsageBasicAuthMiddleware(
+        RequestDelegate next,
+        IConfiguration configuration,
+        ILogger<AdminUsageBasicAuthMiddleware> logger)
     {
         _next = next;
         _configuration = configuration;
+        _logger = logger;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -22,11 +27,17 @@ public class AdminUsageBasicAuthMiddleware
         }
 
         var username = _configuration["UsageDashboard:Username"]
-                       ?? _configuration["Hangfire:Username"]
-                       ?? "admin";
+                       ?? _configuration["Hangfire:Username"];
         var password = _configuration["UsageDashboard:Password"]
-                       ?? _configuration["Hangfire:Password"]
-                       ?? "changeme";
+                       ?? _configuration["Hangfire:Password"];
+
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+        {
+            _logger.LogError("Usage dashboard credentials are not configured. Denying access to {Path}.", context.Request.Path);
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await context.Response.WriteAsync("Usage dashboard credentials are not configured.");
+            return;
+        }
 
         var authHeader = context.Request.Headers.Authorization.ToString();
         if (!TryValidateBasicAuth(authHeader, username, password))

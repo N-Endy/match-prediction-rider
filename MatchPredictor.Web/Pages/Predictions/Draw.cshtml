@@ -4,91 +4,34 @@
 @{
     ViewData["Title"] = "Draw Predictions";
     var today = MatchPredictor.Infrastructure.Utils.DateTimeProvider.GetLocalTime().ToString("dd MMM yyyy");
-    var count = Model.Matches?.Count ?? 0;
-    var nowUtc = DateTime.UtcNow;
 }
 
 <div class="mp-container">
     <div class="mp-page-header">
         <div class="mp-page-title">
             <div class="mp-page-title-icon" style="background: rgba(245, 158, 11, 0.1);">🤝</div>
-            <h1>Draw Predictions</h1>
+            <div>
+                <h1>Draw Predictions</h1>
+                <p class="mp-page-subtext">Track the low-separation fixtures where the model still finds enough confidence for a published draw angle.</p>
+            </div>
         </div>
         <div class="mp-date-badge">📅 @today</div>
     </div>
 
-    @if (count > 0)
-    {
-        <div class="mp-match-count">
-            <span class="mp-live-dot"></span>
-            @count match@(count != 1 ? "es" : "") found
-        </div>
+    <partial name="_PredictionPageFilters" model="Model" />
 
+    @if (Model.VisibleMatchCount > 0)
+    {
         <div class="mp-predictions-list">
             @{ int adIndex = 0; }
-            @foreach (var match in Model.Matches!)
+            @foreach (var match in Model.FilteredMatches)
             {
                 if (adIndex > 0 && adIndex % 5 == 0)
                 {
                     <partial name="_AdBanner" />
                 }
-                <div class="mp-prediction-card">
-                    <div class="mp-match-info">
-                        <div class="mp-match-league">
-                            @match.League
-                            <span class="mp-time">@PredictionDisplayHelper.FormatWatTime(match)</span>
-                        </div>
-                        <div class="mp-match-teams">
-                            @match.HomeTeam
-                            <span class="mp-vs">vs</span>
-                            @match.AwayTeam
-                        </div>
-                    </div>
-                    <div class="mp-card-badges">
-                        @{
-                            var isActuallyLive = PredictionDisplayHelper.IsActuallyLive(match, nowUtc);
-                        }
-                        @if (!string.IsNullOrEmpty(match.ActualScore))
-                        {
-                            var isCorrect = PredictionDisplayHelper.IsPredictionCorrect(match);
 
-                            if (isActuallyLive)
-                            {
-                                if (isCorrect)
-                                {
-                                    <span class="mp-score mp-score-correct"><span class="mp-live-indicator"></span>@match.ActualScore</span>
-                                }
-                                else
-                                {
-                                    <span class="mp-score mp-score-live"><span class="mp-live-indicator"></span>@match.ActualScore</span>
-                                }
-                            }
-                            else
-                            {
-                                <span class="mp-score @(isCorrect ? "mp-score-correct" : "mp-score-incorrect")">
-                                    @match.ActualScore
-                                </span>
-                            }
-                        }
-                        <span class="mp-prediction-badge mp-badge-draw">Draw</span>
-                        <button class="mp-add-cart-btn" title="Add Bet"
-                                data-home="@match.HomeTeam"
-                                data-away="@match.AwayTeam"
-                                data-league="@match.League"
-                                data-market="1X2"
-                                data-prediction="Draw">
-                            Add Bet
-                        </button>
-                        @if (isActuallyLive)
-                        {
-                            <button class="btn-watch-stream d-none" title="Watch Live Stream"
-                                    data-home="@match.HomeTeam"
-                                    data-away="@match.AwayTeam">
-                                <i class="fas fa-play-circle stream-pulse-icon"></i> Watch Live
-                            </button>
-                        }
-                    </div>
-                </div>
+                <partial name="_PredictionCard" model="match" />
                 adIndex++;
             }
         </div>
@@ -97,8 +40,11 @@
     {
         <div class="mp-empty-state">
             <div class="mp-empty-state-icon">🤝</div>
-            <p>No Draw predictions available for today yet.</p>
-            <p style="font-size: 0.85rem; margin-top: 0.5rem;">Predictions are updated daily. Check back soon!</p>
+            <p>@(Model.TotalMatchCount > 0 ? "No draw predictions match the current filters." : "No draw predictions available for today yet.")</p>
+            <p style="font-size: 0.85rem; margin-top: 0.5rem;">
+                @(Model.TotalMatchCount > 0 ? "Try widening the kickoff or confidence filters." : "Predictions are updated daily. Check back soon!")
+            </p>
         </div>
     }
 </div>
+

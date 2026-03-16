@@ -1,12 +1,14 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Web.Services;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
 
 namespace MatchPredictor.Web.Api;
 
 [ApiController]
 [Route("api/booking")]
+[EnableRateLimiting(RateLimitPolicies.Booking)]
 public class BookingController : ControllerBase
 {
     private readonly ISportyBetBookingService _bookingService;

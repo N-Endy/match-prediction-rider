@@ -143,4 +143,75 @@ public class CalibrationServiceTests
         Assert.Equal("Beta", history.PreviousValue);
         Assert.Equal("Bucket", history.NewValue);
     }
+
+    [Fact]
+    public async Task RebuildProfilesAsync_UsesPointInTimeForecastRevisionPerFixture()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = DateTime.UtcNow.Date.AddHours(18);
+
+        for (var index = 0; index < 40; index++)
+        {
+            var fixtureKickoff = kickoff.AddDays(-index);
+            context.ForecastObservations.Add(new ForecastObservation
+            {
+                Date = fixtureKickoff.ToString("dd-MM-yyyy"),
+                Time = "18:00",
+                MatchLocalDate = DateOnly.FromDateTime(fixtureKickoff),
+                MatchLocalTime = new TimeOnly(18, 0),
+                MatchDateTime = fixtureKickoff,
+                FixtureKey = $"league|fixture-{index}",
+                League = "League",
+                HomeTeam = $"Home{index}",
+                AwayTeam = $"Away{index}",
+                Market = PredictionMarket.Over25Goals,
+                PredictedOutcome = "Over2.5Goals",
+                RawProbability = 0.62,
+                CalibratedProbability = 0.60,
+                OutcomeOccurred = true,
+                IsSettled = true,
+                RevisionNumber = 1,
+                CreatedAt = fixtureKickoff.AddHours(-2),
+                SettledAt = fixtureKickoff.AddHours(2)
+            });
+        }
+
+        context.ForecastObservations.Add(new ForecastObservation
+        {
+            Date = kickoff.ToString("dd-MM-yyyy"),
+            Time = "18:00",
+            MatchLocalDate = DateOnly.FromDateTime(kickoff),
+            MatchLocalTime = new TimeOnly(18, 0),
+            MatchDateTime = kickoff,
+            FixtureKey = "league|fixture-0",
+            League = "League",
+            HomeTeam = "Home0",
+            AwayTeam = "Away0",
+            Market = PredictionMarket.Over25Goals,
+            PredictedOutcome = "Over2.5Goals",
+            RawProbability = 0.18,
+            CalibratedProbability = 0.22,
+            OutcomeOccurred = false,
+            IsSettled = true,
+            RevisionNumber = 2,
+            CreatedAt = kickoff.AddHours(1),
+            SettledAt = kickoff.AddHours(2)
+        });
+
+        await context.SaveChangesAsync();
+
+        var service = new CalibrationService(context);
+
+        await service.RebuildProfilesAsync();
+
+        var observationCount = await context.MarketCalibrationProfiles
+            .Where(profile => profile.Market == PredictionMarket.Over25Goals)
+            .SumAsync(profile => profile.ObservationCount);
+
+        Assert.Equal(40, observationCount);
+    }
 }

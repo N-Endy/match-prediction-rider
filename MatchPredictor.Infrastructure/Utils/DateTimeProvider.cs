@@ -57,6 +57,11 @@ public static class DateTimeProvider
         return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, WatZone);
     }
 
+    public static DateOnly GetLocalDate()
+    {
+        return DateOnly.FromDateTime(GetLocalTime());
+    }
+
     public static DateTime ConvertUtcToLocal(DateTime dateTime)
     {
         var utcDateTime = dateTime.Kind switch
@@ -109,6 +114,92 @@ public static class DateTimeProvider
     public static string ConvertTimeToDateString(DateTime dateTime)
     {
         return GetLocalTimeFromUtc(dateTime).ToString("dd-MM-yyyy");
+    }
+
+    public static DateOnly ConvertUtcToLocalDate(DateTime utcDateTime)
+    {
+        return DateOnly.FromDateTime(ConvertUtcToLocal(utcDateTime));
+    }
+
+    public static TimeOnly ConvertUtcToLocalTime(DateTime utcDateTime)
+    {
+        return TimeOnly.FromDateTime(ConvertUtcToLocal(utcDateTime));
+    }
+
+    public static string FormatLocalDate(DateOnly localDate)
+    {
+        return localDate.ToString("dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    public static string FormatLocalTime(TimeOnly localTime)
+    {
+        return localTime.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    public static DateOnly? ParseLocalDateOrNull(string? dateString)
+    {
+        if (string.IsNullOrWhiteSpace(dateString))
+        {
+            return null;
+        }
+
+        if (DateTime.TryParseExact(dateString, DateOnlyFormats,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var parsedDateTime))
+        {
+            return DateOnly.FromDateTime(parsedDateTime);
+        }
+
+        if (DateTime.TryParse(dateString, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out parsedDateTime))
+        {
+            return DateOnly.FromDateTime(parsedDateTime);
+        }
+
+        return null;
+    }
+
+    public static TimeOnly? ParseLocalTimeOrNull(string? timeString)
+    {
+        if (string.IsNullOrWhiteSpace(timeString))
+        {
+            return null;
+        }
+
+        var timeFormats = new[]
+        {
+            "HH:mm",
+            "H:mm",
+            "hh\\:mm",
+            "h\\:mm",
+            "h:mm tt",
+            "hh:mm tt",
+            "H:mm:ss",
+            "HH:mm:ss"
+        };
+
+        if (TimeOnly.TryParseExact(timeString.Trim(), timeFormats,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var parsedTime))
+        {
+            return parsedTime;
+        }
+
+        if (DateTime.TryParse(timeString, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var parsedDateTime))
+        {
+            return TimeOnly.FromDateTime(parsedDateTime);
+        }
+
+        return null;
+    }
+
+    public static (DateOnly localDate, TimeOnly localTime, DateTime utcDateTime) ParseCanonicalMatchDateTime(string? dateString, string? timeString)
+    {
+        var parsed = ParseProperDateAndTime(dateString, timeString);
+        return (DateOnly.ParseExact(parsed.date, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture),
+            TimeOnly.ParseExact(parsed.time, "HH:mm", System.Globalization.CultureInfo.InvariantCulture),
+            parsed.utcDateTime);
     }
     
     public static string AddOneHourToTime(string timeString)
