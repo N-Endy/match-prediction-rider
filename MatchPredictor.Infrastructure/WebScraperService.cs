@@ -24,6 +24,8 @@ public partial class WebScraperService : IWebScraperService
     private const int DefaultSofaScoreMaxSitemapsPerRun = 48;
     private const int DefaultSofaScoreMaxCandidateUrlsPerFixture = 3;
     private const int DefaultSofaScoreMaxEventPagesPerRun = 24;
+    private const int DefaultSofaScoreBrowserScrollRounds = 6;
+    private const int DefaultSofaScoreBrowserListingPagesPerRun = 2;
     private static readonly ConcurrentDictionary<string, SofaScoreDiscoveryCacheEntry> SofaScoreEventUrlCache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object SofaScoreSitemapPoolGate = new();
     private static SofaScoreSitemapPoolCacheEntry? _sofaScoreSitemapPoolCache;
@@ -302,8 +304,26 @@ public partial class WebScraperService : IWebScraperService
 
         try
         {
-            _sofaScoreSourceHealthTracker.RecordAttempt("live-endpoint", $"Targeted fixtures: {requestedFixtures.Count}.");
+            _sofaScoreSourceHealthTracker.RecordAttempt("browser-discovery", $"Targeted fixtures: {requestedFixtures.Count}.");
             using var client = CreateSofaScoreHttpClient();
+
+            var browserAttempt = await ScrapeSofaScoreViaBrowserCrawlerAsync(requestedFixtures);
+            if (browserAttempt.Scores.Count > 0)
+            {
+                _logger.LogInformation(
+                    "Scraped {Count} SofaScore browser-crawled score rows for {FixtureCount} incomplete fixtures.",
+                    browserAttempt.Scores.Count,
+                    requestedFixtures.Count);
+                _sofaScoreSourceHealthTracker.RecordSuccess(
+                    browserAttempt.Stage,
+                    browserAttempt.Scores.Count,
+                    browserAttempt.CandidateCount,
+                    browserAttempt.DetailFetchCount,
+                    browserAttempt.Detail);
+                return browserAttempt.Scores;
+            }
+
+            _logger.LogInformation("{Detail}", browserAttempt.Detail);
 
             var apiAttempt = await ScrapeSofaScoreViaApiAsync(requestedFixtures, client);
             if (apiAttempt.Scores.Count > 0)
@@ -932,6 +952,262 @@ public partial class WebScraperService : IWebScraperService
         client.DefaultRequestHeaders.Referrer = new Uri((_configuration["ScrapingValues:SofaScoreBaseUrl"] ?? "https://www.sofascore.com").TrimEnd('/') + "/");
         client.Timeout = TimeSpan.FromSeconds(20);
         return client;
+    }
+
+    private async Task<SofaScoreApiAttemptResult> ScrapeSofaScoreViaBrowserCrawlerAsync(IReadOnlyList<SofaScoreFixtureRequest> fixtures)
+    {
+        var nowUtc = DateTime.UtcNow;
+        var eventUrlsByFixture = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var unresolvedFixtures = new List<SofaScoreFixtureRequest>();
+
+        foreach (var fixture in fixtures)
+        {
+            var cacheKey = BuildSofaScoreFixtureCacheKey(fixture);
+            if (SofaScoreEventUrlCache.TryGetValue(cacheKey, out var cached) &&
+                cached.ExpiresAtUtc > nowUtc &&
+                !string.IsNullOrWhiteSpace(cached.EventUrl))
+            {
+                eventUrlsByFixture[cacheKey] = [cached.EventUrl];
+                continue;
+            }
+
+            unresolvedFixtures.Add(fixture);
+        }
+
+        var candidateUrlCount = eventUrlsByFixture.Values.Sum(urls => urls.Count);
+        if (unresolvedFixtures.Count == 0)
+        {
+            return await FetchSofaScoreBrowserEventPagesAsync(fixtures, eventUrlsByFixture);
+        }
+
+        var chromeOptions = GetChromeOptions();
+        chromeOptions.AddArgument("--disable-gpu");
+        chromeOptions.AddArgument("--lang=en-US");
+        chromeOptions.AddArgument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
+
+        using var driver = new ChromeDriver(chromeOptions);
+        var listingUrls = BuildSofaScoreBrowserListingUrls();
+        var discoveredUrls = await CollectSofaScoreCandidateUrlsViaBrowserAsync(driver, listingUrls);
+
+        if (discoveredUrls.Count == 0)
+        {
+            return new SofaScoreApiAttemptResult(
+                [],
+                "browser-discovery",
+                $"SofaScore browser discovery found no football match URLs across {listingUrls.Count} rendered listing page(s).",
+                candidateUrlCount,
+                0);
+        }
+
+        var maxCandidateUrlsPerFixture = ParseConfiguredInt("ScrapingValues:SofaScoreMaxCandidateUrlsPerFixture", DefaultSofaScoreMaxCandidateUrlsPerFixture);
+        foreach (var fixture in unresolvedFixtures)
+        {
+            var cacheKey = BuildSofaScoreFixtureCacheKey(fixture);
+            var homeSlugs = SofaScoreDiscoveryHelper.BuildSlugCandidates(fixture.HomeTeam);
+            var awaySlugs = SofaScoreDiscoveryHelper.BuildSlugCandidates(fixture.AwayTeam);
+
+            var matches = discoveredUrls
+                .Select(url => new
+                {
+                    Url = url,
+                    Score = SofaScoreDiscoveryHelper.ScoreUrlAgainstFixture(url, homeSlugs, awaySlugs)
+                })
+                .Where(candidate => candidate.Score > 0)
+                .OrderByDescending(candidate => candidate.Score)
+                .ThenBy(candidate => candidate.Url)
+                .Take(maxCandidateUrlsPerFixture)
+                .Select(candidate => candidate.Url)
+                .ToList();
+
+            if (matches.Count == 0)
+            {
+                continue;
+            }
+
+            eventUrlsByFixture[cacheKey] = matches;
+            candidateUrlCount += matches.Count;
+            SofaScoreEventUrlCache[cacheKey] = new SofaScoreDiscoveryCacheEntry(matches[0], nowUtc.Add(SofaScoreDiscoveryCacheLifetime));
+        }
+
+        if (eventUrlsByFixture.Count == 0)
+        {
+            return new SofaScoreApiAttemptResult(
+                [],
+                "browser-discovery",
+                $"SofaScore browser discovered {discoveredUrls.Count} football match URL(s) but none matched the {fixtures.Count} targeted fixtures.",
+                discoveredUrls.Count,
+                0);
+        }
+
+        return await FetchSofaScoreBrowserEventPagesAsync(fixtures, eventUrlsByFixture, driver);
+    }
+
+    private async Task<SofaScoreApiAttemptResult> FetchSofaScoreBrowserEventPagesAsync(
+        IReadOnlyList<SofaScoreFixtureRequest> fixtures,
+        IReadOnlyDictionary<string, List<string>> eventUrlsByFixture,
+        ChromeDriver? sharedDriver = null)
+    {
+        var ownsDriver = sharedDriver is null;
+        var chromeOptions = default(ChromeOptions);
+        if (ownsDriver)
+        {
+            chromeOptions = GetChromeOptions();
+            chromeOptions.AddArgument("--disable-gpu");
+            chromeOptions.AddArgument("--lang=en-US");
+            chromeOptions.AddArgument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
+        }
+
+        using var createdDriver = ownsDriver ? new ChromeDriver(chromeOptions!) : null;
+        var driver = sharedDriver ?? createdDriver!;
+        var eventPageBudget = ParseConfiguredInt("ScrapingValues:SofaScoreMaxEventPagesPerRun", DefaultSofaScoreMaxEventPagesPerRun);
+        var pagesFetched = 0;
+        var scrapedScores = new List<SofaScoreMatchScore>();
+
+        foreach (var fixture in fixtures)
+        {
+            if (!eventUrlsByFixture.TryGetValue(BuildSofaScoreFixtureCacheKey(fixture), out var candidateUrls))
+            {
+                continue;
+            }
+
+            foreach (var candidateUrl in candidateUrls)
+            {
+                if (pagesFetched >= eventPageBudget)
+                {
+                    return new SofaScoreApiAttemptResult(
+                        scrapedScores,
+                        "browser-event-page",
+                        $"SofaScore browser event-page budget of {eventPageBudget} was reached after {pagesFetched} detail page(s).",
+                        eventUrlsByFixture.Values.Sum(urls => urls.Count),
+                        pagesFetched);
+                }
+
+                pagesFetched++;
+                try
+                {
+                    await driver.Navigate().GoToUrlAsync(candidateUrl);
+                    WaitForDocumentReady(driver);
+                    DismissCookieBanners(driver);
+                    await Task.Delay(1500);
+
+                    var html = driver.PageSource;
+                    if (string.IsNullOrWhiteSpace(html) ||
+                        !SofaScoreEventPageParser.TryParse(html, candidateUrl, out var parsedScore) ||
+                        !SofaScoreEventMatchesFixture(parsedScore, fixture))
+                    {
+                        continue;
+                    }
+
+                    scrapedScores.Add(parsedScore);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "SofaScore browser event page fetch failed for {Url}.", candidateUrl);
+                }
+            }
+        }
+
+        return new SofaScoreApiAttemptResult(
+            scrapedScores,
+            "browser-event-page",
+            scrapedScores.Count > 0
+                ? $"SofaScore browser crawler parsed {scrapedScores.Count} targeted event page(s) from {eventUrlsByFixture.Values.Sum(urls => urls.Count)} candidate URL(s)."
+                : $"SofaScore browser crawler found {eventUrlsByFixture.Values.Sum(urls => urls.Count)} candidate URL(s) but no targeted event pages parsed successfully.",
+            eventUrlsByFixture.Values.Sum(urls => urls.Count),
+            pagesFetched);
+    }
+
+    private async Task<HashSet<string>> CollectSofaScoreCandidateUrlsViaBrowserAsync(
+        ChromeDriver driver,
+        IReadOnlyList<string> listingUrls)
+    {
+        var discoveredUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var scrollRounds = ParseConfiguredInt("ScrapingValues:SofaScoreBrowserScrollRounds", DefaultSofaScoreBrowserScrollRounds);
+        var listingPageBudget = ParseConfiguredInt("ScrapingValues:SofaScoreBrowserListingPagesPerRun", DefaultSofaScoreBrowserListingPagesPerRun);
+        var pagesVisited = 0;
+        var baseUrl = (_configuration["ScrapingValues:SofaScoreBaseUrl"] ?? "https://www.sofascore.com").TrimEnd('/');
+
+        foreach (var listingUrl in listingUrls.Take(listingPageBudget))
+        {
+            pagesVisited++;
+            try
+            {
+                await driver.Navigate().GoToUrlAsync(listingUrl);
+                WaitForDocumentReady(driver);
+                DismissCookieBanners(driver);
+                await Task.Delay(2500);
+
+                for (var round = 0; round < scrollRounds; round++)
+                {
+                    MergeSofaScoreBrowserUrls(discoveredUrls, driver.PageSource, baseUrl);
+                    TryClickSofaScoreExpanders(driver);
+
+                    var js = (IJavaScriptExecutor)driver;
+                    js.ExecuteScript("window.scrollTo(0, document.body.scrollHeight);");
+                    await Task.Delay(1200);
+                }
+
+                MergeSofaScoreBrowserUrls(discoveredUrls, driver.PageSource, baseUrl);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "SofaScore browser listing fetch failed for {Url}.", listingUrl);
+            }
+        }
+
+        _logger.LogInformation(
+            "SofaScore browser discovery harvested {UrlCount} candidate match URL(s) from {PageCount} rendered listing page(s).",
+            discoveredUrls.Count,
+            pagesVisited);
+
+        return discoveredUrls;
+    }
+
+    private IReadOnlyList<string> BuildSofaScoreBrowserListingUrls()
+    {
+        var configured = _configuration["ScrapingValues:SofaScoreBrowserListingUrls"];
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            return configured
+                .Split([',', ';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        var baseUrl = (_configuration["ScrapingValues:SofaScoreBaseUrl"] ?? "https://www.sofascore.com").TrimEnd('/');
+        return
+        [
+            $"{baseUrl}/football",
+            baseUrl
+        ];
+    }
+
+    private void MergeSofaScoreBrowserUrls(HashSet<string> discoveredUrls, string html, string baseUrl)
+    {
+        foreach (var url in SofaScoreDiscoveryHelper.ExtractMatchUrlsFromHtml(html, baseUrl))
+        {
+            if (!string.IsNullOrWhiteSpace(url))
+            {
+                discoveredUrls.Add(url);
+            }
+        }
+    }
+
+    private static void TryClickSofaScoreExpanders(IWebDriver driver)
+    {
+        var js = (IJavaScriptExecutor)driver;
+        js.ExecuteScript(@"
+            const labels = ['show more', 'load more', 'more matches', 'all matches'];
+            const nodes = Array.from(document.querySelectorAll('button, [role=""button""], a'));
+            for (const node of nodes) {
+              const text = (node.textContent || '').trim().toLowerCase();
+              if (!text) continue;
+              if (labels.some(label => text.includes(label))) {
+                try { node.click(); } catch (_) {}
+              }
+            }
+        ");
     }
 
     private async Task<SofaScoreApiAttemptResult> ScrapeSofaScoreViaApiAsync(

@@ -222,7 +222,7 @@ using (var scope = app.Services.CreateScope())
         recurringJobs.AddOrUpdate<IAnalyzerService>(
             "score-update-job",
             service => service.RunScoreUpdaterAsync(1, "recent"),
-            "*/5 * * * *", // Every 5 minutes for today's and yesterday's fixtures
+            "*/6 * * * *", // Every 6 minutes for today's and yesterday's fixtures
             new RecurringJobOptions
             {
                 TimeZone = watTimeZone

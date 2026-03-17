@@ -1,11 +1,12 @@
 using System.Globalization;
 using System.IO.Compression;
+using System.Text.RegularExpressions;
 using System.Text;
 using System.Xml.Linq;
 
 namespace MatchPredictor.Infrastructure.Services;
 
-public static class SofaScoreDiscoveryHelper
+public static partial class SofaScoreDiscoveryHelper
 {
     public static IReadOnlyList<string> ParseRobotSitemapUrls(string robotsText)
     {
@@ -170,6 +171,57 @@ public static class SofaScoreDiscoveryHelper
         return score;
     }
 
+    public static IReadOnlyList<string> ExtractMatchUrlsFromHtml(string html, string baseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return [];
+        }
+
+        var normalizedBaseUrl = baseUrl.TrimEnd('/');
+        var urls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (Match match in MatchUrlRegex().Matches(html))
+        {
+            var raw = match.Value;
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                continue;
+            }
+
+            var absolute = raw.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                ? raw
+                : $"{normalizedBaseUrl}{raw}";
+
+            urls.Add(NormalizeMatchUrl(absolute));
+        }
+
+        return urls.ToList();
+    }
+
+    public static string NormalizeMatchUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = url.Trim();
+        var hashIndex = trimmed.IndexOf('#');
+        if (hashIndex >= 0)
+        {
+            trimmed = trimmed[..hashIndex];
+        }
+
+        var queryIndex = trimmed.IndexOf('?');
+        if (queryIndex >= 0)
+        {
+            trimmed = trimmed[..queryIndex];
+        }
+
+        return trimmed.TrimEnd('/');
+    }
+
     private static string ReadSitemapPayload(byte[] payload, string sourceUrl)
     {
         using var payloadStream = new MemoryStream(payload);
@@ -200,6 +252,9 @@ public static class SofaScoreDiscoveryHelper
             ? parsed.UtcDateTime
             : null;
     }
+
+    [GeneratedRegex(@"(?:https?:\/\/www\.sofascore\.com)?\/football\/match\/[A-Za-z0-9\-]+\/[A-Za-z0-9]+", RegexOptions.IgnoreCase)]
+    private static partial Regex MatchUrlRegex();
 }
 
 public sealed record SofaScoreSitemapEntry(string Location, DateTime? LastModifiedUtc);

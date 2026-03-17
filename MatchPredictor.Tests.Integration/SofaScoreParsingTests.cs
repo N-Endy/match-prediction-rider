@@ -131,6 +131,26 @@ public class SofaScoreParsingTests
     }
 
     [Fact]
+    public void ExtractMatchUrlsFromHtml_ReturnsNormalizedRenderedLinks()
+    {
+        const string html = """
+            <html>
+            <body>
+              <a href="/football/match/real-madrid-manchester-city/rsEgb#id:15631365">Man City - Real Madrid</a>
+              <a href="https://www.sofascore.com/football/match/arsenal-chelsea/NR?tab=overview">Arsenal - Chelsea</a>
+              <a href="/basketball/match/lakers-celtics/ABC">Ignore</a>
+            </body>
+            </html>
+            """;
+
+        var urls = SofaScoreDiscoveryHelper.ExtractMatchUrlsFromHtml(html, "https://www.sofascore.com");
+
+        Assert.Equal(2, urls.Count);
+        Assert.Contains("https://www.sofascore.com/football/match/real-madrid-manchester-city/rsEgb", urls);
+        Assert.Contains("https://www.sofascore.com/football/match/arsenal-chelsea/NR", urls);
+    }
+
+    [Fact]
     public void TryParse_FinishedExtraTimePage_UsesRegularTimeScoreForSettlement()
     {
         const string html = """
