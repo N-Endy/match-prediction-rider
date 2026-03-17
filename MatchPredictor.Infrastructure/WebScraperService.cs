@@ -4,6 +4,7 @@ using HtmlAgilityPack;
 using Jint;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Services;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -15,14 +16,21 @@ namespace MatchPredictor.Infrastructure;
 
 public partial class WebScraperService : IWebScraperService
 {
+    private static readonly TimeSpan AiScoreBlockedCooldown = TimeSpan.FromMinutes(10);
+    private const int AiScoreBrowserChallengeProbeSeconds = 6;
     private readonly string _downloadFolder;
     private readonly IConfiguration _configuration;
     private readonly ILogger<WebScraperService> _logger;
+    private readonly AiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
 
-    public WebScraperService(IConfiguration configuration, ILogger<WebScraperService> logger)
+    public WebScraperService(
+        IConfiguration configuration,
+        ILogger<WebScraperService> logger,
+        AiScoreSourceHealthTracker aiScoreSourceHealthTracker)
     {
         _logger = logger;
         _configuration = configuration;
+        _aiScoreSourceHealthTracker = aiScoreSourceHealthTracker;
         
         var baseDirFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources");
         var currentDirFolder = Path.Combine(Directory.GetCurrentDirectory(), "Resources");
@@ -197,63 +205,81 @@ public partial class WebScraperService : IWebScraperService
 
     public async Task<List<AiScoreMatchScore>> ScrapeAiScoreMatchScoresAsync()
     {
-        var matchScores = new List<AiScoreMatchScore>();
+        if (_aiScoreSourceHealthTracker.IsInCooldown(DateTime.UtcNow, out var remaining))
+        {
+            _logger.LogWarning(
+                "AiScore is in cooldown for another {RemainingSeconds:0}s after a recent block. Skipping direct fetch and falling back immediately.",
+                remaining.TotalSeconds);
+            return await FetchAndTrackApiFootballFallbackAsync("AiScore cooldown active.");
+        }
+
+        _aiScoreSourceHealthTracker.RecordAttempt("http");
 
         // ── Primary: HttpClient → extract window.__NUXT__ state from AiScore ──
         try
         {
-            matchScores = await ScrapeAiScoreViaHttpAsync();
-            if (matchScores.Count > 0)
+            var httpAttempt = await ScrapeAiScoreViaHttpAttemptAsync();
+            if (httpAttempt.Matches.Count > 0)
             {
-                _logger.LogInformation("Scraped {Count} match scores from AiScore (HTTP).", matchScores.Count);
-                return matchScores;
+                _aiScoreSourceHealthTracker.RecordSuccess("http", httpAttempt.Matches.Count, httpAttempt.Detail);
+                _logger.LogInformation("Scraped {Count} match scores from AiScore (HTTP).", httpAttempt.Matches.Count);
+                return await MaybeSupplementAiScoreCoverageAsync(httpAttempt.Matches, "http");
             }
-            _logger.LogWarning("AiScore HTTP extraction returned 0 matches. Falling back to Headless Browser.");
+
+            if (httpAttempt.Status == AiScoreAttemptStatus.Blocked)
+            {
+                _aiScoreSourceHealthTracker.RecordHttpBlocked(httpAttempt.Detail);
+                _logger.LogWarning("{Detail} Falling back to Headless Browser.", httpAttempt.Detail);
+            }
+            else
+            {
+                _aiScoreSourceHealthTracker.RecordEmpty("http", httpAttempt.Detail);
+                _logger.LogWarning("AiScore HTTP extraction returned 0 matches. Falling back to Headless Browser.");
+            }
         }
         catch (Exception ex)
         {
+            _aiScoreSourceHealthTracker.RecordFailure("http", ex.Message);
             _logger.LogWarning(ex, "AiScore HTTP extraction failed. Falling back to Headless Browser.");
         }
 
         // ── Secondary: Headless Browser → extract window.__NUXT__ state from AiScore ──
         try
         {
-            matchScores = await ScrapeAiScoreViaBrowserAsync();
-            if (matchScores.Count > 0)
+            _aiScoreSourceHealthTracker.RecordAttempt("browser");
+            var browserAttempt = await ScrapeAiScoreViaBrowserAttemptAsync();
+            if (browserAttempt.Matches.Count > 0)
             {
-                _logger.LogInformation("Scraped {Count} match scores from AiScore (Browser).", matchScores.Count);
-                return matchScores;
+                _aiScoreSourceHealthTracker.RecordSuccess("browser", browserAttempt.Matches.Count, browserAttempt.Detail);
+                _logger.LogInformation("Scraped {Count} match scores from AiScore (Browser).", browserAttempt.Matches.Count);
+                return await MaybeSupplementAiScoreCoverageAsync(browserAttempt.Matches, "browser");
             }
-            _logger.LogWarning("AiScore Browser extraction returned 0 matches. Falling back to API-Football.");
+
+            if (browserAttempt.Status == AiScoreAttemptStatus.Blocked)
+            {
+                _aiScoreSourceHealthTracker.RecordBrowserBlocked(browserAttempt.Detail, AiScoreBlockedCooldown);
+                _logger.LogWarning("{Detail} Falling back to API-Football.", browserAttempt.Detail);
+            }
+            else
+            {
+                _aiScoreSourceHealthTracker.RecordEmpty("browser", browserAttempt.Detail);
+                _logger.LogWarning("AiScore Browser extraction returned 0 matches. Falling back to API-Football.");
+            }
         }
         catch (Exception ex)
         {
+            _aiScoreSourceHealthTracker.RecordFailure("browser", ex.Message);
             _logger.LogWarning(ex, "AiScore Browser extraction failed. Falling back to API-Football.");
         }
 
-        // ── Tertiary: Fallback API-Football REST API ──
-        try
-        {
-            matchScores = await FetchFromApiFootballAsync();
-            if (matchScores.Count > 0)
-            {
-                _logger.LogInformation("Fetched {Count} match scores from API-Football (fallback).", matchScores.Count);
-                return matchScores;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "API-Football fallback also failed.");
-        }
-
-        return matchScores;
+        return await FetchAndTrackApiFootballFallbackAsync("AiScore unavailable after direct attempts.");
     }
 
     /// <summary>
     /// Extracts match scores from AiScore by downloading the HTML via HttpClient.
     /// Fast, but might get blocked by Cloudflare (403 Forbidden).
     /// </summary>
-    private async Task<List<AiScoreMatchScore>> ScrapeAiScoreViaHttpAsync()
+    private async Task<AiScoreAttemptResult> ScrapeAiScoreViaHttpAttemptAsync()
     {
         var aiScoreUrl = _configuration["ScrapingValues:AiScoreWebsite"] ?? "https://m.aiscore.com";
 
@@ -273,19 +299,33 @@ public partial class WebScraperService : IWebScraperService
         var response = await client.GetAsync(aiScoreUrl);
         if (!response.IsSuccessStatusCode)
         {
+            var detail = $"AiScore HTTP returned {(int)response.StatusCode} {response.ReasonPhrase}.";
+            if ((int)response.StatusCode is 403 or 429)
+            {
+                return new AiScoreAttemptResult([], AiScoreAttemptStatus.Blocked, detail);
+            }
+
             _logger.LogWarning("AiScore HTTP returned {StatusCode} {ReasonPhrase}.", response.StatusCode, response.ReasonPhrase);
-            return new List<AiScoreMatchScore>();
+            return new AiScoreAttemptResult([], AiScoreAttemptStatus.Empty, detail);
         }
 
         var html = await response.Content.ReadAsStringAsync();
-        return ParseAiScoreNuxtState(html);
+        if (LooksLikeAiScoreChallengePage(html))
+        {
+            return new AiScoreAttemptResult([], AiScoreAttemptStatus.Blocked, "AiScore HTTP returned a challenge page instead of score data.");
+        }
+
+        var matches = ParseAiScoreNuxtState(html);
+        return matches.Count > 0
+            ? new AiScoreAttemptResult(matches, AiScoreAttemptStatus.Success, $"Fetched {matches.Count} match(es) from AiScore HTTP.")
+            : new AiScoreAttemptResult([], AiScoreAttemptStatus.Empty, "AiScore HTTP returned HTML without extractable match data.");
     }
 
     /// <summary>
     /// Extracts match scores from AiScore by loading the page via Headless Browser
     /// and extracting JSON data from window.__NUXT__ using the JS executor.
     /// </summary>
-    private async Task<List<AiScoreMatchScore>> ScrapeAiScoreViaBrowserAsync()
+    private async Task<AiScoreAttemptResult> ScrapeAiScoreViaBrowserAttemptAsync()
     {
         var aiScoreUrl = _configuration["ScrapingValues:AiScoreWebsite"] ?? "https://m.aiscore.com";
 
@@ -306,26 +346,34 @@ public partial class WebScraperService : IWebScraperService
 
             await driver.Navigate().GoToUrlAsync(aiScoreUrl);
 
-            // Dynamically wait up to 30s for Cloudflare challenges to clear
-            var maxWait = 30;
             var elapsed = 0;
-            while (elapsed < maxWait)
+            while (elapsed < AiScoreBrowserChallengeProbeSeconds)
             {
-                await Task.Delay(2000);
-                elapsed += 2;
+                await Task.Delay(1000);
+                elapsed += 1;
                 var src = driver.PageSource;
-                if (!src.Contains("security verification", StringComparison.OrdinalIgnoreCase) &&
-                    !src.Contains("cf-turnstile", StringComparison.OrdinalIgnoreCase) &&
-                    !src.Contains("Just a moment", StringComparison.OrdinalIgnoreCase))
+                var title = driver.Title;
+                if (!LooksLikeAiScoreChallengePage(src, title))
                 {
-                    _logger.LogInformation("Cloudflare passed or not present after {Elapsed}s.", elapsed);
+                    _logger.LogInformation("AiScore browser challenge cleared after {Elapsed}s.", elapsed);
                     break;
                 }
-                _logger.LogDebug("Still waiting for Cloudflare at {Elapsed}s...", elapsed);
+                _logger.LogDebug("Still waiting for AiScore challenge to clear at {Elapsed}s...", elapsed);
             }
 
-            // Extra buffer to ensure Nuxt/Next state finishes hydrating
-            await Task.Delay(5000);
+            var currentHtml = driver.PageSource;
+            var currentTitle = driver.Title;
+            if (LooksLikeAiScoreChallengePage(currentHtml, currentTitle))
+            {
+                _logger.LogWarning(
+                    "AiScore Browser: challenge page detected after {Elapsed}s. Title: '{Title}', HTML length: {Len}.",
+                    elapsed,
+                    currentTitle,
+                    currentHtml.Length);
+                return new AiScoreAttemptResult([], AiScoreAttemptStatus.Blocked, $"AiScore browser was blocked by a challenge page ('{currentTitle}').");
+            }
+
+            await Task.Delay(2000);
 
             // --- Strategy 1: Extract __NUXT__ via JavaScript executor (preferred) ---
             var hasNuxt = (bool)js.ExecuteScript("return !!window.__NUXT__;");
@@ -341,7 +389,10 @@ public partial class WebScraperService : IWebScraperService
                         comps: s.matchesData_competitions || [] 
                     });
                 ");
-                return ParseAiScoreExtractedJson(nuxtJson);
+                var matches = ParseAiScoreExtractedJson(nuxtJson);
+                return matches.Count > 0
+                    ? new AiScoreAttemptResult(matches, AiScoreAttemptStatus.Success, $"Fetched {matches.Count} match(es) from AiScore browser extraction.")
+                    : new AiScoreAttemptResult([], AiScoreAttemptStatus.Empty, "AiScore browser found hydrated state, but no match rows were extracted.");
             }
 
             // --- Strategy 2: Extract __NEXT_DATA__ via JS executor ---
@@ -358,7 +409,9 @@ public partial class WebScraperService : IWebScraperService
             var html = driver.PageSource;
             var result = ParseAiScoreNuxtState(html);
             if (result.Count > 0)
-                return result;
+            {
+                return new AiScoreAttemptResult(result, AiScoreAttemptStatus.Success, $"Fetched {result.Count} match(es) from AiScore browser HTML.");
+            }
 
             // Debugging: log what the page actually contains
             var pageTitle = driver.Title;
@@ -366,12 +419,12 @@ public partial class WebScraperService : IWebScraperService
             _logger.LogWarning("AiScore Browser: No data extracted. Page title: '{Title}', HTML length: {Len}, first 300 chars: {Preview}",
                 pageTitle, pageLen, html.Substring(0, Math.Min(pageLen, 300)));
 
-            return new List<AiScoreMatchScore>();
+            return new AiScoreAttemptResult([], AiScoreAttemptStatus.Empty, $"AiScore browser loaded '{pageTitle}' but no extractable match data was found.");
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to load AiScore via Headless Chrome.");
-            return new List<AiScoreMatchScore>();
+            return new AiScoreAttemptResult([], AiScoreAttemptStatus.Failed, $"AiScore browser failure: {ex.Message}");
         }
     }
 
@@ -665,6 +718,161 @@ public partial class WebScraperService : IWebScraperService
         return matchScores;
     }
 
+    private async Task<List<AiScoreMatchScore>> FetchAndTrackApiFootballFallbackAsync(string reason)
+    {
+        try
+        {
+            var matchScores = await FetchFromApiFootballAsync();
+            _aiScoreSourceHealthTracker.RecordFallback(
+                "api-football",
+                matchScores.Count,
+                $"{reason} API-Football returned {matchScores.Count} match(es).");
+
+            if (matchScores.Count > 0)
+            {
+                _logger.LogInformation("Fetched {Count} match scores from API-Football (fallback).", matchScores.Count);
+            }
+
+            return matchScores;
+        }
+        catch (Exception ex)
+        {
+            _aiScoreSourceHealthTracker.RecordFailure("api-football", ex.Message);
+            _logger.LogWarning(ex, "API-Football fallback also failed.");
+            return [];
+        }
+    }
+
+    private async Task<List<AiScoreMatchScore>> MaybeSupplementAiScoreCoverageAsync(
+        List<AiScoreMatchScore> aiScoreMatches,
+        string sourceStage)
+    {
+        if (!ShouldSupplementAiScoreCoverage(aiScoreMatches.Count))
+        {
+            return aiScoreMatches;
+        }
+
+        var supplement = await FetchAndTrackApiFootballFallbackAsync(
+            $"AiScore {sourceStage} coverage looked low ({aiScoreMatches.Count} match(es)); supplementing.");
+
+        if (supplement.Count == 0)
+        {
+            return aiScoreMatches;
+        }
+
+        var merged = MergeAiScoreResults(aiScoreMatches, supplement);
+        _aiScoreSourceHealthTracker.RecordSupplement(
+            Math.Max(0, merged.Count - aiScoreMatches.Count),
+            $"Merged {supplement.Count} API-Football fallback match(es) with {aiScoreMatches.Count} AiScore match(es) to reach {merged.Count} unique fixtures.");
+        return merged;
+    }
+
+    private bool ShouldSupplementAiScoreCoverage(int aiScoreCount)
+    {
+        if (aiScoreCount <= 0 || string.IsNullOrWhiteSpace(_configuration["ApiFootball:ApiKey"]))
+        {
+            return false;
+        }
+
+        var previousHealthyCount = _aiScoreSourceHealthTracker.GetLastSuccessfulMatchCount();
+        if (previousHealthyCount < 40)
+        {
+            return false;
+        }
+
+        return aiScoreCount < Math.Max(20, (int)Math.Floor(previousHealthyCount * 0.6));
+    }
+
+    private static List<AiScoreMatchScore> MergeAiScoreResults(
+        IEnumerable<AiScoreMatchScore> primary,
+        IEnumerable<AiScoreMatchScore> supplement)
+    {
+        var merged = new Dictionary<string, AiScoreMatchScore>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var score in supplement)
+        {
+            UpsertMergedScore(merged, score, preferCandidateOnTie: false);
+        }
+
+        foreach (var score in primary)
+        {
+            UpsertMergedScore(merged, score, preferCandidateOnTie: true);
+        }
+
+        return merged.Values
+            .OrderBy(score => score.MatchTime)
+            .ThenBy(score => score.HomeTeam)
+            .ThenBy(score => score.AwayTeam)
+            .ToList();
+    }
+
+    private static void UpsertMergedScore(
+        IDictionary<string, AiScoreMatchScore> merged,
+        AiScoreMatchScore candidate,
+        bool preferCandidateOnTie)
+    {
+        var key = BuildMergedFixtureKey(candidate);
+        if (!merged.TryGetValue(key, out var existing))
+        {
+            merged[key] = candidate;
+            return;
+        }
+
+        if (!existing.IsLive && candidate.IsLive)
+        {
+            return;
+        }
+
+        if (existing.IsLive && !candidate.IsLive)
+        {
+            merged[key] = candidate;
+            return;
+        }
+
+        if (candidate.MatchTime > existing.MatchTime)
+        {
+            merged[key] = candidate;
+            return;
+        }
+
+        if (candidate.MatchTime == existing.MatchTime && preferCandidateOnTie)
+        {
+            merged[key] = candidate;
+        }
+    }
+
+    private static string BuildMergedFixtureKey(AiScoreMatchScore score)
+    {
+        var localDate = DateTimeProvider.ConvertUtcToLocal(score.MatchTime).ToString("yyyy-MM-dd");
+        return string.Join(
+            "|",
+            localDate,
+            NormalizeFixtureKeyPart(score.League),
+            NormalizeFixtureKeyPart(score.HomeTeam),
+            NormalizeFixtureKeyPart(score.AwayTeam));
+    }
+
+    private static string NormalizeFixtureKeyPart(string? value)
+    {
+        return (value ?? string.Empty).Trim().ToLowerInvariant();
+    }
+
+    private static bool LooksLikeAiScoreChallengePage(string html, string? title = null)
+    {
+        if (string.IsNullOrWhiteSpace(html) && string.IsNullOrWhiteSpace(title))
+        {
+            return false;
+        }
+
+        return (!string.IsNullOrWhiteSpace(title) &&
+                title.Contains("Just a moment", StringComparison.OrdinalIgnoreCase)) ||
+               (!string.IsNullOrWhiteSpace(html) &&
+                (html.Contains("Just a moment", StringComparison.OrdinalIgnoreCase) ||
+                 html.Contains("cf-turnstile", StringComparison.OrdinalIgnoreCase) ||
+                 html.Contains("security verification", StringComparison.OrdinalIgnoreCase) ||
+                 html.Contains("Attention Required", StringComparison.OrdinalIgnoreCase)));
+    }
+
     /// <summary>
     /// Normalizes various score formats ("1 - 0", "1-0", "1 : 0", "1:0") to "H:A" format.
     /// </summary>
@@ -688,6 +896,19 @@ public partial class WebScraperService : IWebScraperService
     /// <summary>
     /// Internal DTO for deserializing JS extraction results
     /// </summary>
+    private sealed record AiScoreAttemptResult(
+        List<AiScoreMatchScore> Matches,
+        AiScoreAttemptStatus Status,
+        string Detail);
+
+    private enum AiScoreAttemptStatus
+    {
+        Success,
+        Empty,
+        Blocked,
+        Failed
+    }
+
     private sealed class AiScoreRawMatch
     {
         public string? Home { get; set; }

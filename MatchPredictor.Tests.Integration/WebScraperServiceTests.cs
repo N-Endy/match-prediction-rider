@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using MatchPredictor.Infrastructure;
+using MatchPredictor.Infrastructure.Services;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -28,7 +29,10 @@ namespace MatchPredictor.Tests.Integration
             });
             var config = configBuilder.Build();
 
-            var scraper = new WebScraperService(config, NullLogger<WebScraperService>.Instance);
+            var scraper = new WebScraperService(
+                config,
+                NullLogger<WebScraperService>.Instance,
+                new AiScoreSourceHealthTracker());
 
             var scores = await scraper.ScrapeAiScoreMatchScoresAsync();
 

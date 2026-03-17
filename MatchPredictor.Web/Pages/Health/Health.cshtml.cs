@@ -1,5 +1,6 @@
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Services;
 using MatchPredictor.Infrastructure.Utils;
 using MatchPredictor.Web.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -23,11 +24,16 @@ public class Health : PageModel
 
     private readonly ApplicationDbContext _dbContext;
     private readonly OperationalStartupState _startupState;
+    private readonly AiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
 
-    public Health(ApplicationDbContext dbContext, OperationalStartupState startupState)
+    public Health(
+        ApplicationDbContext dbContext,
+        OperationalStartupState startupState,
+        AiScoreSourceHealthTracker aiScoreSourceHealthTracker)
     {
         _dbContext = dbContext;
         _startupState = startupState;
+        _aiScoreSourceHealthTracker = aiScoreSourceHealthTracker;
     }
 
     [BindProperty(SupportsGet = true)]
@@ -132,6 +138,7 @@ public class Health : PageModel
             LivePredictionsToday = livePredictionsToday,
             PredictionCoverageExpected = predictionCoverageExpected,
             Signals = signals,
+            AiScoreRuntime = BuildAiScoreRuntimeStatus(_aiScoreSourceHealthTracker.GetSnapshot()),
             SourceQualityProfiles = sourceQualityProfiles
                 .Select(BuildSourceQualitySummary)
                 .ToList(),
@@ -209,6 +216,29 @@ public class Health : PageModel
         };
     }
 
+    private static AiScoreRuntimeStatus BuildAiScoreRuntimeStatus(AiScoreSourceHealthSnapshot snapshot)
+    {
+        return new AiScoreRuntimeStatus
+        {
+            Status = snapshot.Status,
+            LastStage = snapshot.LastStage,
+            LastDetail = snapshot.LastDetail,
+            LastAttemptLocal = snapshot.LastAttemptUtc.HasValue
+                ? DateTimeProvider.ConvertUtcToLocal(snapshot.LastAttemptUtc.Value)
+                : null,
+            LastSuccessLocal = snapshot.LastSuccessUtc.HasValue
+                ? DateTimeProvider.ConvertUtcToLocal(snapshot.LastSuccessUtc.Value)
+                : null,
+            LastMatchCount = snapshot.LastMatchCount,
+            LastFallbackMatchCount = snapshot.LastFallbackMatchCount,
+            LastSupplementMatchCount = snapshot.LastSupplementMatchCount,
+            IsCoolingDown = snapshot.IsCoolingDown,
+            CooldownUntilLocal = snapshot.CooldownUntilUtc.HasValue
+                ? DateTimeProvider.ConvertUtcToLocal(snapshot.CooldownUntilUtc.Value)
+                : null
+        };
+    }
+
     private static bool IsMissingSourceQualityTable(PostgresException ex)
     {
         return ex.SqlState == PostgresErrorCodes.UndefinedTable &&
@@ -231,6 +261,7 @@ public sealed class OperationalHealthSnapshot
     public bool PredictionCoverageExpected { get; init; }
     public bool IsHealthy { get; init; }
     public List<HealthSignalStatus> Signals { get; init; } = [];
+    public AiScoreRuntimeStatus AiScoreRuntime { get; init; } = new();
     public List<SourceQualitySummary> SourceQualityProfiles { get; init; } = [];
     public List<SourceQualitySummary> WeakestSourceProfiles { get; init; } = [];
 }
@@ -255,6 +286,20 @@ public enum HealthLevel
     Stale,
     Failed,
     Missing
+}
+
+public sealed class AiScoreRuntimeStatus
+{
+    public string Status { get; init; } = "Idle";
+    public string? LastStage { get; init; }
+    public string? LastDetail { get; init; }
+    public DateTime? LastAttemptLocal { get; init; }
+    public DateTime? LastSuccessLocal { get; init; }
+    public int LastMatchCount { get; init; }
+    public int LastFallbackMatchCount { get; init; }
+    public int LastSupplementMatchCount { get; init; }
+    public bool IsCoolingDown { get; init; }
+    public DateTime? CooldownUntilLocal { get; init; }
 }
 
 public sealed class SourceQualitySummary

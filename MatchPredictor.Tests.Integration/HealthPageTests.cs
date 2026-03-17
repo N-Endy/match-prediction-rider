@@ -1,5 +1,6 @@
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Services;
 using MatchPredictor.Infrastructure.Utils;
 using MatchPredictor.Web.Pages.Health;
 using MatchPredictor.Web.Services;
@@ -41,7 +42,7 @@ public class HealthPageTests
         startupState.MarkHangfireInitialized();
         startupState.MarkRecurringJobsRegistered();
 
-        var page = new Health(context, startupState);
+        var page = new Health(context, startupState, new AiScoreSourceHealthTracker());
 
         var result = await page.OnGetAsync(CancellationToken.None);
 

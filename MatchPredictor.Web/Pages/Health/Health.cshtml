@@ -115,6 +115,63 @@
 
     <div class="mp-page-header" style="margin-top: 2rem;">
         <div class="mp-page-title">
+            <div class="mp-page-title-icon" style="background: rgba(59, 130, 246, 0.12);">📡</div>
+            <h2 style="margin: 0;">AiScore Runtime</h2>
+        </div>
+    </div>
+
+    @{
+        var aiScoreLevel = Model.Snapshot.AiScoreRuntime.Status switch
+        {
+            "Healthy" => HealthLevel.Healthy,
+            "Supplemented" => HealthLevel.Stale,
+            "Fallback" => HealthLevel.Stale,
+            "CooldownFallback" => HealthLevel.Failed,
+            "Blocked" => HealthLevel.Failed,
+            "HttpBlocked" => HealthLevel.Stale,
+            "Failed" => HealthLevel.Failed,
+            _ => HealthLevel.Missing
+        };
+    }
+
+    <div class="mp-prediction-card" style="border-left: 3px solid @(aiScoreLevel == HealthLevel.Healthy ? "var(--accent-emerald)" : aiScoreLevel == HealthLevel.Stale ? "#f59e0b" : aiScoreLevel == HealthLevel.Failed ? "var(--accent-rose)" : "var(--border-color)");">
+        <div class="mp-match-info">
+            <div class="mp-match-league">
+                AiScore status
+                @if (!string.IsNullOrWhiteSpace(Model.Snapshot.AiScoreRuntime.LastStage))
+                {
+                    <span class="mp-time">Last stage @Model.Snapshot.AiScoreRuntime.LastStage</span>
+                }
+            </div>
+            <div style="font-size: 1.2rem; font-weight: 700; margin-top: 0.45rem;">@Model.Snapshot.AiScoreRuntime.Status</div>
+            <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.35rem;">
+                Last AiScore count: @Model.Snapshot.AiScoreRuntime.LastMatchCount
+                • Fallback: @Model.Snapshot.AiScoreRuntime.LastFallbackMatchCount
+                • Supplement: @Model.Snapshot.AiScoreRuntime.LastSupplementMatchCount
+            </div>
+            <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
+                Last success: @(Model.Snapshot.AiScoreRuntime.LastSuccessLocal?.ToString("dd MMM yyyy, hh:mm tt") ?? "Never")
+            </div>
+            @if (Model.Snapshot.AiScoreRuntime.IsCoolingDown)
+            {
+                <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
+                    Cooldown until: @(Model.Snapshot.AiScoreRuntime.CooldownUntilLocal?.ToString("dd MMM yyyy, hh:mm tt") ?? "--")
+                </div>
+            }
+            @if (!string.IsNullOrWhiteSpace(Model.Snapshot.AiScoreRuntime.LastDetail))
+            {
+                <div style="font-size: 0.84rem; color: var(--text-secondary); margin-top: 0.65rem; line-height: 1.5;">
+                    @Model.Snapshot.AiScoreRuntime.LastDetail
+                </div>
+            }
+        </div>
+        <span class="mp-prediction-badge" style="@BadgeColors(aiScoreLevel)">
+            @aiScoreLevel
+        </span>
+    </div>
+
+    <div class="mp-page-header" style="margin-top: 2rem;">
+        <div class="mp-page-title">
             <div class="mp-page-title-icon" style="background: rgba(245, 158, 11, 0.12);">🧭</div>
             <h2 style="margin: 0;">Source Quality</h2>
         </div>
