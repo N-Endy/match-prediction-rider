@@ -29,19 +29,22 @@ public class AiAdvisorService : IAiAdvisorService
     private readonly ILogger<AiAdvisorService> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IDistributedCache _cache;
+    private readonly AiChatKnowledgeService _knowledgeService;
 
     public AiAdvisorService(
         ApplicationDbContext dbContext,
         IConfiguration configuration,
         ILogger<AiAdvisorService> logger,
         IHttpClientFactory httpClientFactory,
-        IDistributedCache cache)
+        IDistributedCache cache,
+        AiChatKnowledgeService knowledgeService)
     {
         _dbContext = dbContext;
         _configuration = configuration;
         _logger = logger;
         _httpClientFactory = httpClientFactory;
         _cache = cache;
+        _knowledgeService = knowledgeService;
     }
 
     public async Task<AiChatResponse> GetAdviceAsync(string userPrompt, string sessionId, CancellationToken ct = default)
@@ -55,34 +58,85 @@ public class AiAdvisorService : IAiAdvisorService
             };
         }
 
-        var apiKey = _configuration["GroqApiKey"];
-        if (string.IsNullOrEmpty(apiKey) || apiKey.Contains("stored in user-secrets") || apiKey.Contains("set via environment variable"))
-        {
-            return new AiChatResponse
-            {
-                Message = "⚠️ Groq API key is not configured. Please add 'GroqApiKey' to your configuration via user-secrets or environment variables."
-            };
-        }
-
         var sessionState = await LoadSessionStateAsync(sessionId, ct);
         if (TryResolvePendingRolloverPrompt(normalizedPrompt, sessionState, out var effectivePrompt))
         {
             normalizedPrompt = effectivePrompt;
         }
 
-        var predictions = await LoadPublishedPredictionsForChatAsync(ct);
-
-        if (AiChatContextBuilder.IsContextFollowUpPrompt(normalizedPrompt) &&
-            sessionState.LastContextPredictionIds.Count > 0)
+        if (_knowledgeService.TryBuildSecurityRefusal(normalizedPrompt, out var securityResponse))
         {
-            var contextualPredictions = predictions
-                .Where(prediction => sessionState.LastContextPredictionIds.Contains(prediction.Id))
-                .ToList();
+            FinalizeResponse(securityResponse, "security_refusal");
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, securityResponse, null, [], ct);
+            return securityResponse;
+        }
 
-            if (contextualPredictions.Count > 0)
-            {
-                predictions = contextualPredictions;
-            }
+        var predictions = await LoadPublishedPredictionsForChatAsync(ct);
+        var pricingByPredictionId = await LoadCandidatePricingByPredictionIdAsync(predictions, ct);
+        var candidateCatalog = AiChatContextBuilder.BuildCandidateCatalog(predictions, DateTime.UtcNow, pricingByPredictionId);
+        var workingSlipCandidates = ResolveSessionCandidates(candidateCatalog, sessionState.WorkingSlipPredictionIds, sessionState.WorkingSlipActionKeys, sessionState.LastRecommendedActionKeys);
+        var contextCandidates = ResolveContextCandidates(candidateCatalog, sessionState, normalizedPrompt, workingSlipCandidates);
+        var intent = AiChatContextBuilder.DetectIntent(normalizedPrompt, workingSlipCandidates.Count > 0, contextCandidates.Count > 0);
+
+        if (IsBookingFollowUp(normalizedPrompt, sessionState))
+        {
+            var followUp = BuildBookingFollowUpResponse(predictions, sessionState.LastRecommendedActionKeys);
+            FinalizeResponse(followUp, "working_slip_refinement");
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, followUp, null, followUp.Actions.Select(action => action.PredictionId).ToList(), ct);
+            return followUp;
+        }
+
+        var predictionsForSelection = contextCandidates.Count > 0
+            ? predictions.Where(prediction => contextCandidates.Any(candidate => candidate.PredictionId == prediction.Id)).ToList()
+            : predictions;
+
+        var selection = AiChatContextBuilder.BuildSelection(predictionsForSelection, normalizedPrompt, DateTime.UtcNow, pricingByPredictionId);
+        var relevantCandidates = selection.Candidates.Count > 0 ? selection.Candidates : contextCandidates;
+
+        if (intent is AiChatIntent.AppHelp or AiChatIntent.SettlementExplanation &&
+            _knowledgeService.TryBuildPublicAppHelpResponse(normalizedPrompt, relevantCandidates, out var helpResponse, out var knowledgeTopic))
+        {
+            FinalizeResponse(helpResponse, intent == AiChatIntent.SettlementExplanation ? "settlement_explanation" : "app_help");
+            await SaveSessionTurnAsync(
+                sessionId,
+                sessionState,
+                normalizedPrompt,
+                helpResponse,
+                selection,
+                relevantCandidates.Select(candidate => candidate.PredictionId).ToList(),
+                ct,
+                knowledgeTopic);
+            return helpResponse;
+        }
+
+        if (intent == AiChatIntent.WorkingSlipRefinement)
+        {
+            var refinementResponse = BuildWorkingSlipRefinementResponse(normalizedPrompt, workingSlipCandidates, candidateCatalog);
+            FinalizeResponse(refinementResponse, "working_slip_refinement");
+            await SaveSessionTurnAsync(
+                sessionId,
+                sessionState,
+                normalizedPrompt,
+                refinementResponse,
+                selection,
+                refinementResponse.Actions.Select(action => action.PredictionId).ToList(),
+                ct);
+            return refinementResponse;
+        }
+
+        if (intent == AiChatIntent.MatchDiscussion)
+        {
+            var discussionResponse = BuildMatchDiscussionResponse(normalizedPrompt, relevantCandidates);
+            FinalizeResponse(discussionResponse, "match_discussion");
+            await SaveSessionTurnAsync(
+                sessionId,
+                sessionState,
+                normalizedPrompt,
+                discussionResponse,
+                selection,
+                relevantCandidates.Select(candidate => candidate.PredictionId).ToList(),
+                ct);
+            return discussionResponse;
         }
 
         if (predictions.Count == 0)
@@ -92,20 +146,10 @@ public class AiAdvisorService : IAiAdvisorService
                 Message = "No published predictions are available in the recent card window right now. Let the sync refresh, then try again."
             };
 
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noPredictions, null, ct);
+            FinalizeResponse(noPredictions, "recommend_picks");
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noPredictions, null, [], ct);
             return noPredictions;
         }
-
-        var pricingByPredictionId = await LoadCandidatePricingByPredictionIdAsync(predictions, ct);
-
-        if (IsBookingFollowUp(normalizedPrompt, sessionState))
-        {
-            var followUp = BuildBookingFollowUpResponse(predictions, sessionState.LastRecommendedActionKeys);
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, followUp, null, ct);
-            return followUp;
-        }
-
-        var selection = AiChatContextBuilder.BuildSelection(predictions, normalizedPrompt, DateTime.UtcNow, pricingByPredictionId);
 
         if (selection.NeedsRolloverTargetOdds)
         {
@@ -121,7 +165,8 @@ public class AiAdvisorService : IAiAdvisorService
                 ]
             };
 
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, askForTargetOdds, selection, ct);
+            FinalizeResponse(askForTargetOdds, "recommend_picks");
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, askForTargetOdds, selection, [], ct);
             return askForTargetOdds;
         }
 
@@ -132,7 +177,8 @@ public class AiAdvisorService : IAiAdvisorService
                 Message = AiChatContextBuilder.BuildNoRelevantMatchesMessage(normalizedPrompt)
             };
 
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noMatchResponse, selection, ct);
+            FinalizeResponse(noMatchResponse, "recommend_picks");
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noMatchResponse, selection, [], ct);
             return noMatchResponse;
         }
 
@@ -145,7 +191,8 @@ public class AiAdvisorService : IAiAdvisorService
                     Message = "No predictions are available for today's card right now. Recent settled matches are available, but there are no bookable picks left in the current window."
                 };
 
-                await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noTodayCard, selection, ct);
+                FinalizeResponse(noTodayCard, "recommend_picks");
+                await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noTodayCard, selection, [], ct);
                 return noTodayCard;
             }
 
@@ -154,15 +201,37 @@ public class AiAdvisorService : IAiAdvisorService
                 Message = "I couldn't find a useful slice of today's card for that request. Try asking for BTTS, Over 2.5, Draw, or Straight Win picks."
             };
 
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, emptySelection, selection, ct);
+            FinalizeResponse(emptySelection, "recommend_picks");
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, emptySelection, selection, [], ct);
             return emptySelection;
         }
 
         if (selection.IsRolloverRequest && selection.RequestedCombinedOdds is > 0)
         {
             var rolloverResponse = BuildRolloverResponse(normalizedPrompt, selection);
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, rolloverResponse, selection, ct);
+            FinalizeResponse(rolloverResponse, "working_slip_refinement");
+            await SaveSessionTurnAsync(
+                sessionId,
+                sessionState,
+                normalizedPrompt,
+                rolloverResponse,
+                selection,
+                rolloverResponse.Actions.Select(action => action.PredictionId).ToList(),
+                ct);
             return rolloverResponse;
+        }
+
+        var apiKey = _configuration["GroqApiKey"];
+        if (string.IsNullOrEmpty(apiKey) || apiKey.Contains("stored in user-secrets") || apiKey.Contains("set via environment variable"))
+        {
+            var missingKey = new AiChatResponse
+            {
+                Message = "⚠️ Groq API key is not configured. Please add 'GroqApiKey' to your configuration via user-secrets or environment variables."
+            };
+
+            FinalizeResponse(missingKey, intent == AiChatIntent.MixedMarketRecommendation ? "mixed_market_recommendation" : "recommend_picks");
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, missingKey, selection, [], ct);
+            return missingKey;
         }
 
         var systemPrompt = BuildChatSystemPrompt();
@@ -178,7 +247,15 @@ public class AiAdvisorService : IAiAdvisorService
             maxTokens: 1400);
 
         var parsed = ParseAiChatResponse(rawResponse, selection, normalizedPrompt);
-        await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, parsed, selection, ct);
+        FinalizeResponse(parsed, intent == AiChatIntent.MixedMarketRecommendation ? "mixed_market_recommendation" : "recommend_picks");
+        await SaveSessionTurnAsync(
+            sessionId,
+            sessionState,
+            normalizedPrompt,
+            parsed,
+            selection,
+            parsed.Actions.Select(action => action.PredictionId).ToList(),
+            ct);
         return parsed;
     }
 
@@ -397,6 +474,435 @@ public class AiAdvisorService : IAiAdvisorService
             : null;
     }
 
+    private static List<AiChatContextBuilder.AiChatContextCandidate> ResolveSessionCandidates(
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidateCatalog,
+        IReadOnlyCollection<int> predictionIds,
+        IReadOnlyCollection<string> actionKeys,
+        IReadOnlyCollection<string>? fallbackActionKeys = null)
+    {
+        var predictionIdSet = predictionIds.ToHashSet();
+        var actionKeySet = new HashSet<string>(actionKeys, StringComparer.OrdinalIgnoreCase);
+        if (fallbackActionKeys is not null)
+        {
+            foreach (var actionKey in fallbackActionKeys)
+            {
+                actionKeySet.Add(actionKey);
+            }
+        }
+
+        return candidateCatalog
+            .Where(candidate => predictionIdSet.Contains(candidate.PredictionId) || actionKeySet.Contains(candidate.ActionKey))
+            .GroupBy(candidate => candidate.ActionKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    private static List<AiChatContextBuilder.AiChatContextCandidate> ResolveContextCandidates(
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidateCatalog,
+        AiChatSessionState sessionState,
+        string userPrompt,
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> workingSlipCandidates)
+    {
+        if (!IsSessionFollowUpPrompt(userPrompt))
+        {
+            return [];
+        }
+
+        var discussedCandidates = ResolveSessionCandidates(candidateCatalog, sessionState.LastDiscussedPredictionIds, []);
+        if (discussedCandidates.Count > 0)
+        {
+            return discussedCandidates;
+        }
+
+        if (workingSlipCandidates.Count > 0)
+        {
+            return workingSlipCandidates.ToList();
+        }
+
+        return ResolveSessionCandidates(candidateCatalog, sessionState.LastContextPredictionIds, [], sessionState.LastRecommendedActionKeys);
+    }
+
+    private static bool IsSessionFollowUpPrompt(string userPrompt)
+    {
+        var prompt = userPrompt.ToLowerInvariant();
+        return prompt.Contains("this", StringComparison.Ordinal) ||
+               prompt.Contains("that", StringComparison.Ordinal) ||
+               prompt.Contains("these", StringComparison.Ordinal) ||
+               prompt.Contains("them", StringComparison.Ordinal) ||
+               prompt.Contains("those", StringComparison.Ordinal) ||
+               prompt.Contains("last", StringComparison.Ordinal) ||
+               prompt.Contains("previous", StringComparison.Ordinal);
+    }
+
+    private AiChatResponse BuildMatchDiscussionResponse(
+        string userPrompt,
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> discussionCandidates)
+    {
+        if (discussionCandidates.Count == 0)
+        {
+            return new AiChatResponse
+            {
+                Message = "I need a match or a slip in context to discuss it properly. Ask about a specific fixture or let me line up some picks first."
+            };
+        }
+
+        if (discussionCandidates.Count == 1)
+        {
+            var candidate = discussionCandidates[0];
+            var message = candidate.MatchState switch
+            {
+                "Finished" => BuildFinishedDiscussionMessage(candidate),
+                "Live" => BuildLiveDiscussionMessage(candidate),
+                _ => BuildUpcomingDiscussionMessage(candidate)
+            };
+
+            var actions = candidate.CanBook
+                ? new List<AiChatAction> { CreateAction(candidate, BuildDiscussionExplanation(candidate)) }
+                : new List<AiChatAction>();
+
+            return new AiChatResponse
+            {
+                Message = message,
+                Actions = actions,
+                ShowBookAll = false
+            };
+        }
+
+        var orderedCandidates = discussionCandidates
+            .OrderByDescending(BuildSafetyScore)
+            .ToList();
+        var actionsForBookableCandidates = orderedCandidates
+            .Where(candidate => candidate.CanBook)
+            .Select(candidate => CreateAction(candidate, BuildDiscussionExplanation(candidate)))
+            .ToList();
+
+        return new AiChatResponse
+        {
+            Message = actionsForBookableCandidates.Count > 0
+                ? $"Here is the current read on the {discussionCandidates.Count} matches in focus. I kept the bookable legs attached so we can keep refining the slip."
+                : $"Here is the grounded read on the {discussionCandidates.Count} matches in focus.",
+            Actions = actionsForBookableCandidates,
+            ShowBookAll = actionsForBookableCandidates.Count > 1
+        };
+    }
+
+    private AiChatResponse BuildWorkingSlipRefinementResponse(
+        string userPrompt,
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> workingSlipCandidates,
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidateCatalog)
+    {
+        if (workingSlipCandidates.Count == 0)
+        {
+            return new AiChatResponse
+            {
+                Message = "I don't have an active working slip in context yet. Ask me for a set of picks first, then I can trim it, swap legs, or build a target-odds version from it."
+            };
+        }
+
+        if ((userPrompt.Contains("odds", StringComparison.OrdinalIgnoreCase) ||
+             userPrompt.Contains("rollover", StringComparison.OrdinalIgnoreCase)) &&
+            !AiChatContextBuilder.TryExtractRolloverTargetOdds(userPrompt, out var targetOdds))
+        {
+            return new AiChatResponse
+            {
+                Message = "I can tune the current slip to a target total price. Tell me the target like `2 odds` or `3.5 odds` and I'll rebuild it from these legs first."
+            };
+        }
+
+        if (AiChatContextBuilder.TryExtractRolloverTargetOdds(userPrompt, out targetOdds))
+        {
+            return BuildWorkingSlipRolloverResponse(userPrompt, workingSlipCandidates, targetOdds);
+        }
+
+        var weakestCandidate = workingSlipCandidates
+            .OrderBy(BuildSafetyScore)
+            .First();
+
+        if (userPrompt.Contains("riskiest", StringComparison.OrdinalIgnoreCase))
+        {
+            var ordered = workingSlipCandidates
+                .OrderBy(BuildSafetyScore)
+                .Select(candidate => CreateAction(
+                    candidate,
+                    candidate.PredictionId == weakestCandidate.PredictionId
+                        ? $"This is the riskiest leg in the current slip. {BuildDiscussionExplanation(candidate)}"
+                        : BuildDiscussionExplanation(candidate)))
+                .ToList();
+
+            return new AiChatResponse
+            {
+                Message = $"{weakestCandidate.HomeTeam} vs {weakestCandidate.AwayTeam} looks like the riskiest leg right now because it carries the softest confidence-to-threshold profile in the current slip.",
+                Actions = ordered,
+                ShowBookAll = ordered.Count > 1
+            };
+        }
+
+        if (userPrompt.Contains("remove", StringComparison.OrdinalIgnoreCase) || userPrompt.Contains("weakest", StringComparison.OrdinalIgnoreCase))
+        {
+            if (workingSlipCandidates.Count == 1)
+            {
+                return new AiChatResponse
+                {
+                    Message = "There is only one leg in the working slip, so there is nothing to remove without emptying it."
+                };
+            }
+
+            var reduced = workingSlipCandidates
+                .Where(candidate => candidate.PredictionId != weakestCandidate.PredictionId)
+                .OrderByDescending(BuildSafetyScore)
+                .Select(candidate => CreateAction(candidate, BuildDiscussionExplanation(candidate)))
+                .ToList();
+
+            return new AiChatResponse
+            {
+                Message = $"I removed {weakestCandidate.HomeTeam} vs {weakestCandidate.AwayTeam} to clean the slip up. The remaining legs are the stronger core of what we already had.",
+                Actions = reduced,
+                ShowBookAll = reduced.Count > 1
+            };
+        }
+
+        if (userPrompt.Contains("swap", StringComparison.OrdinalIgnoreCase) && userPrompt.Contains("draw", StringComparison.OrdinalIgnoreCase))
+        {
+            var drawCandidate = workingSlipCandidates
+                .Where(candidate => candidate.PredictionCategory == "Draw")
+                .OrderBy(BuildSafetyScore)
+                .FirstOrDefault();
+
+            if (drawCandidate is null)
+            {
+                return new AiChatResponse
+                {
+                    Message = "There is no draw leg in the active working slip to swap out. If you want, I can still make the whole slip safer."
+                };
+            }
+
+            var replacement = FindReplacementCandidate(
+                candidateCatalog,
+                workingSlipCandidates,
+                candidate => candidate.PredictionCategory != "Draw");
+
+            if (replacement is null)
+            {
+                return new AiChatResponse
+                {
+                    Message = "I found the draw leg, but I couldn't find a cleaner grounded replacement on today's bookable card without lowering the slip quality."
+                };
+            }
+
+            var swapped = workingSlipCandidates
+                .Where(candidate => candidate.PredictionId != drawCandidate.PredictionId)
+                .Append(replacement)
+                .OrderByDescending(BuildSafetyScore)
+                .Select(candidate => CreateAction(candidate, BuildDiscussionExplanation(candidate)))
+                .ToList();
+
+            return new AiChatResponse
+            {
+                Message = $"I swapped out the draw leg {drawCandidate.HomeTeam} vs {drawCandidate.AwayTeam} for {replacement.HomeTeam} vs {replacement.AwayTeam} to keep the slip cleaner and less volatile.",
+                Actions = swapped,
+                ShowBookAll = swapped.Count > 1
+            };
+        }
+
+        if (userPrompt.Contains("safer", StringComparison.OrdinalIgnoreCase))
+        {
+            var saferSlip = BuildSaferSlip(candidateCatalog, workingSlipCandidates);
+            return new AiChatResponse
+            {
+                Message = "I've rebuilt the working slip toward safer, cleaner legs by leaning harder into stronger confidence, more room above threshold, and lower-volatility profiles.",
+                Actions = saferSlip
+                    .Select(candidate => CreateAction(candidate, BuildDiscussionExplanation(candidate)))
+                    .ToList(),
+                ShowBookAll = saferSlip.Count > 1
+            };
+        }
+
+        return new AiChatResponse
+        {
+            Message = "I can refine the active slip from here. Ask me which leg is riskiest, tell me to make it safer, remove the weakest one, or target a total odds number from these legs.",
+            Actions = workingSlipCandidates
+                .OrderByDescending(BuildSafetyScore)
+                .Select(candidate => CreateAction(candidate, BuildDiscussionExplanation(candidate)))
+                .ToList(),
+            ShowBookAll = workingSlipCandidates.Count > 1
+        };
+    }
+
+    private AiChatResponse BuildWorkingSlipRolloverResponse(
+        string userPrompt,
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> workingSlipCandidates,
+        double targetOdds)
+    {
+        var candidatePool = workingSlipCandidates
+            .Where(candidate => candidate.EstimatedOdds is > 1.01)
+            .OrderByDescending(BuildRolloverCandidateStrength)
+            .ToList();
+
+        if (candidatePool.Count == 0)
+        {
+            return new AiChatResponse
+            {
+                Message = $"I can see the current slip, but I don't have enough stored market pricing on those legs to shape it toward {targetOdds:0.##} odds."
+            };
+        }
+
+        var combo = FindBestRolloverCombo(candidatePool, targetOdds, candidatePool.Count);
+        if (combo.Count == 0)
+        {
+            return new AiChatResponse
+            {
+                Message = $"I couldn't get the current slip close to {targetOdds:0.##} odds without forcing weaker legs in."
+            };
+        }
+
+        var combinedOdds = combo.Aggregate(1d, (running, candidate) => running * candidate.EstimatedOdds!.Value);
+        return new AiChatResponse
+        {
+            Message = $"Using the current working slip first, this is the closest grounded build I can get to {targetOdds:0.##} odds. It comes out around {combinedOdds:0.00}.",
+            Actions = combo
+                .Select(candidate => CreateAction(candidate, BuildDiscussionExplanation(candidate)))
+                .ToList(),
+            ShowBookAll = combo.Count > 1,
+            Warnings =
+            [
+                $"Estimated combined odds from the current working slip: {combinedOdds:0.00}."
+            ]
+        };
+    }
+
+    private static List<AiChatContextBuilder.AiChatContextCandidate> BuildSaferSlip(
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidateCatalog,
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> currentSlip)
+    {
+        var targetCount = currentSlip.Count;
+        var selected = new List<AiChatContextBuilder.AiChatContextCandidate>();
+        var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var candidate in candidateCatalog
+                     .Where(candidate => candidate.CanBook)
+                     .OrderByDescending(BuildSafetyScore))
+        {
+            if (selected.Count >= targetCount)
+            {
+                break;
+            }
+
+            if (!seenKeys.Add(candidate.ActionKey))
+            {
+                continue;
+            }
+
+            selected.Add(candidate);
+        }
+
+        if (selected.Count < targetCount)
+        {
+            foreach (var candidate in currentSlip.OrderByDescending(BuildSafetyScore))
+            {
+                if (selected.Count >= targetCount)
+                {
+                    break;
+                }
+
+                if (!seenKeys.Add(candidate.ActionKey))
+                {
+                    continue;
+                }
+
+                selected.Add(candidate);
+            }
+        }
+
+        return selected;
+    }
+
+    private static AiChatContextBuilder.AiChatContextCandidate? FindReplacementCandidate(
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidateCatalog,
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> currentSlip,
+        Func<AiChatContextBuilder.AiChatContextCandidate, bool> predicate)
+    {
+        var activeKeys = currentSlip
+            .Select(candidate => candidate.ActionKey)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return candidateCatalog
+            .Where(candidate => candidate.CanBook)
+            .Where(predicate)
+            .Where(candidate => !activeKeys.Contains(candidate.ActionKey))
+            .OrderByDescending(BuildSafetyScore)
+            .FirstOrDefault();
+    }
+
+    private static double BuildSafetyScore(AiChatContextBuilder.AiChatContextCandidate candidate)
+    {
+        var score = (double)(candidate.ConfidenceScore ?? decimal.Zero) * 100d;
+        score += candidate.MarginAboveThreshold * 150d;
+        score += (candidate.EdgePoints ?? 0d) * 2d;
+
+        if (candidate.PredictionCategory == "Draw")
+        {
+            score -= 22d;
+        }
+
+        if (candidate.EstimatedOdds is > 0)
+        {
+            score -= Math.Max(0d, (candidate.EstimatedOdds.Value - 1.7d) * 12d);
+        }
+
+        return score;
+    }
+
+    private static string BuildFinishedDiscussionMessage(AiChatContextBuilder.AiChatContextCandidate candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate.ActualScore))
+        {
+            return $"{candidate.HomeTeam} vs {candidate.AwayTeam} is marked finished in the current context, but I do not have a final score attached to explain it cleanly yet.";
+        }
+
+        return $"{candidate.HomeTeam} vs {candidate.AwayTeam} finished {candidate.ActualScore}. The published angle was {candidate.PredictedOutcome}, and the settled outcome was {candidate.ActualOutcome ?? "still pending in context"}.";
+    }
+
+    private static string BuildLiveDiscussionMessage(AiChatContextBuilder.AiChatContextCandidate candidate)
+    {
+        if (!string.IsNullOrWhiteSpace(candidate.ActualScore))
+        {
+            return $"{candidate.HomeTeam} vs {candidate.AwayTeam} is currently live at {candidate.ActualScore}, so the final settlement read is not locked yet.";
+        }
+
+        return $"{candidate.HomeTeam} vs {candidate.AwayTeam} is currently live, so I can only discuss the pre-match angle and not the final settlement yet.";
+    }
+
+    private static string BuildUpcomingDiscussionMessage(AiChatContextBuilder.AiChatContextCandidate candidate)
+    {
+        var confidence = (double)(candidate.ConfidenceScore ?? decimal.Zero) * 100d;
+        var marginPoints = candidate.MarginAboveThreshold * 100d;
+
+        if (candidate.MarketProbability is > 0 && candidate.EstimatedOdds is > 0)
+        {
+            return $"{candidate.HomeTeam} vs {candidate.AwayTeam} is an upcoming {candidate.PredictionCategory} angle. The published lean is {candidate.PredictedOutcome} at {confidence:0.0}% calibrated confidence, versus {candidate.MarketProbability.Value * 100d:0.0}% on the synced market side, with estimated odds around {candidate.EstimatedOdds.Value:0.00}.";
+        }
+
+        return $"{candidate.HomeTeam} vs {candidate.AwayTeam} is an upcoming {candidate.PredictionCategory} angle. The published lean is {candidate.PredictedOutcome} at {confidence:0.0}% calibrated confidence, {marginPoints:+0.0;-0.0;0.0} points over the live threshold.";
+    }
+
+    private static string BuildDiscussionExplanation(AiChatContextBuilder.AiChatContextCandidate candidate)
+    {
+        var confidence = (double)(candidate.ConfidenceScore ?? decimal.Zero) * 100d;
+        var marginPoints = candidate.MarginAboveThreshold * 100d;
+
+        if (candidate.MatchState == "Finished" && !string.IsNullOrWhiteSpace(candidate.ActualScore))
+        {
+            return $"This one is already settled at {candidate.ActualScore}, so it is useful for review rather than booking.";
+        }
+
+        if (candidate.MarketProbability is > 0 && candidate.EstimatedOdds is > 0)
+        {
+            return $"{candidate.PredictedOutcome} sits at {confidence:0.0}% model confidence versus {candidate.MarketProbability.Value * 100d:0.0}% on the synced market side, with estimated odds around {candidate.EstimatedOdds.Value:0.00}.";
+        }
+
+        return $"{candidate.PredictedOutcome} is running at {confidence:0.0}% calibrated confidence, {marginPoints:+0.0;-0.0;0.0} points above threshold.";
+    }
+
     private AiChatResponse BuildRolloverResponse(
         string userPrompt,
         AiChatContextBuilder.AiChatContextSelection selection)
@@ -583,7 +1089,7 @@ public class AiAdvisorService : IAiAdvisorService
     private static string BuildChatSystemPrompt()
     {
         return """
-            IDENTITY: You are Nelson, MatchPredictor's lead football prediction analyst. Be concise, evidence-led, and conversational. Never say "as an AI".
+            IDENTITY: You are Nelson, MatchPredictor's analyst companion. Be concise, evidence-led, conversational, and practical. Sound like a sharp betting partner, not a hype man. Never say "as an AI".
 
             SCOPE:
             - You may discuss only the prediction candidates supplied in the current request payload.
@@ -596,6 +1102,7 @@ public class AiAdvisorService : IAiAdvisorService
             - "Best" and "safe" picks should lean on higher calibrated confidence, stronger margin above threshold, and positive modelEdgePoints when available.
             - Prefer low-variance Straight Win setups when the user asks for safer options.
             - If multiple picks are suggested, keep them grounded and avoid hype or guarantees.
+            - If you recommend a set of legs, make the message feel like you are guiding the user through the card with calm confidence.
             - If the payload includes requestedMarkets with counts, try to satisfy that market mix as closely as the supplied candidates allow.
             - When the user asks for a list of picks, recommend the supplied candidates that best fit the request instead of narrowing aggressively.
             - If the payload includes a rolloverTargetOdds, prioritize a combination whose estimated decimal odds are close to that target without padding the slip with weak picks.
@@ -804,6 +1311,121 @@ public class AiAdvisorService : IAiAdvisorService
         };
     }
 
+    private static void FinalizeResponse(AiChatResponse response, string contextMode)
+    {
+        response.ContextMode = contextMode;
+
+        if (response.WorkingSlipSummary is null &&
+            response.Actions.Count > 0 &&
+            (contextMode == "recommend_picks" ||
+             contextMode == "mixed_market_recommendation" ||
+             contextMode == "working_slip_refinement" ||
+             contextMode == "match_discussion"))
+        {
+            response.WorkingSlipSummary = BuildWorkingSlipSummary(response.Actions);
+        }
+
+        if (response.SuggestedPrompts.Count == 0)
+        {
+            response.SuggestedPrompts = BuildSuggestedPrompts(contextMode, response.Actions);
+        }
+    }
+
+    private static AiChatWorkingSlipSummary BuildWorkingSlipSummary(IReadOnlyCollection<AiChatAction> actions)
+    {
+        double? combinedOdds = null;
+        if (actions.Count > 0 && actions.All(action => action.EstimatedOdds is > 1.01))
+        {
+            combinedOdds = Math.Round(actions.Aggregate(1d, (running, action) => running * action.EstimatedOdds!.Value), 2);
+        }
+
+        return new AiChatWorkingSlipSummary
+        {
+            Count = actions.Count,
+            BookableCount = actions.Count(action => action.CanBook),
+            Markets = actions
+                .Select(action => action.Market)
+                .Where(market => !string.IsNullOrWhiteSpace(market))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            EstimatedCombinedOdds = combinedOdds
+        };
+    }
+
+    private static List<string> BuildSuggestedPrompts(string contextMode, IReadOnlyList<AiChatAction> actions)
+    {
+        var prompts = new List<string>();
+        var hasDraw = actions.Any(action => string.Equals(action.Market, "1X2", StringComparison.OrdinalIgnoreCase) &&
+                                            string.Equals(action.Prediction, "Draw", StringComparison.OrdinalIgnoreCase));
+
+        switch (contextMode)
+        {
+            case "mixed_market_recommendation":
+            case "recommend_picks":
+                prompts.Add("Which is riskiest?");
+                prompts.Add("Make it safer");
+                prompts.Add("Explain these matches");
+                if (hasDraw)
+                {
+                    prompts.Add("Swap one draw out");
+                }
+                if (actions.Count > 1)
+                {
+                    prompts.Add("Give me 2 odds from these");
+                }
+                break;
+
+            case "working_slip_refinement":
+                prompts.Add("Which is riskiest?");
+                prompts.Add("Make it safer");
+                if (hasDraw)
+                {
+                    prompts.Add("Swap one draw out");
+                }
+                prompts.Add("Give me 2 odds from these");
+                break;
+
+            case "match_discussion":
+                if (actions.Count > 0)
+                {
+                    prompts.Add("Add all to slip");
+                    prompts.Add("Which is riskiest?");
+                }
+                prompts.Add("Make it safer");
+                prompts.Add("Give me similar picks today");
+                break;
+
+            case "settlement_explanation":
+                prompts.Add("Explain these matches");
+                prompts.Add("Give me today's strongest picks");
+                prompts.Add("How are straight wins selected?");
+                break;
+
+            case "app_help":
+                prompts.Add("How are straight wins selected?");
+                prompts.Add("Why isn't this in value bets?");
+                prompts.Add("Give me 5 strong picks");
+                break;
+
+            case "security_refusal":
+                prompts.Add("Give me 5 strong picks");
+                prompts.Add("How are straight wins selected?");
+                prompts.Add("What does reliability mean?");
+                break;
+
+            default:
+                prompts.Add("Give me 5 strong picks");
+                prompts.Add("Which draw games would you recommend?");
+                prompts.Add("How are straight wins selected?");
+                break;
+        }
+
+        return prompts
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(5)
+            .ToList();
+    }
+
     private static List<AiChatAction> BuildDeterministicFallbackActions(AiChatContextBuilder.AiChatContextSelection selection)
     {
         if (selection.RequestedCandidateCount <= 0)
@@ -972,7 +1594,9 @@ public class AiAdvisorService : IAiAdvisorService
         string userPrompt,
         AiChatResponse response,
         AiChatContextBuilder.AiChatContextSelection? selection,
-        CancellationToken ct)
+        IReadOnlyCollection<int> discussedPredictionIds,
+        CancellationToken ct,
+        string? knowledgeTopic = null)
     {
         state.History.Add(new ChatHistoryItem { Role = "user", Content = NormalizeHistoryContent(userPrompt) });
         state.History.Add(new ChatHistoryItem { Role = "assistant", Content = NormalizeHistoryContent(response.Message) });
@@ -987,6 +1611,26 @@ public class AiAdvisorService : IAiAdvisorService
             .Select(candidate => candidate.PredictionId)
             .Distinct()
             .ToList() ?? [];
+        state.LastDiscussedPredictionIds = discussedPredictionIds
+            .Distinct()
+            .ToList();
+        state.LastIntent = response.ContextMode;
+        state.LastKnowledgeTopic = knowledgeTopic ?? state.LastKnowledgeTopic;
+
+        if (response.Actions.Count > 0 &&
+            (response.ContextMode == "recommend_picks" ||
+             response.ContextMode == "mixed_market_recommendation" ||
+             response.ContextMode == "working_slip_refinement"))
+        {
+            state.WorkingSlipActionKeys = response.Actions
+                .Select(action => action.ActionKey)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            state.WorkingSlipPredictionIds = response.Actions
+                .Select(action => action.PredictionId)
+                .Distinct()
+                .ToList();
+        }
 
         var payload = JsonSerializer.Serialize(state);
         await _cache.SetStringAsync(

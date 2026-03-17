@@ -13,22 +13,30 @@ public static partial class AiChatContextBuilder
     {
         "a", "about", "acca", "accumulator", "add", "all", "analysis", "analyse", "analyze", "any", "another", "are",
         "and", "away", "banker", "bankers", "best", "bet", "bets", "book", "booking", "both", "btts", "can", "chat",
-        "combo", "day", "days", "doing", "draw", "for", "game", "games", "give", "goals", "good", "help", "home", "i", "in", "into", "is",
+        "combo", "combination", "day", "days", "doing", "draw", "for", "game", "games", "give", "goals", "good", "help", "home", "i", "in", "into", "is",
         "it", "leg", "legs", "list", "match", "matches", "me", "need", "odd", "odds", "of", "on", "open", "over", "pick", "picks",
-        "prediction", "predictions", "recent", "result", "results", "safe", "safer", "score", "settle", "settled", "show", "slip", "some", "straight", "strong",
+        "prediction", "predictions", "recent", "recommend", "recommended", "recommending", "recommendation", "recommendations", "result", "results", "safe", "safer", "score", "settle", "settled", "show", "slip", "some", "straight", "strong",
         "straightwin", "straightwins", "stronger", "rollover", "teams", "the", "them", "these", "this", "those", "ticket", "to",
         "today", "top", "value", "why", "won", "yesterday",
-        "want", "what", "which", "win", "wins", "with", "you", "your", "red", "green", "finished", "lost", "landed", "did"
+        "want", "what", "which", "win", "wins", "with", "would", "you", "your", "red", "green", "finished", "lost", "landed", "did", "mix", "mixture", "suggest", "suggested",
+        "explain", "explained", "discuss", "discussion", "talk", "riskiest", "weakest", "remove", "swap", "replace", "fits"
     };
 
     private static readonly HashSet<string> RecommendationTokens = new(StringComparer.OrdinalIgnoreCase)
     {
-        "best", "safe", "safer", "strong", "stronger", "top", "pick", "picks", "list", "show", "give"
+        "best", "safe", "safer", "strong", "stronger", "top", "pick", "picks", "list", "show", "give", "recommend", "recommended", "recommendation", "recommendations", "suggest", "suggested", "mix", "mixture", "combo", "combination"
     };
 
     private static readonly HashSet<string> SettlementTokens = new(StringComparer.OrdinalIgnoreCase)
     {
         "finished", "settle", "settled", "result", "results", "red", "green", "won", "lost", "landed"
+    };
+
+    private static readonly HashSet<string> AppHelpTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "analytics", "analytic", "brier", "reliability", "resolution", "uncertainty", "threshold", "thresholds",
+        "calibrator", "calibration", "value", "pricing", "freshness", "edge", "exclusion", "excluded", "source",
+        "chip", "chips", "live", "upcoming", "finished", "selected", "selection", "meaning", "mean"
     };
 
     public static AiChatContextSelection BuildSelection(
@@ -40,14 +48,9 @@ public static partial class AiChatContextBuilder
     {
         var nowLocal = DateTimeProvider.ConvertUtcToLocal(nowUtc);
         var todayLocalDate = DateOnly.FromDateTime(nowLocal);
-        var recentStartDate = todayLocalDate.AddDays(-7);
         var isRolloverRequest = MentionsRolloverIntent(userPrompt);
         var hasTargetCombinedOdds = TryExtractRolloverTargetOdds(userPrompt, out var requestedCombinedOdds);
-        var candidates = predictions
-            .Where(prediction => prediction.IsCurrentRevision && prediction.WasPublished)
-            .Where(prediction => prediction.MatchLocalDate >= recentStartDate && prediction.MatchLocalDate <= todayLocalDate)
-            .Select(prediction => CreateCandidate(prediction, pricingByPredictionId?.GetValueOrDefault(prediction.Id), nowUtc, todayLocalDate))
-            .ToList();
+        var candidates = BuildCandidateCatalog(predictions, nowUtc, pricingByPredictionId);
 
         if (candidates.Count == 0)
         {
@@ -60,8 +63,13 @@ public static partial class AiChatContextBuilder
 
         var promptTokens = Tokenize(userPrompt);
         var requestedMarketSlices = ExtractRequestedMarketSlices(userPrompt);
-        var genericRequestedCount = ExtractGenericRequestedCount(userPrompt, requestedMarketSlices);
         var marketFilters = DetectMarketFilters(promptTokens);
+        if (requestedMarketSlices.Count == 0 && marketFilters.Count > 1)
+        {
+            requestedMarketSlices = BuildImplicitMarketSlices(userPrompt, marketFilters);
+        }
+
+        var genericRequestedCount = ExtractGenericRequestedCount(userPrompt, requestedMarketSlices, marketFilters, promptTokens);
         var specificTokens = promptTokens
             .Where(token => !GenericPromptTokens.Contains(token))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -76,13 +84,20 @@ public static partial class AiChatContextBuilder
         {
             requestedCandidateCount = genericRequestedCount;
         }
+        var shouldTreatPromptAsGenericMarketRequest = ShouldTreatPromptAsGenericMarketRequest(
+            specificTokens,
+            promptTokens,
+            marketFilters,
+            requestedMarketSlices,
+            genericRequestedCount,
+            isRolloverRequest);
 
         var ranked = candidates
             .Where(candidate => MatchesSelectionIntent(candidate, selectionIntent, todayLocalDate))
             .Select(candidate => CreateRankedCandidate(candidate, promptTokens, marketFilters, isRolloverRequest, selectionIntent, todayLocalDate))
             .ToList();
 
-        if (specificTokens.Count > 0)
+        if (specificTokens.Count > 0 && !shouldTreatPromptAsGenericMarketRequest)
         {
             var entityMatched = ranked
                 .Where(item => item.EntityMatchCount > 0)
@@ -144,6 +159,64 @@ public static partial class AiChatContextBuilder
     }
 
     public static string CreateActionKey(Prediction prediction) => $"P{prediction.Id}";
+
+    public static IReadOnlyList<AiChatContextCandidate> BuildCandidateCatalog(
+        IEnumerable<Prediction> predictions,
+        DateTime nowUtc,
+        IReadOnlyDictionary<int, AiChatCandidatePricing>? pricingByPredictionId = null)
+    {
+        var todayLocalDate = DateOnly.FromDateTime(DateTimeProvider.ConvertUtcToLocal(nowUtc));
+        var recentStartDate = todayLocalDate.AddDays(-7);
+
+        return predictions
+            .Where(prediction => prediction.IsCurrentRevision && prediction.WasPublished)
+            .Where(prediction => prediction.MatchLocalDate >= recentStartDate && prediction.MatchLocalDate <= todayLocalDate)
+            .Select(prediction => CreateCandidate(prediction, pricingByPredictionId?.GetValueOrDefault(prediction.Id), nowUtc, todayLocalDate))
+            .ToList();
+    }
+
+    public static AiChatIntent DetectIntent(
+        string userPrompt,
+        bool hasWorkingSlip,
+        bool hasContextCandidates)
+    {
+        var prompt = userPrompt.ToLowerInvariant();
+        var tokens = Tokenize(userPrompt);
+        var marketFilters = DetectMarketFilters(tokens);
+        var requestedSlices = ExtractRequestedMarketSlices(userPrompt);
+
+        if (ContainsSecuritySensitiveTopic(prompt))
+        {
+            return AiChatIntent.SecurityRefusal;
+        }
+
+        if (IsWorkingSlipRefinementPrompt(prompt, hasWorkingSlip))
+        {
+            return AiChatIntent.WorkingSlipRefinement;
+        }
+
+        if (IsSettlementPrompt(prompt, hasContextCandidates))
+        {
+            return AiChatIntent.SettlementExplanation;
+        }
+
+        if (IsAppHelpPrompt(prompt, tokens))
+        {
+            return AiChatIntent.AppHelp;
+        }
+
+        if (IsMatchDiscussionPrompt(prompt, hasWorkingSlip, hasContextCandidates))
+        {
+            return AiChatIntent.MatchDiscussion;
+        }
+
+        if (requestedSlices.Count > 1 || marketFilters.Count > 1 || prompt.Contains("mixture", StringComparison.Ordinal) || prompt.Contains("mix", StringComparison.Ordinal))
+        {
+            return AiChatIntent.MixedMarketRecommendation;
+        }
+
+        return AiChatIntent.RecommendPicks;
+    }
 
     public static bool MentionsRolloverIntent(string userPrompt)
     {
@@ -228,7 +301,9 @@ public static partial class AiChatContextBuilder
                 prompt.Contains("result", StringComparison.Ordinal) ||
                 prompt.Contains("red", StringComparison.Ordinal) ||
                 prompt.Contains("green", StringComparison.Ordinal) ||
-                prompt.Contains("why", StringComparison.Ordinal));
+                prompt.Contains("why", StringComparison.Ordinal) ||
+                prompt.Contains("explain", StringComparison.Ordinal) ||
+                prompt.Contains("talk", StringComparison.Ordinal));
     }
 
     private static AiChatContextCandidate CreateCandidate(
@@ -455,6 +530,26 @@ public static partial class AiChatContextBuilder
         return filters;
     }
 
+    private static bool ShouldTreatPromptAsGenericMarketRequest(
+        HashSet<string> specificTokens,
+        HashSet<string> promptTokens,
+        HashSet<string> marketFilters,
+        IReadOnlyList<RequestedMarketSlice> requestedMarketSlices,
+        int genericRequestedCount,
+        bool isRolloverRequest)
+    {
+        if (specificTokens.Count > 0)
+        {
+            return false;
+        }
+
+        return isRolloverRequest ||
+               requestedMarketSlices.Count > 0 ||
+               genericRequestedCount > 0 ||
+               marketFilters.Count > 0 ||
+               promptTokens.Overlaps(RecommendationTokens);
+    }
+
     private static IReadOnlyList<RequestedMarketSlice> ExtractRequestedMarketSlices(string userPrompt)
     {
         if (string.IsNullOrWhiteSpace(userPrompt))
@@ -496,7 +591,11 @@ public static partial class AiChatContextBuilder
         return slices;
     }
 
-    private static int ExtractGenericRequestedCount(string userPrompt, IReadOnlyList<RequestedMarketSlice> requestedMarketSlices)
+    private static int ExtractGenericRequestedCount(
+        string userPrompt,
+        IReadOnlyList<RequestedMarketSlice> requestedMarketSlices,
+        HashSet<string> marketFilters,
+        HashSet<string> promptTokens)
     {
         if (requestedMarketSlices.Count > 0 || string.IsNullOrWhiteSpace(userPrompt))
         {
@@ -506,12 +605,134 @@ public static partial class AiChatContextBuilder
         var match = GenericPickCountRegex().Match(userPrompt);
         if (!match.Success)
         {
-            return 0;
+            return marketFilters.Count == 0 && promptTokens.Overlaps(RecommendationTokens)
+                ? 5
+                : 0;
         }
 
         return int.TryParse(match.Groups["count"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var count) && count > 0
             ? Math.Min(count, MaxRequestedCandidates)
             : 0;
+    }
+
+    private static List<RequestedMarketSlice> BuildImplicitMarketSlices(string userPrompt, HashSet<string> marketFilters)
+    {
+        var orderedMarkets = GetOrderedMentionedMarkets(userPrompt)
+            .Where(market => marketFilters.Contains(market))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToList();
+
+        if (orderedMarkets.Count == 0)
+        {
+            orderedMarkets = marketFilters
+                .Take(3)
+                .ToList();
+        }
+
+        return orderedMarkets
+            .Select(market => new RequestedMarketSlice(market, 2))
+            .ToList();
+    }
+
+    private static IEnumerable<string> GetOrderedMentionedMarkets(string userPrompt)
+    {
+        var matches = new List<(string Market, int Index)>();
+        AddMarketMention(matches, userPrompt, "btts", "BothTeamsScore");
+        AddMarketMention(matches, userPrompt, "both teams to score", "BothTeamsScore");
+        AddMarketMention(matches, userPrompt, "over 2.5", "Over2.5Goals");
+        AddMarketMention(matches, userPrompt, "over2.5", "Over2.5Goals");
+        AddMarketMention(matches, userPrompt, "draw", "Draw");
+        AddMarketMention(matches, userPrompt, "straight win", "StraightWin");
+        AddMarketMention(matches, userPrompt, "straightwin", "StraightWin");
+        AddMarketMention(matches, userPrompt, "1x2", "StraightWin");
+
+        return matches
+            .OrderBy(match => match.Index)
+            .Select(match => match.Market);
+    }
+
+    private static void AddMarketMention(List<(string Market, int Index)> mentions, string userPrompt, string needle, string market)
+    {
+        var index = userPrompt.IndexOf(needle, StringComparison.OrdinalIgnoreCase);
+        if (index >= 0)
+        {
+            mentions.Add((market, index));
+        }
+    }
+
+    private static bool ContainsSecuritySensitiveTopic(string prompt)
+    {
+        return prompt.Contains("password", StringComparison.Ordinal) ||
+               prompt.Contains("api key", StringComparison.Ordinal) ||
+               prompt.Contains("apikey", StringComparison.Ordinal) ||
+               prompt.Contains("groq key", StringComparison.Ordinal) ||
+               prompt.Contains("connection string", StringComparison.Ordinal) ||
+               prompt.Contains("admin credential", StringComparison.Ordinal) ||
+               prompt.Contains("admin password", StringComparison.Ordinal) ||
+               prompt.Contains("hangfire password", StringComparison.Ordinal) ||
+               prompt.Contains("secret", StringComparison.Ordinal) ||
+               prompt.Contains("token", StringComparison.Ordinal) ||
+               prompt.Contains("env var", StringComparison.Ordinal) ||
+               prompt.Contains("environment variable", StringComparison.Ordinal);
+    }
+
+    private static bool IsWorkingSlipRefinementPrompt(string prompt, bool hasWorkingSlip)
+    {
+        if (!hasWorkingSlip)
+        {
+            return false;
+        }
+
+        return prompt.Contains("riskiest", StringComparison.Ordinal) ||
+               prompt.Contains("weakest", StringComparison.Ordinal) ||
+               prompt.Contains("remove", StringComparison.Ordinal) ||
+               prompt.Contains("swap", StringComparison.Ordinal) ||
+               prompt.Contains("replace", StringComparison.Ordinal) ||
+               prompt.Contains("make it safer", StringComparison.Ordinal) ||
+               prompt.Contains("make them safer", StringComparison.Ordinal) ||
+               prompt.Contains("safer", StringComparison.Ordinal) && (prompt.Contains("these", StringComparison.Ordinal) || prompt.Contains("them", StringComparison.Ordinal)) ||
+               prompt.Contains("from these", StringComparison.Ordinal) ||
+               prompt.Contains("from them", StringComparison.Ordinal);
+    }
+
+    private static bool IsSettlementPrompt(string prompt, bool hasContextCandidates)
+    {
+        return SettlementTokens.Any(token => prompt.Contains(token, StringComparison.Ordinal)) &&
+               (hasContextCandidates ||
+                prompt.Contains("this", StringComparison.Ordinal) ||
+                prompt.Contains("that", StringComparison.Ordinal) ||
+                prompt.Contains("these", StringComparison.Ordinal) ||
+                prompt.Contains("them", StringComparison.Ordinal));
+    }
+
+    private static bool IsAppHelpPrompt(string prompt, HashSet<string> promptTokens)
+    {
+        var asksForExplanation =
+            prompt.Contains("what does", StringComparison.Ordinal) ||
+            prompt.Contains("what is", StringComparison.Ordinal) ||
+            prompt.Contains("how does", StringComparison.Ordinal) ||
+            prompt.Contains("how are", StringComparison.Ordinal) ||
+            prompt.Contains("how is", StringComparison.Ordinal) ||
+            prompt.Contains("why is", StringComparison.Ordinal) ||
+            prompt.Contains("why isn't", StringComparison.Ordinal) ||
+            prompt.Contains("why isnt", StringComparison.Ordinal) ||
+            prompt.Contains("explain", StringComparison.Ordinal);
+
+        return asksForExplanation &&
+               promptTokens.Overlaps(AppHelpTokens) &&
+               !prompt.Contains("tell me about", StringComparison.Ordinal);
+    }
+
+    private static bool IsMatchDiscussionPrompt(string prompt, bool hasWorkingSlip, bool hasContextCandidates)
+    {
+        return prompt.Contains("tell me about", StringComparison.Ordinal) ||
+               prompt.Contains("explain these", StringComparison.Ordinal) ||
+               prompt.Contains("explain this", StringComparison.Ordinal) ||
+               prompt.Contains("talk about", StringComparison.Ordinal) ||
+               prompt.Contains("discuss", StringComparison.Ordinal) ||
+               (hasWorkingSlip && (prompt.Contains("these matches", StringComparison.Ordinal) || prompt.Contains("them", StringComparison.Ordinal))) ||
+               (hasContextCandidates && prompt.Contains("this match", StringComparison.Ordinal));
     }
 
     private static string? NormalizeRequestedMarket(string rawMarket)

@@ -239,20 +239,14 @@ public class AiAdvisorServiceTests
 
         await context.SaveChangesAsync();
 
-        var handler = new SequenceHttpMessageHandler(
-            BuildGroqResponse("""
-                {
-                  "message": "Arsenal beat Chelsea 2:1 yesterday, so that Home Win settled green.",
-                  "recommendations": [],
-                  "showBookAll": false
-                }
-                """));
-
+        var handler = new SequenceHttpMessageHandler();
         var service = CreateService(context, handler);
         var response = await service.GetAdviceAsync("Tell me about Arsenal yesterday", "session-yesterday");
 
         Assert.Contains("2:1", response.Message);
         Assert.Empty(response.Actions);
+        Assert.Equal("match_discussion", response.ContextMode);
+        Assert.Equal(0, handler.CallCount);
     }
 
     [Fact]
@@ -287,21 +281,7 @@ public class AiAdvisorServiceTests
 
         await context.SaveChangesAsync();
 
-        var handler = new SequenceHttpMessageHandler(
-            BuildGroqResponse("""
-                {
-                  "message": "Arsenal lost 0:1 to Chelsea yesterday.",
-                  "recommendations": [],
-                  "showBookAll": false
-                }
-                """),
-            BuildGroqResponse("""
-                {
-                  "message": "It settled red because the pick was Home Win but Chelsea won 1:0 away.",
-                  "recommendations": [],
-                  "showBookAll": false
-                }
-                """));
+        var handler = new SequenceHttpMessageHandler();
 
         var cache = new TestDistributedCache();
         var service = CreateService(context, handler, cache);
@@ -311,7 +291,8 @@ public class AiAdvisorServiceTests
 
         Assert.Contains("0:1", first.Message);
         Assert.Contains("settled red", second.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(2, handler.CallCount);
+        Assert.Equal("settlement_explanation", second.ContextMode);
+        Assert.Equal(0, handler.CallCount);
     }
 
     [Fact]
@@ -336,7 +317,7 @@ public class AiAdvisorServiceTests
 
         var service = CreateService(context, handler);
 
-        var response = await service.GetAdviceAsync("Tell me about Beta 1 vs Delta 1", "session-7");
+        var response = await service.GetAdviceAsync("Give me the best pick for Beta 1 vs Delta 1", "session-7");
 
         var action = Assert.Single(response.Actions);
         Assert.Equal($"P{predictions[0].Id}", action.ActionKey);
@@ -423,6 +404,238 @@ public class AiAdvisorServiceTests
         Assert.NotNull(state);
         Assert.False(state!.AwaitingRolloverTargetOdds);
         Assert.True(string.IsNullOrWhiteSpace(state.PendingRolloverPrompt));
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_RefusesSecuritySensitivePrompts_WithoutCallingAi()
+    {
+        await using var context = CreateContext();
+        var handler = new SequenceHttpMessageHandler();
+        var service = CreateService(context, handler);
+
+        var response = await service.GetAdviceAsync("What is the AI Chat password?", "security-session");
+
+        Assert.Equal("security_refusal", response.ContextMode);
+        Assert.Contains("can't reveal", response.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEmpty(response.KnowledgeCards);
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_AnswersAnalyticsGlossaryQuestions_Deterministically()
+    {
+        await using var context = CreateContext();
+        var handler = new SequenceHttpMessageHandler();
+        var service = CreateService(context, handler);
+
+        var response = await service.GetAdviceAsync("What does reliability mean?", "glossary-session");
+
+        Assert.Equal("app_help", response.ContextMode);
+        Assert.Contains("Reliability", response.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEmpty(response.KnowledgeCards);
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_StoresWorkingSlipAndSummary_AfterRecommendationResponse()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(context, 3);
+        var cache = new TestDistributedCache();
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "message": "Here are the strongest two picks on today's card.",
+                  "recommendedActionKeys": ["P{{predictions[0].Id}}", "P{{predictions[1].Id}}"],
+                  "showBookAll": true
+                }
+                """));
+
+        var service = CreateService(context, handler, cache);
+        var response = await service.GetAdviceAsync("Give me 2 strong picks", "working-slip-session");
+
+        Assert.Equal("recommend_picks", response.ContextMode);
+        Assert.NotNull(response.WorkingSlipSummary);
+        Assert.Equal(2, response.WorkingSlipSummary!.Count);
+        Assert.Contains("Which is riskiest?", response.SuggestedPrompts);
+
+        var storedStateJson = cache.GetStoredString("ai-chat-session:working-slip-session");
+        var state = JsonSerializer.Deserialize<AiChatSessionState>(storedStateJson!, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        });
+
+        Assert.NotNull(state);
+        Assert.Equal(2, state!.WorkingSlipPredictionIds.Count);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_RanksRiskiestFromWorkingSlip_WithoutCallingAiAgain()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(
+            context,
+            new[]
+            {
+                ("StraightWin", "Home Win", 0.84m, 0.68d, "Safe Home", "Safe Away", "England - Premier League"),
+                ("Draw", "Draw", 0.34m, 0.30d, "Draw Home", "Draw Away", "Italy - Serie A"),
+                ("BothTeamsScore", "BTTS", 0.74m, 0.55d, "BTTS Home", "BTTS Away", "Spain - La Liga")
+            });
+
+        var cache = new TestDistributedCache();
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "message": "Here is the mix.",
+                  "recommendedActionKeys": ["P{{predictions[0].Id}}", "P{{predictions[1].Id}}", "P{{predictions[2].Id}}"],
+                  "showBookAll": true
+                }
+                """));
+        var service = CreateService(context, handler, cache);
+
+        await service.GetAdviceAsync("Give me 3 strong picks", "risk-session");
+        var response = await service.GetAdviceAsync("Which is riskiest?", "risk-session");
+
+        Assert.Equal("working_slip_refinement", response.ContextMode);
+        Assert.Contains("riskiest leg", response.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(3, response.Actions.Count);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_RemovesWeakestLeg_FromWorkingSlip()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(
+            context,
+            new[]
+            {
+                ("StraightWin", "Home Win", 0.84m, 0.68d, "Safe Home", "Safe Away", "England - Premier League"),
+                ("Draw", "Draw", 0.34m, 0.30d, "Draw Home", "Draw Away", "Italy - Serie A"),
+                ("BothTeamsScore", "BTTS", 0.74m, 0.55d, "BTTS Home", "BTTS Away", "Spain - La Liga")
+            });
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "message": "Here is the mix.",
+                  "recommendedActionKeys": ["P{{predictions[0].Id}}", "P{{predictions[1].Id}}", "P{{predictions[2].Id}}"],
+                  "showBookAll": true
+                }
+                """));
+        var service = CreateService(context, handler, new TestDistributedCache());
+
+        await service.GetAdviceAsync("Give me 3 strong picks", "remove-session");
+        var response = await service.GetAdviceAsync("Remove the weakest one", "remove-session");
+
+        Assert.Equal(2, response.Actions.Count);
+        Assert.DoesNotContain(response.Actions, action => action.Prediction == "Draw");
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_SwapsDrawOut_FromWorkingSlip()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(
+            context,
+            new[]
+            {
+                ("Draw", "Draw", 0.34m, 0.30d, "Draw Home", "Draw Away", "Italy - Serie A"),
+                ("BothTeamsScore", "BTTS", 0.76m, 0.55d, "BTTS Home", "BTTS Away", "Spain - La Liga"),
+                ("StraightWin", "Home Win", 0.83m, 0.68d, "Straight Home", "Straight Away", "England - Premier League"),
+                ("Over2.5Goals", "Over 2.5", 0.79m, 0.58d, "Over Home", "Over Away", "Portugal - Primeira Liga")
+            });
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "message": "Here is the mix.",
+                  "recommendedActionKeys": ["P{{predictions[0].Id}}", "P{{predictions[1].Id}}", "P{{predictions[2].Id}}"],
+                  "showBookAll": true
+                }
+                """));
+        var service = CreateService(context, handler, new TestDistributedCache());
+
+        await service.GetAdviceAsync("Give me a mixture of btts, draw and straight win", "swap-session");
+        var response = await service.GetAdviceAsync("Swap one draw out", "swap-session");
+
+        Assert.Equal(3, response.Actions.Count);
+        Assert.DoesNotContain(response.Actions, action => action.Prediction == "Draw");
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_MakesWorkingSlipSafer_WithoutCallingAiAgain()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(
+            context,
+            new[]
+            {
+                ("Draw", "Draw", 0.34m, 0.30d, "Draw Home", "Draw Away", "Italy - Serie A"),
+                ("StraightWin", "Home Win", 0.72m, 0.68d, "Risk Home", "Risk Away", "Spain - La Liga"),
+                ("StraightWin", "Home Win", 0.86m, 0.68d, "Safe Home 1", "Safe Away 1", "England - Premier League"),
+                ("StraightWin", "Home Win", 0.84m, 0.68d, "Safe Home 2", "Safe Away 2", "Portugal - Primeira Liga"),
+                ("BothTeamsScore", "BTTS", 0.78m, 0.55d, "Safe Home 3", "Safe Away 3", "Germany - Bundesliga")
+            });
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "message": "Here is the mix.",
+                  "recommendedActionKeys": ["P{{predictions[0].Id}}", "P{{predictions[1].Id}}", "P{{predictions[2].Id}}"],
+                  "showBookAll": true
+                }
+                """));
+        var service = CreateService(context, handler, new TestDistributedCache());
+
+        await service.GetAdviceAsync("Give me 3 strong picks", "safer-session");
+        var response = await service.GetAdviceAsync("Make it safer", "safer-session");
+
+        Assert.Equal(3, response.Actions.Count);
+        Assert.DoesNotContain(response.Actions, action => action.Prediction == "Draw");
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_TargetsOdds_FromExistingWorkingSlipFirst()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(
+            context,
+            new[]
+            {
+                ("StraightWin", "Home Win", 0.84m, 0.68d, "Palmeiras", "Sporting Cristal", "CONMEBOL - Copa Libertadores U20"),
+                ("BothTeamsScore", "BTTS", 0.78m, 0.55d, "Inter", "Milan", "Italy - Serie A"),
+                ("Over2.5Goals", "Over 2.5", 0.76m, 0.58d, "Benfica", "Porto", "Portugal - Primeira Liga")
+            });
+
+        await SeedMarketDataAsync(
+            context,
+            (predictions[0], homeWin: 0.73, draw: 0.15, awayWin: 0.12, over25: 0.58, under25: 0.42, bttsYes: 0.56, bttsNo: 0.44),
+            (predictions[1], homeWin: 0.38, draw: 0.28, awayWin: 0.34, over25: 0.53, under25: 0.47, bttsYes: 0.68, bttsNo: 0.32),
+            (predictions[2], homeWin: 0.43, draw: 0.25, awayWin: 0.32, over25: 0.67, under25: 0.33, bttsYes: 0.61, bttsNo: 0.39));
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "message": "Here is the mix.",
+                  "recommendedActionKeys": ["P{{predictions[0].Id}}", "P{{predictions[1].Id}}", "P{{predictions[2].Id}}"],
+                  "showBookAll": true
+                }
+                """));
+        var service = CreateService(context, handler, new TestDistributedCache());
+
+        await service.GetAdviceAsync("Give me 3 strong picks", "odds-session");
+        var response = await service.GetAdviceAsync("Give me 2 odds from these", "odds-session");
+
+        Assert.Equal("working_slip_refinement", response.ContextMode);
+        Assert.NotEmpty(response.Actions);
+        Assert.Contains("closest grounded build", response.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(response.WorkingSlipSummary);
+        Assert.Equal(1, handler.CallCount);
     }
 
     private static async Task<List<Prediction>> SeedPredictionsAsync(ApplicationDbContext context, int count)
@@ -549,7 +762,8 @@ public class AiAdvisorServiceTests
             configuration,
             NullLogger<AiAdvisorService>.Instance,
             new StubHttpClientFactory(handler),
-            cache ?? new TestDistributedCache());
+            cache ?? new TestDistributedCache(),
+            new AiChatKnowledgeService());
     }
 
     private static string BuildGroqResponse(string modelContent)

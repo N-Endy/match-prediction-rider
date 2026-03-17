@@ -140,6 +140,70 @@ public class AiChatContextBuilderTests
     }
 
     [Fact]
+    public void BuildSelection_TreatsDrawRecommendationPrompt_AsGenericMarketRequest()
+    {
+        var predictions = new[]
+        {
+            CreatePrediction(1, "Draw", "Draw", "Roma", "Lazio", "Italy - Serie A", 0.34m, thresholdUsed: 0.30),
+            CreatePrediction(2, "Draw", "Draw", "Real Sociedad", "Valencia", "Spain - La Liga", 0.33m, thresholdUsed: 0.30),
+            CreatePrediction(3, "StraightWin", "Home Win", "Arsenal", "Chelsea", "England - Premier League", 0.78m, thresholdUsed: 0.68)
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Which draw games would you recommend?",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(2, selection.Candidates.Count);
+        Assert.All(selection.Candidates, candidate => Assert.Equal("Draw", candidate.PredictionCategory));
+    }
+
+    [Fact]
+    public void BuildSelection_ReturnsMixedMarketRecommendations_WhenPromptAsksForMixture()
+    {
+        var predictions = new[]
+        {
+            CreatePrediction(1, "BothTeamsScore", "BTTS", "Inter", "Milan", "Italy - Serie A", 0.79m),
+            CreatePrediction(2, "Over2.5Goals", "Over 2.5", "Barcelona", "Atletico Madrid", "Spain - La Liga", 0.77m),
+            CreatePrediction(3, "StraightWin", "Home Win", "Arsenal", "Chelsea", "England - Premier League", 0.81m, thresholdUsed: 0.68),
+            CreatePrediction(4, "Draw", "Draw", "Roma", "Lazio", "Italy - Serie A", 0.32m, thresholdUsed: 0.30)
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me a mixture of btts, over 2.5 and straight win for today",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Contains(selection.Candidates, candidate => candidate.PredictionCategory == "BothTeamsScore");
+        Assert.Contains(selection.Candidates, candidate => candidate.PredictionCategory == "Over2.5Goals");
+        Assert.Contains(selection.Candidates, candidate => candidate.PredictionCategory == "StraightWin");
+    }
+
+    [Fact]
+    public void BuildSelection_DefaultsMixtureWithoutCounts_ToTwoPerNamedMarket()
+    {
+        var predictions = Enumerable.Range(1, 3)
+            .Select(index => CreatePrediction(index, "BothTeamsScore", "BTTS", $"BTTS Home {index}", $"BTTS Away {index}", "Italy - Serie A", 0.82m - (index * 0.01m)))
+            .Concat(Enumerable.Range(4, 3)
+                .Select(index => CreatePrediction(index, "Over2.5Goals", "Over 2.5", $"Over Home {index}", $"Over Away {index}", "Spain - La Liga", 0.81m - ((index - 3) * 0.01m))))
+            .Concat(Enumerable.Range(7, 3)
+                .Select(index => CreatePrediction(index, "StraightWin", "Home Win", $"Win Home {index}", $"Win Away {index}", "England - Premier League", 0.84m - ((index - 6) * 0.01m), thresholdUsed: 0.68)))
+            .ToArray();
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me a mixture of btts, over 2.5 and straight win",
+            DateTime.UtcNow);
+
+        Assert.Equal(6, selection.Candidates.Count);
+        Assert.Equal(2, selection.Candidates.Count(candidate => candidate.PredictionCategory == "BothTeamsScore"));
+        Assert.Equal(2, selection.Candidates.Count(candidate => candidate.PredictionCategory == "Over2.5Goals"));
+        Assert.Equal(2, selection.Candidates.Count(candidate => candidate.PredictionCategory == "StraightWin"));
+    }
+
+    [Fact]
     public void BuildSelection_TreatsRolloverPrompt_AsGenericRecommendationRequest()
     {
         var predictions = new[]
@@ -192,6 +256,22 @@ public class AiChatContextBuilderTests
         Assert.False(selection.NoRelevantMatchesFound);
         Assert.Equal(3, selection.RequestedCandidateCount);
         Assert.Equal(3, selection.Candidates.Count);
+    }
+
+    [Fact]
+    public void BuildSelection_DefaultsStrongGenericRequests_ToFivePicks()
+    {
+        var predictions = Enumerable.Range(1, 10)
+            .Select(index => CreatePrediction(index, "StraightWin", "Home Win", $"Team {index}", $"Opponent {index}", "England - Premier League", 0.88m - (index * 0.01m), thresholdUsed: 0.68))
+            .ToArray();
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me your strong picks for today",
+            DateTime.UtcNow);
+
+        Assert.Equal(5, selection.RequestedCandidateCount);
+        Assert.Equal(5, selection.Candidates.Count);
     }
 
     [Fact]

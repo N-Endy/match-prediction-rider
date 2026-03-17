@@ -65,6 +65,29 @@ public class AiChatPageScriptTests
         Assert.Contains("action.edgePoints", script);
     }
 
+    [Fact]
+    public void ChatScript_RendersWorkingSlipSummary_AndSuggestedPrompts()
+    {
+        var script = ExtractScript(
+            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/Pages/AiChat.cshtml");
+
+        Assert.Contains("response.workingSlipSummary", script);
+        Assert.Contains("buildWorkingSlipSummary", script);
+        Assert.Contains("response.suggestedPrompts", script);
+        Assert.Contains("sendSuggestedPrompt", script);
+    }
+
+    [Fact]
+    public void ChatScript_RendersKnowledgeCards_ThroughEscapedFormatter()
+    {
+        var script = ExtractScript(
+            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/Pages/AiChat.cshtml");
+
+        Assert.Contains("response.knowledgeCards", script);
+        Assert.Contains("buildKnowledgeCards", script);
+        Assert.Contains("formatMessageHtml(card.body", script);
+    }
+
     private static string ExtractScript(string path)
     {
         var content = File.ReadAllText(path);

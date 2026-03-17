@@ -9,7 +9,7 @@
     <div class="mp-page-header">
         <div class="mp-page-title">
             <div class="mp-page-title-icon" style="background: rgba(99, 102, 241, 0.1);">🤖</div>
-            <h1>AI Prediction Advisor</h1>
+            <h1>AI Betting Companion</h1>
         </div>
         @if (Model.IsAuthenticated)
         {
@@ -56,14 +56,15 @@ else
             <div class="mp-chat-message mp-chat-ai">
                 <div class="mp-chat-avatar">🤖</div>
                 <div class="mp-chat-bubble">
-                    <p>Hello! I'm Nelson, your grounded prediction advisor. I work from MatchPredictor's current card plus the recent published prediction history, so I can talk about today's picks and recent settled matches without guessing.</p>
+                    <p>Hello! I'm Nelson, your grounded betting companion. I work from MatchPredictor's live card, recent published history, and the app's public analytics logic, so I can help you build slips, refine them, and explain what the app is showing without guessing.</p>
                     <p style="margin-top: 0.5rem; font-size: 0.85rem; opacity: 0.7;">Try asking:</p>
                     <ul style="font-size: 0.85rem; opacity: 0.7; margin: 0.25rem 0 0 1rem;">
                         <li>"Give me 10 of the best BTTS predictions"</li>
-                        <li>"Pick 5 safe straight wins"</li>
-                        <li>"Tell me about Arsenal yesterday"</li>
-                        <li>"Give me 3 strong picks and add them to the slip"</li>
-                        <li>"I'm doing a rollover of 2 odds. Give me your strong picks for today"</li>
+                        <li>"Give me a mixture of btts, over 2.5 and straight win"</li>
+                        <li>"Which draw games would you recommend?"</li>
+                        <li>"Which is riskiest?"</li>
+                        <li>"Why isn't this in value bets?"</li>
+                        <li>"What does reliability mean?"</li>
                     </ul>
                 </div>
             </div>
@@ -128,6 +129,10 @@ else
         message.innerHTML = formatMessageHtml(response.message || '');
         bubble.appendChild(message);
 
+        if (response.workingSlipSummary) {
+            bubble.appendChild(buildWorkingSlipSummary(response.workingSlipSummary));
+        }
+
         if (Array.isArray(response.warnings) && response.warnings.length > 0) {
             const warnings = document.createElement('div');
             warnings.style.marginTop = '0.75rem';
@@ -137,6 +142,10 @@ else
                 .map(warning => `<div>${escapeHtml(warning)}</div>`)
                 .join('');
             bubble.appendChild(warnings);
+        }
+
+        if (Array.isArray(response.knowledgeCards) && response.knowledgeCards.length > 0) {
+            bubble.appendChild(buildKnowledgeCards(response.knowledgeCards));
         }
 
         if (Array.isArray(response.actions) && response.actions.length > 0) {
@@ -242,31 +251,147 @@ else
             });
 
             bubble.appendChild(actions);
+        }
 
-            if (response.showBookAll && response.actions.length > 1) {
-                const footer = document.createElement('div');
-                footer.style.marginTop = '12px';
-                footer.style.paddingTop = '12px';
-                footer.style.borderTop = '1px solid rgba(255,255,255,0.1)';
+        if (response.showBookAll && Array.isArray(response.actions) && response.actions.length > 1) {
+            const footer = document.createElement('div');
+            footer.style.marginTop = '12px';
+            footer.style.paddingTop = '12px';
+            footer.style.borderTop = '1px solid rgba(255,255,255,0.1)';
 
-                const btn = document.createElement('button');
-                btn.className = 'mp-book-btn';
-                btn.style.fontSize = '0.85rem';
-                btn.style.padding = '8px 16px';
-                btn.style.width = 'auto';
-                btn.style.borderRadius = '8px';
-                btn.textContent = '🎫 Add All & Open Slip';
-                btn.addEventListener('click', () => addAllAndBook(btn));
+            const btn = document.createElement('button');
+            btn.className = 'mp-book-btn';
+            btn.style.fontSize = '0.85rem';
+            btn.style.padding = '8px 16px';
+            btn.style.width = 'auto';
+            btn.style.borderRadius = '8px';
+            btn.textContent = '🎫 Add All & Open Slip';
+            btn.addEventListener('click', () => addAllAndBook(btn));
 
-                footer.appendChild(btn);
-                bubble.appendChild(footer);
-            }
+            footer.appendChild(btn);
+            bubble.appendChild(footer);
+        }
+
+        if (Array.isArray(response.suggestedPrompts) && response.suggestedPrompts.length > 0) {
+            bubble.appendChild(buildSuggestedPromptChips(response.suggestedPrompts));
         }
 
         div.appendChild(avatar);
         div.appendChild(bubble);
         chatMessages.appendChild(div);
         chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function buildWorkingSlipSummary(summary) {
+        const shell = document.createElement('div');
+        shell.style.marginTop = '0.8rem';
+        shell.style.padding = '0.85rem';
+        shell.style.borderRadius = '12px';
+        shell.style.border = '1px solid rgba(59, 130, 246, 0.2)';
+        shell.style.background = 'rgba(59, 130, 246, 0.08)';
+
+        const title = document.createElement('div');
+        title.style.fontSize = '0.78rem';
+        title.style.textTransform = 'uppercase';
+        title.style.letterSpacing = '0.08em';
+        title.style.opacity = '0.7';
+        title.style.fontWeight = '700';
+        title.textContent = 'Working Slip';
+        shell.appendChild(title);
+
+        const stats = document.createElement('div');
+        stats.style.marginTop = '0.4rem';
+        stats.style.fontSize = '0.84rem';
+        stats.style.lineHeight = '1.5';
+        const statParts = [
+            `${Number(summary.count || 0)} leg${Number(summary.count || 0) === 1 ? '' : 's'}`,
+            `${Number(summary.bookableCount || 0)} bookable`
+        ];
+        if (Array.isArray(summary.markets) && summary.markets.length > 0) {
+            statParts.push(summary.markets.join(', '));
+        }
+        if (Number.isFinite(Number(summary.estimatedCombinedOdds))) {
+            statParts.push(`~${Number(summary.estimatedCombinedOdds).toFixed(2)} combined odds`);
+        }
+        stats.textContent = statParts.join(' • ');
+        shell.appendChild(stats);
+
+        return shell;
+    }
+
+    function buildKnowledgeCards(cards) {
+        const shell = document.createElement('div');
+        shell.style.display = 'grid';
+        shell.style.gap = '0.65rem';
+        shell.style.marginTop = '0.8rem';
+
+        cards.forEach(card => {
+            const article = document.createElement('div');
+            article.style.padding = '0.8rem';
+            article.style.borderRadius = '12px';
+            article.style.border = '1px solid rgba(148, 163, 184, 0.16)';
+            article.style.background = 'rgba(15, 23, 42, 0.32)';
+
+            const header = document.createElement('div');
+            header.style.display = 'flex';
+            header.style.justifyContent = 'space-between';
+            header.style.alignItems = 'center';
+            header.style.gap = '0.75rem';
+
+            const title = document.createElement('div');
+            title.style.fontWeight = '700';
+            title.style.fontSize = '0.88rem';
+            title.textContent = card.title || 'Knowledge';
+            header.appendChild(title);
+
+            if (card.kind) {
+                const kind = document.createElement('span');
+                kind.style.fontSize = '0.72rem';
+                kind.style.opacity = '0.7';
+                kind.style.textTransform = 'uppercase';
+                kind.style.letterSpacing = '0.08em';
+                kind.textContent = card.kind;
+                header.appendChild(kind);
+            }
+
+            article.appendChild(header);
+
+            const body = document.createElement('div');
+            body.style.marginTop = '0.5rem';
+            body.style.fontSize = '0.82rem';
+            body.style.lineHeight = '1.55';
+            body.innerHTML = formatMessageHtml(card.body || '');
+            article.appendChild(body);
+
+            shell.appendChild(article);
+        });
+
+        return shell;
+    }
+
+    function buildSuggestedPromptChips(prompts) {
+        const shell = document.createElement('div');
+        shell.style.display = 'flex';
+        shell.style.flexWrap = 'wrap';
+        shell.style.gap = '0.55rem';
+        shell.style.marginTop = '0.9rem';
+
+        prompts.forEach(prompt => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.style.border = '1px solid rgba(148, 163, 184, 0.18)';
+            button.style.background = 'rgba(30, 41, 59, 0.5)';
+            button.style.color = 'var(--text-primary)';
+            button.style.borderRadius = '999px';
+            button.style.padding = '0.45rem 0.75rem';
+            button.style.fontSize = '0.78rem';
+            button.style.cursor = 'pointer';
+            button.textContent = prompt;
+            button.addEventListener('click', () => sendSuggestedPrompt(prompt));
+            shell.appendChild(button);
+        });
+
+        return shell;
     }
 
     function escapeHtml(text) {
@@ -337,6 +462,12 @@ else
     function removeTypingIndicator() {
         const indicator = document.getElementById('typingIndicator');
         if (indicator) indicator.remove();
+    }
+
+    function sendSuggestedPrompt(prompt) {
+        if (!chatInput || !chatSendBtn) return;
+        chatInput.value = prompt;
+        sendChatMessage();
     }
 
     async function sendChatMessage() {
