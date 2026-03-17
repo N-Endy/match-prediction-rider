@@ -62,7 +62,7 @@ public class ScoreUpdaterMatchingTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoff = DateTimeProvider.GetLocalTime().Date.AddHours(15).AddMinutes(30);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(15, 30);
         var date = kickoff.ToString("dd-MM-yyyy");
 
         context.Predictions.Add(CreatePrediction(
@@ -111,7 +111,7 @@ public class ScoreUpdaterMatchingTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoff = DateTimeProvider.GetLocalTime().Date.AddHours(9);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(9);
         var date = kickoff.ToString("dd-MM-yyyy");
 
         context.Predictions.Add(CreatePrediction(
@@ -159,7 +159,7 @@ public class ScoreUpdaterMatchingTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoff = DateTimeProvider.GetLocalTime().Date.AddHours(19);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(19);
         var date = kickoff.ToString("dd-MM-yyyy");
 
         context.Predictions.AddRange(
@@ -284,6 +284,67 @@ public class ScoreUpdaterMatchingTests
     }
 
     [Fact]
+    public async Task RunScoreUpdaterAsync_DoesNotSettleFutureFixture_AndClearsAnyStaleFutureScore()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var nowLocal = DateTimeProvider.GetLocalTime();
+        var kickoffLocal = GetFutureKickoffForToday(nowLocal);
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal);
+        var sourceKickoffUtc = kickoffUtc.AddHours(-2);
+        var date = kickoffLocal.ToString("dd-MM-yyyy");
+
+        context.Predictions.Add(new Prediction
+        {
+            Date = date,
+            Time = kickoffLocal.ToString("HH:mm"),
+            MatchLocalDate = DateOnly.FromDateTime(kickoffLocal),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoffLocal),
+            MatchDateTime = kickoffUtc,
+            FixtureKey = "switzerland-super-league|st-gallen|fc-lugano",
+            League = "Switzerland - Super League",
+            HomeTeam = "St. Gallen",
+            AwayTeam = "FC Lugano",
+            PredictionCategory = "BothTeamsScore",
+            PredictedOutcome = "BTTS",
+            ActualScore = "2:1",
+            ActualOutcome = "BTTS",
+            IsLive = true
+        });
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                MatchScores =
+                [
+                    new MatchScore
+                    {
+                        MatchTime = sourceKickoffUtc,
+                        League = "SWITZERLAND: Super League",
+                        HomeTeam = "St. Gallen",
+                        AwayTeam = "Lugano",
+                        Score = "2:1",
+                        BTTSLabel = true,
+                        IsLive = false
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var prediction = await context.Predictions.SingleAsync();
+        Assert.Null(prediction.ActualScore);
+        Assert.Null(prediction.ActualOutcome);
+        Assert.False(prediction.IsLive);
+    }
+
+    [Fact]
     public async Task RunScoreUpdaterAsync_BackfillsUnresolvedPredictionFromPreviousDay()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
@@ -392,7 +453,7 @@ public class ScoreUpdaterMatchingTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoff = DateTimeProvider.GetLocalTime().Date.AddHours(10);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(10);
         var date = kickoff.ToString("dd-MM-yyyy");
 
         context.Predictions.AddRange(
@@ -485,7 +546,7 @@ public class ScoreUpdaterMatchingTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoff = DateTimeProvider.GetLocalTime().Date.AddHours(9);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(9);
         var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoff);
         var date = kickoff.ToString("dd-MM-yyyy");
 
@@ -771,7 +832,7 @@ public class ScoreUpdaterMatchingTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoffLocal = DateTimeProvider.GetLocalTime().Date.AddHours(14);
+        var kickoffLocal = GetStartedKickoffForTodayOrYesterday(14);
         var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal);
         var date = kickoffLocal.ToString("dd-MM-yyyy");
 
@@ -884,6 +945,30 @@ public class ScoreUpdaterMatchingTests
             PredictedOutcome = predictedOutcome,
             IsLive = false
         };
+    }
+
+    private static DateTime GetFutureKickoffForToday(DateTime nowLocal)
+    {
+        var candidate = nowLocal.AddHours(4);
+        if (candidate.Date == nowLocal.Date)
+        {
+            return candidate;
+        }
+
+        candidate = nowLocal.AddMinutes(1);
+        if (candidate.Date == nowLocal.Date)
+        {
+            return candidate;
+        }
+
+        return nowLocal.AddSeconds(1);
+    }
+
+    private static DateTime GetStartedKickoffForTodayOrYesterday(int hour, int minute = 0)
+    {
+        var nowLocal = DateTimeProvider.GetLocalTime();
+        var todayKickoff = nowLocal.Date.AddHours(hour).AddMinutes(minute);
+        return todayKickoff <= nowLocal ? todayKickoff : todayKickoff.AddDays(-1);
     }
 
     private static Prediction CreateSettledPrediction(

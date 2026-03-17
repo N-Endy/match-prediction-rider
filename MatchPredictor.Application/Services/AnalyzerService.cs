@@ -18,6 +18,7 @@ public class AnalyzerService  : IAnalyzerService
     private const int HistoricalScoreBackfillLookbackDays = 14;
     private const double ExactFinishedRepairWindowMinutes = 65d;
     private const double ExtendedExactFinishedRepairWindowMinutes = 240d;
+    private static readonly TimeSpan FutureFixtureSettlementTolerance = TimeSpan.Zero;
     private const string DataSyncEventName = "data_sync";
     private const string PredictionGenerationEventName = "prediction_generation";
     private const string DailyAnalysisEventName = "daily_analysis";
@@ -475,7 +476,9 @@ public class AnalyzerService  : IAnalyzerService
 
     private async Task UpdatePredictionsWithActualResults(int lookbackDays, string runLabel)
     {
-        var today = DateOnly.FromDateTime(DateTimeProvider.GetLocalTime());
+        var nowLocal = DateTimeProvider.GetLocalTime();
+        var nowUtc = DateTime.UtcNow;
+        var today = DateOnly.FromDateTime(nowLocal);
         var earliestSettlementDate = today.AddDays(-lookbackDays);
         var settlementDates = Enumerable.Range(0, lookbackDays + 1)
             .Select(offset => earliestSettlementDate.AddDays(offset))
@@ -491,12 +494,31 @@ public class AnalyzerService  : IAnalyzerService
             .Where(f => settlementDates.Contains(f.MatchLocalDate))
             .ToListAsync();
 
-        foreach (var prediction in predictionsForSettlement)
+        var settlementFixtures = BuildSettlementFixtureGroups(predictionsForSettlement, forecastsForSettlement);
+        var eligibleSettlementFixtures = settlementFixtures
+            .Where(fixture => IsFixtureEligibleForSettlement(fixture, today, nowUtc))
+            .ToList();
+        var futureSettlementFixtures = settlementFixtures
+            .Where(fixture => !IsFixtureEligibleForSettlement(fixture, today, nowUtc))
+            .ToList();
+
+        foreach (var fixture in futureSettlementFixtures)
+        {
+            ClearFutureFixtureSettlement(fixture);
+        }
+
+        var eligiblePredictionsForSettlement = eligibleSettlementFixtures
+            .SelectMany(fixture => fixture.Predictions)
+            .ToList();
+        var eligibleForecastsForSettlement = eligibleSettlementFixtures
+            .SelectMany(fixture => fixture.Forecasts)
+            .ToList();
+
+        foreach (var prediction in eligiblePredictionsForSettlement)
         {
             RepairPredictionOutcomeFromStoredScore(prediction);
         }
 
-        var settlementFixtures = BuildSettlementFixtureGroups(predictionsForSettlement, forecastsForSettlement);
         var sourceQualityLookup = await LoadSourceQualityLookupAsync();
 
         // ── Primary: FlashScore (faster final-status updates) ──
@@ -531,15 +553,15 @@ public class AnalyzerService  : IAnalyzerService
                 "Matching scores from FlashScore ({CandidateCount} consolidated from {RawCount} rows) against {FixtureCount} fixtures ({PredCount} predictions, {ForecastCount} forecasts) in the {LookbackDays}-day settlement window.",
                 consolidatedFlashScores.Count,
                 scores.Count,
-                settlementFixtures.Count,
-                predictionsForSettlement.Count,
-                forecastsForSettlement.Count,
+                eligibleSettlementFixtures.Count,
+                eligiblePredictionsForSettlement.Count,
+                eligibleForecastsForSettlement.Count,
                 lookbackDays);
 
             var flashMatchedFixtures = 0;
-            for (var index = 0; index < settlementFixtures.Count; index++)
+            for (var index = 0; index < eligibleSettlementFixtures.Count; index++)
             {
-                var fixture = settlementFixtures[index];
+                var fixture = eligibleSettlementFixtures[index];
                 var flashMatch = FindBestFixtureCandidate(
                     flashScoreIndex,
                     fixture.HomeTeam,
@@ -569,7 +591,7 @@ public class AnalyzerService  : IAnalyzerService
                     flashMatchedFixtures++;
                 }
 
-                LogFixtureMatchingProgress("FlashScore", index + 1, settlementFixtures.Count, flashMatchedFixtures);
+                LogFixtureMatchingProgress("FlashScore", index + 1, eligibleSettlementFixtures.Count, flashMatchedFixtures);
             }
         }
 
@@ -586,7 +608,7 @@ public class AnalyzerService  : IAnalyzerService
             score => score.MatchTime,
             score => score.IsLive);
 
-        var incompleteFixtures = settlementFixtures
+        var incompleteFixtures = eligibleSettlementFixtures
             .Where(NeedsFixtureSettlementRepair)
             .ToList();
         var incompletePredictions = incompleteFixtures
@@ -656,20 +678,20 @@ public class AnalyzerService  : IAnalyzerService
             }
         }
 
-        ApplyExactFinishedSourceRepairs(settlementFixtures, consolidatedFlashScores, consolidatedAiScores, sourceQualityLookup);
-        ApplyExactLiveSourceReopens(settlementFixtures, consolidatedFlashScores, consolidatedAiScores, sourceQualityLookup);
+        ApplyExactFinishedSourceRepairs(eligibleSettlementFixtures, consolidatedFlashScores, consolidatedAiScores, sourceQualityLookup);
+        ApplyExactLiveSourceReopens(eligibleSettlementFixtures, consolidatedFlashScores, consolidatedAiScores, sourceQualityLookup);
 
         // ── Matching Statistics & Diagnostics ──
-        var matchedCount = predictionsForSettlement.Count(p => !string.IsNullOrEmpty(p.ActualScore));
-        var unmatchedPredictions = predictionsForSettlement
+        var matchedCount = eligiblePredictionsForSettlement.Count(p => !string.IsNullOrEmpty(p.ActualScore));
+        var unmatchedPredictions = eligiblePredictionsForSettlement
             .Where(p => string.IsNullOrEmpty(p.ActualScore))
             .ToList();
 
         _logger.LogInformation(
             "📊 Score matching summary: {Matched}/{Total} predictions matched ({Percentage}%) in the {LookbackDays}-day settlement window, {Unmatched} unmatched.",
             matchedCount,
-            predictionsForSettlement.Count,
-            predictionsForSettlement.Count > 0 ? (matchedCount * 100 / predictionsForSettlement.Count) : 0,
+            eligiblePredictionsForSettlement.Count,
+            eligiblePredictionsForSettlement.Count > 0 ? (matchedCount * 100 / eligiblePredictionsForSettlement.Count) : 0,
             lookbackDays,
             unmatchedPredictions.Count);
 
@@ -784,6 +806,42 @@ public class AnalyzerService  : IAnalyzerService
         foreach (var forecast in fixture.Forecasts)
         {
             UpdateForecastObservationState(forecast, score, bttsLabel, isLive);
+        }
+    }
+
+    private static bool IsFixtureEligibleForSettlement(SettlementFixtureGroup fixture, DateOnly today, DateTime nowUtc)
+    {
+        if (fixture.ScheduledMatchTimeUtc.HasValue)
+        {
+            return fixture.ScheduledMatchTimeUtc.Value <= nowUtc + FutureFixtureSettlementTolerance;
+        }
+
+        if (fixture.MatchLocalDate != default)
+        {
+            return fixture.MatchLocalDate < today;
+        }
+
+        var parsedDate = DateTimeProvider.ParseLocalDateOrNull(fixture.Date);
+        return parsedDate.HasValue && parsedDate.Value < today;
+    }
+
+    private static void ClearFutureFixtureSettlement(SettlementFixtureGroup fixture)
+    {
+        foreach (var prediction in fixture.Predictions)
+        {
+            prediction.ActualScore = null;
+            prediction.ActualOutcome = null;
+            prediction.IsLive = false;
+        }
+
+        foreach (var forecast in fixture.Forecasts)
+        {
+            forecast.ActualScore = null;
+            forecast.ActualOutcome = null;
+            forecast.OutcomeOccurred = null;
+            forecast.IsSettled = false;
+            forecast.IsLive = false;
+            forecast.SettledAt = null;
         }
     }
 
