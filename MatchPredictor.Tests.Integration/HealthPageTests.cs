@@ -42,7 +42,12 @@ public class HealthPageTests
         startupState.MarkHangfireInitialized();
         startupState.MarkRecurringJobsRegistered();
 
-        var page = new Health(context, startupState, new AiScoreSourceHealthTracker());
+        var aiScoreTracker = new AiScoreSourceHealthTracker();
+        var sofaScoreTracker = new SofaScoreSourceHealthTracker();
+        sofaScoreTracker.RecordAttempt("discovery", "fixture batch");
+        sofaScoreTracker.RecordSuccess("event-page", 2, 4, 3, "SofaScore parsed two pages.");
+
+        var page = new Health(context, startupState, aiScoreTracker, sofaScoreTracker);
 
         var result = await page.OnGetAsync(CancellationToken.None);
 
@@ -52,6 +57,9 @@ public class HealthPageTests
         Assert.True(page.Snapshot.HangfireInitialized);
         Assert.True(page.Snapshot.RecurringJobsRegistered);
         Assert.True(page.Snapshot.PredictionsToday >= 0);
+        Assert.Equal("Healthy", page.Snapshot.SofaScoreRuntime.Status);
+        Assert.Equal(2, page.Snapshot.SofaScoreRuntime.LastMatchCount);
+        Assert.Equal(1.0, page.Snapshot.SofaScoreRuntime.SuccessRate, 3);
     }
 
     private static ApplicationDbContext CreateContext()

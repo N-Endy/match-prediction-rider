@@ -773,6 +773,75 @@ public class AnalyzerService  : IAnalyzerService
             }
         }
 
+        incompleteFixtures = eligibleSettlementFixtures
+            .Where(NeedsFixtureSettlementRepair)
+            .ToList();
+
+        if (incompleteFixtures.Count > 0)
+        {
+            var sofaScoreRequests = incompleteFixtures
+                .Select(BuildSofaScoreFixtureRequest)
+                .ToList();
+            var sofaScores = await _webScraperService.ScrapeSofaScoreMatchScoresAsync(sofaScoreRequests);
+
+            if (sofaScores.Count > 0)
+            {
+                var sofaScoreIndex = new FixtureCandidateIndex<SofaScoreMatchScore>(
+                    sofaScores,
+                    score => score.HomeTeam,
+                    score => score.AwayTeam,
+                    score => score.League,
+                    score => score.MatchTime);
+                var incompleteFixtureIndex = new FixtureCandidateIndex<SettlementFixtureGroup>(
+                    incompleteFixtures,
+                    fixture => fixture.HomeTeam,
+                    fixture => fixture.AwayTeam,
+                    fixture => fixture.League,
+                    fixture => fixture.ScheduledMatchTimeUtc);
+
+                _logger.LogInformation(
+                    "Attempting targeted fallback score match from SofaScore for {FixtureCount} incomplete fixtures using {CandidateCount} event-page rows.",
+                    incompleteFixtures.Count,
+                    sofaScores.Count);
+
+                var sofaMatchedFixtures = 0;
+                for (var index = 0; index < incompleteFixtures.Count; index++)
+                {
+                    var fixture = incompleteFixtures[index];
+                    var sofaMatch = FindBestFixtureCandidate(
+                        sofaScoreIndex,
+                        fixture.HomeTeam,
+                        fixture.AwayTeam,
+                        fixture.League,
+                        fixture.Date,
+                        fixture.ScheduledMatchTimeUtc,
+                        score => score.HomeTeam,
+                        score => score.AwayTeam,
+                        score => score.League,
+                        score => score.MatchTime,
+                        score => score.IsLive,
+                        score => GetSourceQualityReliability(sourceQualityLookup, "SofaScore", score.League, score.MatchTime));
+
+                    if (sofaMatch != null &&
+                        IsReciprocalFixtureMatch(
+                            incompleteFixtureIndex,
+                            fixture,
+                            sofaMatch,
+                            score => score.HomeTeam,
+                            score => score.AwayTeam,
+                            score => score.League,
+                            score => score.MatchTime,
+                            score => score.IsLive))
+                    {
+                        ApplyFixtureSettlement(fixture, sofaMatch.Score, sofaMatch.BTTSLabel, sofaMatch.IsLive);
+                        sofaMatchedFixtures++;
+                    }
+
+                    LogFixtureMatchingProgress("SofaScore", index + 1, incompleteFixtures.Count, sofaMatchedFixtures);
+                }
+            }
+        }
+
         ApplyExactFinishedSourceRepairs(eligibleSettlementFixtures, consolidatedFlashScores, consolidatedAiScores, sourceQualityLookup);
         ApplyExactLiveSourceReopens(eligibleSettlementFixtures, consolidatedFlashScores, consolidatedAiScores, sourceQualityLookup);
 
@@ -949,6 +1018,19 @@ public class AnalyzerService  : IAnalyzerService
     private static bool NeedsForecastSettlementRepair(ForecastObservation forecast)
     {
         return string.IsNullOrWhiteSpace(forecast.ActualScore) || forecast.IsLive || !forecast.IsSettled;
+    }
+
+    private static SofaScoreFixtureRequest BuildSofaScoreFixtureRequest(SettlementFixtureGroup fixture)
+    {
+        return new SofaScoreFixtureRequest
+        {
+            League = fixture.League,
+            HomeTeam = fixture.HomeTeam,
+            AwayTeam = fixture.AwayTeam,
+            MatchLocalDate = fixture.MatchLocalDate,
+            ScheduledMatchTimeUtc = fixture.ScheduledMatchTimeUtc,
+            FixtureKey = fixture.FixtureKey
+        };
     }
 
     private void ApplyExactFinishedSourceRepairs(

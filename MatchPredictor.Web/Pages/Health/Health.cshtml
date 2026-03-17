@@ -172,6 +172,66 @@
 
     <div class="mp-page-header" style="margin-top: 2rem;">
         <div class="mp-page-title">
+            <div class="mp-page-title-icon" style="background: rgba(244, 114, 182, 0.12);">🛋️</div>
+            <h2 style="margin: 0;">SofaScore Runtime</h2>
+        </div>
+    </div>
+
+    @{
+        var sofaScoreLevel = Model.Snapshot.SofaScoreRuntime.Status switch
+        {
+            "Healthy" => HealthLevel.Healthy,
+            "Empty" => HealthLevel.Stale,
+            "Blocked" => HealthLevel.Failed,
+            "Failed" => HealthLevel.Failed,
+            _ => HealthLevel.Missing
+        };
+    }
+
+    <div class="mp-prediction-card" style="border-left: 3px solid @(sofaScoreLevel == HealthLevel.Healthy ? "var(--accent-emerald)" : sofaScoreLevel == HealthLevel.Stale ? "#f59e0b" : sofaScoreLevel == HealthLevel.Failed ? "var(--accent-rose)" : "var(--border-color)");">
+        <div class="mp-match-info">
+            <div class="mp-match-league">
+                SofaScore status
+                @if (!string.IsNullOrWhiteSpace(Model.Snapshot.SofaScoreRuntime.LastStage))
+                {
+                    <span class="mp-time">Last stage @Model.Snapshot.SofaScoreRuntime.LastStage</span>
+                }
+            </div>
+            <div style="font-size: 1.2rem; font-weight: 700; margin-top: 0.45rem;">@Model.Snapshot.SofaScoreRuntime.Status</div>
+            <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.35rem;">
+                Last matches: @Model.Snapshot.SofaScoreRuntime.LastMatchCount
+                • Candidate URLs: @Model.Snapshot.SofaScoreRuntime.LastCandidateUrlCount
+                • Pages fetched: @Model.Snapshot.SofaScoreRuntime.LastPageFetchCount
+            </div>
+            <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
+                Attempts: @Model.Snapshot.SofaScoreRuntime.TotalAttempts
+                • Success: @Model.Snapshot.SofaScoreRuntime.TotalSuccesses
+                • Blocked: @Model.Snapshot.SofaScoreRuntime.TotalBlocked
+                • Empty: @Model.Snapshot.SofaScoreRuntime.TotalEmpty
+                • Failed: @Model.Snapshot.SofaScoreRuntime.TotalFailures
+            </div>
+            <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
+                Success rate: @Model.Snapshot.SofaScoreRuntime.SuccessRate.ToString("P0")
+                • Block rate: @Model.Snapshot.SofaScoreRuntime.BlockRate.ToString("P0")
+                • Total page fetches: @Model.Snapshot.SofaScoreRuntime.TotalPageFetches
+            </div>
+            <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
+                Last success: @(Model.Snapshot.SofaScoreRuntime.LastSuccessLocal?.ToString("dd MMM yyyy, hh:mm tt") ?? "Never")
+            </div>
+            @if (!string.IsNullOrWhiteSpace(Model.Snapshot.SofaScoreRuntime.LastDetail))
+            {
+                <div style="font-size: 0.84rem; color: var(--text-secondary); margin-top: 0.65rem; line-height: 1.5;">
+                    @Model.Snapshot.SofaScoreRuntime.LastDetail
+                </div>
+            }
+        </div>
+        <span class="mp-prediction-badge" style="@BadgeColors(sofaScoreLevel)">
+            @sofaScoreLevel
+        </span>
+    </div>
+
+    <div class="mp-page-header" style="margin-top: 2rem;">
+        <div class="mp-page-title">
             <div class="mp-page-title-icon" style="background: rgba(245, 158, 11, 0.12);">🧭</div>
             <h2 style="margin: 0;">Source Quality</h2>
         </div>

@@ -214,6 +214,59 @@ public class ScoreUpdaterMatchingTests
     }
 
     [Fact]
+    public async Task RunScoreUpdaterAsync_UsesTargetedSofaScoreFallbackForIncompleteFixture()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(18);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        context.Predictions.Add(CreatePrediction(
+            date,
+            kickoff,
+            "Manchester City",
+            "Real Madrid",
+            "StraightWin",
+            "Home Win",
+            "UEFA Champions League"));
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                SofaScoreMatchScores =
+                [
+                    new SofaScoreMatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+                        League = "UEFA Champions League",
+                        HomeTeam = "Manchester City",
+                        AwayTeam = "Real Madrid",
+                        Score = "2:1",
+                        DisplayedScore = "2:1",
+                        RegularTimeScore = "2:1",
+                        StatusText = "Finished",
+                        EventUrl = "https://www.sofascore.com/football/match/real-madrid-manchester-city/rsEgb",
+                        BTTSLabel = true,
+                        IsLive = false
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var prediction = await context.Predictions.SingleAsync();
+        Assert.Equal("2:1", prediction.ActualScore);
+        Assert.Equal("Home Win", prediction.ActualOutcome);
+        Assert.False(prediction.IsLive);
+    }
+
+    [Fact]
     public async Task RunScoreUpdaterAsync_EarlySettlesBttsAndOverMarketsWhileKeepingStraightWinLive()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
@@ -1243,10 +1296,12 @@ public class ScoreUpdaterMatchingTests
     {
         public List<MatchScore> MatchScores { get; init; } = [];
         public List<AiScoreMatchScore> AiScoreMatchScores { get; init; } = [];
+        public List<SofaScoreMatchScore> SofaScoreMatchScores { get; init; } = [];
 
         public Task ScrapeMatchDataAsync() => Task.CompletedTask;
         public Task<List<MatchScore>> ScrapeMatchScoresAsync() => Task.FromResult(MatchScores);
         public Task<List<AiScoreMatchScore>> ScrapeAiScoreMatchScoresAsync() => Task.FromResult(AiScoreMatchScores);
+        public Task<List<SofaScoreMatchScore>> ScrapeSofaScoreMatchScoresAsync(IEnumerable<SofaScoreFixtureRequest> fixtures) => Task.FromResult(SofaScoreMatchScores);
     }
 
     private sealed class StubExtractFromExcel : IExtractFromExcel

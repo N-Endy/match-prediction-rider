@@ -25,15 +25,18 @@ public class Health : PageModel
     private readonly ApplicationDbContext _dbContext;
     private readonly OperationalStartupState _startupState;
     private readonly AiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
+    private readonly SofaScoreSourceHealthTracker _sofaScoreSourceHealthTracker;
 
     public Health(
         ApplicationDbContext dbContext,
         OperationalStartupState startupState,
-        AiScoreSourceHealthTracker aiScoreSourceHealthTracker)
+        AiScoreSourceHealthTracker aiScoreSourceHealthTracker,
+        SofaScoreSourceHealthTracker sofaScoreSourceHealthTracker)
     {
         _dbContext = dbContext;
         _startupState = startupState;
         _aiScoreSourceHealthTracker = aiScoreSourceHealthTracker;
+        _sofaScoreSourceHealthTracker = sofaScoreSourceHealthTracker;
     }
 
     [BindProperty(SupportsGet = true)]
@@ -139,6 +142,7 @@ public class Health : PageModel
             PredictionCoverageExpected = predictionCoverageExpected,
             Signals = signals,
             AiScoreRuntime = BuildAiScoreRuntimeStatus(_aiScoreSourceHealthTracker.GetSnapshot()),
+            SofaScoreRuntime = BuildSofaScoreRuntimeStatus(_sofaScoreSourceHealthTracker.GetSnapshot()),
             SourceQualityProfiles = sourceQualityProfiles
                 .Select(BuildSourceQualitySummary)
                 .ToList(),
@@ -239,6 +243,34 @@ public class Health : PageModel
         };
     }
 
+    private static SofaScoreRuntimeStatus BuildSofaScoreRuntimeStatus(SofaScoreSourceHealthSnapshot snapshot)
+    {
+        var successDenominator = Math.Max(1, snapshot.TotalAttempts);
+        return new SofaScoreRuntimeStatus
+        {
+            Status = snapshot.Status,
+            LastStage = snapshot.LastStage,
+            LastDetail = snapshot.LastDetail,
+            LastAttemptLocal = snapshot.LastAttemptUtc.HasValue
+                ? DateTimeProvider.ConvertUtcToLocal(snapshot.LastAttemptUtc.Value)
+                : null,
+            LastSuccessLocal = snapshot.LastSuccessUtc.HasValue
+                ? DateTimeProvider.ConvertUtcToLocal(snapshot.LastSuccessUtc.Value)
+                : null,
+            LastMatchCount = snapshot.LastMatchCount,
+            LastCandidateUrlCount = snapshot.LastCandidateUrlCount,
+            LastPageFetchCount = snapshot.LastPageFetchCount,
+            TotalAttempts = snapshot.TotalAttempts,
+            TotalSuccesses = snapshot.TotalSuccesses,
+            TotalBlocked = snapshot.TotalBlocked,
+            TotalEmpty = snapshot.TotalEmpty,
+            TotalFailures = snapshot.TotalFailures,
+            TotalPageFetches = snapshot.TotalPageFetches,
+            SuccessRate = snapshot.TotalSuccesses / (double)successDenominator,
+            BlockRate = snapshot.TotalBlocked / (double)successDenominator
+        };
+    }
+
     private static bool IsMissingSourceQualityTable(PostgresException ex)
     {
         return ex.SqlState == PostgresErrorCodes.UndefinedTable &&
@@ -262,6 +294,7 @@ public sealed class OperationalHealthSnapshot
     public bool IsHealthy { get; init; }
     public List<HealthSignalStatus> Signals { get; init; } = [];
     public AiScoreRuntimeStatus AiScoreRuntime { get; init; } = new();
+    public SofaScoreRuntimeStatus SofaScoreRuntime { get; init; } = new();
     public List<SourceQualitySummary> SourceQualityProfiles { get; init; } = [];
     public List<SourceQualitySummary> WeakestSourceProfiles { get; init; } = [];
 }
@@ -300,6 +333,26 @@ public sealed class AiScoreRuntimeStatus
     public int LastSupplementMatchCount { get; init; }
     public bool IsCoolingDown { get; init; }
     public DateTime? CooldownUntilLocal { get; init; }
+}
+
+public sealed class SofaScoreRuntimeStatus
+{
+    public string Status { get; init; } = "Idle";
+    public string? LastStage { get; init; }
+    public string? LastDetail { get; init; }
+    public DateTime? LastAttemptLocal { get; init; }
+    public DateTime? LastSuccessLocal { get; init; }
+    public int LastMatchCount { get; init; }
+    public int LastCandidateUrlCount { get; init; }
+    public int LastPageFetchCount { get; init; }
+    public int TotalAttempts { get; init; }
+    public int TotalSuccesses { get; init; }
+    public int TotalBlocked { get; init; }
+    public int TotalEmpty { get; init; }
+    public int TotalFailures { get; init; }
+    public int TotalPageFetches { get; init; }
+    public double SuccessRate { get; init; }
+    public double BlockRate { get; init; }
 }
 
 public sealed class SourceQualitySummary

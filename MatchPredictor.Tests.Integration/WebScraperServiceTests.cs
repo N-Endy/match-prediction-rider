@@ -32,7 +32,8 @@ namespace MatchPredictor.Tests.Integration
             var scraper = new WebScraperService(
                 config,
                 NullLogger<WebScraperService>.Instance,
-                new AiScoreSourceHealthTracker());
+                new AiScoreSourceHealthTracker(),
+                new SofaScoreSourceHealthTracker());
 
             var scores = await scraper.ScrapeAiScoreMatchScoresAsync();
 
