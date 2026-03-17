@@ -20,10 +20,13 @@ public partial class WebScraperService : IWebScraperService
     private static readonly TimeSpan AiScoreBlockedCooldown = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan SofaScoreDiscoveryCacheLifetime = TimeSpan.FromHours(8);
     private const int AiScoreBrowserChallengeProbeSeconds = 6;
-    private const int DefaultSofaScoreMaxSitemapsPerRun = 8;
+    private static readonly TimeSpan SofaScoreSitemapPoolCacheLifetime = TimeSpan.FromHours(2);
+    private const int DefaultSofaScoreMaxSitemapsPerRun = 48;
     private const int DefaultSofaScoreMaxCandidateUrlsPerFixture = 3;
     private const int DefaultSofaScoreMaxEventPagesPerRun = 24;
     private static readonly ConcurrentDictionary<string, SofaScoreDiscoveryCacheEntry> SofaScoreEventUrlCache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object SofaScoreSitemapPoolGate = new();
+    private static SofaScoreSitemapPoolCacheEntry? _sofaScoreSitemapPoolCache;
     private readonly string _downloadFolder;
     private readonly IConfiguration _configuration;
     private readonly ILogger<WebScraperService> _logger;
@@ -304,7 +307,6 @@ public partial class WebScraperService : IWebScraperService
             var eventUrlsByFixture = await DiscoverSofaScoreEventUrlsAsync(requestedFixtures, client);
             if (eventUrlsByFixture.Count == 0)
             {
-                _sofaScoreSourceHealthTracker.RecordEmpty("discovery", $"SofaScore discovery found no event URLs for {requestedFixtures.Count} targeted fixtures.");
                 _logger.LogInformation("SofaScore discovery returned no event URLs for {FixtureCount} targeted fixtures.", requestedFixtures.Count);
                 return [];
             }
@@ -1021,12 +1023,21 @@ public partial class WebScraperService : IWebScraperService
 
         if (sitemapRoots.Count == 0)
         {
+            _sofaScoreSourceHealthTracker.RecordEmpty("discovery", "SofaScore robots.txt did not expose any sitemap URLs.");
             return eventUrlsByFixture;
         }
 
         var maxSitemaps = ParseConfiguredInt("ScrapingValues:SofaScoreMaxSitemapsPerRun", DefaultSofaScoreMaxSitemapsPerRun);
         var maxCandidateUrlsPerFixture = ParseConfiguredInt("ScrapingValues:SofaScoreMaxCandidateUrlsPerFixture", DefaultSofaScoreMaxCandidateUrlsPerFixture);
-        var candidateUrls = await LoadSofaScoreEventUrlsAsync(client, sitemapRoots, maxSitemaps);
+        var candidateUrlPool = await LoadSofaScoreEventUrlsAsync(client, sitemapRoots, maxSitemaps);
+        var candidateUrls = candidateUrlPool.Urls;
+        if (candidateUrls.Count == 0)
+        {
+            _sofaScoreSourceHealthTracker.RecordEmpty(
+                "discovery",
+                $"SofaScore processed {candidateUrlPool.SitemapsProcessed} sitemap(s) but discovered no football match URLs.");
+            return eventUrlsByFixture;
+        }
 
         foreach (var fixture in unresolvedFixtures)
         {
@@ -1056,14 +1067,35 @@ public partial class WebScraperService : IWebScraperService
             SofaScoreEventUrlCache[cacheKey] = new SofaScoreDiscoveryCacheEntry(matches[0], nowUtc.Add(SofaScoreDiscoveryCacheLifetime));
         }
 
+        if (eventUrlsByFixture.Count == 0)
+        {
+            _sofaScoreSourceHealthTracker.RecordEmpty(
+                "discovery",
+                $"SofaScore discovered {candidateUrls.Count} football event URL(s) across {candidateUrlPool.SitemapsProcessed} sitemap(s) but none matched the {unresolvedFixtures.Count} targeted fixture slug pairs.");
+        }
+
         return eventUrlsByFixture;
     }
 
-    private async Task<List<string>> LoadSofaScoreEventUrlsAsync(
+    private async Task<SofaScoreEventUrlPoolResult> LoadSofaScoreEventUrlsAsync(
         HttpClient client,
         IReadOnlyList<string> sitemapRoots,
         int maxSitemaps)
     {
+        var nowUtc = DateTime.UtcNow;
+        lock (SofaScoreSitemapPoolGate)
+        {
+            if (_sofaScoreSitemapPoolCache is not null &&
+                _sofaScoreSitemapPoolCache.ExpiresAtUtc > nowUtc &&
+                _sofaScoreSitemapPoolCache.Urls.Count > 0)
+            {
+                return new SofaScoreEventUrlPoolResult(
+                    _sofaScoreSitemapPoolCache.Urls.ToList(),
+                    0,
+                    true);
+            }
+        }
+
         var queue = new Queue<string>(sitemapRoots);
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var eventUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1095,7 +1127,9 @@ public partial class WebScraperService : IWebScraperService
                 continue;
             }
 
-            foreach (var entry in entries.OrderByDescending(entry => entry.LastModifiedUtc ?? DateTime.MinValue))
+            foreach (var entry in entries
+                         .OrderByDescending(entry => ScoreSofaScoreLocationPriority(entry.Location))
+                         .ThenByDescending(entry => entry.LastModifiedUtc ?? DateTime.MinValue))
             {
                 if (entry.Location.Contains("/football/match/", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1113,7 +1147,18 @@ public partial class WebScraperService : IWebScraperService
             }
         }
 
-        return eventUrls.ToList();
+        var result = new SofaScoreEventUrlPoolResult(eventUrls.ToList(), processed, false);
+        if (result.Urls.Count > 0)
+        {
+            lock (SofaScoreSitemapPoolGate)
+            {
+                _sofaScoreSitemapPoolCache = new SofaScoreSitemapPoolCacheEntry(
+                    result.Urls,
+                    nowUtc.Add(SofaScoreSitemapPoolCacheLifetime));
+            }
+        }
+
+        return result;
     }
 
     private async Task<string?> TryFetchSofaScorePageAsync(HttpClient client, string url)
@@ -1192,6 +1237,37 @@ public partial class WebScraperService : IWebScraperService
             : fallback;
     }
 
+    private static int ScoreSofaScoreLocationPriority(string location)
+    {
+        if (string.IsNullOrWhiteSpace(location))
+        {
+            return 0;
+        }
+
+        var score = 0;
+        if (location.Contains("/football/match/", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 100;
+        }
+
+        if (location.Contains("football", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 25;
+        }
+
+        if (location.Contains("event", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 15;
+        }
+
+        if (location.Contains("live", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 5;
+        }
+
+        return score;
+    }
+
     private static bool LooksLikeAiScoreChallengePage(string html, string? title = null)
     {
         if (string.IsNullOrWhiteSpace(html) && string.IsNullOrWhiteSpace(title))
@@ -1245,6 +1321,8 @@ public partial class WebScraperService : IWebScraperService
     }
 
     private sealed record SofaScoreDiscoveryCacheEntry(string EventUrl, DateTime ExpiresAtUtc);
+    private sealed record SofaScoreSitemapPoolCacheEntry(IReadOnlyList<string> Urls, DateTime ExpiresAtUtc);
+    private sealed record SofaScoreEventUrlPoolResult(List<string> Urls, int SitemapsProcessed, bool FromCache);
 
     private sealed class AiScoreRawMatch
     {
