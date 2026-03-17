@@ -36,7 +36,8 @@ public static partial class AiChatContextBuilder
     {
         "analytics", "analytic", "brier", "reliability", "resolution", "uncertainty", "threshold", "thresholds",
         "calibrator", "calibration", "value", "pricing", "freshness", "edge", "exclusion", "excluded", "source",
-        "chip", "chips", "live", "upcoming", "finished", "selected", "selection", "meaning", "mean"
+        "chip", "chips", "live", "upcoming", "finished", "selected", "selection", "meaning", "mean", "ev", "clv",
+        "expected", "mispriced", "closing"
     };
 
     public static AiChatContextSelection BuildSelection(
@@ -720,7 +721,12 @@ public static partial class AiChatContextBuilder
             prompt.Contains("explain", StringComparison.Ordinal);
 
         return asksForExplanation &&
-               promptTokens.Overlaps(AppHelpTokens) &&
+               (promptTokens.Overlaps(AppHelpTokens) ||
+                prompt.Contains(" expected value", StringComparison.Ordinal) ||
+                prompt.Contains(" ev", StringComparison.Ordinal) ||
+                prompt.EndsWith("ev", StringComparison.Ordinal) ||
+                prompt.Contains(" clv", StringComparison.Ordinal) ||
+                prompt.EndsWith("clv", StringComparison.Ordinal)) &&
                !prompt.Contains("tell me about", StringComparison.Ordinal);
     }
 

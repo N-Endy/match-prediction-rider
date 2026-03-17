@@ -132,11 +132,17 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             AwayTeam = fixture.AwayTeam,
             MatchTimeUtc = fixture.MatchTimeUtc,
             HomeWinProbability = fixture.HomeProbability,
+            HomeWinOdds = fixture.HomeOdds,
             DrawProbability = fixture.DrawProbability,
+            DrawOdds = fixture.DrawOdds,
             AwayWinProbability = fixture.AwayProbability,
+            AwayWinOdds = fixture.AwayOdds,
             Over25Probability = fixture.Over25Probability,
+            Over25Odds = fixture.Over25Odds,
             BttsYesProbability = fixture.BttsYesProbability,
-            BttsNoProbability = fixture.BttsNoProbability
+            BttsYesOdds = fixture.BttsYesOdds,
+            BttsNoProbability = fixture.BttsNoProbability,
+            BttsNoOdds = fixture.BttsNoOdds
         }).ToList();
     }
 
@@ -240,6 +246,12 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                             double? bttsYesProbability = null;
                             double? bttsNoProbability = null;
                             double? over25Probability = null;
+                            double? homeOdds = null;
+                            double? drawOdds = null;
+                            double? awayOdds = null;
+                            double? bttsYesOdds = null;
+                            double? bttsNoOdds = null;
+                            double? over25Odds = null;
 
                             if (ev.TryGetProperty("markets", out var markets))
                             {
@@ -257,21 +269,25 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                                     var oid = o.GetProperty("id").GetString() ?? "";
                                                     var desc = o.TryGetProperty("desc", out var d) ? d.GetString() ?? "" : "";
                                                     var probability = TryParseProbability(o);
+                                                    var decimalOdds = TryParseDecimalOdds(o);
                                                 
                                                 if (oid == "1" || desc.Contains("Home", StringComparison.OrdinalIgnoreCase))
                                                 {
                                                     homeOutcomeId = oid;
                                                     homeProbability = probability;
+                                                    homeOdds = decimalOdds;
                                                 }
                                                 else if (oid == "2" || desc.Contains("Draw", StringComparison.OrdinalIgnoreCase))
                                                 {
                                                     drawOutcomeId = oid;
                                                     drawProbability = probability;
+                                                    drawOdds = decimalOdds;
                                                 }
                                                 else if (oid == "3" || desc.Contains("Away", StringComparison.OrdinalIgnoreCase))
                                                 {
                                                     awayOutcomeId = oid;
                                                     awayProbability = probability;
+                                                    awayOdds = decimalOdds;
                                                 }
                                             }
                                         }
@@ -288,10 +304,12 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                                     var oid = o.GetProperty("id").GetString() ?? "";
                                                     var desc = o.TryGetProperty("desc", out var d) ? d.GetString() ?? "" : "";
                                                     var probability = TryParseProbability(o);
+                                                    var decimalOdds = TryParseDecimalOdds(o);
                                                     if (oid == "12" || desc.Contains("Over", StringComparison.OrdinalIgnoreCase))
                                                     {
                                                         over25OutcomeId = oid;
                                                         over25Probability = probability;
+                                                        over25Odds = decimalOdds;
                                                     }
                                                 }
                                             }
@@ -306,14 +324,17 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                                 var oid = o.GetProperty("id").GetString() ?? "";
                                                 var desc = o.TryGetProperty("desc", out var d) ? d.GetString() ?? "" : "";
                                                 var probability = TryParseProbability(o);
+                                                var decimalOdds = TryParseDecimalOdds(o);
                                                 if (oid == "74" || desc.Equals("Yes", StringComparison.OrdinalIgnoreCase))
                                                 {
                                                     bttsOutcomeId = oid;
                                                     bttsYesProbability = probability;
+                                                    bttsYesOdds = decimalOdds;
                                                 }
                                                 else if (oid == "76" || desc.Equals("No", StringComparison.OrdinalIgnoreCase))
                                                 {
                                                     bttsNoProbability = probability;
+                                                    bttsNoOdds = decimalOdds;
                                                 }
                                             }
                                         }
@@ -334,11 +355,17 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                 BttsYesOutcomeId = bttsOutcomeId,
                                 Over25OutcomeId = over25OutcomeId,
                                 HomeProbability = homeProbability,
+                                HomeOdds = homeOdds,
                                 DrawProbability = drawProbability,
+                                DrawOdds = drawOdds,
                                 AwayProbability = awayProbability,
+                                AwayOdds = awayOdds,
                                 Over25Probability = over25Probability,
+                                Over25Odds = over25Odds,
                                 BttsYesProbability = bttsYesProbability,
-                                BttsNoProbability = bttsNoProbability
+                                BttsYesOdds = bttsYesOdds,
+                                BttsNoProbability = bttsNoProbability,
+                                BttsNoOdds = bttsNoOdds
                             });
                         }
                         catch (Exception ex)
@@ -566,6 +593,31 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
 
         return null;
     }
+
+    private static double? TryParseDecimalOdds(JsonElement outcomeElement)
+    {
+        foreach (var propertyName in new[] { "odds", "oddValue", "oddsValue", "price", "decimalOdds", "marketOdds" })
+        {
+            if (!outcomeElement.TryGetProperty(propertyName, out var oddsElement))
+            {
+                continue;
+            }
+
+            if (oddsElement.ValueKind == JsonValueKind.Number && oddsElement.TryGetDouble(out var numericOdds) && numericOdds > 1d)
+            {
+                return numericOdds;
+            }
+
+            if (oddsElement.ValueKind == JsonValueKind.String &&
+                double.TryParse(oddsElement.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var stringOdds) &&
+                stringOdds > 1d)
+            {
+                return stringOdds;
+            }
+        }
+
+        return null;
+    }
 }
 
 // ── Internal Models ──
@@ -583,11 +635,17 @@ public record SportyBetFixture
     public string BttsYesOutcomeId { get; init; } = "";
     public string Over25OutcomeId { get; init; } = "";
     public double? HomeProbability { get; init; }
+    public double? HomeOdds { get; init; }
     public double? DrawProbability { get; init; }
+    public double? DrawOdds { get; init; }
     public double? AwayProbability { get; init; }
+    public double? AwayOdds { get; init; }
     public double? Over25Probability { get; init; }
+    public double? Over25Odds { get; init; }
     public double? BttsYesProbability { get; init; }
+    public double? BttsYesOdds { get; init; }
     public double? BttsNoProbability { get; init; }
+    public double? BttsNoOdds { get; init; }
 }
 
 public record SportyBetOutcome

@@ -104,13 +104,11 @@ public class ValueBetsService : IValueBetsService
 
                 foreach (var forecastCandidate in forecastCandidates)
                 {
-                    if (!TryGetMarketProbability(
+                    if (!MarketQuoteResolver.TryResolve(
                             match,
                             sourceFixture,
                             forecastCandidate.Market,
-                            out var marketProbability,
-                            out var pricingSource,
-                            out var oddsFreshness))
+                            out var marketQuote))
                     {
                         IncrementExclusion(exclusionCounts, "no_source_price");
                         continue;
@@ -124,12 +122,14 @@ public class ValueBetsService : IValueBetsService
                         continue;
                     }
 
-                    var edge = calibratedProbability - marketProbability;
+                    var edge = calibratedProbability - marketQuote.MarketProbability;
                     if (edge < _settings.ValueBetMinimumEdge)
                     {
                         IncrementExclusion(exclusionCounts, "insufficient_edge");
                         continue;
                     }
+
+                    var expectedValuePercent = BetPricingMath.CalculateExpectedValuePercent(calibratedProbability, marketQuote.DecimalOdds) ?? 0d;
 
                     pricedCandidates.Add(new ValueBetCandidate
                     {
@@ -148,14 +148,18 @@ public class ValueBetsService : IValueBetsService
                         PredictionCategory = forecastCandidate.PredictionCategory,
                         PredictedOutcome = forecastCandidate.PredictedOutcome,
                         MathematicalProbability = calibratedProbability,
-                        MarketProbability = marketProbability,
+                        MarketProbability = marketQuote.MarketProbability,
+                        DecimalOdds = marketQuote.DecimalOdds,
+                        ImpliedProbability = marketQuote.ImpliedProbability,
+                        ExpectedValuePercent = expectedValuePercent,
                         Edge = edge,
                         ThresholdUsed = thresholdDecision.Threshold,
                         ThresholdSource = thresholdDecision.ThresholdSource,
                         CalibratorUsed = forecastCandidate.CalibratorUsed,
-                        PricingSource = pricingSource,
-                        OddsFreshness = oddsFreshness,
-                        EdgeSource = BuildEdgeSource(calibratedProbability, marketProbability)
+                        PricingSource = marketQuote.PricingSource,
+                        OddsFreshness = marketQuote.OddsFreshness,
+                        OddsDerivationSource = marketQuote.OddsDerivationSource,
+                        EdgeSource = BuildEdgeSource(calibratedProbability, marketQuote.MarketProbability)
                     });
                 }
 
@@ -175,7 +179,8 @@ public class ValueBetsService : IValueBetsService
         }
 
         var topCandidates = candidateBets
-            .OrderByDescending(c => c.Edge)
+            .OrderByDescending(c => c.ExpectedValuePercent)
+            .ThenByDescending(c => c.Edge)
             .ThenByDescending(c => c.MathematicalProbability)
             .ThenBy(c => c.KickoffTime)
             .Take(limit)
@@ -208,6 +213,9 @@ public class ValueBetsService : IValueBetsService
                     candidate.PredictedOutcome,
                     ModelProbabilityPct = Math.Round(candidate.MathematicalProbability * 100, 1),
                     MarketProbabilityPct = Math.Round(candidate.MarketProbability * 100, 1),
+                    DecimalOdds = Math.Round(candidate.DecimalOdds, 2),
+                    ImpliedProbabilityPct = Math.Round(candidate.ImpliedProbability * 100, 1),
+                    ExpectedValuePct = Math.Round(candidate.ExpectedValuePercent * 100, 1),
                     EdgePctPoints = Math.Round(candidate.Edge * 100, 1),
                     ThresholdPct = Math.Round(candidate.ThresholdUsed * 100, 1),
                     candidate.ThresholdSource,
@@ -257,7 +265,8 @@ public class ValueBetsService : IValueBetsService
 
         var bestOneX2Candidate = candidateList
             .Where(candidate => candidate.PredictionCategory is "StraightWin" or "Draw")
-            .OrderByDescending(candidate => candidate.Edge)
+            .OrderByDescending(candidate => candidate.ExpectedValuePercent)
+            .ThenByDescending(candidate => candidate.Edge)
             .ThenByDescending(candidate => candidate.MathematicalProbability)
             .FirstOrDefault();
 
@@ -285,78 +294,6 @@ public class ValueBetsService : IValueBetsService
                 ThresholdSource = "Unsupported"
             }
         };
-    }
-
-    private static bool TryGetMarketProbability(
-        MatchData match,
-        SourceMarketFixture? sourceFixture,
-        PredictionMarket market,
-        out double marketProbability,
-        out string pricingSource,
-        out string oddsFreshness)
-    {
-        marketProbability = 0.0;
-        pricingSource = string.Empty;
-        oddsFreshness = string.Empty;
-
-        if (TryGetLiveMarketProbability(sourceFixture, market, out marketProbability))
-        {
-            pricingSource = "Live source pull";
-            oddsFreshness = "Fresh from today's source pricing pull.";
-            return true;
-        }
-
-        if (market is PredictionMarket.HomeWin or PredictionMarket.Draw or PredictionMarket.AwayWin)
-        {
-            if (!match.TryGetNormalizedOneX2(out var oneX2))
-            {
-                return false;
-            }
-
-            marketProbability = market switch
-            {
-                PredictionMarket.HomeWin => oneX2.home,
-                PredictionMarket.Draw => oneX2.draw,
-                PredictionMarket.AwayWin => oneX2.away,
-                _ => 0.0
-            };
-            pricingSource = "Stored sync snapshot";
-            oddsFreshness = "Using the latest stored sync pricing for this fixture.";
-            return true;
-        }
-
-        if (market == PredictionMarket.Over25Goals && match.TryGetNormalizedOver25Pair(out var overUnder25))
-        {
-            marketProbability = overUnder25.over25;
-            pricingSource = "Stored sync snapshot";
-            oddsFreshness = "Using the latest stored sync pricing for this fixture.";
-            return true;
-        }
-
-        if (market == PredictionMarket.BothTeamsScore && match.TryGetNormalizedBttsPair(out var bttsPair))
-        {
-            marketProbability = bttsPair.yes;
-            pricingSource = "Stored sync snapshot";
-            oddsFreshness = "Using the latest stored sync pricing for this fixture.";
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool TryGetLiveMarketProbability(SourceMarketFixture? sourceFixture, PredictionMarket market, out double marketProbability)
-    {
-        marketProbability = market switch
-        {
-            PredictionMarket.HomeWin when sourceFixture?.HomeWinProbability is double value => value,
-            PredictionMarket.Draw when sourceFixture?.DrawProbability is double value => value,
-            PredictionMarket.AwayWin when sourceFixture?.AwayWinProbability is double value => value,
-            PredictionMarket.Over25Goals when sourceFixture?.Over25Probability is double value => value,
-            PredictionMarket.BothTeamsScore when sourceFixture?.BttsYesProbability is double value => value,
-            _ => 0.0
-        };
-
-        return marketProbability > 0;
     }
 
     private static DateTime? ResolveScheduledUtc(MatchData match)
@@ -452,14 +389,16 @@ public class ValueBetsService : IValueBetsService
     {
         var modelPct = candidate.MathematicalProbability * 100;
         var marketPct = candidate.MarketProbability * 100;
+        var impliedPct = candidate.ImpliedProbability * 100;
         var edgePct = candidate.Edge * 100;
+        var evPct = candidate.ExpectedValuePercent * 100;
         var thresholdPct = candidate.ThresholdUsed * 100;
         var thresholdDescriptor = candidate.ThresholdSource.Equals("Tuned", StringComparison.OrdinalIgnoreCase)
             ? "tuned"
             : "configured";
 
-        return $"{candidate.PredictedOutcome} is priced below our calibrated view: model {modelPct:F1}% vs market {marketPct:F1}% (+{edgePct:F1} pts). " +
-               $"It clears the {thresholdDescriptor} {thresholdPct:F1}% threshold with the {candidate.CalibratorUsed} calibrator.";
+        return $"{candidate.PredictedOutcome} is priced at {candidate.DecimalOdds:0.00} ({impliedPct:F1}% implied) against a {modelPct:F1}% calibrated view for {evPct:+0.0;-0.0;0.0}% EV. " +
+               $"That is model {modelPct:F1}% vs market {marketPct:F1}% (+{edgePct:F1} pts), and it clears the {thresholdDescriptor} {thresholdPct:F1}% threshold with the {candidate.CalibratorUsed} calibrator.";
     }
 
     private static void AddWarning(ValueBetReportDto report, string message)
@@ -521,12 +460,16 @@ public class ValueBetsService : IValueBetsService
         public string PredictedOutcome { get; init; } = string.Empty;
         public double MathematicalProbability { get; init; }
         public double MarketProbability { get; init; }
+        public double DecimalOdds { get; init; }
+        public double ImpliedProbability { get; init; }
+        public double ExpectedValuePercent { get; init; }
         public double Edge { get; init; }
         public double ThresholdUsed { get; init; }
         public string ThresholdSource { get; init; } = "Configured";
         public string CalibratorUsed { get; init; } = "Bucket";
         public string PricingSource { get; init; } = "Stored sync snapshot";
         public string OddsFreshness { get; init; } = "Using the latest stored sync pricing for this fixture.";
+        public string OddsDerivationSource { get; init; } = MarketQuoteResolver.StoredDerivedOddsDerivationLabel;
         public string EdgeSource { get; init; } = string.Empty;
         public string AiJustification { get; set; } = string.Empty;
 
@@ -542,12 +485,16 @@ public class ValueBetsService : IValueBetsService
                 PredictedOutcome = PredictedOutcome,
                 MathematicalProbability = MathematicalProbability,
                 MarketProbability = MarketProbability,
+                DecimalOdds = DecimalOdds,
+                ImpliedProbability = ImpliedProbability,
+                ExpectedValuePercent = ExpectedValuePercent,
                 Edge = Edge,
                 ThresholdUsed = ThresholdUsed,
                 ThresholdSource = ThresholdSource,
                 CalibratorUsed = CalibratorUsed,
                 PricingSource = PricingSource,
                 OddsFreshness = OddsFreshness,
+                OddsDerivationSource = OddsDerivationSource,
                 EdgeSource = EdgeSource,
                 AiJustification = AiJustification
             };

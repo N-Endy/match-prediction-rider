@@ -178,20 +178,83 @@ public class AiChatKnowledgeService
             return true;
         }
 
+        if (prompt.Contains("expected value", StringComparison.Ordinal) ||
+            prompt.Contains("ev formula", StringComparison.Ordinal) ||
+            prompt.Contains("what is ev", StringComparison.Ordinal) ||
+            prompt.Contains("explain ev", StringComparison.Ordinal) ||
+            prompt.Contains("value %", StringComparison.Ordinal))
+        {
+            knowledgeTopic = "expected-value";
+            response = new AiChatResponse
+            {
+                Message = "Expected value in the app is the pricing check: EV% = (model probability x decimal odds) - 1. Positive EV means the model thinks the true chance is better than the price being offered.",
+                KnowledgeCards =
+                [
+                    new AiChatKnowledgeCard
+                    {
+                        Title = "EV Formula",
+                        Body = "The app uses EV% = (model probability x decimal odds) - 1. A 0.12 result means about +12% expected value.",
+                        Kind = "value-bets"
+                    },
+                    new AiChatKnowledgeCard
+                    {
+                        Title = "How The App Uses It",
+                        Body = "Value Bets still require threshold clearance and a positive edge versus market first. EV then becomes the main ranking signal on the page.",
+                        Kind = "value-bets"
+                    }
+                ]
+            };
+            return true;
+        }
+
+        if (prompt.Contains("clv", StringComparison.Ordinal) ||
+            prompt.Contains("closing line value", StringComparison.Ordinal) ||
+            prompt.Contains("closing line", StringComparison.Ordinal))
+        {
+            knowledgeTopic = "clv";
+            response = new AiChatResponse
+            {
+                Message = "CLV compares the odds captured when the app published a pick against the closing odds near kickoff. Positive CLV means the earlier captured price was better than the close.",
+                KnowledgeCards =
+                [
+                    new AiChatKnowledgeCard
+                    {
+                        Title = "CLV Formula",
+                        Body = "The tracking layer uses CLV% = (publish odds / closing odds) - 1. Positive CLV means the market moved against that price before kickoff.",
+                        Kind = "value-bets"
+                    },
+                    new AiChatKnowledgeCard
+                    {
+                        Title = "What It Tells You",
+                        Body = "CLV is a market-timing signal, not a guarantee. Beating the close consistently is healthier than judging one bet in isolation.",
+                        Kind = "value-bets"
+                    }
+                ]
+            };
+            return true;
+        }
+
         if (prompt.Contains("value bets", StringComparison.Ordinal) ||
             prompt.Contains("value bet", StringComparison.Ordinal) ||
+            prompt.Contains("mispriced", StringComparison.Ordinal) ||
             (prompt.Contains("edge", StringComparison.Ordinal) && prompt.Contains("market", StringComparison.Ordinal)))
         {
             knowledgeTopic = "value-bets";
             response = new AiChatResponse
             {
-                Message = "Value bets are deterministic. A pick needs to clear its calibrated threshold and still beat the source market probability by a positive edge. If pricing is missing or stale, the page can explain that instead of forcing it in.",
+                Message = "Value bets are deterministic. A pick needs to clear its calibrated threshold, beat the source market probability by a positive edge, and then it is ranked by expected value using the current decimal price.",
                 KnowledgeCards =
                 [
                     new AiChatKnowledgeCard
                     {
                         Title = "Value Bet Rules",
-                        Body = "The page checks threshold first, then compares model probability against the synced market probability. A positive edge is required.",
+                        Body = "The page checks threshold first, then compares model probability against the synced market probability. A positive edge is required before EV ranking matters.",
+                        Kind = "value-bets"
+                    },
+                    new AiChatKnowledgeCard
+                    {
+                        Title = "EV Ranking",
+                        Body = "After the gate passes, the app ranks picks by expected value, using the available decimal odds or a derived fallback when raw odds are missing.",
                         Kind = "value-bets"
                     },
                     new AiChatKnowledgeCard

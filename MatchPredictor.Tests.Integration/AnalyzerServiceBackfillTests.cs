@@ -2,6 +2,7 @@ using MatchPredictor.Application.Services;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -401,6 +402,186 @@ public class AnalyzerServiceBackfillTests
         Assert.NotEmpty(await context.SourceQualityProfiles.ToListAsync());
     }
 
+    [Fact]
+    public async Task GeneratePredictionsAsync_CapturesPublishOddsSnapshot_ForCurrentDayPrediction()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var nowLocal = DateTimeProvider.GetLocalTime();
+        var kickoffLocal = nowLocal.AddHours(2);
+        if (kickoffLocal.Date != nowLocal.Date)
+        {
+            kickoffLocal = nowLocal.AddMinutes(10);
+        }
+
+        var targetDate = DateOnly.FromDateTime(kickoffLocal);
+        var targetDateString = targetDate.ToString("dd-MM-yyyy");
+        context.MatchDatas.Add(new MatchData
+        {
+            Date = targetDateString,
+            Time = kickoffLocal.ToString("HH:mm"),
+            MatchLocalDate = targetDate,
+            MatchLocalTime = TimeOnly.FromDateTime(kickoffLocal),
+            MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoffLocal),
+            FixtureKey = "league|alpha|beta",
+            League = "League",
+            HomeTeam = "Alpha",
+            AwayTeam = "Beta",
+            HomeWin = 0.55,
+            Draw = 0.24,
+            AwayWin = 0.21
+        });
+
+        await context.SaveChangesAsync();
+
+        var sourcePricing = new StubSourceMarketPricingService
+        {
+            Fixtures =
+            [
+                new SourceMarketFixture
+                {
+                    League = "League",
+                    HomeTeam = "Alpha",
+                    AwayTeam = "Beta",
+                    MatchTimeUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal),
+                    HomeWinProbability = 0.55,
+                    HomeWinOdds = 2.20
+                }
+            ]
+        };
+
+        var service = new AnalyzerService(
+            new StubDataAnalyzerService(),
+            new StubWebScraperService(),
+            context,
+            new StubExtractFromExcel(),
+            new StubRegressionPredictorService(),
+            new StubCalibrationService(),
+            new StubThresholdTuningService(),
+            sourcePricing,
+            Options.Create(new PredictionSettings
+            {
+                BttsScoreThreshold = 0.55,
+                OverTwoGoalsStrongThreshold = 0.58,
+                DrawStrongThreshold = 0.30,
+                HomeWinStrong = 0.68,
+                AwayWinStrong = 0.70
+            }),
+            NullLogger<AnalyzerService>.Instance);
+
+        await service.GeneratePredictionsAsync(targetDateString, "publish-snapshot-test");
+
+        var snapshot = await context.PredictionOddsSnapshots.SingleAsync();
+        Assert.Equal(PredictionOddsSnapshotKind.Publish, snapshot.SnapshotKind);
+        Assert.Equal("SportyBet", snapshot.SourceName);
+        Assert.Equal(2.20, snapshot.DecimalOdds, 2);
+        Assert.Equal(BetPricingMath.ConvertDecimalOddsToProbability(2.20) ?? 0d, snapshot.ImpliedProbability, 5);
+        Assert.Equal("Source decimal odds", snapshot.OddsDerivationSource);
+    }
+
+    [Fact]
+    public async Task CaptureClosingLineSnapshotsAsync_CapturesCloseSnapshotOnce_AndSupportsPositiveClv()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var nowLocal = DateTimeProvider.GetLocalTime();
+        var kickoffLocal = nowLocal.AddMinutes(10);
+        if (kickoffLocal.Date != nowLocal.Date)
+        {
+            kickoffLocal = nowLocal.AddMinutes(5);
+        }
+
+        var targetDate = DateOnly.FromDateTime(kickoffLocal);
+        var targetDateString = targetDate.ToString("dd-MM-yyyy");
+        context.MatchDatas.Add(new MatchData
+        {
+            Date = targetDateString,
+            Time = kickoffLocal.ToString("HH:mm"),
+            MatchLocalDate = targetDate,
+            MatchLocalTime = TimeOnly.FromDateTime(kickoffLocal),
+            MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoffLocal),
+            FixtureKey = "league|gamma|delta",
+            League = "League",
+            HomeTeam = "Gamma",
+            AwayTeam = "Delta",
+            HomeWin = 0.56,
+            Draw = 0.23,
+            AwayWin = 0.21
+        });
+
+        await context.SaveChangesAsync();
+
+        var sourcePricing = new StubSourceMarketPricingService
+        {
+            Fixtures =
+            [
+                new SourceMarketFixture
+                {
+                    League = "League",
+                    HomeTeam = "Gamma",
+                    AwayTeam = "Delta",
+                    MatchTimeUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal),
+                    HomeWinProbability = 0.56,
+                    HomeWinOdds = 2.10
+                }
+            ]
+        };
+
+        var service = new AnalyzerService(
+            new StubDataAnalyzerService(),
+            new StubWebScraperService(),
+            context,
+            new StubExtractFromExcel(),
+            new StubRegressionPredictorService(),
+            new StubCalibrationService(),
+            new StubThresholdTuningService(),
+            sourcePricing,
+            Options.Create(new PredictionSettings
+            {
+                BttsScoreThreshold = 0.55,
+                OverTwoGoalsStrongThreshold = 0.58,
+                DrawStrongThreshold = 0.30,
+                HomeWinStrong = 0.68,
+                AwayWinStrong = 0.70
+            }),
+            NullLogger<AnalyzerService>.Instance);
+
+        await service.GeneratePredictionsAsync(targetDateString, "close-snapshot-test");
+
+        sourcePricing.Fixtures =
+        [
+            new SourceMarketFixture
+            {
+                League = "League",
+                HomeTeam = "Gamma",
+                AwayTeam = "Delta",
+                MatchTimeUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal),
+                HomeWinProbability = 0.61,
+                HomeWinOdds = 1.80
+            }
+        ];
+
+        await service.CaptureClosingLineSnapshotsAsync(15);
+        await service.CaptureClosingLineSnapshotsAsync(15);
+
+        var snapshots = await context.PredictionOddsSnapshots
+            .OrderBy(snapshot => snapshot.SnapshotKind)
+            .ToListAsync();
+
+        Assert.Equal(2, snapshots.Count);
+        var publish = Assert.Single(snapshots.Where(snapshot => snapshot.SnapshotKind == PredictionOddsSnapshotKind.Publish));
+        var close = Assert.Single(snapshots.Where(snapshot => snapshot.SnapshotKind == PredictionOddsSnapshotKind.Close));
+        Assert.Equal(2.10, publish.DecimalOdds, 2);
+        Assert.Equal(1.80, close.DecimalOdds, 2);
+        Assert.True(BetPricingMath.CalculateClosingLineValuePercent(publish.DecimalOdds, close.DecimalOdds) > 0);
+    }
+
     private sealed class StubDataAnalyzerService : IDataAnalyzerService
     {
         public List<MatchData> LastMatchSelection { get; } = [];
@@ -493,7 +674,9 @@ public class AnalyzerServiceBackfillTests
 
     private sealed class StubSourceMarketPricingService : ISourceMarketPricingService
     {
+        public IReadOnlyList<SourceMarketFixture> Fixtures { get; set; } = [];
+
         public Task<IReadOnlyList<SourceMarketFixture>> GetTodaySourceMarketFixturesAsync(CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<SourceMarketFixture>>([]);
+            Task.FromResult(Fixtures);
     }
 }

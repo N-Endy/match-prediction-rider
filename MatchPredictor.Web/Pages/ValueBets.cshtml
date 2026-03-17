@@ -85,6 +85,10 @@
                 grid.innerHTML = valueBets.map(bet => {
                     const modelProbString = (bet.mathematicalProbability * 100).toFixed(1) + '%';
                     const marketProbString = (bet.marketProbability * 100).toFixed(1) + '%';
+                    const impliedProbString = (bet.impliedProbability * 100).toFixed(1) + '%';
+                    const decimalOddsString = Number(bet.decimalOdds || 0).toFixed(2);
+                    const expectedValueValue = (bet.expectedValuePercent || 0) * 100;
+                    const expectedValueString = `${expectedValueValue >= 0 ? '+' : ''}${expectedValueValue.toFixed(1)}%`;
                     const edgeString = '+' + (bet.edge * 100).toFixed(1) + ' pts';
                     const thresholdString = (bet.thresholdUsed * 100).toFixed(1) + '%';
                     const thresholdSource = (bet.thresholdSource || 'Configured').toLowerCase();
@@ -109,6 +113,7 @@
                     const insightChips = [
                         bet.pricingSource ? `<span class="mp-insight-chip">${escapeHtml(bet.pricingSource)}</span>` : '',
                         bet.oddsFreshness ? `<span class="mp-insight-chip">${escapeHtml(bet.oddsFreshness)}</span>` : '',
+                        bet.oddsDerivationSource ? `<span class="mp-insight-chip">${escapeHtml(bet.oddsDerivationSource)}</span>` : '',
                         bet.edgeSource ? `<span class="mp-insight-chip">${escapeHtml(bet.edgeSource)}</span>` : ''
                     ].filter(Boolean).join('');
 
@@ -152,12 +157,24 @@
                                         <div style="font-weight: 700; color: var(--text-primary); font-size: 1.05rem;">${escapeHtml(bet.predictedOutcome)}</div>
                                     </div>
                                     <div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">EV</div>
+                                        <div style="color: #10b981; font-weight: 800; font-size: 1.1rem;">${expectedValueString}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Odds</div>
+                                        <div style="font-weight: 700; color: var(--text-primary); font-size: 1.05rem;">${decimalOddsString}</div>
+                                    </div>
+                                    <div>
                                         <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Model</div>
                                         <div style="font-weight: 700; color: var(--text-primary); font-size: 1.05rem;">${modelProbString}</div>
                                     </div>
                                     <div>
                                         <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Market</div>
                                         <div style="font-weight: 700; color: var(--text-primary); font-size: 1.05rem;">${marketProbString}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Implied</div>
+                                        <div style="font-weight: 700; color: var(--text-primary); font-size: 1.05rem;">${impliedProbString}</div>
                                     </div>
                                     <div>
                                         <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Edge</div>
@@ -247,7 +264,7 @@
                     </div>
                 </div>
                 <div class="mp-analytics-note" style="margin-bottom: 1rem;">
-                    We only surface picks that clear the publish threshold and still beat the source market by a real edge. The cards below show where the market price came from and how fresh it is.
+                    We only surface picks that clear the publish threshold and still beat the source market by a real edge. The cards below are now ranked by expected value, with the market price source and freshness shown on each fixture.
                 </div>
                 ${exclusionCards ? `<div class="mp-stat-grid">${exclusionCards}</div>` : ''}
             `;

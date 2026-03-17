@@ -8,6 +8,7 @@ using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MatchPredictor.Infrastructure.Services;
@@ -30,6 +31,7 @@ public class AiAdvisorService : IAiAdvisorService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IDistributedCache _cache;
     private readonly AiChatKnowledgeService _knowledgeService;
+    private readonly IServiceScopeFactory _serviceScopeFactory;
 
     public AiAdvisorService(
         ApplicationDbContext dbContext,
@@ -37,7 +39,8 @@ public class AiAdvisorService : IAiAdvisorService
         ILogger<AiAdvisorService> logger,
         IHttpClientFactory httpClientFactory,
         IDistributedCache cache,
-        AiChatKnowledgeService knowledgeService)
+        AiChatKnowledgeService knowledgeService,
+        IServiceScopeFactory serviceScopeFactory)
     {
         _dbContext = dbContext;
         _configuration = configuration;
@@ -45,6 +48,7 @@ public class AiAdvisorService : IAiAdvisorService
         _httpClientFactory = httpClientFactory;
         _cache = cache;
         _knowledgeService = knowledgeService;
+        _serviceScopeFactory = serviceScopeFactory;
     }
 
     public async Task<AiChatResponse> GetAdviceAsync(string userPrompt, string sessionId, CancellationToken ct = default)
@@ -77,6 +81,22 @@ public class AiAdvisorService : IAiAdvisorService
         var workingSlipCandidates = ResolveSessionCandidates(candidateCatalog, sessionState.WorkingSlipPredictionIds, sessionState.WorkingSlipActionKeys, sessionState.LastRecommendedActionKeys);
         var contextCandidates = ResolveContextCandidates(candidateCatalog, sessionState, normalizedPrompt, workingSlipCandidates);
         var intent = AiChatContextBuilder.DetectIntent(normalizedPrompt, workingSlipCandidates.Count > 0, contextCandidates.Count > 0);
+
+        if (IsValueBetRecommendationPrompt(normalizedPrompt))
+        {
+            var valueBetResponse = await BuildValueBetRecommendationResponseAsync(normalizedPrompt, candidateCatalog, ct);
+            FinalizeResponse(valueBetResponse, "recommend_picks");
+            await SaveSessionTurnAsync(
+                sessionId,
+                sessionState,
+                normalizedPrompt,
+                valueBetResponse,
+                null,
+                valueBetResponse.Actions.Select(action => action.PredictionId).ToList(),
+                ct,
+                "value-bets");
+            return valueBetResponse;
+        }
 
         if (IsBookingFollowUp(normalizedPrompt, sessionState))
         {
@@ -344,6 +364,49 @@ public class AiAdvisorService : IAiAdvisorService
         }
 
         return pricingByPredictionId;
+    }
+
+    private async Task<AiChatResponse> BuildValueBetRecommendationResponseAsync(
+        string userPrompt,
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidateCatalog,
+        CancellationToken ct)
+    {
+        using var scope = _serviceScopeFactory.CreateScope();
+        var valueBetsService = scope.ServiceProvider.GetRequiredService<IValueBetsService>();
+        var report = await valueBetsService.GetValueBetReportAsync(5, ct);
+
+        if (report.Bets.Count == 0)
+        {
+            return new AiChatResponse
+            {
+                Message = "I don't see any value-positive picks on the current card right now after threshold, edge, and pricing checks.",
+                Warnings = report.Warnings
+            };
+        }
+
+        var candidateLookup = candidateCatalog
+            .GroupBy(candidate => BuildValueBetLookupKey(candidate.HomeTeam, candidate.AwayTeam, candidate.PredictionCategory, candidate.PredictedOutcome))
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        var actions = report.Bets
+            .Select(bet =>
+            {
+                var key = BuildValueBetLookupKey(bet.HomeTeam, bet.AwayTeam, bet.PredictionCategory, bet.PredictedOutcome);
+                return candidateLookup.TryGetValue(key, out var candidate)
+                    ? CreateAction(candidate, BuildValueBetActionExplanation(bet))
+                    : null;
+            })
+            .Where(action => action is not null)
+            .Cast<AiChatAction>()
+            .ToList();
+
+        return new AiChatResponse
+        {
+            Message = "These are the strongest value-positive picks on the current card by expected value after threshold and positive-edge gating.",
+            Actions = actions,
+            ShowBookAll = ShouldShowBookAll(userPrompt, actions.Count, modelRequestedBookAll: false),
+            Warnings = report.Warnings
+        };
     }
 
     private static bool TryResolvePendingRolloverPrompt(
@@ -1404,6 +1467,7 @@ public class AiAdvisorService : IAiAdvisorService
             case "app_help":
                 prompts.Add("How are straight wins selected?");
                 prompts.Add("Why isn't this in value bets?");
+                prompts.Add("Which picks have the highest EV today?");
                 prompts.Add("Give me 5 strong picks");
                 break;
 
@@ -1416,6 +1480,7 @@ public class AiAdvisorService : IAiAdvisorService
             default:
                 prompts.Add("Give me 5 strong picks");
                 prompts.Add("Which draw games would you recommend?");
+                prompts.Add("Which picks have the highest EV today?");
                 prompts.Add("How are straight wins selected?");
                 break;
         }
@@ -1470,6 +1535,48 @@ public class AiAdvisorService : IAiAdvisorService
             : prediction.ThresholdSource.ToLowerInvariant();
 
         return $"{prediction.PredictedOutcome} rates at {confidence:0.#}% calibrated confidence, {marginPoints:+0.#;-0.#;0.0} pts versus the {thresholdLabel} threshold.";
+    }
+
+    private static string BuildValueBetActionExplanation(ValueBetDto bet)
+    {
+        return $"{bet.AiJustification} EV {bet.ExpectedValuePercent * 100:+0.0;-0.0;0.0}% at {bet.DecimalOdds:0.00} odds ({bet.ImpliedProbability * 100:0.0}% implied).";
+    }
+
+    private static string BuildValueBetLookupKey(string homeTeam, string awayTeam, string predictionCategory, string predictedOutcome)
+    {
+        return string.Join(
+            "|",
+            NormalizeKeyPart(homeTeam),
+            NormalizeKeyPart(awayTeam),
+            NormalizeKeyPart(predictionCategory),
+            NormalizeKeyPart(predictedOutcome));
+    }
+
+    private static bool IsValueBetRecommendationPrompt(string userPrompt)
+    {
+        if (string.IsNullOrWhiteSpace(userPrompt))
+        {
+            return false;
+        }
+
+        var prompt = userPrompt.ToLowerInvariant();
+        if (prompt.Contains("what is expected value", StringComparison.Ordinal) ||
+            prompt.Contains("what is ev", StringComparison.Ordinal) ||
+            prompt.Contains("explain ev", StringComparison.Ordinal) ||
+            prompt.Contains("what is clv", StringComparison.Ordinal) ||
+            prompt.Contains("what does clv mean", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return prompt.Contains("highest ev", StringComparison.Ordinal) ||
+               prompt.Contains("best ev", StringComparison.Ordinal) ||
+               prompt.Contains("top ev", StringComparison.Ordinal) ||
+               prompt.Contains("highest expected value", StringComparison.Ordinal) ||
+               prompt.Contains("best value bets", StringComparison.Ordinal) ||
+               prompt.Contains("most mispriced", StringComparison.Ordinal) ||
+               prompt.Contains("mispriced picks", StringComparison.Ordinal) ||
+               prompt.Contains("value-positive", StringComparison.Ordinal);
     }
 
     private static bool ShouldShowBookAll(string userPrompt, int actionCount, bool modelRequestedBookAll)

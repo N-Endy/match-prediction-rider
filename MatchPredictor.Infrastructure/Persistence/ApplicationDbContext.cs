@@ -23,6 +23,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<ThresholdProfile> ThresholdProfiles => Set<ThresholdProfile>();
     public DbSet<PromotionHistory> PromotionHistories => Set<PromotionHistory>();
     public DbSet<SourceQualityProfile> SourceQualityProfiles => Set<SourceQualityProfile>();
+    public DbSet<PredictionOddsSnapshot> PredictionOddsSnapshots => Set<PredictionOddsSnapshot>();
     public DbSet<VisitorSession> VisitorSessions => Set<VisitorSession>();
     public DbSet<UserActivityEvent> UserActivityEvents => Set<UserActivityEvent>();
     // Required by IDataProtectionKeyContext
@@ -102,6 +103,13 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => new { e.TargetLocalDate, e.StartedAtUtc });
             entity.HasIndex(e => new { e.RunKind, e.StartedAtUtc });
+        });
+
+        modelBuilder.Entity<PredictionOddsSnapshot>(entity =>
+        {
+            entity.HasIndex(e => new { e.PredictionId, e.SourceName, e.SnapshotKind }).IsUnique();
+            entity.HasIndex(e => new { e.SnapshotKind, e.CapturedAtUtc });
+            entity.HasIndex(e => new { e.PredictionRunId, e.SnapshotKind });
         });
 
         modelBuilder.Entity<ThresholdProfile>(entity =>

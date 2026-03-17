@@ -23,6 +23,7 @@ public class AnalyzerService  : IAnalyzerService
     private const string PredictionGenerationEventName = "prediction_generation";
     private const string DailyAnalysisEventName = "daily_analysis";
     private const string SourceQualityEventName = "source_quality";
+    private const string ClosingLineSnapshotEventName = "closing_line_snapshot";
 
     private readonly IDataAnalyzerService _dataAnalyzerService;
     private readonly IWebScraperService _webScraperService;
@@ -210,6 +211,18 @@ public class AnalyzerService  : IAnalyzerService
             }
 
             var generationMatches = DeduplicateMatchesForGeneration(matches, targetDateString);
+            IReadOnlyList<SourceMarketFixture> publishPricingFixtures = [];
+            if (targetLocalDate == DateTimeProvider.GetLocalDate())
+            {
+                try
+                {
+                    publishPricingFixtures = await _sourceMarketPricingService.GetTodaySourceMarketFixturesAsync();
+                }
+                catch (Exception pricingEx)
+                {
+                    _logger.LogWarning(pricingEx, "Failed to load live source pricing while generating predictions for {TargetDate}. Publish odds snapshots will fall back to derived pricing.", targetDateString);
+                }
+            }
 
             var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates(generationMatches).ToList();
             foreach (var candidate in forecastCandidates)
@@ -227,7 +240,8 @@ public class AnalyzerService  : IAnalyzerService
 
             var predictionRun = await CreatePredictionRunAsync(targetLocalDate, normalizedRunReason, forecastCandidates, publishedCandidates);
             await SaveForecastObservations(forecastCandidates, publishedCandidates, predictionRun);
-            await SavePredictions(publishedCandidates, predictionRun);
+            var savedPredictions = await SavePredictions(publishedCandidates, predictionRun);
+            await CapturePublishOddsSnapshotsAsync(savedPredictions, generationMatches, publishPricingFixtures);
             predictionRun.Succeeded = true;
             predictionRun.CompletedAtUtc = DateTime.UtcNow;
             await _dbContext.SaveChangesAsync();
@@ -299,6 +313,87 @@ public class AnalyzerService  : IAnalyzerService
                 GetScoreUpdateEventName(normalizedRunLabel),
                 "Failed",
                 $"Score Update Error: {ex.Message}");
+            throw;
+        }
+    }
+
+    [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
+    [DisableConcurrentExecution(timeoutInSeconds: 300)]
+    public async Task CaptureClosingLineSnapshotsAsync(int lookaheadMinutes = 15)
+    {
+        var normalizedLookaheadMinutes = Math.Clamp(lookaheadMinutes, 1, 60);
+        var nowUtc = DateTime.UtcNow;
+        var windowEndUtc = nowUtc.AddMinutes(normalizedLookaheadMinutes);
+
+        try
+        {
+            var candidatePredictions = await _dbContext.Predictions
+                .Where(prediction => prediction.IsCurrentRevision && prediction.WasPublished)
+                .Where(prediction =>
+                    prediction.MatchDateTime.HasValue &&
+                    prediction.MatchDateTime.Value >= nowUtc &&
+                    prediction.MatchDateTime.Value <= windowEndUtc)
+                .OrderBy(prediction => prediction.MatchDateTime)
+                .ToListAsync();
+
+            if (candidatePredictions.Count == 0)
+            {
+                return;
+            }
+
+            var predictionIds = candidatePredictions.Select(prediction => prediction.Id).ToList();
+            var existingClosePredictionIds = await _dbContext.PredictionOddsSnapshots
+                .AsNoTracking()
+                .Where(snapshot =>
+                    predictionIds.Contains(snapshot.PredictionId) &&
+                    snapshot.SnapshotKind == PredictionOddsSnapshotKind.Close)
+                .Select(snapshot => snapshot.PredictionId)
+                .Distinct()
+                .ToListAsync();
+
+            var pendingPredictions = candidatePredictions
+                .Where(prediction => !existingClosePredictionIds.Contains(prediction.Id))
+                .ToList();
+
+            if (pendingPredictions.Count == 0)
+            {
+                return;
+            }
+
+            IReadOnlyList<SourceMarketFixture> sourceFixtures = [];
+            try
+            {
+                sourceFixtures = await _sourceMarketPricingService.GetTodaySourceMarketFixturesAsync();
+            }
+            catch (Exception pricingEx)
+            {
+                _logger.LogWarning(pricingEx, "Failed to load live source pricing for closing-line snapshots. Close snapshots will fall back to derived pricing when possible.");
+            }
+
+            var targetDates = pendingPredictions
+                .Select(prediction => prediction.MatchLocalDate)
+                .Distinct()
+                .ToList();
+
+            var matchDatas = await _dbContext.MatchDatas
+                .AsNoTracking()
+                .Where(match => match.MatchLocalDate.HasValue && targetDates.Contains(match.MatchLocalDate.Value))
+                .ToListAsync();
+
+            var createdCount = await SavePredictionOddsSnapshotsAsync(pendingPredictions, matchDatas, sourceFixtures, PredictionOddsSnapshotKind.Close);
+
+            if (createdCount > 0)
+            {
+                await LogScrapingStatus(
+                    ClosingLineSnapshotEventName,
+                    "Success",
+                    $"✅ Captured {createdCount} closing-line snapshot(s) in the final {normalizedLookaheadMinutes}-minute window.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ An error occurred while capturing closing-line snapshots.");
+            await LogScrapingStatus(ClosingLineSnapshotEventName, "Failed", $"Closing-line snapshot error: {ex.Message}");
             throw;
         }
     }
@@ -1705,10 +1800,13 @@ public class AnalyzerService  : IAnalyzerService
         }
     }
     
-    private async Task SavePredictions(IEnumerable<PredictionCandidate> candidates, PredictionRun predictionRun)
+    private async Task<IReadOnlyList<Prediction>> SavePredictions(IEnumerable<PredictionCandidate> candidates, PredictionRun predictionRun)
     {
         var candidateList = DeduplicatePublishedCandidates(candidates, predictionRun.TargetLocalDate.ToString("dd-MM-yyyy"));
-        if (!candidateList.Any()) return;
+        if (!candidateList.Any())
+        {
+            return [];
+        }
 
         var targetDate = predictionRun.TargetLocalDate;
         var currentPredictions = await _dbContext.Predictions
@@ -1731,6 +1829,7 @@ public class AnalyzerService  : IAnalyzerService
             .GroupBy(prediction => (prediction.FixtureKey, prediction.PredictionCategory))
             .ToDictionary(group => group.Key, group => group.Max(prediction => prediction.RevisionNumber));
 
+        var createdPredictions = new List<Prediction>();
         foreach (var existingRecord in currentPredictions)
         {
             existingRecord.IsCurrentRevision = false;
@@ -1745,7 +1844,7 @@ public class AnalyzerService  : IAnalyzerService
                 ? revisionNumber + 1
                 : 1;
 
-            _dbContext.Predictions.Add(new Prediction
+            var prediction = new Prediction
             {
                 HomeTeam = candidate.HomeTeam.Trim(),
                 AwayTeam = candidate.AwayTeam.Trim(),
@@ -1772,10 +1871,14 @@ public class AnalyzerService  : IAnalyzerService
                 ActualOutcome = currentRecord?.ActualOutcome,
                 ActualScore = currentRecord?.ActualScore,
                 IsLive = currentRecord?.IsLive ?? false
-            });
+            };
+
+            createdPredictions.Add(prediction);
+            _dbContext.Predictions.Add(prediction);
         }
 
         await _dbContext.SaveChangesAsync();
+        return createdPredictions;
     }
 
     private async Task SaveForecastObservations(
@@ -1864,6 +1967,109 @@ public class AnalyzerService  : IAnalyzerService
         await _dbContext.SaveChangesAsync();
     }
 
+    private async Task CapturePublishOddsSnapshotsAsync(
+        IReadOnlyList<Prediction> predictions,
+        IReadOnlyCollection<MatchData> matchDatas,
+        IReadOnlyList<SourceMarketFixture> sourceFixtures)
+    {
+        if (predictions.Count == 0)
+        {
+            return;
+        }
+
+        var createdCount = await SavePredictionOddsSnapshotsAsync(predictions, matchDatas, sourceFixtures, PredictionOddsSnapshotKind.Publish);
+        if (createdCount > 0)
+        {
+            _logger.LogInformation("Captured {Count} publish odds snapshot(s) for the latest prediction run.", createdCount);
+        }
+    }
+
+    private async Task<int> SavePredictionOddsSnapshotsAsync(
+        IReadOnlyCollection<Prediction> predictions,
+        IReadOnlyCollection<MatchData> matchDatas,
+        IReadOnlyList<SourceMarketFixture> sourceFixtures,
+        PredictionOddsSnapshotKind snapshotKind)
+    {
+        if (predictions.Count == 0)
+        {
+            return 0;
+        }
+
+        var predictionIds = predictions.Select(prediction => prediction.Id).ToList();
+        var existingKeys = await _dbContext.PredictionOddsSnapshots
+            .AsNoTracking()
+            .Where(snapshot =>
+                predictionIds.Contains(snapshot.PredictionId) &&
+                snapshot.SnapshotKind == snapshotKind)
+            .Select(snapshot => new { snapshot.PredictionId, snapshot.SourceName })
+            .ToListAsync();
+
+        var existingKeySet = existingKeys
+            .Select(snapshot => BuildSnapshotDuplicateKey(snapshot.PredictionId, snapshot.SourceName))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var byFixtureAndLeague = matchDatas
+            .GroupBy(match => BuildPredictionMatchKey(match.MatchLocalDate, match.FixtureKey, match.League, match.HomeTeam, match.AwayTeam, includeLeague: true))
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        var byFixture = matchDatas
+            .GroupBy(match => BuildPredictionMatchKey(match.MatchLocalDate, match.FixtureKey, null, match.HomeTeam, match.AwayTeam, includeLeague: false))
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        var createdSnapshots = new List<PredictionOddsSnapshot>();
+        foreach (var prediction in predictions)
+        {
+            var matchData = ResolveMatchDataForPrediction(prediction, byFixtureAndLeague, byFixture);
+            if (matchData is null)
+            {
+                continue;
+            }
+
+            var sourceFixture = SourceMarketFixtureMatcher.FindBestFixture(
+                sourceFixtures,
+                prediction.HomeTeam,
+                prediction.AwayTeam,
+                prediction.League,
+                prediction.MatchDateTime);
+
+            if (!MarketQuoteResolver.TryResolve(matchData, prediction, sourceFixture, out var quote))
+            {
+                continue;
+            }
+
+            var duplicateKey = BuildSnapshotDuplicateKey(prediction.Id, quote.SourceName);
+            if (existingKeySet.Contains(duplicateKey))
+            {
+                continue;
+            }
+
+            createdSnapshots.Add(new PredictionOddsSnapshot
+            {
+                PredictionId = prediction.Id,
+                PredictionRunId = prediction.PredictionRunId,
+                SourceName = quote.SourceName,
+                Market = prediction.PredictionCategory,
+                Outcome = prediction.PredictedOutcome,
+                DecimalOdds = Math.Round(quote.DecimalOdds, 4),
+                ImpliedProbability = Math.Round(quote.ImpliedProbability, 6),
+                OddsDerivationSource = quote.OddsDerivationSource,
+                SnapshotKind = snapshotKind,
+                CapturedAtUtc = DateTime.UtcNow
+            });
+
+            existingKeySet.Add(duplicateKey);
+        }
+
+        if (createdSnapshots.Count == 0)
+        {
+            return 0;
+        }
+
+        _dbContext.PredictionOddsSnapshots.AddRange(createdSnapshots);
+        await _dbContext.SaveChangesAsync();
+        return createdSnapshots.Count;
+    }
+
     private static string GetObservationKey(ForecastObservation forecast)
     {
         return $"{ResolveFixtureKey(forecast.FixtureKey, forecast.MatchLocalDate, forecast.League, forecast.HomeTeam, forecast.AwayTeam)}|{forecast.Market}";
@@ -1877,6 +2083,49 @@ public class AnalyzerService  : IAnalyzerService
     private static string GetCandidatePredictionKey(PredictionCandidate candidate)
     {
         return $"{ResolveFixtureKey(candidate.FixtureKey, candidate.MatchLocalDate, candidate.League, candidate.HomeTeam, candidate.AwayTeam)}|{candidate.PredictionCategory}";
+    }
+
+    private static MatchData? ResolveMatchDataForPrediction(
+        Prediction prediction,
+        IReadOnlyDictionary<string, List<MatchData>> byFixtureAndLeague,
+        IReadOnlyDictionary<string, List<MatchData>> byFixture)
+    {
+        var leagueKey = BuildPredictionMatchKey(prediction.MatchLocalDate, prediction.FixtureKey, prediction.League, prediction.HomeTeam, prediction.AwayTeam, includeLeague: true);
+        if (byFixtureAndLeague.TryGetValue(leagueKey, out var leagueMatches))
+        {
+            return SelectBestSnapshotMatchData(leagueMatches, prediction);
+        }
+
+        var fixtureKey = BuildPredictionMatchKey(prediction.MatchLocalDate, prediction.FixtureKey, null, prediction.HomeTeam, prediction.AwayTeam, includeLeague: false);
+        return byFixture.TryGetValue(fixtureKey, out var fallbackMatches)
+            ? SelectBestSnapshotMatchData(fallbackMatches, prediction)
+            : null;
+    }
+
+    private static MatchData SelectBestSnapshotMatchData(IEnumerable<MatchData> matches, Prediction prediction)
+    {
+        return matches
+            .OrderBy(match => match.MatchDateTime.HasValue ? Math.Abs((match.MatchDateTime.Value - (prediction.MatchDateTime ?? match.MatchDateTime.Value)).TotalMinutes) : double.MaxValue)
+            .ThenBy(match => string.Equals(match.League, prediction.League, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .First();
+    }
+
+    private static string BuildPredictionMatchKey(
+        DateOnly? matchLocalDate,
+        string? fixtureKey,
+        string? league,
+        string? homeTeam,
+        string? awayTeam,
+        bool includeLeague)
+    {
+        return includeLeague
+            ? ResolveFixtureKey(fixtureKey, matchLocalDate, league, homeTeam, awayTeam)
+            : ResolveFixtureKey(fixtureKey, matchLocalDate, null, homeTeam, awayTeam);
+    }
+
+    private static string BuildSnapshotDuplicateKey(int predictionId, string sourceName)
+    {
+        return $"{predictionId}|{sourceName}";
     }
 
     private List<MatchData> DeduplicateMatchesForGeneration(IEnumerable<MatchData> matches, string targetDate)

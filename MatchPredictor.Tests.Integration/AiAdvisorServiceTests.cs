@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Services;
@@ -8,6 +9,7 @@ using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -437,6 +439,67 @@ public class AiAdvisorServiceTests
     }
 
     [Fact]
+    public async Task GetAdviceAsync_ExplainsExpectedValue_Deterministically()
+    {
+        await using var context = CreateContext();
+        var handler = new SequenceHttpMessageHandler();
+        var service = CreateService(context, handler);
+
+        var response = await service.GetAdviceAsync("What is EV?", "ev-glossary-session");
+
+        Assert.Equal("app_help", response.ContextMode);
+        Assert.Contains("Expected value", response.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEmpty(response.KnowledgeCards);
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_RoutesHighestEvPrompt_ToValueBetReport()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(context, 2);
+        var handler = new SequenceHttpMessageHandler();
+        var report = new ValueBetReportDto
+        {
+            Bets =
+            [
+                new ValueBetDto
+                {
+                    League = predictions[0].League,
+                    HomeTeam = predictions[0].HomeTeam,
+                    AwayTeam = predictions[0].AwayTeam,
+                    KickoffTime = predictions[0].Time,
+                    PredictionCategory = predictions[0].PredictionCategory,
+                    PredictedOutcome = predictions[0].PredictedOutcome,
+                    MathematicalProbability = 0.74,
+                    MarketProbability = 0.56,
+                    DecimalOdds = 2.10,
+                    ImpliedProbability = 0.47619,
+                    ExpectedValuePercent = 0.554,
+                    Edge = 0.18,
+                    ThresholdUsed = 0.55,
+                    ThresholdSource = "Configured",
+                    CalibratorUsed = "Bucket",
+                    PricingSource = "Live source pull",
+                    OddsFreshness = "Fresh from today's source pricing pull.",
+                    OddsDerivationSource = "Source decimal odds",
+                    EdgeSource = "Model 74.0% vs market 56.0%",
+                    AiJustification = "The model is materially ahead of the market on this leg."
+                }
+            ]
+        };
+
+        var service = CreateService(context, handler, valueBetsService: new StubValueBetsService(report));
+        var response = await service.GetAdviceAsync("Which picks have the highest EV today?", "ev-picks-session");
+
+        Assert.Equal("recommend_picks", response.ContextMode);
+        var action = Assert.Single(response.Actions);
+        Assert.Equal(predictions[0].Id, action.PredictionId);
+        Assert.Contains("EV +55.4%", action.Explanation, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Fact]
     public async Task GetAdviceAsync_StoresWorkingSlipAndSummary_AfterRecommendationResponse()
     {
         await using var context = CreateContext();
@@ -747,7 +810,8 @@ public class AiAdvisorServiceTests
     private static AiAdvisorService CreateService(
         ApplicationDbContext context,
         SequenceHttpMessageHandler handler,
-        TestDistributedCache? cache = null)
+        TestDistributedCache? cache = null,
+        IValueBetsService? valueBetsService = null)
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -763,7 +827,8 @@ public class AiAdvisorServiceTests
             NullLogger<AiAdvisorService>.Instance,
             new StubHttpClientFactory(handler),
             cache ?? new TestDistributedCache(),
-            new AiChatKnowledgeService());
+            new AiChatKnowledgeService(),
+            new StubServiceScopeFactory(valueBetsService));
     }
 
     private static string BuildGroqResponse(string modelContent)
@@ -819,6 +884,80 @@ public class AiAdvisorServiceTests
             {
                 Content = new StringContent(_responses.Dequeue(), Encoding.UTF8, "application/json")
             });
+        }
+    }
+
+    private sealed class StubValueBetsService : IValueBetsService
+    {
+        private readonly ValueBetReportDto _report;
+
+        public StubValueBetsService(ValueBetReportDto report)
+        {
+            _report = report;
+        }
+
+        public Task<IEnumerable<ValueBetDto>> GetTopValueBetsAsync(int limit = 60, CancellationToken ct = default) =>
+            Task.FromResult<IEnumerable<ValueBetDto>>(_report.Bets.Take(limit).ToList());
+
+        public Task<ValueBetReportDto> GetValueBetReportAsync(int limit = 60, CancellationToken ct = default)
+        {
+            var limitedReport = new ValueBetReportDto
+            {
+                GeneratedAtLocal = _report.GeneratedAtLocal,
+                ConsideredCandidateCount = _report.ConsideredCandidateCount,
+                IncludedCandidateCount = Math.Min(limit, _report.Bets.Count),
+                Bets = _report.Bets.Take(limit).ToList(),
+                Warnings = _report.Warnings.ToList(),
+                ExclusionBreakdown = _report.ExclusionBreakdown.ToList()
+            };
+
+            return Task.FromResult(limitedReport);
+        }
+    }
+
+    private sealed class StubServiceScopeFactory : IServiceScopeFactory
+    {
+        private readonly IValueBetsService? _valueBetsService;
+
+        public StubServiceScopeFactory(IValueBetsService? valueBetsService)
+        {
+            _valueBetsService = valueBetsService;
+        }
+
+        public IServiceScope CreateScope() => new StubServiceScope(_valueBetsService);
+    }
+
+    private sealed class StubServiceScope : IServiceScope
+    {
+        public StubServiceScope(IValueBetsService? valueBetsService)
+        {
+            ServiceProvider = new StubServiceProvider(valueBetsService);
+        }
+
+        public IServiceProvider ServiceProvider { get; }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class StubServiceProvider : IServiceProvider
+    {
+        private readonly IValueBetsService? _valueBetsService;
+
+        public StubServiceProvider(IValueBetsService? valueBetsService)
+        {
+            _valueBetsService = valueBetsService;
+        }
+
+        public object? GetService(Type serviceType)
+        {
+            if (serviceType == typeof(IValueBetsService))
+            {
+                return _valueBetsService;
+            }
+
+            return null;
         }
     }
 

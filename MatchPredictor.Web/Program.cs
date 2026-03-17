@@ -175,6 +175,7 @@ using (var scope = app.Services.CreateScope())
         recurringJobs.RemoveIfExists("prediction-generation-post-analysis-job");
         recurringJobs.RemoveIfExists("prediction-generation-refresh-job");
         recurringJobs.RemoveIfExists("score-backfill-job");
+        recurringJobs.RemoveIfExists("closing-line-snapshot-job");
 
         recurringJobs.AddOrUpdate<IAnalyzerService>(
             "prediction-prewarm-job",
@@ -230,6 +231,16 @@ using (var scope = app.Services.CreateScope())
             "score-backfill-job",
             service => service.RunScoreUpdaterAsync(14, "backfill"),
             "17 * * * *", // Hourly backfill for older unresolved fixtures
+            new RecurringJobOptions
+            {
+                TimeZone = watTimeZone
+            }
+        );
+
+        recurringJobs.AddOrUpdate<IAnalyzerService>(
+            "closing-line-snapshot-job",
+            service => service.CaptureClosingLineSnapshotsAsync(15),
+            "*/5 * * * *", // Every 5 minutes capture final pre-kickoff price snapshots for CLV
             new RecurringJobOptions
             {
                 TimeZone = watTimeZone
