@@ -36,7 +36,7 @@
 
             if (isActuallyLive)
             {
-                if (isCorrect)
+                if (MatchPredictor.Web.Helpers.PredictionDisplayHelper.IsLivePredictionCorrect(Model))
                 {
                     <span class="mp-score mp-score-correct"><span class="mp-live-indicator"></span>@Model.ActualScore</span>
                 }

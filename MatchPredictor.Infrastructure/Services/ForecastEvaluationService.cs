@@ -6,28 +6,29 @@ namespace MatchPredictor.Infrastructure.Services;
 public class ForecastEvaluationService : IForecastEvaluationService
 {
     private const double BucketSize = 0.05;
+    private static readonly TimeSpan PredictionLiveGrace = TimeSpan.FromMinutes(200);
 
     public AnalyticsStats CalculateStats(IEnumerable<Prediction> predictions, IEnumerable<ForecastObservation> forecasts)
     {
         var predictionList = PointInTimeBacktestingSelector.SelectPredictions(predictions);
         var completedPredictions = predictionList
-            .Where(prediction => !prediction.IsLive && !string.IsNullOrEmpty(prediction.ActualOutcome))
+            .Where(IsPredictionCompletedForAnalytics)
             .ToList();
 
         var stats = new AnalyticsStats
         {
             TotalPredictions = predictionList.Count,
             CompletedPredictions = completedPredictions.Count,
-            CorrectPredictions = completedPredictions.Count(prediction => prediction.PredictedOutcome == prediction.ActualOutcome),
+            CorrectPredictions = completedPredictions.Count(IsPredictionCorrectForAnalytics),
             OverallAccuracy = completedPredictions.Count > 0
-                ? (double)completedPredictions.Count(prediction => prediction.PredictedOutcome == prediction.ActualOutcome) / completedPredictions.Count
+                ? (double)completedPredictions.Count(IsPredictionCorrectForAnalytics) / completedPredictions.Count
                 : 0.0
         };
 
         foreach (var group in completedPredictions.GroupBy(prediction => prediction.PredictionCategory))
         {
             var total = group.Count();
-            var correct = group.Count(prediction => prediction.PredictedOutcome == prediction.ActualOutcome);
+            var correct = group.Count(IsPredictionCorrectForAnalytics);
             var scoredPredictions = group.Where(prediction => prediction.ConfidenceScore.HasValue).ToList();
 
             stats.CategoryStats[group.Key] = new CategoryStat
@@ -39,7 +40,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
                 BrierScore = scoredPredictions.Count > 0
                     ? scoredPredictions.Average(prediction =>
                     {
-                        var outcome = prediction.PredictedOutcome == prediction.ActualOutcome ? 1.0 : 0.0;
+                        var outcome = IsPredictionCorrectForAnalytics(prediction) ? 1.0 : 0.0;
                         var probability = (double)prediction.ConfidenceScore!.Value;
                         return Math.Pow(probability - outcome, 2);
                     })
@@ -68,6 +69,72 @@ public class ForecastEvaluationService : IForecastEvaluationService
         }
 
         return stats;
+    }
+
+    private static bool IsPredictionCompletedForAnalytics(Prediction prediction)
+    {
+        if (IsPredictionActuallyLive(prediction))
+        {
+            return false;
+        }
+
+        return ResolvePredictionActualOutcome(prediction) is not null;
+    }
+
+    private static bool IsPredictionCorrectForAnalytics(Prediction prediction)
+    {
+        if (TryParseScore(prediction.ActualScore, out var homeGoals, out var awayGoals))
+        {
+            return prediction.PredictionCategory switch
+            {
+                "BothTeamsScore" => DoesBttsPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+                "Over2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+                "Draw" => DoesDrawPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+                "StraightWin" => DoesStraightWinPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+                _ => OutcomesMatch(prediction.PredictedOutcome, ResolvePredictionActualOutcome(prediction))
+            };
+        }
+
+        return OutcomesMatch(prediction.PredictedOutcome, ResolvePredictionActualOutcome(prediction));
+    }
+
+    private static string? ResolvePredictionActualOutcome(Prediction prediction)
+    {
+        if (!string.IsNullOrWhiteSpace(prediction.ActualOutcome) &&
+            !string.Equals(prediction.ActualOutcome, "Unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            return prediction.ActualOutcome;
+        }
+
+        if (IsPredictionActuallyLive(prediction))
+        {
+            return null;
+        }
+
+        if (!TryParseScore(prediction.ActualScore, out var homeGoals, out var awayGoals))
+        {
+            return null;
+        }
+
+        return prediction.PredictionCategory switch
+        {
+            "BothTeamsScore" => homeGoals > 0 && awayGoals > 0 ? "BTTS" : "No BTTS",
+            "Over2.5Goals" => homeGoals + awayGoals > 2 ? "Over 2.5" : "Under 2.5",
+            "Draw" => homeGoals == awayGoals ? "Draw" : "Not Draw",
+            "StraightWin" => homeGoals > awayGoals ? "Home Win" : awayGoals > homeGoals ? "Away Win" : "Draw",
+            _ => null
+        };
+    }
+
+    private static bool IsPredictionActuallyLive(Prediction prediction)
+    {
+        if (!prediction.IsLive)
+        {
+            return false;
+        }
+
+        return !prediction.MatchDateTime.HasValue ||
+               DateTime.UtcNow <= prediction.MatchDateTime.Value.Add(PredictionLiveGrace);
     }
 
     private static ForecastMarketStat BuildMarketStat(IGrouping<PredictionMarket, ForecastObservation> group)
@@ -208,5 +275,95 @@ public class ForecastEvaluationService : IForecastEvaluationService
         }
 
         return thresholdSource.Equals("Tuned", StringComparison.OrdinalIgnoreCase) ? "Tuned" : "Configured";
+    }
+
+    private static bool TryParseScore(string? score, out int homeGoals, out int awayGoals)
+    {
+        homeGoals = 0;
+        awayGoals = 0;
+
+        if (string.IsNullOrWhiteSpace(score))
+        {
+            return false;
+        }
+
+        var normalized = score.Replace("–", "-").Replace("—", "-").Trim();
+        var parts = normalized.Contains(':')
+            ? normalized.Split(':', StringSplitOptions.TrimEntries)
+            : normalized.Split('-', StringSplitOptions.TrimEntries);
+
+        return parts.Length == 2 &&
+               int.TryParse(parts[0], out homeGoals) &&
+               int.TryParse(parts[1], out awayGoals);
+    }
+
+    private static bool DoesBttsPredictionMatch(string? predictedOutcome, int homeGoals, int awayGoals)
+    {
+        var bothTeamsScored = homeGoals > 0 && awayGoals > 0;
+
+        return NormalizeOutcome(predictedOutcome) switch
+        {
+            "btts" or "yes" or "gg" => bothTeamsScored,
+            "no btts" or "no" or "ng" => !bothTeamsScored,
+            _ => bothTeamsScored
+        };
+    }
+
+    private static bool DoesOverPredictionMatch(string? predictedOutcome, int homeGoals, int awayGoals)
+    {
+        var isOver = homeGoals + awayGoals > 2;
+
+        return NormalizeOutcome(predictedOutcome) switch
+        {
+            "over" or "over 2.5" or "over2.5" => isOver,
+            "under" or "under 2.5" or "under2.5" => !isOver,
+            _ => isOver
+        };
+    }
+
+    private static bool DoesDrawPredictionMatch(string? predictedOutcome, int homeGoals, int awayGoals)
+    {
+        var isDraw = homeGoals == awayGoals;
+
+        return NormalizeOutcome(predictedOutcome) switch
+        {
+            "draw" => isDraw,
+            "not draw" => !isDraw,
+            _ => isDraw
+        };
+    }
+
+    private static bool DoesStraightWinPredictionMatch(string? predictedOutcome, int homeGoals, int awayGoals)
+    {
+        return NormalizeOutcome(predictedOutcome) switch
+        {
+            "home win" or "home" or "1" => homeGoals > awayGoals,
+            "away win" or "away" or "2" => awayGoals > homeGoals,
+            "draw" or "x" => homeGoals == awayGoals,
+            _ => false
+        };
+    }
+
+    private static bool OutcomesMatch(string? predictedOutcome, string? actualOutcome)
+    {
+        var normalizedPredicted = NormalizeOutcome(predictedOutcome);
+        var normalizedActual = NormalizeOutcome(actualOutcome);
+
+        return normalizedPredicted.Length > 0 &&
+               normalizedActual.Length > 0 &&
+               normalizedPredicted == normalizedActual;
+    }
+
+    private static string NormalizeOutcome(string? outcome)
+    {
+        if (string.IsNullOrWhiteSpace(outcome))
+        {
+            return string.Empty;
+        }
+
+        return System.Text.RegularExpressions.Regex.Replace(
+            outcome.Trim().ToLowerInvariant(),
+            @"\s+",
+            " ");
     }
 }

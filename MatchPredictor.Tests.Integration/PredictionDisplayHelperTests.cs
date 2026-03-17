@@ -40,6 +40,28 @@ public class PredictionDisplayHelperTests
         Assert.False(isCorrect);
     }
 
+    [Fact]
+    public void IsLivePredictionCorrect_DoesNotTreatStraightWinLeaderAsSettledCorrect()
+    {
+        var prediction = CreatePrediction("StraightWin", "Home Win", "1:0");
+        prediction.IsLive = true;
+
+        var isCorrect = PredictionDisplayHelper.IsLivePredictionCorrect(prediction);
+
+        Assert.False(isCorrect);
+    }
+
+    [Fact]
+    public void IsLivePredictionCorrect_AllowsLiveBttsWhenConditionAlreadyMet()
+    {
+        var prediction = CreatePrediction("BothTeamsScore", "BTTS", "1:1");
+        prediction.IsLive = true;
+
+        var isCorrect = PredictionDisplayHelper.IsLivePredictionCorrect(prediction);
+
+        Assert.True(isCorrect);
+    }
+
     private static Prediction CreatePrediction(string predictionCategory, string predictedOutcome, string actualScore)
     {
         return new Prediction

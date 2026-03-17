@@ -214,6 +214,172 @@ public class ScoreUpdaterMatchingTests
     }
 
     [Fact]
+    public async Task RunScoreUpdaterAsync_EarlySettlesBttsAndOverMarketsWhileKeepingStraightWinLive()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(16);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        context.Predictions.AddRange(
+            CreatePrediction(date, kickoff, "Alpha FC", "Beta FC", "BothTeamsScore", "BTTS", "League"),
+            CreatePrediction(date, kickoff, "Alpha FC", "Beta FC", "Over2.5Goals", "Over 2.5", "League"),
+            CreatePrediction(date, kickoff, "Alpha FC", "Beta FC", "StraightWin", "Home Win", "League"));
+
+        context.ForecastObservations.AddRange(
+            CreateForecast(date, kickoff, "Alpha FC", "Beta FC", PredictionMarket.BothTeamsScore, "BTTS", "League"),
+            CreateForecast(date, kickoff, "Alpha FC", "Beta FC", PredictionMarket.Over25Goals, "Over 2.5", "League"),
+            CreateForecast(date, kickoff, "Alpha FC", "Beta FC", PredictionMarket.StraightWin, "Home Win", "League"));
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                MatchScores =
+                [
+                    new MatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff.AddMinutes(72)),
+                        League = "League",
+                        HomeTeam = "Alpha FC",
+                        AwayTeam = "Beta FC",
+                        Score = "2:1",
+                        BTTSLabel = true,
+                        IsLive = true
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var predictions = await context.Predictions
+            .OrderBy(prediction => prediction.PredictionCategory)
+            .ToListAsync();
+        var forecasts = await context.ForecastObservations
+            .OrderBy(forecast => forecast.Market)
+            .ToListAsync();
+
+        Assert.Collection(
+            predictions,
+            prediction =>
+            {
+                Assert.Equal("2:1", prediction.ActualScore);
+                Assert.Equal("BTTS", prediction.ActualOutcome);
+                Assert.False(prediction.IsLive);
+            },
+            prediction =>
+            {
+                Assert.Equal("2:1", prediction.ActualScore);
+                Assert.Equal("Over 2.5", prediction.ActualOutcome);
+                Assert.False(prediction.IsLive);
+            },
+            prediction =>
+            {
+                Assert.Equal("2:1", prediction.ActualScore);
+                Assert.Null(prediction.ActualOutcome);
+                Assert.True(prediction.IsLive);
+            });
+
+        Assert.Collection(
+            forecasts,
+            forecast =>
+            {
+                Assert.Equal("2:1", forecast.ActualScore);
+                Assert.Equal("BTTS", forecast.ActualOutcome);
+                Assert.True(forecast.OutcomeOccurred);
+                Assert.True(forecast.IsSettled);
+                Assert.False(forecast.IsLive);
+            },
+            forecast =>
+            {
+                Assert.Equal("2:1", forecast.ActualScore);
+                Assert.Equal("Over 2.5", forecast.ActualOutcome);
+                Assert.True(forecast.OutcomeOccurred);
+                Assert.True(forecast.IsSettled);
+                Assert.False(forecast.IsLive);
+            },
+            forecast =>
+            {
+                Assert.Equal("2:1", forecast.ActualScore);
+                Assert.Null(forecast.ActualOutcome);
+                Assert.Null(forecast.OutcomeOccurred);
+                Assert.False(forecast.IsSettled);
+                Assert.True(forecast.IsLive);
+            });
+    }
+
+    [Fact]
+    public async Task RunScoreUpdaterAsync_LeavesBttsAndOverLiveUntilIrreversibleConditionIsMet()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(17);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        context.Predictions.AddRange(
+            CreatePrediction(date, kickoff, "Gamma FC", "Delta FC", "BothTeamsScore", "BTTS", "League"),
+            CreatePrediction(date, kickoff, "Gamma FC", "Delta FC", "Over2.5Goals", "Over 2.5", "League"));
+
+        context.ForecastObservations.AddRange(
+            CreateForecast(date, kickoff, "Gamma FC", "Delta FC", PredictionMarket.BothTeamsScore, "BTTS", "League"),
+            CreateForecast(date, kickoff, "Gamma FC", "Delta FC", PredictionMarket.Over25Goals, "Over 2.5", "League"));
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                MatchScores =
+                [
+                    new MatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff.AddMinutes(50)),
+                        League = "League",
+                        HomeTeam = "Gamma FC",
+                        AwayTeam = "Delta FC",
+                        Score = "1:0",
+                        BTTSLabel = false,
+                        IsLive = true
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var predictions = await context.Predictions
+            .OrderBy(prediction => prediction.PredictionCategory)
+            .ToListAsync();
+        var forecasts = await context.ForecastObservations
+            .OrderBy(forecast => forecast.Market)
+            .ToListAsync();
+
+        Assert.All(predictions, prediction =>
+        {
+            Assert.Equal("1:0", prediction.ActualScore);
+            Assert.Null(prediction.ActualOutcome);
+            Assert.True(prediction.IsLive);
+        });
+
+        Assert.All(forecasts, forecast =>
+        {
+            Assert.Equal("1:0", forecast.ActualScore);
+            Assert.Null(forecast.ActualOutcome);
+            Assert.Null(forecast.OutcomeOccurred);
+            Assert.False(forecast.IsSettled);
+            Assert.True(forecast.IsLive);
+        });
+    }
+
+    [Fact]
     public async Task RunScoreUpdaterAsync_PrefersFinishedFlashScoreSnapshotOverEarlierLiveSnapshots()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
@@ -944,6 +1110,40 @@ public class ScoreUpdaterMatchingTests
             PredictionCategory = predictionCategory,
             PredictedOutcome = predictedOutcome,
             IsLive = false
+        };
+    }
+
+    private static ForecastObservation CreateForecast(
+        string date,
+        DateTime kickoff,
+        string homeTeam,
+        string awayTeam,
+        PredictionMarket market,
+        string predictedOutcome,
+        string league = "Spain LaLiga")
+    {
+        var kickoffUtc = kickoff.Kind == DateTimeKind.Utc
+            ? kickoff
+            : DateTimeProvider.ConvertLocalToUtc(DateTime.SpecifyKind(kickoff, DateTimeKind.Unspecified));
+        var kickoffLocal = kickoff.Kind == DateTimeKind.Utc
+            ? DateTimeProvider.ConvertUtcToLocal(kickoff)
+            : kickoff;
+
+        return new ForecastObservation
+        {
+            Date = date,
+            Time = kickoffLocal.ToString("HH:mm"),
+            MatchLocalDate = DateOnly.FromDateTime(kickoffLocal),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoffLocal),
+            MatchDateTime = kickoffUtc,
+            FixtureKey = $"{league.Trim().ToLowerInvariant()}|{homeTeam.Trim().ToLowerInvariant()}|{awayTeam.Trim().ToLowerInvariant()}",
+            League = league,
+            HomeTeam = homeTeam,
+            AwayTeam = awayTeam,
+            Market = market,
+            PredictedOutcome = predictedOutcome,
+            IsLive = false,
+            IsSettled = false
         };
     }
 

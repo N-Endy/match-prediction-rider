@@ -163,7 +163,22 @@ public static partial class PredictionDisplayHelper
 
     public static bool IsLivePredictionCorrect(Prediction prediction)
     {
-        return IsPredictionCorrect(prediction);
+        if (!prediction.IsLive)
+        {
+            return IsPredictionCorrect(prediction);
+        }
+
+        if (!TryParseScore(prediction.ActualScore, out var homeGoals, out var awayGoals))
+        {
+            return false;
+        }
+
+        return prediction.PredictionCategory switch
+        {
+            "BothTeamsScore" => DoesBttsPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+            "Over2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+            _ => false
+        };
     }
 
     public static bool IsPredictionCorrect(Prediction prediction)

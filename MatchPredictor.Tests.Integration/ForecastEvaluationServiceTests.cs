@@ -164,6 +164,96 @@ public class ForecastEvaluationServiceTests
         Assert.DoesNotContain(market.CalibratorEraStats, era => era.Era == "Beta");
     }
 
+    [Fact]
+    public void CalculateStats_DerivesCompletedDrawResultFromAgedScoreWhenOutcomeIsMissing()
+    {
+        var service = new ForecastEvaluationService();
+        var kickoff = DateTime.UtcNow.AddHours(-6);
+        var localDate = DateOnly.FromDateTime(kickoff);
+
+        var predictions = new[]
+        {
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|umecit|union-cocle",
+                League = "League",
+                HomeTeam = "UMECIT",
+                AwayTeam = "Union Cocle",
+                PredictionCategory = "Draw",
+                PredictedOutcome = "Draw",
+                ActualScore = "1:1",
+                ActualOutcome = null,
+                IsLive = true,
+                ConfidenceScore = 0.35m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|alpha|beta",
+                League = "League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                PredictionCategory = "Draw",
+                PredictedOutcome = "Draw",
+                ActualScore = "2:1",
+                ActualOutcome = "Not Draw",
+                IsLive = false,
+                ConfidenceScore = 0.31m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|gamma|delta",
+                League = "League",
+                HomeTeam = "Gamma",
+                AwayTeam = "Delta",
+                PredictionCategory = "Draw",
+                PredictedOutcome = "Draw",
+                ActualScore = "3:1",
+                ActualOutcome = "Not Draw",
+                IsLive = false,
+                ConfidenceScore = 0.32m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|epsilon|zeta",
+                League = "League",
+                HomeTeam = "Epsilon",
+                AwayTeam = "Zeta",
+                PredictionCategory = "Draw",
+                PredictedOutcome = "Draw",
+                ActualScore = "0:2",
+                ActualOutcome = "Not Draw",
+                IsLive = false,
+                ConfidenceScore = 0.30m,
+                CreatedAt = kickoff.AddHours(-2)
+            }
+        };
+
+        var stats = service.CalculateStats(predictions, []);
+        var drawStats = Assert.Single(stats.CategoryStats.Values);
+
+        Assert.Equal(4, stats.CompletedPredictions);
+        Assert.Equal(1, stats.CorrectPredictions);
+        Assert.Equal("Draw", drawStats.Category);
+        Assert.Equal(4, drawStats.Total);
+        Assert.Equal(1, drawStats.Correct);
+        Assert.Equal(0.25, drawStats.Accuracy, 5);
+    }
+
     private static ForecastObservation CreateForecast(
         double rawProbability,
         double calibratedProbability,

@@ -1311,7 +1311,7 @@ public class AnalyzerService  : IAnalyzerService
 
     private void UpdatePredictionSettlementState(Prediction prediction, string score, bool bttsLabel, bool isLive)
     {
-        var effectiveIsLive = DetermineEffectiveIsLive(isLive);
+        var effectiveIsLive = DetermineEffectivePredictionIsLive(prediction, score, bttsLabel, isLive);
 
         prediction.ActualScore = score;
         prediction.IsLive = effectiveIsLive;
@@ -1389,7 +1389,7 @@ public class AnalyzerService  : IAnalyzerService
 
     private void UpdateForecastObservationState(ForecastObservation forecast, string score, bool bttsLabel, bool isLive)
     {
-        var effectiveIsLive = DetermineEffectiveIsLive(isLive);
+        var effectiveIsLive = DetermineEffectiveForecastIsLive(forecast, score, bttsLabel, isLive);
 
         forecast.ActualScore = score;
         forecast.IsLive = effectiveIsLive;
@@ -1459,6 +1459,57 @@ public class AnalyzerService  : IAnalyzerService
             PredictionMarket.StraightWin => DetermineStraightWinOutcome(score),
             _ => null
         };
+    }
+
+    private bool DetermineEffectivePredictionIsLive(Prediction prediction, string score, bool? bttsLabel, bool sourceIsLive)
+    {
+        if (!sourceIsLive)
+        {
+            return false;
+        }
+
+        return PredictionMarketExtensions.TryFromCategory(prediction.PredictionCategory, out var market) &&
+               CanSettleMarketEarly(market, score, bttsLabel)
+            ? false
+            : DetermineEffectiveIsLive(sourceIsLive);
+    }
+
+    private bool DetermineEffectiveForecastIsLive(ForecastObservation forecast, string score, bool? bttsLabel, bool sourceIsLive)
+    {
+        if (!sourceIsLive)
+        {
+            return false;
+        }
+
+        return CanSettleMarketEarly(forecast.Market, score, bttsLabel)
+            ? false
+            : DetermineEffectiveIsLive(sourceIsLive);
+    }
+
+    private static bool CanSettleMarketEarly(PredictionMarket market, string score, bool? bttsLabel)
+    {
+        return market switch
+        {
+            PredictionMarket.BothTeamsScore => HasBothTeamsScored(score, bttsLabel),
+            PredictionMarket.Over25Goals => HasOver25BeenMet(score),
+            _ => false
+        };
+    }
+
+    private static bool HasBothTeamsScored(string score, bool? fallbackBttsLabel)
+    {
+        if (TryParseScore(score, out var homeGoals, out var awayGoals))
+        {
+            return homeGoals > 0 && awayGoals > 0;
+        }
+
+        return fallbackBttsLabel == true;
+    }
+
+    private static bool HasOver25BeenMet(string score)
+    {
+        return TryParseScore(score, out var homeGoals, out var awayGoals) &&
+               homeGoals + awayGoals > 2;
     }
 
     
