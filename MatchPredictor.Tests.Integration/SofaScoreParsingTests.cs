@@ -6,6 +6,83 @@ namespace MatchPredictor.Tests.Integration;
 public class SofaScoreParsingTests
 {
     [Fact]
+    public void ParseEventSummaries_ReturnsRelevantLiveEvents()
+    {
+        const string json = """
+            {
+              "events": [
+                {
+                  "id": 101,
+                  "startTimestamp": 1773763200,
+                  "status": { "type": "inprogress", "description": "67'" },
+                  "homeTeam": { "name": "Arsenal" },
+                  "awayTeam": { "name": "Chelsea" },
+                  "tournament": {
+                    "name": "Premier League",
+                    "category": { "name": "England" }
+                  },
+                  "homeScore": { "current": 2, "display": 2, "period1": 1 },
+                  "awayScore": { "current": 1, "display": 1, "period1": 0 }
+                },
+                {
+                  "id": 102,
+                  "startTimestamp": 1773766800,
+                  "status": { "type": "notstarted", "description": "19:00" },
+                  "homeTeam": { "name": "Unused" },
+                  "awayTeam": { "name": "Fixture" },
+                  "tournament": {
+                    "name": "Premier League",
+                    "category": { "name": "England" }
+                  }
+                }
+              ]
+            }
+            """;
+
+        var events = SofaScoreApiParser.ParseEventSummaries(json, "https://www.sofascore.com");
+
+        var summary = Assert.Single(events);
+        Assert.Equal(101, summary.EventId);
+        Assert.Equal("England - Premier League", summary.League);
+        Assert.Equal("Arsenal", summary.HomeTeam);
+        Assert.Equal("Chelsea", summary.AwayTeam);
+        Assert.Equal("2:1", summary.Score);
+        Assert.Equal("1:0", summary.HalfTimeScore);
+        Assert.True(summary.IsLive);
+    }
+
+    [Fact]
+    public void TryParseEventDetail_AfterPenalties_UsesNormalTimeScoreForSettlement()
+    {
+        const string json = """
+            {
+              "event": {
+                "id": 501,
+                "startTimestamp": 1773853200,
+                "status": { "type": "finished", "description": "After penalties" },
+                "homeTeam": { "name": "Madagascar" },
+                "awayTeam": { "name": "Sudan" },
+                "tournament": {
+                  "name": "Africa Cup of Nations Qualification",
+                  "category": { "name": "Africa" }
+                },
+                "homeScore": { "current": 1, "display": 1, "normaltime": 0, "period1": 0, "penalties": 1 },
+                "awayScore": { "current": 0, "display": 0, "normaltime": 0, "period1": 0, "penalties": 0 }
+              }
+            }
+            """;
+
+        var parsed = SofaScoreApiParser.TryParseEventDetail(json, "https://www.sofascore.com", out var score);
+
+        Assert.True(parsed);
+        Assert.Equal("Africa Cup of Nations Qualification", score.League);
+        Assert.Equal("0:0", score.Score);
+        Assert.Equal("0:0", score.RegularTimeScore);
+        Assert.Equal("1:0", score.ExtraTimeScore);
+        Assert.False(score.IsLive);
+    }
+
+    [Fact]
     public void ParseRobotSitemapUrls_ReturnsSitemapLines()
     {
         const string robots = """

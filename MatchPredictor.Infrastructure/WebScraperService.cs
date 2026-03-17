@@ -302,75 +302,27 @@ public partial class WebScraperService : IWebScraperService
 
         try
         {
-            _sofaScoreSourceHealthTracker.RecordAttempt("discovery", $"Targeted fixtures: {requestedFixtures.Count}.");
+            _sofaScoreSourceHealthTracker.RecordAttempt("live-endpoint", $"Targeted fixtures: {requestedFixtures.Count}.");
             using var client = CreateSofaScoreHttpClient();
-            var eventUrlsByFixture = await DiscoverSofaScoreEventUrlsAsync(requestedFixtures, client);
-            if (eventUrlsByFixture.Count == 0)
+
+            var apiAttempt = await ScrapeSofaScoreViaApiAsync(requestedFixtures, client);
+            if (apiAttempt.Scores.Count > 0)
             {
-                _logger.LogInformation("SofaScore discovery returned no event URLs for {FixtureCount} targeted fixtures.", requestedFixtures.Count);
-                return [];
-            }
-
-            var eventPageBudget = ParseConfiguredInt("ScrapingValues:SofaScoreMaxEventPagesPerRun", DefaultSofaScoreMaxEventPagesPerRun);
-            var scrapedScores = new List<SofaScoreMatchScore>();
-            var pagesFetched = 0;
-            var candidateUrlCount = eventUrlsByFixture.Values.Sum(urls => urls.Count);
-
-            foreach (var fixture in requestedFixtures)
-            {
-                if (!eventUrlsByFixture.TryGetValue(BuildSofaScoreFixtureCacheKey(fixture), out var candidateUrls))
-                {
-                    continue;
-                }
-
-                foreach (var candidateUrl in candidateUrls)
-                {
-                    if (pagesFetched >= eventPageBudget)
-                    {
-                        _logger.LogWarning(
-                            "SofaScore event-page budget of {Budget} reached. Stopping targeted fetches for this run.",
-                            eventPageBudget);
-                        return scrapedScores;
-                    }
-
-                    pagesFetched++;
-                    var html = await TryFetchSofaScorePageAsync(client, candidateUrl);
-                    if (string.IsNullOrWhiteSpace(html) ||
-                        !SofaScoreEventPageParser.TryParse(html, candidateUrl, out var parsedScore) ||
-                        !SofaScoreEventMatchesFixture(parsedScore, fixture))
-                    {
-                        continue;
-                    }
-
-                    scrapedScores.Add(parsedScore);
-                    break;
-                }
-            }
-
-            _logger.LogInformation(
-                "Scraped {Count} SofaScore targeted match pages for {FixtureCount} incomplete fixtures.",
-                scrapedScores.Count,
-                requestedFixtures.Count);
-
-            if (scrapedScores.Count > 0)
-            {
+                _logger.LogInformation(
+                    "Scraped {Count} SofaScore API score rows for {FixtureCount} incomplete fixtures.",
+                    apiAttempt.Scores.Count,
+                    requestedFixtures.Count);
                 _sofaScoreSourceHealthTracker.RecordSuccess(
-                    "event-page",
-                    scrapedScores.Count,
-                    candidateUrlCount,
-                    pagesFetched,
-                    $"SofaScore scraped {scrapedScores.Count} targeted match page(s) from {candidateUrlCount} candidate URL(s).");
-            }
-            else
-            {
-                _sofaScoreSourceHealthTracker.RecordEmpty(
-                    "event-page",
-                    $"SofaScore found {candidateUrlCount} candidate URL(s) but no matching event pages were parsed successfully.",
-                    candidateUrlCount,
-                    pagesFetched);
+                    apiAttempt.Stage,
+                    apiAttempt.Scores.Count,
+                    apiAttempt.CandidateCount,
+                    apiAttempt.DetailFetchCount,
+                    apiAttempt.Detail);
+                return apiAttempt.Scores;
             }
 
-            return scrapedScores;
+            _logger.LogInformation("{Detail}", apiAttempt.Detail);
+            return await ScrapeSofaScoreViaHtmlFallbackAsync(requestedFixtures, client);
         }
         catch (Exception ex)
         {
@@ -975,10 +927,333 @@ public partial class WebScraperService : IWebScraperService
     {
         var client = new HttpClient();
         client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
-        client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        client.DefaultRequestHeaders.Add("Accept", "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
         client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9");
+        client.DefaultRequestHeaders.Referrer = new Uri((_configuration["ScrapingValues:SofaScoreBaseUrl"] ?? "https://www.sofascore.com").TrimEnd('/') + "/");
         client.Timeout = TimeSpan.FromSeconds(20);
         return client;
+    }
+
+    private async Task<SofaScoreApiAttemptResult> ScrapeSofaScoreViaApiAsync(
+        IReadOnlyList<SofaScoreFixtureRequest> fixtures,
+        HttpClient client)
+    {
+        var liveEvents = await FetchSofaScoreEndpointEventsAsync(client, "live-endpoint", "/api/v1/sport/football/events/live");
+        var scheduledEvents = new List<SofaScoreApiEventSummary>();
+
+        foreach (var localDate in fixtures.Select(fixture => fixture.MatchLocalDate).Distinct().OrderBy(date => date))
+        {
+            var scheduledForDate = await FetchSofaScoreEndpointEventsAsync(
+                client,
+                "scheduled-endpoint",
+                $"/api/v1/sport/football/scheduled-events/{localDate:yyyy-MM-dd}");
+            if (scheduledForDate.Count > 0)
+            {
+                scheduledEvents.AddRange(scheduledForDate);
+            }
+        }
+
+        var mergedEvents = new Dictionary<long, SofaScoreApiEventSummary>();
+        foreach (var summary in scheduledEvents)
+        {
+            mergedEvents[summary.EventId] = summary;
+        }
+
+        foreach (var summary in liveEvents)
+        {
+            mergedEvents[summary.EventId] = summary;
+        }
+
+        if (mergedEvents.Count == 0)
+        {
+            return new SofaScoreApiAttemptResult(
+                [],
+                "scheduled-endpoint",
+                $"SofaScore API returned no live or scheduled event rows for {fixtures.Count} targeted fixtures.",
+                0,
+                0);
+        }
+
+        var selectedEventsByFixture = new Dictionary<string, SofaScoreApiEventSummary>(StringComparer.OrdinalIgnoreCase);
+        foreach (var fixture in fixtures)
+        {
+            var bestCandidate = SelectBestSofaScoreEvent(fixtures, fixture, mergedEvents.Values);
+            if (bestCandidate is null)
+            {
+                continue;
+            }
+
+            selectedEventsByFixture[BuildSofaScoreFixtureCacheKey(fixture)] = bestCandidate;
+        }
+
+        var candidateEventCount = selectedEventsByFixture.Values
+            .Select(summary => summary.EventId)
+            .Distinct()
+            .Count();
+
+        if (candidateEventCount == 0)
+        {
+            return new SofaScoreApiAttemptResult(
+                [],
+                "scheduled-endpoint",
+                $"SofaScore API returned {mergedEvents.Count} event rows but none matched the {fixtures.Count} targeted fixtures.",
+                0,
+                0);
+        }
+
+        var detailBudget = ParseConfiguredInt("ScrapingValues:SofaScoreMaxEventDetailsPerRun", DefaultSofaScoreMaxEventPagesPerRun);
+        var detailFetches = 0;
+        var eventDetails = new Dictionary<long, SofaScoreMatchScore>();
+
+        foreach (var eventId in selectedEventsByFixture.Values.Select(summary => summary.EventId).Distinct().Take(detailBudget))
+        {
+            var detailScore = await FetchSofaScoreEventDetailAsync(client, eventId);
+            if (detailScore is null)
+            {
+                continue;
+            }
+
+            detailFetches++;
+            eventDetails[eventId] = detailScore;
+        }
+
+        var resolvedScores = new List<SofaScoreMatchScore>();
+        foreach (var fixture in fixtures)
+        {
+            if (!selectedEventsByFixture.TryGetValue(BuildSofaScoreFixtureCacheKey(fixture), out var summary))
+            {
+                continue;
+            }
+
+            var resolved = eventDetails.TryGetValue(summary.EventId, out var detailScore) &&
+                           SofaScoreEventMatchesFixture(detailScore, fixture)
+                ? detailScore
+                : summary.ToMatchScore();
+
+            if (!SofaScoreEventMatchesFixture(resolved, fixture))
+            {
+                continue;
+            }
+
+            resolvedScores.Add(resolved);
+        }
+
+        return new SofaScoreApiAttemptResult(
+            resolvedScores,
+            eventDetails.Count > 0 ? "event-detail" : "scheduled-endpoint",
+            $"SofaScore API matched {resolvedScores.Count} fixture(s) from {candidateEventCount} candidate event(s) and fetched {detailFetches} detail payload(s).",
+            candidateEventCount,
+            detailFetches);
+    }
+
+    private async Task<List<SofaScoreMatchScore>> ScrapeSofaScoreViaHtmlFallbackAsync(
+        IReadOnlyList<SofaScoreFixtureRequest> requestedFixtures,
+        HttpClient client)
+    {
+        var eventUrlsByFixture = await DiscoverSofaScoreEventUrlsAsync(requestedFixtures, client);
+        if (eventUrlsByFixture.Count == 0)
+        {
+            _logger.LogInformation("SofaScore HTML fallback discovery returned no event URLs for {FixtureCount} targeted fixtures.", requestedFixtures.Count);
+            return [];
+        }
+
+        var eventPageBudget = ParseConfiguredInt("ScrapingValues:SofaScoreMaxEventPagesPerRun", DefaultSofaScoreMaxEventPagesPerRun);
+        var scrapedScores = new List<SofaScoreMatchScore>();
+        var pagesFetched = 0;
+        var candidateUrlCount = eventUrlsByFixture.Values.Sum(urls => urls.Count);
+
+        foreach (var fixture in requestedFixtures)
+        {
+            if (!eventUrlsByFixture.TryGetValue(BuildSofaScoreFixtureCacheKey(fixture), out var candidateUrls))
+            {
+                continue;
+            }
+
+            foreach (var candidateUrl in candidateUrls)
+            {
+                if (pagesFetched >= eventPageBudget)
+                {
+                    _logger.LogWarning(
+                        "SofaScore event-page budget of {Budget} reached. Stopping targeted fetches for this run.",
+                        eventPageBudget);
+                    return scrapedScores;
+                }
+
+                pagesFetched++;
+                var html = await TryFetchSofaScorePageAsync(client, candidateUrl);
+                if (string.IsNullOrWhiteSpace(html) ||
+                    !SofaScoreEventPageParser.TryParse(html, candidateUrl, out var parsedScore) ||
+                    !SofaScoreEventMatchesFixture(parsedScore, fixture))
+                {
+                    continue;
+                }
+
+                scrapedScores.Add(parsedScore);
+                break;
+            }
+        }
+
+        _logger.LogInformation(
+            "Scraped {Count} SofaScore HTML fallback pages for {FixtureCount} incomplete fixtures.",
+            scrapedScores.Count,
+            requestedFixtures.Count);
+
+        if (scrapedScores.Count > 0)
+        {
+            _sofaScoreSourceHealthTracker.RecordSuccess(
+                "event-page-fallback",
+                scrapedScores.Count,
+                candidateUrlCount,
+                pagesFetched,
+                $"SofaScore HTML fallback scraped {scrapedScores.Count} targeted match page(s) from {candidateUrlCount} candidate URL(s).");
+        }
+        else
+        {
+            _sofaScoreSourceHealthTracker.RecordEmpty(
+                "event-page-fallback",
+                $"SofaScore API and HTML fallback found {candidateUrlCount} candidate URL(s) but no matching event pages were parsed successfully.",
+                candidateUrlCount,
+                pagesFetched);
+        }
+
+        return scrapedScores;
+    }
+
+    private async Task<List<SofaScoreApiEventSummary>> FetchSofaScoreEndpointEventsAsync(
+        HttpClient client,
+        string stage,
+        string relativePath)
+    {
+        var baseUrl = (_configuration["ScrapingValues:SofaScoreBaseUrl"] ?? "https://www.sofascore.com").TrimEnd('/');
+        var json = await TryFetchSofaScoreTextAsync(client, $"{baseUrl}{relativePath}", stage);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return [];
+        }
+
+        try
+        {
+            return SofaScoreApiParser.ParseEventSummaries(json, baseUrl).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to parse SofaScore API response for {Stage}.", stage);
+            return [];
+        }
+    }
+
+    private async Task<SofaScoreMatchScore?> FetchSofaScoreEventDetailAsync(HttpClient client, long eventId)
+    {
+        var baseUrl = (_configuration["ScrapingValues:SofaScoreBaseUrl"] ?? "https://www.sofascore.com").TrimEnd('/');
+        var json = await TryFetchSofaScoreTextAsync(client, $"{baseUrl}/api/v1/event/{eventId}", "event-detail");
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            return SofaScoreApiParser.TryParseEventDetail(json, baseUrl, out var score)
+                ? score
+                : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to parse SofaScore event detail for {EventId}.", eventId);
+            return null;
+        }
+    }
+
+    private SofaScoreApiEventSummary? SelectBestSofaScoreEvent(
+        IReadOnlyList<SofaScoreFixtureRequest> allFixtures,
+        SofaScoreFixtureRequest fixture,
+        IEnumerable<SofaScoreApiEventSummary> candidates)
+    {
+        return candidates
+            .Where(candidate => SofaScoreEventMatchesFixture(candidate.ToMatchScore(), fixture))
+            .OrderByDescending(candidate => ScoreSofaScoreCandidate(allFixtures, fixture, candidate))
+            .ThenBy(candidate => Math.Abs(GetKickoffDeltaMinutes(candidate.MatchTime, fixture.ScheduledMatchTimeUtc)))
+            .FirstOrDefault();
+    }
+
+    private int ScoreSofaScoreCandidate(
+        IReadOnlyList<SofaScoreFixtureRequest> allFixtures,
+        SofaScoreFixtureRequest fixture,
+        SofaScoreApiEventSummary candidate)
+    {
+        var score = 0;
+
+        if (string.Equals(NormalizeFixtureKeyPart(candidate.HomeTeam), NormalizeFixtureKeyPart(fixture.HomeTeam), StringComparison.OrdinalIgnoreCase))
+        {
+            score += 40;
+        }
+        else if (TeamsLookEquivalent(candidate.HomeTeam, fixture.HomeTeam))
+        {
+            score += 20;
+        }
+
+        if (string.Equals(NormalizeFixtureKeyPart(candidate.AwayTeam), NormalizeFixtureKeyPart(fixture.AwayTeam), StringComparison.OrdinalIgnoreCase))
+        {
+            score += 40;
+        }
+        else if (TeamsLookEquivalent(candidate.AwayTeam, fixture.AwayTeam))
+        {
+            score += 20;
+        }
+
+        if (!string.IsNullOrWhiteSpace(candidate.League) &&
+            !string.IsNullOrWhiteSpace(fixture.League) &&
+            TeamsLookEquivalent(candidate.League, fixture.League))
+        {
+            score += 10;
+        }
+
+        var kickoffDeltaMinutes = Math.Abs(GetKickoffDeltaMinutes(candidate.MatchTime, fixture.ScheduledMatchTimeUtc));
+        if (kickoffDeltaMinutes <= 5)
+        {
+            score += 25;
+        }
+        else if (kickoffDeltaMinutes <= 30)
+        {
+            score += 15;
+        }
+        else if (kickoffDeltaMinutes <= 90)
+        {
+            score += 5;
+        }
+
+        if (!fixture.MatchLocalDate.Equals(DateOnly.MinValue) &&
+            DateTimeProvider.ConvertUtcToLocal(candidate.MatchTime).Date == fixture.MatchLocalDate.ToDateTime(TimeOnly.MinValue).Date)
+        {
+            score += 20;
+        }
+
+        if (!candidate.IsLive)
+        {
+            score += 5;
+        }
+
+        var sameDayFixtureCollisions = allFixtures.Count(other =>
+            other.MatchLocalDate == fixture.MatchLocalDate &&
+            TeamsLookEquivalent(other.HomeTeam, fixture.HomeTeam) &&
+            TeamsLookEquivalent(other.AwayTeam, fixture.AwayTeam));
+
+        if (sameDayFixtureCollisions > 1)
+        {
+            score -= 15;
+        }
+
+        return score;
+    }
+
+    private static double GetKickoffDeltaMinutes(DateTime candidateMatchTimeUtc, DateTime? scheduledMatchTimeUtc)
+    {
+        if (!scheduledMatchTimeUtc.HasValue)
+        {
+            return double.MaxValue;
+        }
+
+        return Math.Abs((candidateMatchTimeUtc - scheduledMatchTimeUtc.Value).TotalMinutes);
     }
 
     private async Task<Dictionary<string, List<string>>> DiscoverSofaScoreEventUrlsAsync(
@@ -1009,7 +1284,7 @@ public partial class WebScraperService : IWebScraperService
         }
 
         var baseUrl = (_configuration["ScrapingValues:SofaScoreBaseUrl"] ?? "https://www.sofascore.com").TrimEnd('/');
-        var robotsText = await TryFetchSofaScoreTextAsync(client, $"{baseUrl}/robots.txt");
+        var robotsText = await TryFetchSofaScoreTextAsync(client, $"{baseUrl}/robots.txt", "html-discovery");
         if (string.IsNullOrWhiteSpace(robotsText))
         {
             return eventUrlsByFixture;
@@ -1110,7 +1385,7 @@ public partial class WebScraperService : IWebScraperService
             }
 
             processed++;
-            var payload = await TryFetchSofaScoreBytesAsync(client, sitemapUrl);
+            var payload = await TryFetchSofaScoreBytesAsync(client, sitemapUrl, "html-sitemap");
             if (payload.Length == 0)
             {
                 continue;
@@ -1163,17 +1438,17 @@ public partial class WebScraperService : IWebScraperService
 
     private async Task<string?> TryFetchSofaScorePageAsync(HttpClient client, string url)
     {
-        var bytes = await TryFetchSofaScoreBytesAsync(client, url);
+        var bytes = await TryFetchSofaScoreBytesAsync(client, url, "event-page-fallback");
         return bytes.Length == 0 ? null : System.Text.Encoding.UTF8.GetString(bytes);
     }
 
-    private async Task<string?> TryFetchSofaScoreTextAsync(HttpClient client, string url)
+    private async Task<string?> TryFetchSofaScoreTextAsync(HttpClient client, string url, string stage)
     {
-        var bytes = await TryFetchSofaScoreBytesAsync(client, url);
+        var bytes = await TryFetchSofaScoreBytesAsync(client, url, stage);
         return bytes.Length == 0 ? null : System.Text.Encoding.UTF8.GetString(bytes);
     }
 
-    private async Task<byte[]> TryFetchSofaScoreBytesAsync(HttpClient client, string url)
+    private async Task<byte[]> TryFetchSofaScoreBytesAsync(HttpClient client, string url, string stage)
     {
         try
         {
@@ -1182,7 +1457,7 @@ public partial class WebScraperService : IWebScraperService
             {
                 if ((int)response.StatusCode is 403 or 429)
                 {
-                    _sofaScoreSourceHealthTracker.RecordBlocked("http", $"SofaScore returned {(int)response.StatusCode} for {url}.");
+                    _sofaScoreSourceHealthTracker.RecordBlocked(stage, $"SofaScore returned {(int)response.StatusCode} for {url}.");
                 }
                 _logger.LogDebug("SofaScore fetch for {Url} returned {StatusCode}.", url, response.StatusCode);
                 return [];
@@ -1323,6 +1598,12 @@ public partial class WebScraperService : IWebScraperService
     private sealed record SofaScoreDiscoveryCacheEntry(string EventUrl, DateTime ExpiresAtUtc);
     private sealed record SofaScoreSitemapPoolCacheEntry(IReadOnlyList<string> Urls, DateTime ExpiresAtUtc);
     private sealed record SofaScoreEventUrlPoolResult(List<string> Urls, int SitemapsProcessed, bool FromCache);
+    private sealed record SofaScoreApiAttemptResult(
+        List<SofaScoreMatchScore> Scores,
+        string Stage,
+        string Detail,
+        int CandidateCount,
+        int DetailFetchCount);
 
     private sealed class AiScoreRawMatch
     {

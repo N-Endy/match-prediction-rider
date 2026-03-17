@@ -200,8 +200,8 @@
             <div style="font-size: 1.2rem; font-weight: 700; margin-top: 0.45rem;">@Model.Snapshot.SofaScoreRuntime.Status</div>
             <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.35rem;">
                 Last matches: @Model.Snapshot.SofaScoreRuntime.LastMatchCount
-                • Candidate URLs: @Model.Snapshot.SofaScoreRuntime.LastCandidateUrlCount
-                • Pages fetched: @Model.Snapshot.SofaScoreRuntime.LastPageFetchCount
+                • Candidate events: @Model.Snapshot.SofaScoreRuntime.LastCandidateUrlCount
+                • Detail fetches: @Model.Snapshot.SofaScoreRuntime.LastPageFetchCount
             </div>
             <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
                 Attempts: @Model.Snapshot.SofaScoreRuntime.TotalAttempts
@@ -213,7 +213,7 @@
             <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
                 Success rate: @Model.Snapshot.SofaScoreRuntime.SuccessRate.ToString("P0")
                 • Block rate: @Model.Snapshot.SofaScoreRuntime.BlockRate.ToString("P0")
-                • Total page fetches: @Model.Snapshot.SofaScoreRuntime.TotalPageFetches
+                • Total detail fetches: @Model.Snapshot.SofaScoreRuntime.TotalPageFetches
             </div>
             <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
                 Last success: @(Model.Snapshot.SofaScoreRuntime.LastSuccessLocal?.ToString("dd MMM yyyy, hh:mm tt") ?? "Never")

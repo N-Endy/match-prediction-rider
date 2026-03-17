@@ -800,7 +800,7 @@ public class AnalyzerService  : IAnalyzerService
                     fixture => fixture.ScheduledMatchTimeUtc);
 
                 _logger.LogInformation(
-                    "Attempting targeted fallback score match from SofaScore for {FixtureCount} incomplete fixtures using {CandidateCount} event-page rows.",
+                    "Attempting targeted fallback score match from SofaScore for {FixtureCount} incomplete fixtures using {CandidateCount} API/detail row(s).",
                     incompleteFixtures.Count,
                     sofaScores.Count);
 
