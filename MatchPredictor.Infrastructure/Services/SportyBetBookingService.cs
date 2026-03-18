@@ -21,6 +21,9 @@ namespace MatchPredictor.Infrastructure.Services;
 /// </summary>
 public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPricingService
 {
+    private const string PricingClientName = "SportyBetPricing";
+    private const string BookingClientName = "SportyBetBooking";
+
     private readonly IConfiguration _configuration;
     private readonly ILogger<SportyBetBookingService> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
@@ -54,7 +57,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             _logger.LogInformation("Searching SportyBet API for {Count} selections...", selections.Count);
 
             // Step 1: Fetch today's fixtures from SportyBet to get outcome IDs
-            var fixtureMap = await FetchTodayFixturesAsync(baseUrl, soccerSportId, market1X2, CancellationToken.None);
+            var fixtureMap = await FetchTodayFixturesAsync(baseUrl, soccerSportId, market1X2, CancellationToken.None, useBookingClient: true);
             if (fixtureMap.Count == 0)
             {
                 _logger.LogWarning("Could not fetch fixtures from SportyBet API.");
@@ -123,7 +126,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         var soccerSportId = _configuration["SportyBet:SoccerSportId"] ?? "sr:sport:1";
         var market1X2 = _configuration["SportyBet:Market1X2"] ?? "1";
 
-        var fixtures = await FetchTodayFixturesAsync(baseUrl, soccerSportId, market1X2, ct);
+        var fixtures = await FetchTodayFixturesAsync(baseUrl, soccerSportId, market1X2, ct, useBookingClient: false);
         return fixtures.Select(fixture => new SourceMarketFixture
         {
             EventId = fixture.EventId,
@@ -149,7 +152,12 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
     /// <summary>
     /// Fetches today's football fixtures from SportyBet and returns a flat list indexed by fixture.
     /// </summary>
-    private async Task<List<SportyBetFixture>> FetchTodayFixturesAsync(string baseUrl, string soccerSportId, string market1X2, CancellationToken ct)
+    private async Task<List<SportyBetFixture>> FetchTodayFixturesAsync(
+        string baseUrl,
+        string soccerSportId,
+        string market1X2,
+        CancellationToken ct,
+        bool useBookingClient)
     {
         var cacheKey = $"sportybet_fixtures_{DateTime.UtcNow:yyyyMMdd}";
         string? cachedData = null;
@@ -170,7 +178,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         }
 
         var fixtures = new List<SportyBetFixture>();
-        var client = CreateHttpClient();
+        var client = CreateHttpClient(useBookingClient ? BookingClientName : PricingClientName);
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         // Paginate — SportyBet uses pageNum (not pageIndex), todayGames=true, timeline=2.9
@@ -483,7 +491,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
     /// </summary>
     private async Task<(string? Code, string? Url)> CreateBookingCodeAsync(List<SportyBetOutcome> outcomes, string baseUrl)
     {
-        var client = CreateHttpClient();
+        var client = CreateHttpClient(BookingClientName);
 
         // Build payload exactly as SportyBet expects — each selection needs eventId, marketId, specifier, outcomeId
         var selections = outcomes.Select(o => new
@@ -535,9 +543,9 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         return (null, null);
     }
 
-    private HttpClient CreateHttpClient()
+    private HttpClient CreateHttpClient(string clientName)
     {
-        var client = _httpClientFactory.CreateClient("SportyBet");
+        var client = _httpClientFactory.CreateClient(clientName);
         var baseUrl = _configuration["SportyBet:BaseUrl"] ?? "https://www.sportybet.com";
         client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");

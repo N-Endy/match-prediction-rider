@@ -20,7 +20,7 @@ public static class ServiceExtension
                 .HandleTransientHttpError()
                 .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
         
-        services.AddHttpClient("SportyBet", client => 
+        services.AddHttpClient("SportyBetPricing", client => 
             {
                 client.Timeout = TimeSpan.FromSeconds(30);
             })
@@ -31,6 +31,15 @@ public static class ServiceExtension
             .AddPolicyHandler(HttpPolicyExtensions
                 .HandleTransientHttpError()
                 .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+
+        services.AddHttpClient("SportyBetBooking", client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(30);
+            })
+            .AddPolicyHandler(HttpPolicyExtensions
+                .HandleTransientHttpError()
+                .OrResult(msg => msg.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))));
     }
 
     public static void AddRedisMemoryCache(this IServiceCollection services, IConfiguration configuration)
