@@ -113,7 +113,11 @@ builder.Services.AddHangfire((_, config) =>
     config.UseFilter(new AutomaticRetryAttribute { Attempts = 3 });
 });
 
-builder.Services.AddHangfireServer();
+var hangfireWorkerCount = ResolveHangfireWorkerCount(builder.Configuration);
+builder.Services.AddHangfireServer(options =>
+{
+    options.WorkerCount = hangfireWorkerCount;
+});
 
 // Configure Kestrel
 var port = Environment.GetEnvironmentVariable("PORT") ?? "10000";
@@ -146,6 +150,7 @@ using (var scope = app.Services.CreateScope())
         var stats = monitoringApi.GetStatistics();
         
         logger.LogInformation("✅ Hangfire initialized - Servers: {StatsServers}, Jobs: {StatsRecurring}", stats.Servers, stats.Recurring);
+        logger.LogInformation("Configured Hangfire worker count: {WorkerCount}.", hangfireWorkerCount);
         startupState.MarkHangfireInitialized();
     }
     catch (Exception ex)
@@ -348,3 +353,24 @@ app.MapControllers();
 app.MapHealthChecks("/health");
 
 app.Run();
+
+static int ResolveHangfireWorkerCount(IConfiguration configuration)
+{
+    var configuredWorkerCount = configuration.GetValue<int?>("Hangfire:WorkerCount");
+    if (configuredWorkerCount is > 0)
+    {
+        return configuredWorkerCount.Value;
+    }
+
+    var runningOnRailway =
+        !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RAILWAY_ENVIRONMENT")) ||
+        !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RAILWAY_PROJECT_ID")) ||
+        !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RAILWAY_SERVICE_ID"));
+
+    if (runningOnRailway)
+    {
+        return 1;
+    }
+
+    return Math.Max(1, Math.Min(2, Environment.ProcessorCount));
+}

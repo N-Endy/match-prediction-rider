@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using HtmlAgilityPack;
 using Jint;
@@ -17,10 +19,18 @@ namespace MatchPredictor.Infrastructure;
 
 public partial class WebScraperService : IWebScraperService
 {
+    private static readonly SemaphoreSlim ChromeSessionGate = new(1, 1);
     private static readonly TimeSpan AiScoreBlockedCooldown = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan ChromeSessionAcquireTimeout = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan ChromeDriverCommandTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan SofaScoreDiscoveryCacheLifetime = TimeSpan.FromHours(8);
     private const int AiScoreBrowserChallengeProbeSeconds = 6;
     private static readonly TimeSpan SofaScoreSitemapPoolCacheLifetime = TimeSpan.FromHours(2);
+    private const int MaxAiScoreNuxtPayloadBytes = 5 * 1024 * 1024;
+    private const int MaxAiScoreExtractedJsonBytes = 5 * 1024 * 1024;
+    private const long AiScoreJintMemoryLimitBytes = 64L * 1024 * 1024;
+    private static readonly TimeSpan AiScoreJintTimeout = TimeSpan.FromSeconds(2);
+    private const int AiScoreJintMaxStatements = 25_000;
     private const int DefaultSofaScoreMaxSitemapsPerRun = 48;
     private const int DefaultSofaScoreMaxCandidateUrlsPerFixture = 3;
     private const int DefaultSofaScoreMaxEventPagesPerRun = 24;
@@ -64,44 +74,39 @@ public partial class WebScraperService : IWebScraperService
     {
         try
         {
-            var chromeOptions = GetChromeOptions();
             var scrapeStartedAtUtc = DateTime.UtcNow;
+            await RunWithChromeSessionAsync(
+                async driver =>
+                {
+                    DeletePreviousFile();
 
-            // var service = ChromeDriverService.CreateDefaultService();
-            // service.HideCommandPromptWindow = true;
+                    var downloadUrl = _configuration["ScrapingValues:ScrapingWebsite"] ??
+                        throw new InvalidOperationException("Download URL not configured in appsettings.json");
 
-            DeletePreviousFile();
+                    await driver.Navigate().GoToUrlAsync(downloadUrl);
 
-            var downloadUrl = _configuration["ScrapingValues:ScrapingWebsite"] ?? 
-                throw new InvalidOperationException("Download URL not configured in appsettings.json");
-            
-            using var driver = new ChromeDriver(chromeOptions);
-            await driver.Navigate().GoToUrlAsync(downloadUrl);
+                    // ensure page fully loaded first
+                    WaitForDocumentReady(driver);
 
-            // ensure page fully loaded first
-            WaitForDocumentReady(driver);
+                    // Accept/hide cookie banners if any (optional but helpful)
+                    DismissCookieBanners(driver);
 
-            // Accept/hide cookie banners if any (optional but helpful)
-            DismissCookieBanners(driver);
+                    // Choose one: if your selector in config is XPath, set isXPath=true; else false for CSS
+                    var selector = _configuration["ScrapingValues:PredictionsButtonSelector"]
+                                   ?? throw new InvalidOperationException("Predictions button selector not configured");
+                    var isXPath = selector.TrimStart().StartsWith("/") || selector.StartsWith("(."); // crude check
 
-            // Choose one: if your selector in config is XPath, set isXPath=true; else false for CSS
-            var selector = _configuration["ScrapingValues:PredictionsButtonSelector"]
-                           ?? throw new InvalidOperationException("Predictions button selector not configured");
-            var isXPath = selector.TrimStart().StartsWith("/") || selector.StartsWith("(."); // crude check
+                    var clicked = ClickByJsAcrossFrames(driver, selector, isXPath, timeoutSec: 30);
+                    if (!clicked)
+                    {
+                        await File.WriteAllTextAsync("debug.html", driver.PageSource);
+                        throw new WebDriverTimeoutException($"Could not locate/click element by {(isXPath ? "XPath" : "CSS")}: {selector}");
+                    }
 
-            var clicked = ClickByJsAcrossFrames(driver, selector, isXPath, timeoutSec: 30);
-            if (!clicked)
-            {
-                // Dump for debugging and fail fast
-                await File.WriteAllTextAsync("debug.html", driver.PageSource);
-                //((ITakesScreenshot)driver).GetScreenshot().SaveAsFile("debug.png", ScreenshotImageFormat.Png);
-                throw new WebDriverTimeoutException($"Could not locate/click element by {(isXPath ? "XPath" : "CSS")}: {selector}");
-            }
-
-            _logger.LogInformation("Download button clicked successfully.");
-
-
-            await CheckFileIsDownloaded(scrapeStartedAtUtc);
+                    _logger.LogInformation("Download button clicked successfully.");
+                    await CheckFileIsDownloaded(scrapeStartedAtUtc);
+                },
+                purpose: "match data scraping");
         }
         catch (Exception ex)
         {
@@ -114,101 +119,105 @@ public partial class WebScraperService : IWebScraperService
     {
         try
         {
-            var chromeOptions = GetChromeOptions();
-
-            var downloadUrl = _configuration["ScrapingValues:ScoresWebsite"] ?? 
-                              throw new InvalidOperationException("Download URL for scores is not configured in appsettings.json");
-            
-            using var driver = new ChromeDriver(chromeOptions);
-            _logger.LogInformation("Checking URL for scores...");
-            await driver.Navigate().GoToUrlAsync(downloadUrl);
-            
-            _logger.LogInformation("Commencing scrapping for scores in inner HTML...");
-            
-            // Wait for dynamic content to render
-            await Task.Delay(3000);
-            
-            var container = driver.FindElement(By.Id("score-data"));
-            var rawHtml = container.GetAttribute("innerHTML");
-
-            var doc = new HtmlDocument();
-            doc.LoadHtml($"<div>{rawHtml}</div>");
-
-            var currentLeague = "";
-
-            // Use direct ChildNodes — NOT recursive Nodes() which flattens the tree
-            var nodes = doc.DocumentNode.FirstChild.ChildNodes.ToList();
-            
-          var matchScores = new List<MatchScore>();
-
-            for (var i = 0; i < nodes.Count; i++)
-            {
-                var node = nodes[i];
-
-                switch (node.Name)
+            return await RunWithChromeSessionAsync(
+                async driver =>
                 {
-                    case "h4":
-                        currentLeague = node.InnerText.Split("Standings")[0].Trim();
-                        break;
-                    case "span":
+                    var downloadUrl = _configuration["ScrapingValues:ScoresWebsite"] ??
+                                      throw new InvalidOperationException("Download URL for scores is not configured in appsettings.json");
+
+                    _logger.LogInformation("Checking URL for scores...");
+                    await driver.Navigate().GoToUrlAsync(downloadUrl);
+
+                    _logger.LogInformation("Commencing scrapping for scores in inner HTML...");
+
+                    // Wait for dynamic content to render
+                    await Task.Delay(3000);
+
+                    var container = driver.FindElement(By.Id("score-data"));
+                    var rawHtml = container.GetAttribute("innerHTML");
+
+                    var doc = new HtmlDocument();
+                    doc.LoadHtml($"<div>{rawHtml}</div>");
+
+                    var currentLeague = "";
+
+                    // Use direct ChildNodes — NOT recursive Nodes() which flattens the tree
+                    var nodes = doc.DocumentNode.FirstChild.ChildNodes.ToList();
+
+                    var matchScores = new List<MatchScore>();
+
+                    for (var i = 0; i < nodes.Count; i++)
                     {
-                        var currentTime = node.InnerText.Trim();
-                        var isLive = node.GetAttributeValue("class", "") == "live";
+                        var node = nodes[i];
 
-                        // Look ahead for teams (text node) and score (a.fin or live score link)
-                        string? teams = null;
-                        string? score = null;
-
-                        for (var j = 1; j <= 4 && i + j < nodes.Count; j++)
+                        switch (node.Name)
                         {
-                            var next = nodes[i + j];
-                            
-                            if (next.Name == "#text" && next.InnerText.Contains(" - "))
+                            case "h4":
+                                currentLeague = node.InnerText.Split("Standings")[0].Trim();
+                                break;
+                            case "span":
                             {
-                                teams = next.InnerText.Trim();
-                            }
-                            else if (next.Name == "a")
-                            {
-                                var cls = next.GetAttributeValue("class", "");
-                                // Accept both finished ("fin") and live scores
-                                if (cls == "fin" || isLive || cls == "")
+                                var currentTime = node.InnerText.Trim();
+                                var isLive = node.GetAttributeValue("class", "") == "live";
+
+                                // Look ahead for teams (text node) and score (a.fin or live score link)
+                                string? teams = null;
+                                string? score = null;
+
+                                for (var j = 1; j <= 4 && i + j < nodes.Count; j++)
                                 {
-                                    var rawString = next.InnerText.Trim();
-                                    var m = MyRegex().Match(rawString);
-                                    if (m.Success)
-                                        score = m.Value;
+                                    var next = nodes[i + j];
+
+                                    if (next.Name == "#text" && next.InnerText.Contains(" - "))
+                                    {
+                                        teams = next.InnerText.Trim();
+                                    }
+                                    else if (next.Name == "a")
+                                    {
+                                        var cls = next.GetAttributeValue("class", "");
+                                        // Accept both finished ("fin") and live scores
+                                        if (cls == "fin" || isLive || cls == "")
+                                        {
+                                            var rawString = next.InnerText.Trim();
+                                            var m = MyRegex().Match(rawString);
+                                            if (m.Success)
+                                            {
+                                                score = m.Value;
+                                            }
+                                        }
+                                    }
                                 }
+
+                                if (!string.IsNullOrWhiteSpace(score) && !string.IsNullOrWhiteSpace(teams) && teams.Contains(" - "))
+                                {
+                                    var split = teams.Split(" - ");
+                                    var home = split[0].Trim();
+                                    var away = split[1].Trim();
+
+                                    DateTime matchTime;
+                                    try { matchTime = ParseScoreMatchTime(currentTime, isLive); }
+                                    catch { matchTime = DateTime.UtcNow; } // Live matches may not expose a kickoff time in the listing
+
+                                    matchScores.Add(new MatchScore
+                                    {
+                                        League = currentLeague,
+                                        HomeTeam = home,
+                                        AwayTeam = away,
+                                        Score = score,
+                                        MatchTime = matchTime,
+                                        BTTSLabel = IsBtts(score),
+                                        IsLive = isLive
+                                    });
+                                }
+
+                                break;
                             }
                         }
-
-                        if (!string.IsNullOrWhiteSpace(score) && !string.IsNullOrWhiteSpace(teams) && teams.Contains(" - "))
-                        {
-                            var split = teams.Split(" - ");
-                            var home = split[0].Trim();
-                            var away = split[1].Trim();
-
-                            DateTime matchTime;
-                            try { matchTime = ParseScoreMatchTime(currentTime, isLive); }
-                            catch { matchTime = DateTime.UtcNow; } // Live matches may not expose a kickoff time in the listing
-                            
-                            matchScores.Add(new MatchScore
-                            {
-                                League = currentLeague,
-                                HomeTeam = home,
-                                AwayTeam = away,
-                                Score = score,
-                                MatchTime = matchTime,
-                                BTTSLabel = IsBtts(score),
-                                IsLive = isLive
-                            });
-                        }
-
-                        break;
                     }
-                }
-            }
-            
-            return matchScores;
+
+                    return matchScores;
+                },
+                purpose: "score scraping");
         }
         catch (Exception e)
         {
@@ -410,54 +419,50 @@ public partial class WebScraperService : IWebScraperService
 
         try
         {
-            var chromeOptions = GetChromeOptions();
-            chromeOptions.AddArgument("--disable-blink-features=AutomationControlled");
-            chromeOptions.AddExcludedArgument("enable-automation");
-            chromeOptions.AddAdditionalOption("useAutomationExtension", false);
-            chromeOptions.AddArgument("--user-agent=Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
-            chromeOptions.AddArgument("--disable-gpu");
-            
-            using var driver = new ChromeDriver(chromeOptions);
-            var js = (IJavaScriptExecutor)driver;
-            js.ExecuteScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
-
-            await driver.Navigate().GoToUrlAsync(aiScoreUrl);
-
-            var elapsed = 0;
-            while (elapsed < AiScoreBrowserChallengeProbeSeconds)
-            {
-                await Task.Delay(1000);
-                elapsed += 1;
-                var src = driver.PageSource;
-                var title = driver.Title;
-                if (!LooksLikeAiScoreChallengePage(src, title))
+            return await RunWithChromeSessionAsync(
+                async driver =>
                 {
-                    _logger.LogInformation("AiScore browser challenge cleared after {Elapsed}s.", elapsed);
-                    break;
-                }
-                _logger.LogDebug("Still waiting for AiScore challenge to clear at {Elapsed}s...", elapsed);
-            }
+                    var js = (IJavaScriptExecutor)driver;
+                    js.ExecuteScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
 
-            var currentHtml = driver.PageSource;
-            var currentTitle = driver.Title;
-            if (LooksLikeAiScoreChallengePage(currentHtml, currentTitle))
-            {
-                _logger.LogWarning(
-                    "AiScore Browser: challenge page detected after {Elapsed}s. Title: '{Title}', HTML length: {Len}.",
-                    elapsed,
-                    currentTitle,
-                    currentHtml.Length);
-                return new AiScoreAttemptResult([], AiScoreAttemptStatus.Blocked, $"AiScore browser was blocked by a challenge page ('{currentTitle}').");
-            }
+                    await driver.Navigate().GoToUrlAsync(aiScoreUrl);
 
-            await Task.Delay(2000);
+                    var elapsed = 0;
+                    while (elapsed < AiScoreBrowserChallengeProbeSeconds)
+                    {
+                        await Task.Delay(1000);
+                        elapsed += 1;
+                        var src = driver.PageSource;
+                        var title = driver.Title;
+                        if (!LooksLikeAiScoreChallengePage(src, title))
+                        {
+                            _logger.LogInformation("AiScore browser challenge cleared after {Elapsed}s.", elapsed);
+                            break;
+                        }
 
-            // --- Strategy 1: Extract __NUXT__ via JavaScript executor (preferred) ---
-            var hasNuxt = (bool)js.ExecuteScript("return !!window.__NUXT__;");
-            if (hasNuxt)
-            {
-                _logger.LogInformation("Found window.__NUXT__ via JS executor.");
-                var nuxtJson = (string)js.ExecuteScript(@"
+                        _logger.LogDebug("Still waiting for AiScore challenge to clear at {Elapsed}s...", elapsed);
+                    }
+
+                    var currentHtml = driver.PageSource;
+                    var currentTitle = driver.Title;
+                    if (LooksLikeAiScoreChallengePage(currentHtml, currentTitle))
+                    {
+                        _logger.LogWarning(
+                            "AiScore Browser: challenge page detected after {Elapsed}s. Title: '{Title}', HTML length: {Len}.",
+                            elapsed,
+                            currentTitle,
+                            currentHtml.Length);
+                        return new AiScoreAttemptResult([], AiScoreAttemptStatus.Blocked, $"AiScore browser was blocked by a challenge page ('{currentTitle}').");
+                    }
+
+                    await Task.Delay(2000);
+
+                    // --- Strategy 1: Extract __NUXT__ via JavaScript executor (preferred) ---
+                    var hasNuxt = js.ExecuteScript("return !!window.__NUXT__;") is true;
+                    if (hasNuxt)
+                    {
+                        _logger.LogInformation("Found window.__NUXT__ via JS executor.");
+                        var nuxtJson = js.ExecuteScript(@"
                     var s = window.__NUXT__ && window.__NUXT__.state && window.__NUXT__.state['football/home'];
                     if (!s) return JSON.stringify({matches:[], teams:[], comps:[]});
                     return JSON.stringify({ 
@@ -465,38 +470,46 @@ public partial class WebScraperService : IWebScraperService
                         teams: s.matchesData_teams || [], 
                         comps: s.matchesData_competitions || [] 
                     });
-                ");
-                var matches = ParseAiScoreExtractedJson(nuxtJson);
-                return matches.Count > 0
-                    ? new AiScoreAttemptResult(matches, AiScoreAttemptStatus.Success, $"Fetched {matches.Count} match(es) from AiScore browser extraction.")
-                    : new AiScoreAttemptResult([], AiScoreAttemptStatus.Empty, "AiScore browser found hydrated state, but no match rows were extracted.");
-            }
+                        ")?.ToString();
+                        if (string.IsNullOrWhiteSpace(nuxtJson))
+                        {
+                            return new AiScoreAttemptResult([], AiScoreAttemptStatus.Empty, "AiScore browser found hydrated state, but the extracted JSON payload was empty.");
+                        }
 
-            // --- Strategy 2: Extract __NEXT_DATA__ via JS executor ---
-            var hasNext = (bool)js.ExecuteScript("return !!window.__NEXT_DATA__;");
-            if (hasNext)
-            {
-                _logger.LogInformation("Found window.__NEXT_DATA__ via JS executor.");
-                var nextJson = (string)js.ExecuteScript("return JSON.stringify(window.__NEXT_DATA__);");
-                _logger.LogDebug("NEXT_DATA preview: {Preview}", nextJson?.Substring(0, Math.Min(nextJson.Length, 300)));
-                // For now, log and fall through — parse if structure is known
-            }
+                        var matches = ParseAiScoreExtractedJson(nuxtJson);
+                        return matches.Count > 0
+                            ? new AiScoreAttemptResult(matches, AiScoreAttemptStatus.Success, $"Fetched {matches.Count} match(es) from AiScore browser extraction.")
+                            : new AiScoreAttemptResult([], AiScoreAttemptStatus.Empty, "AiScore browser found hydrated state, but no match rows were extracted.");
+                    }
 
-            // --- Strategy 3: Regex on page source (legacy fallback) ---
-            var html = driver.PageSource;
-            var result = ParseAiScoreNuxtState(html);
-            if (result.Count > 0)
-            {
-                return new AiScoreAttemptResult(result, AiScoreAttemptStatus.Success, $"Fetched {result.Count} match(es) from AiScore browser HTML.");
-            }
+                    // --- Strategy 2: Extract __NEXT_DATA__ via JS executor ---
+                    var hasNext = js.ExecuteScript("return !!window.__NEXT_DATA__;") is true;
+                    if (hasNext)
+                    {
+                        _logger.LogInformation("Found window.__NEXT_DATA__ via JS executor.");
+                        var nextJson = js.ExecuteScript("return JSON.stringify(window.__NEXT_DATA__);")?.ToString();
+                        _logger.LogDebug("NEXT_DATA preview: {Preview}", nextJson?.Substring(0, Math.Min(nextJson.Length, 300)));
+                        // For now, log and fall through — parse if structure is known
+                    }
 
-            // Debugging: log what the page actually contains
-            var pageTitle = driver.Title;
-            var pageLen = html.Length;
-            _logger.LogWarning("AiScore Browser: No data extracted. Page title: '{Title}', HTML length: {Len}, first 300 chars: {Preview}",
-                pageTitle, pageLen, html.Substring(0, Math.Min(pageLen, 300)));
+                    // --- Strategy 3: Regex on page source (legacy fallback) ---
+                    var html = driver.PageSource;
+                    var result = ParseAiScoreNuxtState(html);
+                    if (result.Count > 0)
+                    {
+                        return new AiScoreAttemptResult(result, AiScoreAttemptStatus.Success, $"Fetched {result.Count} match(es) from AiScore browser HTML.");
+                    }
 
-            return new AiScoreAttemptResult([], AiScoreAttemptStatus.Empty, $"AiScore browser loaded '{pageTitle}' but no extractable match data was found.");
+                    // Debugging: log what the page actually contains
+                    var pageTitle = driver.Title;
+                    var pageLen = html.Length;
+                    _logger.LogWarning("AiScore Browser: No data extracted. Page title: '{Title}', HTML length: {Len}, first 300 chars: {Preview}",
+                        pageTitle, pageLen, html.Substring(0, Math.Min(pageLen, 300)));
+
+                    return new AiScoreAttemptResult([], AiScoreAttemptStatus.Empty, $"AiScore browser loaded '{pageTitle}' but no extractable match data was found.");
+                },
+                ConfigureAiScoreBrowserOptions,
+                "AiScore browser scrape");
         }
         catch (Exception ex)
         {
@@ -514,6 +527,16 @@ public partial class WebScraperService : IWebScraperService
 
         try
         {
+            var payloadBytes = Encoding.UTF8.GetByteCount(extractedJson);
+            if (payloadBytes > MaxAiScoreExtractedJsonBytes)
+            {
+                _logger.LogWarning(
+                    "Skipping AiScore extracted JSON parse because the payload size {PayloadBytes} bytes exceeded the safe limit of {LimitBytes} bytes.",
+                    payloadBytes,
+                    MaxAiScoreExtractedJsonBytes);
+                return matchScores;
+            }
+
             using var doc = System.Text.Json.JsonDocument.Parse(extractedJson);
             var root = doc.RootElement;
             var matchesArr = root.GetProperty("matches");
@@ -610,7 +633,20 @@ public partial class WebScraperService : IWebScraperService
         
         try
         {
-            var engine = new Engine();
+            var payloadBytes = Encoding.UTF8.GetByteCount(jsonStr);
+            if (payloadBytes > MaxAiScoreNuxtPayloadBytes)
+            {
+                _logger.LogWarning(
+                    "Skipping AiScore Nuxt parsing because the payload size {PayloadBytes} bytes exceeded the safe limit of {LimitBytes} bytes.",
+                    payloadBytes,
+                    MaxAiScoreNuxtPayloadBytes);
+                return matchScores;
+            }
+
+            var engine = new Engine(options => options
+                .TimeoutInterval(AiScoreJintTimeout)
+                .LimitMemory(AiScoreJintMemoryLimitBytes)
+                .MaxStatements(AiScoreJintMaxStatements));
             engine.Execute("var nuxt = " + jsonStr);
             var extractedJson = engine.Evaluate(@"
                 JSON.stringify({ 
@@ -980,66 +1016,66 @@ public partial class WebScraperService : IWebScraperService
             return await FetchSofaScoreBrowserEventPagesAsync(fixtures, eventUrlsByFixture);
         }
 
-        var chromeOptions = GetChromeOptions();
-        chromeOptions.AddArgument("--disable-gpu");
-        chromeOptions.AddArgument("--lang=en-US");
-        chromeOptions.AddArgument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
-
-        using var driver = new ChromeDriver(chromeOptions);
-        var listingUrls = BuildSofaScoreBrowserListingUrls();
-        var discoveredUrls = await CollectSofaScoreCandidateUrlsViaBrowserAsync(driver, listingUrls);
-
-        if (discoveredUrls.Count == 0)
-        {
-            return new SofaScoreApiAttemptResult(
-                [],
-                "browser-discovery",
-                $"SofaScore browser discovery found no football match URLs across {listingUrls.Count} rendered listing page(s).",
-                candidateUrlCount,
-                0);
-        }
-
-        var maxCandidateUrlsPerFixture = ParseConfiguredInt("ScrapingValues:SofaScoreMaxCandidateUrlsPerFixture", DefaultSofaScoreMaxCandidateUrlsPerFixture);
-        foreach (var fixture in unresolvedFixtures)
-        {
-            var cacheKey = BuildSofaScoreFixtureCacheKey(fixture);
-            var homeSlugs = SofaScoreDiscoveryHelper.BuildSlugCandidates(fixture.HomeTeam);
-            var awaySlugs = SofaScoreDiscoveryHelper.BuildSlugCandidates(fixture.AwayTeam);
-
-            var matches = discoveredUrls
-                .Select(url => new
-                {
-                    Url = url,
-                    Score = SofaScoreDiscoveryHelper.ScoreUrlAgainstFixture(url, homeSlugs, awaySlugs)
-                })
-                .Where(candidate => candidate.Score > 0)
-                .OrderByDescending(candidate => candidate.Score)
-                .ThenBy(candidate => candidate.Url)
-                .Take(maxCandidateUrlsPerFixture)
-                .Select(candidate => candidate.Url)
-                .ToList();
-
-            if (matches.Count == 0)
+        return await RunWithChromeSessionAsync(
+            async driver =>
             {
-                continue;
-            }
+                var listingUrls = BuildSofaScoreBrowserListingUrls();
+                var discoveredUrls = await CollectSofaScoreCandidateUrlsViaBrowserAsync(driver, listingUrls);
 
-            eventUrlsByFixture[cacheKey] = matches;
-            candidateUrlCount += matches.Count;
-            SofaScoreEventUrlCache[cacheKey] = new SofaScoreDiscoveryCacheEntry(matches[0], nowUtc.Add(SofaScoreDiscoveryCacheLifetime));
-        }
+                if (discoveredUrls.Count == 0)
+                {
+                    return new SofaScoreApiAttemptResult(
+                        [],
+                        "browser-discovery",
+                        $"SofaScore browser discovery found no football match URLs across {listingUrls.Count} rendered listing page(s).",
+                        candidateUrlCount,
+                        0);
+                }
 
-        if (eventUrlsByFixture.Count == 0)
-        {
-            return new SofaScoreApiAttemptResult(
-                [],
-                "browser-discovery",
-                $"SofaScore browser discovered {discoveredUrls.Count} football match URL(s) but none matched the {fixtures.Count} targeted fixtures.",
-                discoveredUrls.Count,
-                0);
-        }
+                var maxCandidateUrlsPerFixture = ParseConfiguredInt("ScrapingValues:SofaScoreMaxCandidateUrlsPerFixture", DefaultSofaScoreMaxCandidateUrlsPerFixture);
+                foreach (var fixture in unresolvedFixtures)
+                {
+                    var cacheKey = BuildSofaScoreFixtureCacheKey(fixture);
+                    var homeSlugs = SofaScoreDiscoveryHelper.BuildSlugCandidates(fixture.HomeTeam);
+                    var awaySlugs = SofaScoreDiscoveryHelper.BuildSlugCandidates(fixture.AwayTeam);
 
-        return await FetchSofaScoreBrowserEventPagesAsync(fixtures, eventUrlsByFixture, driver);
+                    var matches = discoveredUrls
+                        .Select(url => new
+                        {
+                            Url = url,
+                            Score = SofaScoreDiscoveryHelper.ScoreUrlAgainstFixture(url, homeSlugs, awaySlugs)
+                        })
+                        .Where(candidate => candidate.Score > 0)
+                        .OrderByDescending(candidate => candidate.Score)
+                        .ThenBy(candidate => candidate.Url)
+                        .Take(maxCandidateUrlsPerFixture)
+                        .Select(candidate => candidate.Url)
+                        .ToList();
+
+                    if (matches.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    eventUrlsByFixture[cacheKey] = matches;
+                    candidateUrlCount += matches.Count;
+                    SofaScoreEventUrlCache[cacheKey] = new SofaScoreDiscoveryCacheEntry(matches[0], nowUtc.Add(SofaScoreDiscoveryCacheLifetime));
+                }
+
+                if (eventUrlsByFixture.Count == 0)
+                {
+                    return new SofaScoreApiAttemptResult(
+                        [],
+                        "browser-discovery",
+                        $"SofaScore browser discovered {discoveredUrls.Count} football match URL(s) but none matched the {fixtures.Count} targeted fixtures.",
+                        discoveredUrls.Count,
+                        0);
+                }
+
+                return await FetchSofaScoreBrowserEventPagesAsync(fixtures, eventUrlsByFixture, driver);
+            },
+            ConfigureSofaScoreBrowserOptions,
+            "SofaScore browser crawl");
     }
 
     private async Task<SofaScoreApiAttemptResult> FetchSofaScoreBrowserEventPagesAsync(
@@ -1047,18 +1083,22 @@ public partial class WebScraperService : IWebScraperService
         IReadOnlyDictionary<string, List<string>> eventUrlsByFixture,
         ChromeDriver? sharedDriver = null)
     {
-        var ownsDriver = sharedDriver is null;
-        var chromeOptions = default(ChromeOptions);
-        if (ownsDriver)
+        if (sharedDriver is null)
         {
-            chromeOptions = GetChromeOptions();
-            chromeOptions.AddArgument("--disable-gpu");
-            chromeOptions.AddArgument("--lang=en-US");
-            chromeOptions.AddArgument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
+            return await RunWithChromeSessionAsync(
+                driver => FetchSofaScoreBrowserEventPagesCoreAsync(fixtures, eventUrlsByFixture, driver),
+                ConfigureSofaScoreBrowserOptions,
+                "SofaScore browser event fetch");
         }
 
-        using var createdDriver = ownsDriver ? new ChromeDriver(chromeOptions!) : null;
-        var driver = sharedDriver ?? createdDriver!;
+        return await FetchSofaScoreBrowserEventPagesCoreAsync(fixtures, eventUrlsByFixture, sharedDriver);
+    }
+
+    private async Task<SofaScoreApiAttemptResult> FetchSofaScoreBrowserEventPagesCoreAsync(
+        IReadOnlyList<SofaScoreFixtureRequest> fixtures,
+        IReadOnlyDictionary<string, List<string>> eventUrlsByFixture,
+        ChromeDriver driver)
+    {
         var eventPageBudget = ParseConfiguredInt("ScrapingValues:SofaScoreMaxEventPagesPerRun", DefaultSofaScoreMaxEventPagesPerRun);
         var pagesFetched = 0;
         var scrapedScores = new List<SofaScoreMatchScore>();
@@ -1967,11 +2007,45 @@ public partial class WebScraperService : IWebScraperService
         chromeOptions.AddUserProfilePreference("download.prompt_for_download", false);
         chromeOptions.AddUserProfilePreference("download.directory_upgrade", true);
         chromeOptions.AddUserProfilePreference("safebrowsing.enabled", true);
+        chromeOptions.AddUserProfilePreference("profile.default_content_setting_values.images", 2);
+        chromeOptions.AddUserProfilePreference("profile.managed_default_content_settings.images", 2);
 
         SetHeadlessViewport(chromeOptions); // <-- use the helper above
         chromeOptions.AddArgument("--remote-debugging-address=127.0.0.1");
+        chromeOptions.AddArgument("--disable-background-networking");
+        chromeOptions.AddArgument("--disable-background-timer-throttling");
+        chromeOptions.AddArgument("--disable-breakpad");
+        chromeOptions.AddArgument("--disable-component-update");
+        chromeOptions.AddArgument("--disable-default-apps");
+        chromeOptions.AddArgument("--disable-extensions");
+        chromeOptions.AddArgument("--disable-features=Translate,BackForwardCache,OptimizationHints,MediaRouter");
+        chromeOptions.AddArgument("--disable-renderer-backgrounding");
+        chromeOptions.AddArgument("--disable-sync");
+        chromeOptions.AddArgument("--metrics-recording-only");
+        chromeOptions.AddArgument("--mute-audio");
+        chromeOptions.AddArgument("--no-first-run");
+        chromeOptions.AddArgument("--password-store=basic");
+        chromeOptions.AddArgument("--use-mock-keychain");
+        chromeOptions.AddArgument("--blink-settings=imagesEnabled=false");
+        chromeOptions.AddArgument("--js-flags=--max-old-space-size=128");
 
         return chromeOptions;
+    }
+
+    private static void ConfigureAiScoreBrowserOptions(ChromeOptions chromeOptions)
+    {
+        chromeOptions.AddArgument("--disable-blink-features=AutomationControlled");
+        chromeOptions.AddExcludedArgument("enable-automation");
+        chromeOptions.AddAdditionalOption("useAutomationExtension", false);
+        chromeOptions.AddArgument("--user-agent=Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+        chromeOptions.AddArgument("--disable-gpu");
+    }
+
+    private static void ConfigureSofaScoreBrowserOptions(ChromeOptions chromeOptions)
+    {
+        chromeOptions.AddArgument("--disable-gpu");
+        chromeOptions.AddArgument("--lang=en-US");
+        chromeOptions.AddArgument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
     }
 
     
@@ -2027,9 +2101,126 @@ public partial class WebScraperService : IWebScraperService
     private static void SetHeadlessViewport(ChromeOptions options)
     {
         options.AddArgument("--headless=new");
-        options.AddArgument("--window-size=1440,2400");
+        options.AddArgument("--window-size=1280,1400");
         options.AddArgument("--no-sandbox");
         options.AddArgument("--disable-dev-shm-usage");
+    }
+
+    private async Task RunWithChromeSessionAsync(
+        Func<ChromeDriver, Task> work,
+        Action<ChromeOptions>? configureOptions = null,
+        string purpose = "browser session")
+    {
+        await RunWithChromeSessionAsync(
+            async driver =>
+            {
+                await work(driver);
+                return true;
+            },
+            configureOptions,
+            purpose);
+    }
+
+    private async Task<T> RunWithChromeSessionAsync<T>(
+        Func<ChromeDriver, Task<T>> work,
+        Action<ChromeOptions>? configureOptions = null,
+        string purpose = "browser session")
+    {
+        var lockAcquired = false;
+        ChromeDriverService? service = null;
+        ChromeDriver? driver = null;
+
+        try
+        {
+            _logger.LogDebug("Waiting for the shared Chrome session gate for {Purpose}.", purpose);
+            if (!await ChromeSessionGate.WaitAsync(ChromeSessionAcquireTimeout))
+            {
+                throw new TimeoutException($"Timed out waiting for the shared Chrome session gate for {purpose}.");
+            }
+
+            lockAcquired = true;
+            service = CreateChromeDriverService();
+            var chromeOptions = GetChromeOptions();
+            configureOptions?.Invoke(chromeOptions);
+
+            driver = new ChromeDriver(service, chromeOptions, ChromeDriverCommandTimeout);
+            return await work(driver);
+        }
+        finally
+        {
+            if (driver is not null)
+            {
+                try
+                {
+                    driver.Quit();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "ChromeDriver quit failed during {Purpose}.", purpose);
+                }
+
+                try
+                {
+                    driver.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "ChromeDriver dispose failed during {Purpose}.", purpose);
+                }
+            }
+
+            if (service is not null)
+            {
+                ForceStopLingeringChromeDriverProcess(service, purpose);
+                service.Dispose();
+            }
+
+            if (lockAcquired)
+            {
+                ChromeSessionGate.Release();
+            }
+        }
+    }
+
+    private static ChromeDriverService CreateChromeDriverService()
+    {
+        var service = ChromeDriverService.CreateDefaultService();
+        service.HideCommandPromptWindow = true;
+        service.SuppressInitialDiagnosticInformation = true;
+        service.InitializationTimeout = TimeSpan.FromSeconds(30);
+        return service;
+    }
+
+    private void ForceStopLingeringChromeDriverProcess(ChromeDriverService service, string purpose)
+    {
+        if (service.ProcessId <= 0)
+        {
+            return;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(service.ProcessId);
+            if (process.HasExited)
+            {
+                return;
+            }
+
+            _logger.LogWarning(
+                "Force-stopping lingering ChromeDriver process {ProcessId} after {Purpose}.",
+                service.ProcessId,
+                purpose);
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(5000);
+        }
+        catch (ArgumentException)
+        {
+            // Process already exited.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to force-stop lingering ChromeDriver process {ProcessId}.", service.ProcessId);
+        }
     }
 
     private static void WaitForDocumentReady(IWebDriver driver, int sec = 30)
@@ -2040,7 +2231,7 @@ public partial class WebScraperService : IWebScraperService
             try
             {
                 var js = (IJavaScriptExecutor)d;
-                return (string)js.ExecuteScript("return document.readyState") == "complete";
+                return string.Equals(js.ExecuteScript("return document.readyState")?.ToString(), "complete", StringComparison.Ordinal);
             }
             catch { return false; }
         });

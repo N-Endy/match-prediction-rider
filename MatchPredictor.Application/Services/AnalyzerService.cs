@@ -61,6 +61,7 @@ public class AnalyzerService  : IAnalyzerService
     }
 
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
+    [DisableConcurrentExecution(timeoutInSeconds: 3600)]
     public async Task ExtractDataAndSyncDatabaseAsync(int predictionDayOffset = 0, string? runReason = null)
     {
         var targetLocalDateTime = DateTimeProvider.GetLocalTime().Date.AddDays(predictionDayOffset);
@@ -188,6 +189,7 @@ public class AnalyzerService  : IAnalyzerService
     }
 
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
+    [DisableConcurrentExecution(timeoutInSeconds: 3600)]
     public async Task GeneratePredictionsAsync(string? targetDate = null, string? runReason = null)
     {
         var targetDateString = ResolveTargetDateString(targetDate);
