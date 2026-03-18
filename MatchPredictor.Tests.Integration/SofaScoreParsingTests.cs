@@ -52,6 +52,142 @@ public class SofaScoreParsingTests
     }
 
     [Fact]
+    public void ParseResponses_ReturnsBrowserFetchResponses()
+    {
+        const string json = """
+            [
+              {
+                "relativePath": "/api/v1/sport/football/events/live",
+                "ok": true,
+                "status": 200,
+                "body": "{\"events\":[]}",
+                "error": null
+              }
+            ]
+            """;
+
+        var responses = SofaScoreBrowserFetchParser.ParseResponses(json);
+
+        var response = Assert.Single(responses);
+        Assert.Equal("/api/v1/sport/football/events/live", response.RelativePath);
+        Assert.True(response.Ok);
+        Assert.Equal(200, response.Status);
+    }
+
+    [Fact]
+    public void ParseEventSummaries_SplitsBrowserLiveAndScheduledPayloads()
+    {
+        const string liveJson = """
+            {
+              "events": [
+                {
+                  "id": 201,
+                  "startTimestamp": 1773763200,
+                  "status": { "type": "inprogress", "description": "52'" },
+                  "homeTeam": { "name": "Arsenal" },
+                  "awayTeam": { "name": "Chelsea" },
+                  "tournament": {
+                    "name": "Premier League",
+                    "category": { "name": "England" }
+                  },
+                  "homeScore": { "current": 1, "display": 1, "period1": 1 },
+                  "awayScore": { "current": 0, "display": 0, "period1": 0 }
+                }
+              ]
+            }
+            """;
+
+        const string scheduledJson = """
+            {
+              "events": [
+                {
+                  "id": 202,
+                  "startTimestamp": 1773766800,
+                  "status": { "type": "finished", "description": "FT" },
+                  "homeTeam": { "name": "Real Madrid" },
+                  "awayTeam": { "name": "Barcelona" },
+                  "tournament": {
+                    "name": "LaLiga",
+                    "category": { "name": "Spain" }
+                  },
+                  "homeScore": { "current": 2, "display": 2, "period1": 1 },
+                  "awayScore": { "current": 1, "display": 1, "period1": 1 }
+                }
+              ]
+            }
+            """;
+
+        var responses = new[]
+        {
+            new SofaScoreBrowserFetchResponse
+            {
+                RelativePath = "/api/v1/sport/football/events/live",
+                Ok = true,
+                Status = 200,
+                Body = liveJson
+            },
+            new SofaScoreBrowserFetchResponse
+            {
+                RelativePath = "/api/v1/sport/football/scheduled-events/2026-03-18",
+                Ok = true,
+                Status = 200,
+                Body = scheduledJson
+            }
+        };
+
+        SofaScoreBrowserFetchParser.ParseEventSummaries(
+            responses,
+            "https://www.sofascore.com",
+            out var liveEvents,
+            out var scheduledEvents);
+
+        Assert.Single(liveEvents);
+        Assert.Single(scheduledEvents);
+        Assert.Equal(201, liveEvents[0].EventId);
+        Assert.Equal(202, scheduledEvents[0].EventId);
+    }
+
+    [Fact]
+    public void ParseEventDetails_ParsesBrowserDetailPayloadsByEventId()
+    {
+        const string detailJson = """
+            {
+              "event": {
+                "id": 501,
+                "startTimestamp": 1773853200,
+                "status": { "type": "finished", "description": "After extra time" },
+                "homeTeam": { "name": "Madagascar" },
+                "awayTeam": { "name": "Sudan" },
+                "tournament": {
+                  "name": "Africa Cup of Nations Qualification",
+                  "category": { "name": "Africa" }
+                },
+                "homeScore": { "current": 1, "display": 1, "normaltime": 0, "period1": 0, "overtime": 1 },
+                "awayScore": { "current": 0, "display": 0, "normaltime": 0, "period1": 0, "overtime": 0 }
+              }
+            }
+            """;
+
+        var details = SofaScoreBrowserFetchParser.ParseEventDetails(
+            new[]
+            {
+                new SofaScoreBrowserFetchResponse
+                {
+                    RelativePath = "/api/v1/event/501",
+                    Ok = true,
+                    Status = 200,
+                    Body = detailJson
+                }
+            },
+            "https://www.sofascore.com");
+
+        var parsed = Assert.Single(details);
+        Assert.Equal(501, parsed.Key);
+        Assert.Equal("0:0", parsed.Value.Score);
+        Assert.Equal("1:0", parsed.Value.ExtraTimeScore);
+    }
+
+    [Fact]
     public void TryParseEventDetail_AfterPenalties_UsesNormalTimeScoreForSettlement()
     {
         const string json = """
