@@ -45,6 +45,7 @@ public partial class WebScraperService : IWebScraperService
     private readonly ILogger<WebScraperService> _logger;
     private readonly AiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
     private readonly SofaScoreSourceHealthTracker _sofaScoreSourceHealthTracker;
+    private readonly bool _browserScrapingEnabled;
 
     public WebScraperService(
         IConfiguration configuration,
@@ -56,6 +57,7 @@ public partial class WebScraperService : IWebScraperService
         _configuration = configuration;
         _aiScoreSourceHealthTracker = aiScoreSourceHealthTracker;
         _sofaScoreSourceHealthTracker = sofaScoreSourceHealthTracker;
+        _browserScrapingEnabled = ResolveBrowserScrapingEnabled(configuration);
         
         var baseDirFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources");
         var currentDirFolder = Path.Combine(Directory.GetCurrentDirectory(), "Resources");
@@ -73,6 +75,8 @@ public partial class WebScraperService : IWebScraperService
     
     public async Task ScrapeMatchDataAsync()
     {
+        EnsureBrowserScrapingEnabled("match data scraping");
+
         try
         {
             var scrapeStartedAtUtc = DateTime.UtcNow;
@@ -118,6 +122,8 @@ public partial class WebScraperService : IWebScraperService
 
     public async Task<List<MatchScore>> ScrapeMatchScoresAsync()
     {
+        EnsureBrowserScrapingEnabled("primary score scraping");
+
         try
         {
             return await RunWithChromeSessionAsync(
@@ -267,6 +273,14 @@ public partial class WebScraperService : IWebScraperService
             _logger.LogWarning(ex, "AiScore HTTP extraction failed. Falling back to Headless Browser.");
         }
 
+        if (!_browserScrapingEnabled)
+        {
+            var detail = "Browser scraping is disabled. Skipping AiScore headless browser fallback and using API-Football.";
+            _aiScoreSourceHealthTracker.RecordAttempt("browser-disabled", detail);
+            _logger.LogWarning("{Detail}", detail);
+            return await FetchAndTrackApiFootballFallbackAsync("Browser scraping disabled.");
+        }
+
         // ── Secondary: Headless Browser → extract window.__NUXT__ state from AiScore ──
         try
         {
@@ -312,28 +326,40 @@ public partial class WebScraperService : IWebScraperService
             return [];
         }
 
+        PruneExpiredSofaScoreEventUrlCache(DateTime.UtcNow);
+
         try
         {
-            _sofaScoreSourceHealthTracker.RecordAttempt("browser-discovery", $"Targeted fixtures: {requestedFixtures.Count}.");
             using var client = CreateSofaScoreHttpClient();
 
-            var browserAttempt = await ScrapeSofaScoreViaBrowserCrawlerAsync(requestedFixtures);
-            if (browserAttempt.Scores.Count > 0)
+            if (_browserScrapingEnabled)
             {
-                _logger.LogInformation(
-                    "Scraped {Count} SofaScore browser-crawled score rows for {FixtureCount} incomplete fixtures.",
-                    browserAttempt.Scores.Count,
-                    requestedFixtures.Count);
-                _sofaScoreSourceHealthTracker.RecordSuccess(
-                    browserAttempt.Stage,
-                    browserAttempt.Scores.Count,
-                    browserAttempt.CandidateCount,
-                    browserAttempt.DetailFetchCount,
-                    browserAttempt.Detail);
-                return browserAttempt.Scores;
-            }
+                _sofaScoreSourceHealthTracker.RecordAttempt("browser-discovery", $"Targeted fixtures: {requestedFixtures.Count}.");
 
-            _logger.LogInformation("{Detail}", browserAttempt.Detail);
+                var browserAttempt = await ScrapeSofaScoreViaBrowserCrawlerAsync(requestedFixtures);
+                if (browserAttempt.Scores.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "Scraped {Count} SofaScore browser-crawled score rows for {FixtureCount} incomplete fixtures.",
+                        browserAttempt.Scores.Count,
+                        requestedFixtures.Count);
+                    _sofaScoreSourceHealthTracker.RecordSuccess(
+                        browserAttempt.Stage,
+                        browserAttempt.Scores.Count,
+                        browserAttempt.CandidateCount,
+                        browserAttempt.DetailFetchCount,
+                        browserAttempt.Detail);
+                    return browserAttempt.Scores;
+                }
+
+                _logger.LogInformation("{Detail}", browserAttempt.Detail);
+            }
+            else
+            {
+                var detail = $"Browser scraping is disabled. Skipping SofaScore browser crawler for {requestedFixtures.Count} targeted fixture(s).";
+                _sofaScoreSourceHealthTracker.RecordAttempt("api-only", detail);
+                _logger.LogInformation("{Detail}", detail);
+            }
 
             var apiAttempt = await ScrapeSofaScoreViaApiAsync(requestedFixtures, client);
             if (apiAttempt.Scores.Count > 0)
@@ -1916,6 +1942,17 @@ public partial class WebScraperService : IWebScraperService
         return eventUrlsByFixture;
     }
 
+    private static void PruneExpiredSofaScoreEventUrlCache(DateTime nowUtc)
+    {
+        foreach (var entry in SofaScoreEventUrlCache)
+        {
+            if (entry.Value.ExpiresAtUtc <= nowUtc)
+            {
+                SofaScoreEventUrlCache.TryRemove(entry.Key, out _);
+            }
+        }
+    }
+
     private async Task<SofaScoreEventUrlPoolResult> LoadSofaScoreEventUrlsAsync(
         HttpClient client,
         IReadOnlyList<string> sitemapRoots,
@@ -2074,6 +2111,56 @@ public partial class WebScraperService : IWebScraperService
         return int.TryParse(_configuration[key], out var parsed) && parsed > 0
             ? parsed
             : fallback;
+    }
+
+    private static bool ResolveBrowserScrapingEnabled(IConfiguration configuration)
+    {
+        var rawValue = configuration["ENABLE_BROWSER_SCRAPING"];
+        if (TryParseBoolean(rawValue, out var explicitValue))
+        {
+            return explicitValue;
+        }
+
+        rawValue = configuration["RUN_BACKGROUND_JOBS"];
+        return TryParseBoolean(rawValue, out var backgroundJobsEnabled)
+            ? backgroundJobsEnabled
+            : true;
+    }
+
+    private static bool TryParseBoolean(string? rawValue, out bool parsedValue)
+    {
+        if (bool.TryParse(rawValue, out parsedValue))
+        {
+            return true;
+        }
+
+        switch (rawValue?.Trim().ToLowerInvariant())
+        {
+            case "1":
+            case "yes":
+            case "on":
+                parsedValue = true;
+                return true;
+            case "0":
+            case "no":
+            case "off":
+                parsedValue = false;
+                return true;
+            default:
+                parsedValue = false;
+                return false;
+        }
+    }
+
+    private void EnsureBrowserScrapingEnabled(string operationName)
+    {
+        if (_browserScrapingEnabled)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Browser scraping is disabled for this service, so {operationName} cannot run here. Set ENABLE_BROWSER_SCRAPING=true on the worker service.");
     }
 
     private static int ScoreSofaScoreLocationPriority(string location)

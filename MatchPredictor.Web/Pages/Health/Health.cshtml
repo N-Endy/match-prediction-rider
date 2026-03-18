@@ -4,6 +4,7 @@
 
 @{
     ViewData["Title"] = "Operational Health";
+    var roleLabel = Model.Snapshot.BackgroundJobsEnabled ? "Web + Worker" : "Web Only";
 
     string BadgeColors(HealthLevel level) => level switch
     {
@@ -53,9 +54,11 @@
         <div class="mp-prediction-card">
             <div class="mp-match-info">
                 <div class="mp-match-league">Startup</div>
+                <div style="font-size: 0.95rem; margin-top: 0.5rem;">Role: @roleLabel</div>
+                <div style="font-size: 0.95rem; margin-top: 0.2rem;">Browser scraping: @(Model.Snapshot.BrowserScrapingEnabled ? "Enabled" : "Disabled")</div>
                 <div style="font-size: 0.95rem; margin-top: 0.5rem;">Database: @(Model.Snapshot.DatabaseInitialized ? "Ready" : "Not Ready")</div>
                 <div style="font-size: 0.95rem; margin-top: 0.2rem;">Hangfire: @(Model.Snapshot.HangfireInitialized ? "Ready" : "Not Ready")</div>
-                <div style="font-size: 0.95rem; margin-top: 0.2rem;">Jobs: @(Model.Snapshot.RecurringJobsRegistered ? "Registered" : "Missing")</div>
+                <div style="font-size: 0.95rem; margin-top: 0.2rem;">Jobs: @(Model.Snapshot.BackgroundJobsEnabled ? (Model.Snapshot.RecurringJobsRegistered ? "Registered" : "Missing") : "Skipped on this service")</div>
             </div>
             <span class="mp-prediction-badge" style="@(string.IsNullOrWhiteSpace(Model.Snapshot.StartupError) ? BadgeColors(HealthLevel.Healthy) : BadgeColors(HealthLevel.Failed))">
                 @(string.IsNullOrWhiteSpace(Model.Snapshot.StartupError) ? "Ready" : "Error")

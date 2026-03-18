@@ -132,6 +132,8 @@ public class Health : PageModel
         return new OperationalHealthSnapshot
         {
             GeneratedAtLocal = nowLocal,
+            BackgroundJobsEnabled = _startupState.BackgroundJobsEnabled,
+            BrowserScrapingEnabled = _startupState.BrowserScrapingEnabled,
             DatabaseInitialized = _startupState.DatabaseInitialized,
             HangfireInitialized = _startupState.HangfireInitialized,
             RecurringJobsRegistered = _startupState.RecurringJobsRegistered,
@@ -151,7 +153,7 @@ public class Health : PageModel
                 .ToList(),
             IsHealthy = _startupState.DatabaseInitialized &&
                         _startupState.HangfireInitialized &&
-                        _startupState.RecurringJobsRegistered &&
+                        (!_startupState.BackgroundJobsEnabled || _startupState.RecurringJobsRegistered) &&
                         string.IsNullOrWhiteSpace(_startupState.InitializationError) &&
                         !criticalSignalIssue &&
                         !missingPredictions
@@ -284,6 +286,8 @@ public sealed class OperationalHealthSnapshot
 {
     public DateTime GeneratedAtLocal { get; init; }
     public DateTimeOffset StartedAtUtc { get; init; }
+    public bool BackgroundJobsEnabled { get; init; }
+    public bool BrowserScrapingEnabled { get; init; }
     public bool DatabaseInitialized { get; init; }
     public bool HangfireInitialized { get; init; }
     public bool RecurringJobsRegistered { get; init; }

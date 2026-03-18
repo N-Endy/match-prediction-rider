@@ -8,6 +8,7 @@ using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Repositories;
 using MatchPredictor.Infrastructure.Services;
 using MatchPredictor.Infrastructure.Utils;
+using MatchPredictor.Web.Configuration;
 using MatchPredictor.Web.Extensions;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
@@ -22,7 +23,6 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container
 builder.Services.AddRazorPages();
-builder.Services.AddMemoryCache();
 builder.Services.AddHealthChecks();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton(TimeProvider.System);
@@ -35,6 +35,8 @@ builder.Configuration
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
     .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
     .AddEnvironmentVariables();
+
+var runtimeMode = RuntimeModeOptions.FromConfiguration(builder.Configuration);
 
 // Configure database
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
@@ -116,10 +118,13 @@ builder.Services.AddHangfire((_, config) =>
 });
 
 var hangfireWorkerCount = ResolveHangfireWorkerCount(builder.Configuration);
-builder.Services.AddHangfireServer(options =>
+if (runtimeMode.RunBackgroundJobs)
 {
-    options.WorkerCount = hangfireWorkerCount;
-});
+    builder.Services.AddHangfireServer(options =>
+    {
+        options.WorkerCount = hangfireWorkerCount;
+    });
+}
 
 // Configure Kestrel
 var port = Environment.GetEnvironmentVariable("PORT") ?? "10000";
@@ -135,9 +140,20 @@ using (var scope = app.Services.CreateScope())
     var services = scope.ServiceProvider;
     var logger = services.GetRequiredService<ILogger<Program>>();
     var startupState = services.GetRequiredService<OperationalStartupState>();
+    startupState.ConfigureRuntimeMode(runtimeMode.RunBackgroundJobs, runtimeMode.BrowserScrapingEnabled);
     
     try
     {
+        logger.LogInformation(
+            "Runtime mode: background jobs {BackgroundJobsState}; browser scraping {BrowserScrapingState}.",
+            runtimeMode.RunBackgroundJobs ? "enabled" : "disabled",
+            runtimeMode.BrowserScrapingEnabled ? "enabled" : "disabled");
+        if (runtimeMode.RunBackgroundJobs && !runtimeMode.BrowserScrapingEnabled)
+        {
+            logger.LogWarning(
+                "Background jobs are enabled while browser scraping is disabled. Jobs that require Chrome-based scraping will fail until ENABLE_BROWSER_SCRAPING is turned on.");
+        }
+
         // Step 1: Migrate application database
         var context = services.GetRequiredService<ApplicationDbContext>();
         await context.Database.MigrateAsync();
@@ -152,7 +168,14 @@ using (var scope = app.Services.CreateScope())
         var stats = monitoringApi.GetStatistics();
         
         logger.LogInformation("✅ Hangfire initialized - Servers: {StatsServers}, Jobs: {StatsRecurring}", stats.Servers, stats.Recurring);
-        logger.LogInformation("Configured Hangfire worker count: {WorkerCount}.", hangfireWorkerCount);
+        if (runtimeMode.RunBackgroundJobs)
+        {
+            logger.LogInformation("Configured Hangfire worker count: {WorkerCount}.", hangfireWorkerCount);
+        }
+        else
+        {
+            logger.LogInformation("Hangfire server startup is disabled for this service.");
+        }
         startupState.MarkHangfireInitialized();
     }
     catch (Exception ex)
@@ -163,9 +186,10 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
-// Register recurring Hangfire jobs properly
-using (var scope = app.Services.CreateScope())
+// Register recurring Hangfire jobs only on the worker service
+if (runtimeMode.RunBackgroundJobs)
 {
+    using var scope = app.Services.CreateScope();
     var recurringJobs = scope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
     var startupState = scope.ServiceProvider.GetRequiredService<OperationalStartupState>();
@@ -285,10 +309,17 @@ using (var scope = app.Services.CreateScope())
         throw;
     }
 }
-
-// Auto-trigger initial data scraping if no predictions exist for today
-using (var scope = app.Services.CreateScope())
+else
 {
+    using var scope = app.Services.CreateScope();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    logger.LogInformation("Skipping recurring Hangfire job registration because RUN_BACKGROUND_JOBS is disabled.");
+}
+
+// Auto-trigger initial data scraping only on the worker service
+if (runtimeMode.RunBackgroundJobs)
+{
+    using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
     
@@ -317,6 +348,12 @@ using (var scope = app.Services.CreateScope())
     {
         logger.LogWarning(ex, "Could not check for existing predictions or trigger initial scraping.");
     }
+}
+else
+{
+    using var scope = app.Services.CreateScope();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    logger.LogInformation("Skipping startup analysis/scrape queue because RUN_BACKGROUND_JOBS is disabled.");
 }
 
 // Configure the HTTP request pipeline
