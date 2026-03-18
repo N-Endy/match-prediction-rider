@@ -23,6 +23,12 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
 {
     private const string PricingClientName = "SportyBetPricing";
     private const string BookingClientName = "SportyBetBooking";
+    private const int DefaultPricingPageSize = 100;
+    private const int DefaultBookingPageSize = 40;
+    private const int DefaultPricingMaxPages = 10;
+    private const int DefaultBookingMaxPages = 4;
+    private static readonly TimeSpan FullFixtureCacheTtl = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan BackupFixtureCacheTtl = TimeSpan.FromHours(6);
 
     private readonly IConfiguration _configuration;
     private readonly ILogger<SportyBetBookingService> _logger;
@@ -57,7 +63,13 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             _logger.LogInformation("Searching SportyBet API for {Count} selections...", selections.Count);
 
             // Step 1: Fetch today's fixtures from SportyBet to get outcome IDs
-            var fixtureMap = await FetchTodayFixturesAsync(baseUrl, soccerSportId, market1X2, CancellationToken.None, useBookingClient: true);
+            var fixtureMap = await FetchTodayFixturesAsync(
+                baseUrl,
+                soccerSportId,
+                market1X2,
+                CancellationToken.None,
+                useBookingClient: true,
+                targetedSelections: selections);
             if (fixtureMap.Count == 0)
             {
                 _logger.LogWarning("Could not fetch fixtures from SportyBet API.");
@@ -157,9 +169,11 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         string soccerSportId,
         string market1X2,
         CancellationToken ct,
-        bool useBookingClient)
+        bool useBookingClient,
+        IReadOnlyCollection<BookingSelection>? targetedSelections = null)
     {
         var cacheKey = $"sportybet_fixtures_{DateTime.UtcNow:yyyyMMdd}";
+        var backupCacheKey = $"{cacheKey}_backup";
         string? cachedData = null;
 
         try
@@ -180,9 +194,11 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         var fixtures = new List<SportyBetFixture>();
         var client = CreateHttpClient(useBookingClient ? BookingClientName : PricingClientName);
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var pageSize = ResolvePageSize(useBookingClient);
+        var maxPages = ResolveMaxPages(useBookingClient);
 
         // Paginate — SportyBet uses pageNum (not pageIndex), todayGames=true, timeline=2.9
-        for (int page = 1; page <= 10; page++)
+        for (int page = 1; page <= maxPages; page++)
         {
             try
             {
@@ -190,7 +206,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                 var url = $"{baseUrl}/api/ng/factsCenter/pcUpcomingEvents" +
                            $"?sportId={Uri.EscapeDataString(soccerSportId)}" +
                            $"&marketId={Uri.EscapeDataString(market1X2)},18,29" +
-                           $"&pageSize=100&pageNum={page}" +
+                           $"&pageSize={pageSize}&pageNum={page}" +
                            $"&todayGames=true&timeline=2.9&_t={timestamp}";
 
                 _logger.LogInformation("SportyBet API GET: {Url}", url);
@@ -386,6 +402,15 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                 _logger.LogInformation("SportyBet page {Page}: {Tournaments} tournaments, {Fixtures} fixtures parsed.",
                     page, tournamentCount, fixtures.Count);
 
+                if (targetedSelections is { Count: > 0 } && CanResolveSelections(fixtures, targetedSelections))
+                {
+                    _logger.LogInformation(
+                        "Resolved all {SelectionCount} booking selections from SportyBet after page {Page}.",
+                        targetedSelections.Count,
+                        page);
+                    break;
+                }
+
                 // If no tournaments, we're done
                 if (tournamentCount == 0) break;
             }
@@ -400,17 +425,41 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         {
             try
             {
-                var serialized = JsonSerializer.Serialize(fixtures);
-                var cacheOptions = new DistributedCacheEntryOptions
+                if (!useBookingClient || targetedSelections is null)
                 {
-                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15) // Cache for 15 mins
-                };
-                await _cache.SetStringAsync(cacheKey, serialized, cacheOptions, ct);
-                _logger.LogInformation("Cached {Count} SportyBet fixtures in Redis.", fixtures.Count);
+                    var serialized = JsonSerializer.Serialize(fixtures);
+                    await _cache.SetStringAsync(
+                        cacheKey,
+                        serialized,
+                        new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = FullFixtureCacheTtl },
+                        ct);
+                    await _cache.SetStringAsync(
+                        backupCacheKey,
+                        serialized,
+                        new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = BackupFixtureCacheTtl },
+                        ct);
+                    _logger.LogInformation("Cached {Count} SportyBet fixtures in Redis.", fixtures.Count);
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to write to Redis cache. Continuing without caching.");
+            }
+        }
+        else if (useBookingClient)
+        {
+            try
+            {
+                var backupCachedData = await _cache.GetStringAsync(backupCacheKey, ct);
+                if (!string.IsNullOrWhiteSpace(backupCachedData))
+                {
+                    _logger.LogWarning("Using stale SportyBet fixture backup cache for booking after live fetch returned no fixtures.");
+                    return JsonSerializer.Deserialize<List<SportyBetFixture>>(backupCachedData) ?? new List<SportyBetFixture>();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to read stale SportyBet fixture backup cache.");
             }
         }
 
@@ -554,8 +603,39 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         client.DefaultRequestHeaders.TryAddWithoutValidation("clientid", "web");
         client.DefaultRequestHeaders.TryAddWithoutValidation("platform", "web");
         client.DefaultRequestHeaders.TryAddWithoutValidation("operid", "2");
-        client.Timeout = TimeSpan.FromSeconds(30);
+        client.Timeout = ResolveClientTimeout(clientName);
         return client;
+    }
+
+    private TimeSpan ResolveClientTimeout(string clientName)
+    {
+        var configKey = string.Equals(clientName, BookingClientName, StringComparison.Ordinal)
+            ? "SportyBet:BookingTimeoutSeconds"
+            : "SportyBet:PricingTimeoutSeconds";
+        var defaultSeconds = string.Equals(clientName, BookingClientName, StringComparison.Ordinal) ? 45 : 30;
+        var configuredSeconds = _configuration.GetValue<int?>(configKey);
+        return TimeSpan.FromSeconds(Math.Max(10, configuredSeconds ?? defaultSeconds));
+    }
+
+    private int ResolvePageSize(bool useBookingClient)
+    {
+        var configKey = useBookingClient ? "SportyBet:BookingPageSize" : "SportyBet:PricingPageSize";
+        var defaultSize = useBookingClient ? DefaultBookingPageSize : DefaultPricingPageSize;
+        return Math.Clamp(_configuration.GetValue<int?>(configKey) ?? defaultSize, 10, 100);
+    }
+
+    private int ResolveMaxPages(bool useBookingClient)
+    {
+        var configKey = useBookingClient ? "SportyBet:BookingMaxPages" : "SportyBet:PricingMaxPages";
+        var defaultPages = useBookingClient ? DefaultBookingMaxPages : DefaultPricingMaxPages;
+        return Math.Clamp(_configuration.GetValue<int?>(configKey) ?? defaultPages, 1, 20);
+    }
+
+    private static bool CanResolveSelections(
+        IReadOnlyCollection<SportyBetFixture> fixtures,
+        IReadOnlyCollection<BookingSelection> selections)
+    {
+        return selections.All(selection => FindBestMatch(fixtures.ToList(), selection) is not null);
     }
 
     private static string NormalizeTeamName(string name)
