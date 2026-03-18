@@ -204,6 +204,68 @@ public class AiChatContextBuilderTests
     }
 
     [Fact]
+    public void BuildSelection_TreatsTotalCountInMixedPrompt_AsGenericRecommendationRequest()
+    {
+        var predictions = Enumerable.Range(1, 10)
+            .Select(index => CreatePrediction(index, "BothTeamsScore", "BTTS", $"BTTS Home {index}", $"BTTS Away {index}", "Italy - Serie A", 0.88m - (index * 0.005m)))
+            .Concat(Enumerable.Range(11, 10)
+                .Select(index => CreatePrediction(index, "Over2.5Goals", "Over 2.5", $"Over Home {index}", $"Over Away {index}", "Spain - La Liga", 0.86m - ((index - 10) * 0.005m))))
+            .Concat(Enumerable.Range(21, 10)
+                .Select(index => CreatePrediction(index, "StraightWin", "Home Win", $"Win Home {index}", $"Win Away {index}", "England - Premier League", 0.89m - ((index - 20) * 0.005m), thresholdUsed: 0.68)))
+            .ToArray();
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me a mixture of btts, over 2.5 and straight win. Total 20",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(20, selection.Candidates.Count);
+        Assert.Contains(selection.Candidates, candidate => candidate.PredictionCategory == "BothTeamsScore");
+        Assert.Contains(selection.Candidates, candidate => candidate.PredictionCategory == "Over2.5Goals");
+        Assert.Contains(selection.Candidates, candidate => candidate.PredictionCategory == "StraightWin");
+        Assert.Equal(20, selection.RequestedCandidateCount);
+    }
+
+    [Fact]
+    public void BuildSelection_ReturnsBestEffortSubset_WithShortfallWarning_ForExplicitMarketCounts()
+    {
+        var predictions = new[]
+        {
+            CreatePrediction(1, "BothTeamsScore", "BTTS", "Alpha 1", "Beta 1", "Italy - Serie A", 0.82m),
+            CreatePrediction(2, "BothTeamsScore", "BTTS", "Alpha 2", "Beta 2", "Italy - Serie A", 0.79m),
+            CreatePrediction(3, "Over2.5Goals", "Over 2.5", "Gamma 1", "Delta 1", "Spain - La Liga", 0.81m),
+            CreatePrediction(4, "Over2.5Goals", "Over 2.5", "Gamma 2", "Delta 2", "Spain - La Liga", 0.78m)
+        };
+
+        var request = new AiChatNormalizedRequest
+        {
+            Intent = AiChatIntent.RecommendPicks,
+            Scope = "today",
+            BookableOnly = true,
+            RequestedTotalCount = 5,
+            RequestedMarkets =
+            [
+                new AiChatRequestedMarket
+                {
+                    PredictionCategory = "BothTeamsScore",
+                    Count = 5,
+                    ExplicitCount = true
+                }
+            ]
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            request,
+            DateTime.UtcNow);
+
+        Assert.Equal(2, selection.Candidates.Count);
+        Assert.All(selection.Candidates, candidate => Assert.Equal("BothTeamsScore", candidate.PredictionCategory));
+        Assert.Contains(selection.ShortfallWarnings, warning => warning.Contains("Requested 5 BTTS", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void BuildSelection_TreatsRolloverPrompt_AsGenericRecommendationRequest()
     {
         var predictions = new[]

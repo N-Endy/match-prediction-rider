@@ -61,6 +61,8 @@ builder.Services.AddScoped<SportyBetBookingService>();
 builder.Services.AddScoped<ISportyBetBookingService>(provider => provider.GetRequiredService<SportyBetBookingService>());
 builder.Services.AddScoped<ISourceMarketPricingService>(provider => provider.GetRequiredService<SportyBetBookingService>());
 builder.Services.AddScoped<AiChatKnowledgeService>();
+builder.Services.AddScoped<IAiChatSchemaFallbackService, AiChatSchemaFallbackService>();
+builder.Services.AddScoped<AiChatRequestParser>();
 builder.Services.AddScoped<IAiAdvisorService, AiAdvisorService>();
 builder.Services.AddScoped<IValueBetsService, ValueBetsService>();
 builder.Services.AddScoped<IUserTrackingService, UserTrackingService>();

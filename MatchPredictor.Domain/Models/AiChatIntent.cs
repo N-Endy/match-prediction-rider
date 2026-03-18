@@ -4,6 +4,7 @@ public enum AiChatIntent
 {
     RecommendPicks,
     MixedMarketRecommendation,
+    ValueBetRequest,
     WorkingSlipRefinement,
     MatchDiscussion,
     SettlementExplanation,

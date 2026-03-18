@@ -10,6 +10,10 @@ public class AiChatSessionState
     public List<int> LastDiscussedPredictionIds { get; set; } = [];
     public string LastIntent { get; set; } = string.Empty;
     public string LastKnowledgeTopic { get; set; } = string.Empty;
+    public AiChatNormalizedRequest? LastNormalizedRequest { get; set; }
+    public List<AiChatRequestedMarket> LastResolvedMarketMix { get; set; } = [];
+    public List<string> LastShortfallWarnings { get; set; } = [];
     public bool AwaitingRolloverTargetOdds { get; set; }
     public string PendingRolloverPrompt { get; set; } = string.Empty;
+    public AiChatNormalizedRequest? PendingNormalizedRequest { get; set; }
 }

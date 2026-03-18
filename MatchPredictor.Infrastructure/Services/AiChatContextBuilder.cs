@@ -17,7 +17,7 @@ public static partial class AiChatContextBuilder
         "it", "leg", "legs", "list", "match", "matches", "me", "need", "odd", "odds", "of", "on", "open", "over", "pick", "picks",
         "prediction", "predictions", "recent", "recommend", "recommended", "recommending", "recommendation", "recommendations", "result", "results", "safe", "safer", "score", "settle", "settled", "show", "slip", "some", "straight", "strong",
         "straightwin", "straightwins", "stronger", "rollover", "teams", "the", "them", "these", "this", "those", "ticket", "to",
-        "today", "top", "value", "why", "won", "yesterday",
+        "today", "top", "total", "totals", "altogether", "value", "why", "won", "yesterday",
         "want", "what", "which", "win", "wins", "with", "would", "you", "your", "red", "green", "finished", "lost", "landed", "did", "mix", "mixture", "suggest", "suggested",
         "explain", "explained", "discuss", "discussion", "talk", "riskiest", "weakest", "remove", "swap", "replace", "fits"
     };
@@ -47,10 +47,19 @@ public static partial class AiChatContextBuilder
         IReadOnlyDictionary<int, AiChatCandidatePricing>? pricingByPredictionId = null,
         int limit = 40)
     {
+        var parsed = AiChatRequestParser.ParseDeterministic(userPrompt, null, false, false);
+        return BuildSelection(predictions, parsed.Request, nowUtc, pricingByPredictionId, limit);
+    }
+
+    public static AiChatContextSelection BuildSelection(
+        IEnumerable<Prediction> predictions,
+        AiChatNormalizedRequest request,
+        DateTime nowUtc,
+        IReadOnlyDictionary<int, AiChatCandidatePricing>? pricingByPredictionId = null,
+        int limit = 40)
+    {
         var nowLocal = DateTimeProvider.ConvertUtcToLocal(nowUtc);
         var todayLocalDate = DateOnly.FromDateTime(nowLocal);
-        var isRolloverRequest = MentionsRolloverIntent(userPrompt);
-        var hasTargetCombinedOdds = TryExtractRolloverTargetOdds(userPrompt, out var requestedCombinedOdds);
         var candidates = BuildCandidateCatalog(predictions, nowUtc, pricingByPredictionId);
 
         if (candidates.Count == 0)
@@ -58,47 +67,25 @@ public static partial class AiChatContextBuilder
             return new AiChatContextSelection
             {
                 Candidates = [],
-                TotalAvailableCount = 0
+                TotalAvailableCount = 0,
+                NormalizedRequest = request
             };
         }
 
-        var promptTokens = Tokenize(userPrompt);
-        var requestedMarketSlices = ExtractRequestedMarketSlices(userPrompt);
-        var marketFilters = DetectMarketFilters(promptTokens);
-        if (requestedMarketSlices.Count == 0 && marketFilters.Count > 1)
-        {
-            requestedMarketSlices = BuildImplicitMarketSlices(userPrompt, marketFilters);
-        }
-
-        var genericRequestedCount = ExtractGenericRequestedCount(userPrompt, requestedMarketSlices, marketFilters, promptTokens);
-        var specificTokens = promptTokens
-            .Where(token => !GenericPromptTokens.Contains(token))
+        var selectionIntent = DetectSelectionIntent(request);
+        var marketFilters = request.RequestedMarkets
+            .Select(market => market.PredictionCategory)
+            .Where(category => !string.IsNullOrWhiteSpace(category))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var selectionIntent = DetectSelectionIntent(
-            promptTokens,
-            specificTokens.Count > 0,
-            requestedMarketSlices.Count > 0,
-            genericRequestedCount,
-            isRolloverRequest);
-        var requestedCandidateCount = requestedMarketSlices.Sum(slice => slice.Count);
-        if (requestedCandidateCount == 0 && genericRequestedCount > 0)
-        {
-            requestedCandidateCount = genericRequestedCount;
-        }
-        var shouldTreatPromptAsGenericMarketRequest = ShouldTreatPromptAsGenericMarketRequest(
-            specificTokens,
-            promptTokens,
-            marketFilters,
-            requestedMarketSlices,
-            genericRequestedCount,
-            isRolloverRequest);
+        var entityTerms = request.EntityTerms.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var requestedCandidateCount = ResolveRequestedCandidateCount(request);
 
         var ranked = candidates
-            .Where(candidate => MatchesSelectionIntent(candidate, selectionIntent, todayLocalDate))
-            .Select(candidate => CreateRankedCandidate(candidate, promptTokens, marketFilters, isRolloverRequest, selectionIntent, todayLocalDate))
+            .Where(candidate => MatchesSelectionIntent(candidate, selectionIntent, todayLocalDate, request.BookableOnly))
+            .Select(candidate => CreateRankedCandidate(candidate, request, marketFilters, entityTerms, selectionIntent, todayLocalDate))
             .ToList();
 
-        if (specificTokens.Count > 0 && !shouldTreatPromptAsGenericMarketRequest)
+        if (entityTerms.Count > 0)
         {
             var entityMatched = ranked
                 .Where(item => item.EntityMatchCount > 0)
@@ -111,12 +98,14 @@ public static partial class AiChatContextBuilder
                     Candidates = [],
                     TotalAvailableCount = candidates.Count,
                     NoRelevantMatchesFound = true,
-                    RequestedMarketSlices = requestedMarketSlices,
+                    RequestedMarketSlices = BuildRequestedMarketSlices(request),
                     RequestedCandidateCount = requestedCandidateCount,
-                    IsRolloverRequest = isRolloverRequest,
-                    RequestedCombinedOdds = hasTargetCombinedOdds ? requestedCombinedOdds : null,
-                    NeedsRolloverTargetOdds = isRolloverRequest && !hasTargetCombinedOdds,
-                    DateScopeLabel = selectionIntent.DisplayLabel
+                    IsRolloverRequest = !string.IsNullOrWhiteSpace(request.ActionDirective) && request.ActionDirective == "target_odds",
+                    RequestedCombinedOdds = request.TargetCombinedOdds,
+                    NeedsRolloverTargetOdds = request.ActionDirective == "target_odds" && !request.TargetCombinedOdds.HasValue,
+                    DateScopeLabel = selectionIntent.DisplayLabel,
+                    NormalizedRequest = request,
+                    InterpretationNotes = request.InterpretationNotes
                 };
             }
 
@@ -138,24 +127,23 @@ public static partial class AiChatContextBuilder
             .ThenByDescending(item => item.Candidate.EdgePoints ?? double.MinValue)
             .ToList();
 
-        var selected = requestedMarketSlices.Count > 0
-            ? SelectRequestedMarketSlices(orderedRanked, requestedMarketSlices, limit)
-            : orderedRanked
-                .Take(isRolloverRequest ? limit : ResolveSelectionLimit(limit, requestedCandidateCount))
-                .Select(item => item.Candidate)
-                .ToList();
+        var selectionOutcome = SelectRequestedCandidates(orderedRanked, request, limit);
 
         return new AiChatContextSelection
         {
-            Candidates = selected,
+            Candidates = selectionOutcome.Candidates,
             TotalAvailableCount = candidates.Count,
-            NoRelevantMatchesFound = selected.Count == 0 && specificTokens.Count > 0,
-            RequestedMarketSlices = requestedMarketSlices,
+            NoRelevantMatchesFound = selectionOutcome.Candidates.Count == 0 && entityTerms.Count > 0,
+            RequestedMarketSlices = selectionOutcome.RequestedSlices,
             RequestedCandidateCount = requestedCandidateCount,
-            IsRolloverRequest = isRolloverRequest,
-            RequestedCombinedOdds = hasTargetCombinedOdds ? requestedCombinedOdds : null,
-            NeedsRolloverTargetOdds = isRolloverRequest && !hasTargetCombinedOdds,
-            DateScopeLabel = selectionIntent.DisplayLabel
+            IsRolloverRequest = request.ActionDirective == "target_odds",
+            RequestedCombinedOdds = request.TargetCombinedOdds,
+            NeedsRolloverTargetOdds = request.ActionDirective == "target_odds" && !request.TargetCombinedOdds.HasValue,
+            DateScopeLabel = selectionIntent.DisplayLabel,
+            NormalizedRequest = request,
+            ResolvedMarketMix = selectionOutcome.ResolvedMarketMix,
+            ShortfallWarnings = selectionOutcome.ShortfallWarnings,
+            InterpretationNotes = request.InterpretationNotes
         };
     }
 
@@ -361,13 +349,13 @@ public static partial class AiChatContextBuilder
 
     private static RankedCandidate CreateRankedCandidate(
         AiChatContextCandidate candidate,
-        HashSet<string> promptTokens,
+        AiChatNormalizedRequest request,
         HashSet<string> marketFilters,
-        bool isRolloverRequest,
+        HashSet<string> entityTerms,
         SelectionIntent selectionIntent,
         DateOnly todayLocalDate)
     {
-        var entityMatches = candidate.SearchTokens.Intersect(promptTokens, StringComparer.OrdinalIgnoreCase).Count();
+        var entityMatches = candidate.SearchTokens.Intersect(entityTerms, StringComparer.OrdinalIgnoreCase).Count();
         var score = (double)(candidate.ConfidenceScore ?? decimal.Zero) * 100d;
         score += candidate.MarginAboveThreshold * 150d;
         score += (candidate.EdgePoints ?? 0d) * 3d;
@@ -389,7 +377,7 @@ public static partial class AiChatContextBuilder
             score += 22d;
         }
 
-        if (promptTokens.Contains("safe") || promptTokens.Contains("banker") || promptTokens.Contains("bankers"))
+        if (string.Equals(request.SafetyBias, "safer", StringComparison.OrdinalIgnoreCase))
         {
             score += candidate.PredictionCategory == "StraightWin" ? 20d : 0d;
             score -= candidate.PredictionCategory == "Draw" ? 10d : 0d;
@@ -400,12 +388,12 @@ public static partial class AiChatContextBuilder
             }
         }
 
-        if (promptTokens.Contains("value"))
+        if (request.ValueBias)
         {
             score += candidate.MarginAboveThreshold * 120d;
         }
 
-        if (isRolloverRequest && candidate.EstimatedOdds is > 0)
+        if (request.TargetCombinedOdds.HasValue && candidate.EstimatedOdds is > 0)
         {
             score += candidate.EstimatedOdds <= 1.85 ? 8d : 4d;
         }
@@ -428,51 +416,34 @@ public static partial class AiChatContextBuilder
         };
     }
 
-    private static SelectionIntent DetectSelectionIntent(
-        HashSet<string> promptTokens,
-        bool hasSpecificTokens,
-        bool hasRequestedMarketSlices,
-        int genericRequestedCount,
-        bool isRolloverRequest)
+    private static SelectionIntent DetectSelectionIntent(AiChatNormalizedRequest request)
     {
-        if (promptTokens.Contains("yesterday"))
+        if (string.Equals(request.Scope, "yesterday", StringComparison.OrdinalIgnoreCase))
         {
             return new SelectionIntent(DateScope.Yesterday, BookableOnly: false, DisplayLabel: "Yesterday");
         }
 
-        var asksForSettlementReview = promptTokens.Overlaps(SettlementTokens) ||
-                                      promptTokens.Contains("score") ||
-                                      promptTokens.Contains("scores");
-
-        if (asksForSettlementReview)
+        if (string.Equals(request.Scope, "recent_finished", StringComparison.OrdinalIgnoreCase))
         {
             return new SelectionIntent(DateScope.RecentFinished, BookableOnly: false, DisplayLabel: "Recent finished");
         }
 
-        var genericRecommendationRequest = !hasSpecificTokens ||
-                                           hasRequestedMarketSlices ||
-                                           genericRequestedCount > 0 ||
-                                           isRolloverRequest ||
-                                           promptTokens.Overlaps(RecommendationTokens);
-
-        if (genericRecommendationRequest)
+        if (string.Equals(request.Scope, "today", StringComparison.OrdinalIgnoreCase))
         {
-            return new SelectionIntent(DateScope.Today, BookableOnly: true, DisplayLabel: "Today's bookable card");
-        }
-
-        if (promptTokens.Contains("today"))
-        {
-            return new SelectionIntent(DateScope.Today, BookableOnly: false, DisplayLabel: "Today");
+            return new SelectionIntent(
+                DateScope.Today,
+                BookableOnly: request.BookableOnly,
+                DisplayLabel: request.BookableOnly ? "Today's bookable card" : "Today");
         }
 
         return new SelectionIntent(DateScope.RecentWindow, BookableOnly: false, DisplayLabel: "Recent card");
     }
 
-    private static bool MatchesSelectionIntent(AiChatContextCandidate candidate, SelectionIntent intent, DateOnly todayLocalDate)
+    private static bool MatchesSelectionIntent(AiChatContextCandidate candidate, SelectionIntent intent, DateOnly todayLocalDate, bool requestBookableOnly)
     {
         var yesterday = todayLocalDate.AddDays(-1);
 
-        if (intent.BookableOnly && !candidate.CanBook)
+        if ((intent.BookableOnly || requestBookableOnly) && !candidate.CanBook)
         {
             return false;
         }
@@ -496,11 +467,38 @@ public static partial class AiChatContextBuilder
         return Math.Min(Math.Max(requestedCandidateCount, 1), Math.Min(limit, MaxRequestedCandidates));
     }
 
+    private static int ResolveRequestedCandidateCount(AiChatNormalizedRequest request)
+    {
+        if (request.RequestedTotalCount.HasValue)
+        {
+            return request.RequestedTotalCount.Value;
+        }
+
+        var explicitCount = request.RequestedMarkets
+            .Where(market => market.Count.HasValue)
+            .Sum(market => market.Count!.Value);
+        if (explicitCount > 0)
+        {
+            return explicitCount;
+        }
+
+        if (request.RequestedMarkets.Count > 0)
+        {
+            return Math.Min(6, request.RequestedMarkets.Count * 2);
+        }
+
+        return request.Intent is AiChatIntent.RecommendPicks or AiChatIntent.MixedMarketRecommendation or AiChatIntent.ValueBetRequest
+            ? 5
+            : 0;
+    }
+
     private static HashSet<string> DetectMarketFilters(HashSet<string> promptTokens)
     {
         var filters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        if (promptTokens.Contains("btts") || (promptTokens.Contains("both") && promptTokens.Contains("score")))
+        if (promptTokens.Contains("btts") ||
+            promptTokens.Contains("goalgoal") ||
+            (promptTokens.Contains("both") && promptTokens.Contains("score")))
         {
             filters.Add("BothTeamsScore");
         }
@@ -606,6 +604,11 @@ public static partial class AiChatContextBuilder
         var match = GenericPickCountRegex().Match(userPrompt);
         if (!match.Success)
         {
+            match = TotalPickCountRegex().Match(userPrompt);
+        }
+
+        if (!match.Success)
+        {
             return marketFilters.Count == 0 && promptTokens.Overlaps(RecommendationTokens)
                 ? 5
                 : 0;
@@ -616,7 +619,10 @@ public static partial class AiChatContextBuilder
             : 0;
     }
 
-    private static List<RequestedMarketSlice> BuildImplicitMarketSlices(string userPrompt, HashSet<string> marketFilters)
+    private static List<RequestedMarketSlice> BuildImplicitMarketSlices(
+        string userPrompt,
+        HashSet<string> marketFilters,
+        int totalRequestedCount)
     {
         var orderedMarkets = GetOrderedMentionedMarkets(userPrompt)
             .Where(market => marketFilters.Contains(market))
@@ -631,15 +637,44 @@ public static partial class AiChatContextBuilder
                 .ToList();
         }
 
-        return orderedMarkets
-            .Select(market => new RequestedMarketSlice(market, 2))
-            .ToList();
+        if (orderedMarkets.Count == 0)
+        {
+            return [];
+        }
+
+        if (totalRequestedCount <= 0)
+        {
+            return orderedMarkets
+                .Select(market => new RequestedMarketSlice(market, 2))
+                .ToList();
+        }
+
+        var boundedTotal = Math.Min(totalRequestedCount, MaxRequestedCandidates);
+        var baseCount = boundedTotal / orderedMarkets.Count;
+        var remainder = boundedTotal % orderedMarkets.Count;
+        var slices = new List<RequestedMarketSlice>(orderedMarkets.Count);
+
+        for (var index = 0; index < orderedMarkets.Count; index++)
+        {
+            var count = baseCount + (index < remainder ? 1 : 0);
+            if (count <= 0)
+            {
+                continue;
+            }
+
+            slices.Add(new RequestedMarketSlice(orderedMarkets[index], count));
+        }
+
+        return slices;
     }
 
     private static IEnumerable<string> GetOrderedMentionedMarkets(string userPrompt)
     {
         var matches = new List<(string Market, int Index)>();
         AddMarketMention(matches, userPrompt, "btts", "BothTeamsScore");
+        AddMarketMention(matches, userPrompt, "gg", "BothTeamsScore");
+        AddMarketMention(matches, userPrompt, "goalgoal", "BothTeamsScore");
+        AddMarketMention(matches, userPrompt, "goal goal", "BothTeamsScore");
         AddMarketMention(matches, userPrompt, "both teams to score", "BothTeamsScore");
         AddMarketMention(matches, userPrompt, "over 2.5", "Over2.5Goals");
         AddMarketMention(matches, userPrompt, "over2.5", "Over2.5Goals");
@@ -662,7 +697,7 @@ public static partial class AiChatContextBuilder
         }
     }
 
-    private static bool ContainsSecuritySensitiveTopic(string prompt)
+    internal static bool ContainsSecuritySensitiveTopic(string prompt)
     {
         return prompt.Contains("password", StringComparison.Ordinal) ||
                prompt.Contains("api key", StringComparison.Ordinal) ||
@@ -678,7 +713,7 @@ public static partial class AiChatContextBuilder
                prompt.Contains("environment variable", StringComparison.Ordinal);
     }
 
-    private static bool IsWorkingSlipRefinementPrompt(string prompt, bool hasWorkingSlip)
+    internal static bool IsWorkingSlipRefinementPrompt(string prompt, bool hasWorkingSlip)
     {
         if (!hasWorkingSlip)
         {
@@ -697,7 +732,7 @@ public static partial class AiChatContextBuilder
                prompt.Contains("from them", StringComparison.Ordinal);
     }
 
-    private static bool IsSettlementPrompt(string prompt, bool hasContextCandidates)
+    internal static bool IsSettlementPrompt(string prompt, bool hasContextCandidates)
     {
         return SettlementTokens.Any(token => prompt.Contains(token, StringComparison.Ordinal)) &&
                (hasContextCandidates ||
@@ -707,7 +742,7 @@ public static partial class AiChatContextBuilder
                 prompt.Contains("them", StringComparison.Ordinal));
     }
 
-    private static bool IsAppHelpPrompt(string prompt, HashSet<string> promptTokens)
+    internal static bool IsAppHelpPrompt(string prompt, HashSet<string> promptTokens)
     {
         var asksForExplanation =
             prompt.Contains("what does", StringComparison.Ordinal) ||
@@ -730,7 +765,7 @@ public static partial class AiChatContextBuilder
                !prompt.Contains("tell me about", StringComparison.Ordinal);
     }
 
-    private static bool IsMatchDiscussionPrompt(string prompt, bool hasWorkingSlip, bool hasContextCandidates)
+    internal static bool IsMatchDiscussionPrompt(string prompt, bool hasWorkingSlip, bool hasContextCandidates)
     {
         return prompt.Contains("tell me about", StringComparison.Ordinal) ||
                prompt.Contains("explain these", StringComparison.Ordinal) ||
@@ -745,7 +780,10 @@ public static partial class AiChatContextBuilder
     {
         var normalized = rawMarket.Trim().ToLowerInvariant().Replace(" ", string.Empty);
 
-        if (normalized.Contains("btts") || normalized.Contains("bothteams"))
+        if (normalized.Contains("btts") ||
+            normalized.Contains("bothteams") ||
+            normalized.Contains("goalgoal") ||
+            normalized == "gg")
         {
             return "BothTeamsScore";
         }
@@ -810,6 +848,161 @@ public static partial class AiChatContextBuilder
         return selected;
     }
 
+    private static SelectionOutcome SelectRequestedCandidates(
+        IReadOnlyList<RankedCandidate> orderedRanked,
+        AiChatNormalizedRequest request,
+        int limit)
+    {
+        if (request.RequestedMarkets.Count == 0)
+        {
+            var maxCandidates = request.ActionDirective == "target_odds"
+                ? limit
+                : ResolveSelectionLimit(limit, ResolveRequestedCandidateCount(request));
+
+            var genericSelection = orderedRanked
+                .Take(maxCandidates)
+                .Select(item => item.Candidate)
+                .ToList();
+
+            return new SelectionOutcome(
+                genericSelection,
+                [],
+                BuildResolvedMarketMix(genericSelection),
+                []);
+        }
+
+        var requestedSlices = BuildRequestedMarketSlices(request);
+        var selected = SelectRequestedMarketSlices(orderedRanked, requestedSlices, limit);
+        var shortfallWarnings = BuildShortfallWarnings(requestedSlices, selected);
+        var resolvedMarketMix = BuildResolvedMarketMix(selected);
+
+        var explicitRequestedCounts = request.RequestedMarkets.Any(market => market.ExplicitCount && market.Count.HasValue);
+        var targetTotal = request.RequestedTotalCount ?? requestedSlices.Sum(slice => slice.Count);
+        if (!explicitRequestedCounts &&
+            request.FlexibleMix &&
+            targetTotal > selected.Count)
+        {
+            var seenActionKeys = selected
+                .Select(candidate => candidate.ActionKey)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var allowedMarkets = request.RequestedMarkets
+                .Select(market => market.PredictionCategory)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var candidate in orderedRanked.Select(item => item.Candidate))
+            {
+                if (selected.Count >= targetTotal)
+                {
+                    break;
+                }
+
+                if (!allowedMarkets.Contains(candidate.PredictionCategory) || !seenActionKeys.Add(candidate.ActionKey))
+                {
+                    continue;
+                }
+
+                selected.Add(candidate);
+            }
+
+            shortfallWarnings = BuildShortfallWarnings(requestedSlices, selected);
+            resolvedMarketMix = BuildResolvedMarketMix(selected);
+        }
+
+        return new SelectionOutcome(selected, requestedSlices, resolvedMarketMix, shortfallWarnings);
+    }
+
+    private static List<RequestedMarketSlice> BuildRequestedMarketSlices(AiChatNormalizedRequest request)
+    {
+        if (request.RequestedMarkets.Count == 0)
+        {
+            return [];
+        }
+
+        if (request.RequestedMarkets.Any(market => market.Count.HasValue))
+        {
+            return request.RequestedMarkets
+                .Select(market => new RequestedMarketSlice(market.PredictionCategory, market.Count ?? 0))
+                .Where(slice => slice.Count > 0)
+                .ToList();
+        }
+
+        var targetTotal = request.RequestedTotalCount ?? Math.Min(6, request.RequestedMarkets.Count * 2);
+        if (targetTotal <= 0)
+        {
+            return [];
+        }
+
+        var boundedTotal = Math.Min(targetTotal, MaxRequestedCandidates);
+        var orderedMarkets = request.RequestedMarkets
+            .Select(market => market.PredictionCategory)
+            .Where(category => !string.IsNullOrWhiteSpace(category))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (orderedMarkets.Count == 0)
+        {
+            return [];
+        }
+
+        var baseCount = boundedTotal / orderedMarkets.Count;
+        var remainder = boundedTotal % orderedMarkets.Count;
+        var slices = new List<RequestedMarketSlice>(orderedMarkets.Count);
+        for (var index = 0; index < orderedMarkets.Count; index++)
+        {
+            var count = baseCount + (index < remainder ? 1 : 0);
+            if (count <= 0)
+            {
+                continue;
+            }
+
+            slices.Add(new RequestedMarketSlice(orderedMarkets[index], count));
+        }
+
+        return slices;
+    }
+
+    private static List<AiChatRequestedMarket> BuildResolvedMarketMix(IReadOnlyCollection<AiChatContextCandidate> selectedCandidates)
+    {
+        return selectedCandidates
+            .GroupBy(candidate => candidate.PredictionCategory, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new AiChatRequestedMarket
+            {
+                PredictionCategory = group.Key,
+                Count = group.Count(),
+                ExplicitCount = true
+            })
+            .OrderBy(market => market.DisplayName)
+            .ToList();
+    }
+
+    private static List<string> BuildShortfallWarnings(
+        IReadOnlyList<RequestedMarketSlice> requestedSlices,
+        IReadOnlyCollection<AiChatContextCandidate> selectedCandidates)
+    {
+        var warnings = new List<string>();
+        foreach (var slice in requestedSlices)
+        {
+            var selectedCount = selectedCandidates.Count(candidate =>
+                string.Equals(candidate.PredictionCategory, slice.PredictionCategory, StringComparison.OrdinalIgnoreCase));
+            if (selectedCount >= slice.Count)
+            {
+                continue;
+            }
+
+            warnings.Add($"Requested {slice.Count} {slice.DisplayName}, but only {selectedCount} are currently available on the published card.");
+        }
+
+        return warnings;
+    }
+
+    internal static HashSet<string> TokenizeForParsing(string value) => Tokenize(value);
+
+    internal static List<string> ExtractSpecificTokens(string value)
+    {
+        return Tokenize(value)
+            .Where(token => !GenericPromptTokens.Contains(token))
+            .ToList();
+    }
+
     private static HashSet<string> Tokenize(string value)
     {
         return TokenRegex()
@@ -823,12 +1016,15 @@ public static partial class AiChatContextBuilder
     private static partial Regex TokenRegex();
 
     [GeneratedRegex(
-        "(?<count>\\d{1,3})\\s*(?<market>btts|both teams to score|both teams score|over\\s*2(?:\\.|,)?5|over2(?:\\.|,)?5|over|straight\\s*wins?|straightwins?|straightwin|1x2|home\\s*wins?|away\\s*wins?|draws?|draw)",
+        "(?<count>\\d{1,3})\\s*(?<market>btts|gg|goal\\s*goal|goalgoal|both teams to score|both teams score|over\\s*2(?:\\.|,)?5|over2(?:\\.|,)?5|over|straight\\s*wins?|straightwins?|straightwin|1x2|home\\s*wins?|away\\s*wins?|draws?|draw)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex RequestedMarketSliceRegex();
 
     [GeneratedRegex("(?<count>\\d{1,3})\\s*(?:strong|safe|safer|best|top)?\\s*(?:pick|picks|game|games|match|matches|leg|legs)\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex GenericPickCountRegex();
+
+    [GeneratedRegex("\\btotal(?:\\s+of)?\\s*(?<count>\\d{1,3})\\b|\\b(?<count>\\d{1,3})\\s*total\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex TotalPickCountRegex();
 
     [GeneratedRegex("roll\\s*over|rollover", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex RolloverIntentRegex();
@@ -853,6 +1049,10 @@ public static partial class AiChatContextBuilder
         public double? RequestedCombinedOdds { get; init; }
         public bool NeedsRolloverTargetOdds { get; init; }
         public string DateScopeLabel { get; init; } = "Current card";
+        public AiChatNormalizedRequest? NormalizedRequest { get; init; }
+        public IReadOnlyList<AiChatRequestedMarket> ResolvedMarketMix { get; init; } = [];
+        public IReadOnlyList<string> ShortfallWarnings { get; init; } = [];
+        public IReadOnlyList<string> InterpretationNotes { get; init; } = [];
     }
 
     public sealed class AiChatContextCandidate
@@ -905,6 +1105,12 @@ public static partial class AiChatContextBuilder
     private sealed record RankedCandidate(AiChatContextCandidate Candidate, double Score, int EntityMatchCount)
     {
     }
+
+    private sealed record SelectionOutcome(
+        List<AiChatContextCandidate> Candidates,
+        List<RequestedMarketSlice> RequestedSlices,
+        List<AiChatRequestedMarket> ResolvedMarketMix,
+        List<string> ShortfallWarnings);
 
     private sealed record SelectionIntent(DateScope Scope, bool BookableOnly, string DisplayLabel);
 

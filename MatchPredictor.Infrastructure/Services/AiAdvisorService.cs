@@ -31,6 +31,7 @@ public class AiAdvisorService : IAiAdvisorService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IDistributedCache _cache;
     private readonly AiChatKnowledgeService _knowledgeService;
+    private readonly AiChatRequestParser _requestParser;
     private readonly IServiceScopeFactory _serviceScopeFactory;
 
     public AiAdvisorService(
@@ -40,6 +41,7 @@ public class AiAdvisorService : IAiAdvisorService
         IHttpClientFactory httpClientFactory,
         IDistributedCache cache,
         AiChatKnowledgeService knowledgeService,
+        AiChatRequestParser requestParser,
         IServiceScopeFactory serviceScopeFactory)
     {
         _dbContext = dbContext;
@@ -48,6 +50,7 @@ public class AiAdvisorService : IAiAdvisorService
         _httpClientFactory = httpClientFactory;
         _cache = cache;
         _knowledgeService = knowledgeService;
+        _requestParser = requestParser;
         _serviceScopeFactory = serviceScopeFactory;
     }
 
@@ -63,16 +66,11 @@ public class AiAdvisorService : IAiAdvisorService
         }
 
         var sessionState = await LoadSessionStateAsync(sessionId, ct);
-        if (TryResolvePendingRolloverPrompt(normalizedPrompt, sessionState, out var effectivePrompt))
+        if (TryResolvePendingRolloverRequest(normalizedPrompt, sessionState, out var pendingNormalizedRequest))
         {
-            normalizedPrompt = effectivePrompt;
-        }
-
-        if (_knowledgeService.TryBuildSecurityRefusal(normalizedPrompt, out var securityResponse))
-        {
-            FinalizeResponse(securityResponse, "security_refusal");
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, securityResponse, null, [], ct);
-            return securityResponse;
+            sessionState.AwaitingRolloverTargetOdds = false;
+            sessionState.PendingRolloverPrompt = string.Empty;
+            sessionState.PendingNormalizedRequest = null;
         }
 
         var predictions = await LoadPublishedPredictionsForChatAsync(ct);
@@ -80,11 +78,30 @@ public class AiAdvisorService : IAiAdvisorService
         var candidateCatalog = AiChatContextBuilder.BuildCandidateCatalog(predictions, DateTime.UtcNow, pricingByPredictionId);
         var workingSlipCandidates = ResolveSessionCandidates(candidateCatalog, sessionState.WorkingSlipPredictionIds, sessionState.WorkingSlipActionKeys, sessionState.LastRecommendedActionKeys);
         var contextCandidates = ResolveContextCandidates(candidateCatalog, sessionState, normalizedPrompt, workingSlipCandidates);
-        var intent = AiChatContextBuilder.DetectIntent(normalizedPrompt, workingSlipCandidates.Count > 0, contextCandidates.Count > 0);
 
-        if (IsValueBetRecommendationPrompt(normalizedPrompt))
+        var parseResult = pendingNormalizedRequest is not null
+            ? new AiChatParseResult { Request = pendingNormalizedRequest }
+            : await _requestParser.ParseAsync(
+                normalizedPrompt,
+                sessionState,
+                workingSlipCandidates.Count > 0,
+                contextCandidates.Count > 0,
+                ct);
+        var normalizedRequest = parseResult.Request;
+
+        if (normalizedRequest.Intent == AiChatIntent.SecurityRefusal &&
+            _knowledgeService.TryBuildSecurityRefusal(normalizedPrompt, out var securityResponse))
+        {
+            MergeSelectionWarnings(securityResponse, null, normalizedRequest, parseResult);
+            FinalizeResponse(securityResponse, "security_refusal");
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, securityResponse, null, [], normalizedRequest, ct);
+            return securityResponse;
+        }
+
+        if (normalizedRequest.Intent == AiChatIntent.ValueBetRequest)
         {
             var valueBetResponse = await BuildValueBetRecommendationResponseAsync(normalizedPrompt, candidateCatalog, ct);
+            MergeSelectionWarnings(valueBetResponse, null, normalizedRequest, parseResult);
             FinalizeResponse(valueBetResponse, "recommend_picks");
             await SaveSessionTurnAsync(
                 sessionId,
@@ -93,16 +110,17 @@ public class AiAdvisorService : IAiAdvisorService
                 valueBetResponse,
                 null,
                 valueBetResponse.Actions.Select(action => action.PredictionId).ToList(),
+                normalizedRequest,
                 ct,
                 "value-bets");
             return valueBetResponse;
         }
 
-        if (IsBookingFollowUp(normalizedPrompt, sessionState))
+        if (IsBookingFollowUp(normalizedRequest, sessionState))
         {
             var followUp = BuildBookingFollowUpResponse(predictions, sessionState.LastRecommendedActionKeys);
             FinalizeResponse(followUp, "working_slip_refinement");
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, followUp, null, followUp.Actions.Select(action => action.PredictionId).ToList(), ct);
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, followUp, null, followUp.Actions.Select(action => action.PredictionId).ToList(), normalizedRequest, ct);
             return followUp;
         }
 
@@ -110,13 +128,14 @@ public class AiAdvisorService : IAiAdvisorService
             ? predictions.Where(prediction => contextCandidates.Any(candidate => candidate.PredictionId == prediction.Id)).ToList()
             : predictions;
 
-        var selection = AiChatContextBuilder.BuildSelection(predictionsForSelection, normalizedPrompt, DateTime.UtcNow, pricingByPredictionId);
+        var selection = AiChatContextBuilder.BuildSelection(predictionsForSelection, normalizedRequest, DateTime.UtcNow, pricingByPredictionId);
         var relevantCandidates = selection.Candidates.Count > 0 ? selection.Candidates : contextCandidates;
 
-        if (intent is AiChatIntent.AppHelp or AiChatIntent.SettlementExplanation &&
+        if (normalizedRequest.Intent is AiChatIntent.AppHelp or AiChatIntent.SettlementExplanation &&
             _knowledgeService.TryBuildPublicAppHelpResponse(normalizedPrompt, relevantCandidates, out var helpResponse, out var knowledgeTopic))
         {
-            FinalizeResponse(helpResponse, intent == AiChatIntent.SettlementExplanation ? "settlement_explanation" : "app_help");
+            MergeSelectionWarnings(helpResponse, selection, normalizedRequest, parseResult);
+            FinalizeResponse(helpResponse, normalizedRequest.Intent == AiChatIntent.SettlementExplanation ? "settlement_explanation" : "app_help");
             await SaveSessionTurnAsync(
                 sessionId,
                 sessionState,
@@ -124,14 +143,16 @@ public class AiAdvisorService : IAiAdvisorService
                 helpResponse,
                 selection,
                 relevantCandidates.Select(candidate => candidate.PredictionId).ToList(),
+                normalizedRequest,
                 ct,
                 knowledgeTopic);
             return helpResponse;
         }
 
-        if (intent == AiChatIntent.WorkingSlipRefinement)
+        if (normalizedRequest.Intent == AiChatIntent.WorkingSlipRefinement)
         {
-            var refinementResponse = BuildWorkingSlipRefinementResponse(normalizedPrompt, workingSlipCandidates, candidateCatalog);
+            var refinementResponse = BuildWorkingSlipRefinementResponse(normalizedRequest, normalizedPrompt, workingSlipCandidates, candidateCatalog);
+            MergeSelectionWarnings(refinementResponse, selection, normalizedRequest, parseResult);
             FinalizeResponse(refinementResponse, "working_slip_refinement");
             await SaveSessionTurnAsync(
                 sessionId,
@@ -140,13 +161,15 @@ public class AiAdvisorService : IAiAdvisorService
                 refinementResponse,
                 selection,
                 refinementResponse.Actions.Select(action => action.PredictionId).ToList(),
+                normalizedRequest,
                 ct);
             return refinementResponse;
         }
 
-        if (intent == AiChatIntent.MatchDiscussion)
+        if (normalizedRequest.Intent == AiChatIntent.MatchDiscussion)
         {
             var discussionResponse = BuildMatchDiscussionResponse(normalizedPrompt, relevantCandidates);
+            MergeSelectionWarnings(discussionResponse, selection, normalizedRequest, parseResult);
             FinalizeResponse(discussionResponse, "match_discussion");
             await SaveSessionTurnAsync(
                 sessionId,
@@ -155,6 +178,7 @@ public class AiAdvisorService : IAiAdvisorService
                 discussionResponse,
                 selection,
                 relevantCandidates.Select(candidate => candidate.PredictionId).ToList(),
+                normalizedRequest,
                 ct);
             return discussionResponse;
         }
@@ -167,7 +191,7 @@ public class AiAdvisorService : IAiAdvisorService
             };
 
             FinalizeResponse(noPredictions, "recommend_picks");
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noPredictions, null, [], ct);
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noPredictions, null, [], normalizedRequest, ct);
             return noPredictions;
         }
 
@@ -175,6 +199,7 @@ public class AiAdvisorService : IAiAdvisorService
         {
             sessionState.AwaitingRolloverTargetOdds = true;
             sessionState.PendingRolloverPrompt = normalizedPrompt;
+            sessionState.PendingNormalizedRequest = normalizedRequest;
 
             var askForTargetOdds = new AiChatResponse
             {
@@ -186,7 +211,7 @@ public class AiAdvisorService : IAiAdvisorService
             };
 
             FinalizeResponse(askForTargetOdds, "recommend_picks");
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, askForTargetOdds, selection, [], ct);
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, askForTargetOdds, selection, [], normalizedRequest, ct);
             return askForTargetOdds;
         }
 
@@ -197,8 +222,9 @@ public class AiAdvisorService : IAiAdvisorService
                 Message = AiChatContextBuilder.BuildNoRelevantMatchesMessage(normalizedPrompt)
             };
 
-            FinalizeResponse(noMatchResponse, "recommend_picks");
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noMatchResponse, selection, [], ct);
+            MergeSelectionWarnings(noMatchResponse, selection, normalizedRequest, parseResult);
+            FinalizeResponse(noMatchResponse, GetResponseContextMode(normalizedRequest.Intent));
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noMatchResponse, selection, [], normalizedRequest, ct);
             return noMatchResponse;
         }
 
@@ -212,7 +238,7 @@ public class AiAdvisorService : IAiAdvisorService
                 };
 
                 FinalizeResponse(noTodayCard, "recommend_picks");
-                await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noTodayCard, selection, [], ct);
+                await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noTodayCard, selection, [], normalizedRequest, ct);
                 return noTodayCard;
             }
 
@@ -221,14 +247,16 @@ public class AiAdvisorService : IAiAdvisorService
                 Message = "I couldn't find a useful slice of today's card for that request. Try asking for BTTS, Over 2.5, Draw, or Straight Win picks."
             };
 
-            FinalizeResponse(emptySelection, "recommend_picks");
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, emptySelection, selection, [], ct);
+            MergeSelectionWarnings(emptySelection, selection, normalizedRequest, parseResult);
+            FinalizeResponse(emptySelection, GetResponseContextMode(normalizedRequest.Intent));
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, emptySelection, selection, [], normalizedRequest, ct);
             return emptySelection;
         }
 
         if (selection.IsRolloverRequest && selection.RequestedCombinedOdds is > 0)
         {
             var rolloverResponse = BuildRolloverResponse(normalizedPrompt, selection);
+            MergeSelectionWarnings(rolloverResponse, selection, normalizedRequest, parseResult);
             FinalizeResponse(rolloverResponse, "working_slip_refinement");
             await SaveSessionTurnAsync(
                 sessionId,
@@ -237,6 +265,7 @@ public class AiAdvisorService : IAiAdvisorService
                 rolloverResponse,
                 selection,
                 rolloverResponse.Actions.Select(action => action.PredictionId).ToList(),
+                normalizedRequest,
                 ct);
             return rolloverResponse;
         }
@@ -249,13 +278,14 @@ public class AiAdvisorService : IAiAdvisorService
                 Message = "⚠️ Groq API key is not configured. Please add 'GroqApiKey' to your configuration via user-secrets or environment variables."
             };
 
-            FinalizeResponse(missingKey, intent == AiChatIntent.MixedMarketRecommendation ? "mixed_market_recommendation" : "recommend_picks");
-            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, missingKey, selection, [], ct);
+            MergeSelectionWarnings(missingKey, selection, normalizedRequest, parseResult);
+            FinalizeResponse(missingKey, GetResponseContextMode(normalizedRequest.Intent));
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, missingKey, selection, [], normalizedRequest, ct);
             return missingKey;
         }
 
         var systemPrompt = BuildChatSystemPrompt();
-        var userPayload = BuildChatPayload(normalizedPrompt, selection);
+        var userPayload = BuildChatPayload(normalizedPrompt, selection, normalizedRequest);
         var rawResponse = await CallGroqAsync(
             apiKey,
             systemPrompt,
@@ -267,7 +297,8 @@ public class AiAdvisorService : IAiAdvisorService
             maxTokens: 1400);
 
         var parsed = ParseAiChatResponse(rawResponse, selection, normalizedPrompt);
-        FinalizeResponse(parsed, intent == AiChatIntent.MixedMarketRecommendation ? "mixed_market_recommendation" : "recommend_picks");
+        MergeSelectionWarnings(parsed, selection, normalizedRequest, parseResult);
+        FinalizeResponse(parsed, GetResponseContextMode(normalizedRequest.Intent));
         await SaveSessionTurnAsync(
             sessionId,
             sessionState,
@@ -275,6 +306,7 @@ public class AiAdvisorService : IAiAdvisorService
             parsed,
             selection,
             parsed.Actions.Select(action => action.PredictionId).ToList(),
+            normalizedRequest,
             ct);
         return parsed;
     }
@@ -409,12 +441,12 @@ public class AiAdvisorService : IAiAdvisorService
         };
     }
 
-    private static bool TryResolvePendingRolloverPrompt(
+    private static bool TryResolvePendingRolloverRequest(
         string userPrompt,
         AiChatSessionState sessionState,
-        out string effectivePrompt)
+        out AiChatNormalizedRequest? effectiveRequest)
     {
-        effectivePrompt = userPrompt;
+        effectiveRequest = null;
 
         if (!sessionState.AwaitingRolloverTargetOdds)
         {
@@ -423,13 +455,21 @@ public class AiAdvisorService : IAiAdvisorService
 
         if (AiChatContextBuilder.TryExtractRolloverTargetOdds(userPrompt, out var targetOdds))
         {
-            var normalizedTarget = targetOdds.ToString("0.##", CultureInfo.InvariantCulture);
-            effectivePrompt = string.IsNullOrWhiteSpace(sessionState.PendingRolloverPrompt)
-                ? $"Build a rollover slip to {normalizedTarget} odds"
-                : $"{sessionState.PendingRolloverPrompt} {normalizedTarget} odds";
+            var seedRequest = sessionState.PendingNormalizedRequest ?? new AiChatNormalizedRequest
+            {
+                RawPrompt = string.IsNullOrWhiteSpace(sessionState.PendingRolloverPrompt)
+                    ? $"Build a rollover slip to {targetOdds:0.##} odds"
+                    : $"{sessionState.PendingRolloverPrompt} {targetOdds:0.##} odds",
+                Intent = AiChatIntent.RecommendPicks,
+                Scope = "today",
+                BookableOnly = true,
+                ActionDirective = "target_odds"
+            };
 
-            sessionState.AwaitingRolloverTargetOdds = false;
-            sessionState.PendingRolloverPrompt = string.Empty;
+            seedRequest.TargetCombinedOdds = targetOdds;
+            seedRequest.ActionDirective = "target_odds";
+            seedRequest.RequestedTotalCount ??= Math.Max(0, seedRequest.RequestedMarkets.Sum(market => market.Count ?? 0));
+            effectiveRequest = seedRequest;
             return true;
         }
 
@@ -437,6 +477,7 @@ public class AiAdvisorService : IAiAdvisorService
         {
             sessionState.AwaitingRolloverTargetOdds = false;
             sessionState.PendingRolloverPrompt = string.Empty;
+            sessionState.PendingNormalizedRequest = null;
         }
 
         return false;
@@ -650,6 +691,7 @@ public class AiAdvisorService : IAiAdvisorService
     }
 
     private AiChatResponse BuildWorkingSlipRefinementResponse(
+        AiChatNormalizedRequest normalizedRequest,
         string userPrompt,
         IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> workingSlipCandidates,
         IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidateCatalog)
@@ -662,14 +704,19 @@ public class AiAdvisorService : IAiAdvisorService
             };
         }
 
-        if ((userPrompt.Contains("odds", StringComparison.OrdinalIgnoreCase) ||
-             userPrompt.Contains("rollover", StringComparison.OrdinalIgnoreCase)) &&
+        if (string.Equals(normalizedRequest.ActionDirective, "target_odds", StringComparison.OrdinalIgnoreCase) &&
+            !normalizedRequest.TargetCombinedOdds.HasValue &&
             !AiChatContextBuilder.TryExtractRolloverTargetOdds(userPrompt, out var targetOdds))
         {
             return new AiChatResponse
             {
                 Message = "I can tune the current slip to a target total price. Tell me the target like `2 odds` or `3.5 odds` and I'll rebuild it from these legs first."
             };
+        }
+
+        if (normalizedRequest.TargetCombinedOdds.HasValue)
+        {
+            return BuildWorkingSlipRolloverResponse(userPrompt, workingSlipCandidates, normalizedRequest.TargetCombinedOdds.Value);
         }
 
         if (AiChatContextBuilder.TryExtractRolloverTargetOdds(userPrompt, out targetOdds))
@@ -681,7 +728,8 @@ public class AiAdvisorService : IAiAdvisorService
             .OrderBy(BuildSafetyScore)
             .First();
 
-        if (userPrompt.Contains("riskiest", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalizedRequest.ActionDirective, "show_riskiest", StringComparison.OrdinalIgnoreCase) ||
+            userPrompt.Contains("riskiest", StringComparison.OrdinalIgnoreCase))
         {
             var ordered = workingSlipCandidates
                 .OrderBy(BuildSafetyScore)
@@ -700,7 +748,9 @@ public class AiAdvisorService : IAiAdvisorService
             };
         }
 
-        if (userPrompt.Contains("remove", StringComparison.OrdinalIgnoreCase) || userPrompt.Contains("weakest", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalizedRequest.ActionDirective, "remove_weakest", StringComparison.OrdinalIgnoreCase) ||
+            userPrompt.Contains("remove", StringComparison.OrdinalIgnoreCase) ||
+            userPrompt.Contains("weakest", StringComparison.OrdinalIgnoreCase))
         {
             if (workingSlipCandidates.Count == 1)
             {
@@ -724,7 +774,8 @@ public class AiAdvisorService : IAiAdvisorService
             };
         }
 
-        if (userPrompt.Contains("swap", StringComparison.OrdinalIgnoreCase) && userPrompt.Contains("draw", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalizedRequest.ActionDirective, "swap_draw_out", StringComparison.OrdinalIgnoreCase) ||
+            (userPrompt.Contains("swap", StringComparison.OrdinalIgnoreCase) && userPrompt.Contains("draw", StringComparison.OrdinalIgnoreCase)))
         {
             var drawCandidate = workingSlipCandidates
                 .Where(candidate => candidate.PredictionCategory == "Draw")
@@ -767,7 +818,9 @@ public class AiAdvisorService : IAiAdvisorService
             };
         }
 
-        if (userPrompt.Contains("safer", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalizedRequest.ActionDirective, "make_safer", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalizedRequest.SafetyBias, "safer", StringComparison.OrdinalIgnoreCase) ||
+            userPrompt.Contains("safer", StringComparison.OrdinalIgnoreCase))
         {
             var saferSlip = BuildSaferSlip(candidateCatalog, workingSlipCandidates);
             return new AiChatResponse
@@ -1241,18 +1294,29 @@ public class AiAdvisorService : IAiAdvisorService
             """;
     }
 
-    private static string BuildChatPayload(string userPrompt, AiChatContextBuilder.AiChatContextSelection selection)
+    private static string BuildChatPayload(
+        string userPrompt,
+        AiChatContextBuilder.AiChatContextSelection selection,
+        AiChatNormalizedRequest normalizedRequest)
     {
         var payload = new
         {
             question = userPrompt,
+            normalizedIntent = normalizedRequest.Intent.ToString(),
             availablePredictionCount = selection.TotalAvailableCount,
             requestedPredictionCount = selection.RequestedCandidateCount,
             dateScope = selection.DateScopeLabel,
+            interpretationNotes = normalizedRequest.InterpretationNotes,
+            shortfallWarnings = selection.ShortfallWarnings,
             requestedMarkets = selection.RequestedMarketSlices.Select(slice => new
             {
                 market = slice.DisplayName,
                 count = slice.Count
+            }),
+            resolvedMarketMix = selection.ResolvedMarketMix.Select(market => new
+            {
+                market = market.DisplayName,
+                market.Count
             }),
             relevantPredictions = selection.Candidates.Select(candidate => new
             {
@@ -1392,6 +1456,37 @@ public class AiAdvisorService : IAiAdvisorService
         {
             response.SuggestedPrompts = BuildSuggestedPrompts(contextMode, response.Actions);
         }
+    }
+
+    private static void MergeSelectionWarnings(
+        AiChatResponse response,
+        AiChatContextBuilder.AiChatContextSelection? selection,
+        AiChatNormalizedRequest normalizedRequest,
+        AiChatParseResult parseResult)
+    {
+        var combinedWarnings = response.Warnings
+            .Concat(normalizedRequest.InterpretationNotes)
+            .Concat(parseResult.ValidationWarnings)
+            .Concat(selection?.ShortfallWarnings ?? [])
+            .Where(warning => !string.IsNullOrWhiteSpace(warning))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        response.Warnings = combinedWarnings;
+    }
+
+    private static string GetResponseContextMode(AiChatIntent intent)
+    {
+        return intent switch
+        {
+            AiChatIntent.MixedMarketRecommendation => "mixed_market_recommendation",
+            AiChatIntent.WorkingSlipRefinement => "working_slip_refinement",
+            AiChatIntent.MatchDiscussion => "match_discussion",
+            AiChatIntent.SettlementExplanation => "settlement_explanation",
+            AiChatIntent.AppHelp => "app_help",
+            AiChatIntent.SecurityRefusal => "security_refusal",
+            _ => "recommend_picks"
+        };
     }
 
     private static AiChatWorkingSlipSummary BuildWorkingSlipSummary(IReadOnlyCollection<AiChatAction> actions)
@@ -1702,6 +1797,7 @@ public class AiAdvisorService : IAiAdvisorService
         AiChatResponse response,
         AiChatContextBuilder.AiChatContextSelection? selection,
         IReadOnlyCollection<int> discussedPredictionIds,
+        AiChatNormalizedRequest? normalizedRequest,
         CancellationToken ct,
         string? knowledgeTopic = null)
     {
@@ -1723,6 +1819,9 @@ public class AiAdvisorService : IAiAdvisorService
             .ToList();
         state.LastIntent = response.ContextMode;
         state.LastKnowledgeTopic = knowledgeTopic ?? state.LastKnowledgeTopic;
+        state.LastNormalizedRequest = normalizedRequest;
+        state.LastResolvedMarketMix = selection?.ResolvedMarketMix.ToList() ?? [];
+        state.LastShortfallWarnings = selection?.ShortfallWarnings.ToList() ?? [];
 
         if (response.Actions.Count > 0 &&
             (response.ContextMode == "recommend_picks" ||
@@ -1763,18 +1862,26 @@ public class AiAdvisorService : IAiAdvisorService
 
     private static string GetSessionCacheKey(string sessionId) => $"ai-chat-session:{sessionId}";
 
-    private static bool IsBookingFollowUp(string userPrompt, AiChatSessionState sessionState)
+    private static bool IsBookingFollowUp(AiChatNormalizedRequest request, AiChatSessionState sessionState)
     {
         if (sessionState.LastRecommendedActionKeys.Count == 0)
         {
             return false;
         }
 
-        var prompt = userPrompt.ToLowerInvariant();
-        var mentionsBookingIntent = MentionsBookingIntent(prompt);
+        var prompt = request.RawPrompt.ToLowerInvariant();
+        var mentionsBookingIntent = request.WantsBooking || MentionsBookingIntent(prompt);
         var mentionsPriorPicks = prompt.Contains("them") || prompt.Contains("those") || prompt.Contains("these") || prompt.Contains("last") || prompt.Contains("recommended") || prompt.Contains("all");
 
-        return mentionsBookingIntent && mentionsPriorPicks;
+        var plainBookingFollowUp =
+            mentionsBookingIntent &&
+            mentionsPriorPicks &&
+            request.RequestedMarkets.Count == 0 &&
+            !request.TargetCombinedOdds.HasValue &&
+            string.IsNullOrWhiteSpace(request.ActionDirective);
+
+        return plainBookingFollowUp ||
+               string.Equals(request.ActionDirective, "book", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool MentionsBookingIntent(string userPrompt)

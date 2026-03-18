@@ -48,7 +48,8 @@ public class AiAdvisorServiceTests
         Assert.Equal(validActionKey, action.ActionKey);
         Assert.Equal("BTTS clears the line with strong confidence.", action.Explanation);
         Assert.False(response.ShowBookAll);
-        Assert.Single(response.Warnings);
+        Assert.Contains("Grounded to today's published card.", response.Warnings);
+        Assert.Contains(response.Warnings, warning => warning.Contains("only 1 are currently available", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(1, handler.CallCount);
     }
 
@@ -56,7 +57,7 @@ public class AiAdvisorServiceTests
     public async Task GetAdviceAsync_ReturnsRawFallbackMessage_WhenModelDoesNotReturnJson()
     {
         await using var context = CreateContext();
-        await SeedPredictionsAsync(context, 1);
+        var predictions = await SeedPredictionsAsync(context, 1);
 
         var handler = new SequenceHttpMessageHandler(
             BuildGroqResponse("This is not valid JSON."));
@@ -65,7 +66,8 @@ public class AiAdvisorServiceTests
         var response = await service.GetAdviceAsync("Give me the best BTTS predictions", "session-2");
 
         Assert.Equal("This is not valid JSON.", response.Message);
-        Assert.Empty(response.Actions);
+        var action = Assert.Single(response.Actions);
+        Assert.Equal(predictions[0].Id, action.PredictionId);
         Assert.False(response.ShowBookAll);
     }
 
@@ -206,6 +208,40 @@ public class AiAdvisorServiceTests
         Assert.Equal(20, response.Actions.Count(action => action.Market == "1X2"));
         Assert.All(response.Actions, action => Assert.False(string.IsNullOrWhiteSpace(action.Explanation)));
         Assert.True(response.ShowBookAll);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_HandlesMixedPromptWithTotalCount_WithoutFallingIntoNoMatchPath()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(
+            context,
+            Enumerable.Range(1, 10).Select(index => ("BothTeamsScore", "BTTS", 0.87m - (index * 0.004m), 0.55d, $"BTTS Home {index}", $"BTTS Away {index}", "England - Premier League"))
+                .Concat(Enumerable.Range(1, 10).Select(index => ("Over2.5Goals", "Over 2.5", 0.85m - (index * 0.004m), 0.58d, $"Over Home {index}", $"Over Away {index}", "Italy - Serie A")))
+                .Concat(Enumerable.Range(1, 10).Select(index => ("StraightWin", "Home Win", 0.84m - (index * 0.004m), 0.68d, $"Straight Home {index}", $"Straight Away {index}", "Spain - La Liga"))));
+
+        var recommendedKeys = predictions
+            .Take(20)
+            .Select(prediction => $"\"P{prediction.Id}\"");
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "message": "Here is a 20-leg mixed card from today's published picks.",
+                  "recommendedActionKeys": [{{string.Join(", ", recommendedKeys)}}],
+                  "showBookAll": true
+                }
+                """));
+
+        var service = CreateService(context, handler);
+        var response = await service.GetAdviceAsync(
+            "Give me a mixture of btts, over 2.5 and straight win. Total 20",
+            "session-total-mix");
+
+        Assert.Equal("mixed_market_recommendation", response.ContextMode);
+        Assert.Equal(20, response.Actions.Count);
+        Assert.DoesNotContain("couldn't find a matching team, league, or fixture", response.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, handler.CallCount);
     }
 
@@ -828,6 +864,7 @@ public class AiAdvisorServiceTests
             new StubHttpClientFactory(handler),
             cache ?? new TestDistributedCache(),
             new AiChatKnowledgeService(),
+            new AiChatRequestParser(new StubSchemaFallbackService(), NullLogger<AiChatRequestParser>.Instance),
             new StubServiceScopeFactory(valueBetsService));
     }
 
@@ -912,6 +949,17 @@ public class AiAdvisorServiceTests
             };
 
             return Task.FromResult(limitedReport);
+        }
+    }
+
+    private sealed class StubSchemaFallbackService : IAiChatSchemaFallbackService
+    {
+        public Task<AiChatNormalizedRequest?> TryParseAsync(
+            string userPrompt,
+            AiChatNormalizedRequest deterministicRequest,
+            CancellationToken ct = default)
+        {
+            return Task.FromResult<AiChatNormalizedRequest?>(null);
         }
     }
 
