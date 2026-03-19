@@ -2,6 +2,7 @@ using MatchPredictor.Application.Services;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Services;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -62,6 +63,7 @@ public class AnalyzerServiceBackfillTests
             new StubCalibrationService(),
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
+            new AiScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -161,6 +163,7 @@ public class AnalyzerServiceBackfillTests
             new StubCalibrationService(),
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
+            new AiScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -221,6 +224,7 @@ public class AnalyzerServiceBackfillTests
             new StubCalibrationService(),
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
+            new AiScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -259,6 +263,121 @@ public class AnalyzerServiceBackfillTests
 
         Assert.Equal(2, runs.Count);
         Assert.All(runs, run => Assert.True(run.Succeeded));
+    }
+
+    [Fact]
+    public async Task GeneratePredictionsAsync_PreservesUntouchedCurrentFixtures_WhenRefreshInputIsPartial()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var targetDate = DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(1));
+        var targetDateString = targetDate.ToString("dd-MM-yyyy");
+
+        context.MatchDatas.AddRange(
+            new MatchData
+            {
+                Date = targetDateString,
+                Time = "10:00",
+                MatchLocalDate = targetDate,
+                MatchLocalTime = new TimeOnly(10, 0),
+                MatchDateTime = targetDate.ToDateTime(new TimeOnly(9, 0), DateTimeKind.Utc),
+                FixtureKey = "league|alpha|beta",
+                League = "League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta"
+            },
+            new MatchData
+            {
+                Date = targetDateString,
+                Time = "12:00",
+                MatchLocalDate = targetDate,
+                MatchLocalTime = new TimeOnly(12, 0),
+                MatchDateTime = targetDate.ToDateTime(new TimeOnly(11, 0), DateTimeKind.Utc),
+                FixtureKey = "league|gamma|delta",
+                League = "League",
+                HomeTeam = "Gamma",
+                AwayTeam = "Delta"
+            });
+
+        await context.SaveChangesAsync();
+
+        var service = new AnalyzerService(
+            new StubDataAnalyzerService(),
+            new StubWebScraperService(),
+            context,
+            new StubExtractFromExcel(),
+            new StubRegressionPredictorService(),
+            new StubCalibrationService(),
+            new StubThresholdTuningService(),
+            new StubSourceMarketPricingService(),
+            new AiScoreSourceHealthTracker(),
+            Options.Create(new PredictionSettings
+            {
+                BttsScoreThreshold = 0.55,
+                OverTwoGoalsStrongThreshold = 0.58,
+                UnderTwoGoalsStrongThreshold = 0.58,
+                DrawStrongThreshold = 0.30,
+                HomeWinStrong = 0.68,
+                AwayWinStrong = 0.70
+            }),
+            NullLogger<AnalyzerService>.Instance);
+
+        await service.GeneratePredictionsAsync(targetDateString, "initial");
+
+        var omittedFixture = await context.MatchDatas.SingleAsync(match =>
+            match.HomeTeam == "Gamma" &&
+            match.AwayTeam == "Delta");
+        context.MatchDatas.Remove(omittedFixture);
+        await context.SaveChangesAsync();
+
+        await service.GeneratePredictionsAsync(targetDateString, "refresh-partial");
+
+        var predictions = await context.Predictions
+            .OrderBy(prediction => prediction.HomeTeam)
+            .ThenBy(prediction => prediction.RevisionNumber)
+            .ToListAsync();
+        var forecasts = await context.ForecastObservations
+            .OrderBy(forecast => forecast.HomeTeam)
+            .ThenBy(forecast => forecast.RevisionNumber)
+            .ToListAsync();
+
+        Assert.Equal(3, predictions.Count);
+        Assert.Equal(2, predictions.Count(prediction => prediction.IsCurrentRevision));
+
+        var alphaPredictions = predictions
+            .Where(prediction => prediction.HomeTeam == "Alpha" && prediction.AwayTeam == "Beta")
+            .OrderBy(prediction => prediction.RevisionNumber)
+            .ToList();
+        Assert.Equal(2, alphaPredictions.Count);
+        Assert.False(alphaPredictions[0].IsCurrentRevision);
+        Assert.True(alphaPredictions[1].IsCurrentRevision);
+        Assert.Equal("refresh-partial", alphaPredictions[1].RunReason);
+
+        var gammaPrediction = Assert.Single(predictions.Where(prediction =>
+            prediction.HomeTeam == "Gamma" &&
+            prediction.AwayTeam == "Delta"));
+        Assert.True(gammaPrediction.IsCurrentRevision);
+        Assert.Equal("initial", gammaPrediction.RunReason);
+
+        Assert.Equal(3, forecasts.Count);
+        Assert.Equal(2, forecasts.Count(forecast => forecast.IsCurrentRevision));
+
+        var alphaForecasts = forecasts
+            .Where(forecast => forecast.HomeTeam == "Alpha" && forecast.AwayTeam == "Beta")
+            .OrderBy(forecast => forecast.RevisionNumber)
+            .ToList();
+        Assert.Equal(2, alphaForecasts.Count);
+        Assert.False(alphaForecasts[0].IsCurrentRevision);
+        Assert.True(alphaForecasts[1].IsCurrentRevision);
+
+        var gammaForecast = Assert.Single(forecasts.Where(forecast =>
+            forecast.HomeTeam == "Gamma" &&
+            forecast.AwayTeam == "Delta"));
+        Assert.True(gammaForecast.IsCurrentRevision);
+        Assert.Equal("initial", gammaForecast.RunReason);
     }
 
     [Fact]
@@ -317,6 +436,7 @@ public class AnalyzerServiceBackfillTests
             new StubCalibrationService(),
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
+            new AiScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -387,6 +507,7 @@ public class AnalyzerServiceBackfillTests
             new StubCalibrationService(),
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
+            new AiScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -462,6 +583,7 @@ public class AnalyzerServiceBackfillTests
             new StubCalibrationService(),
             new StubThresholdTuningService(),
             sourcePricing,
+            new AiScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -542,6 +664,7 @@ public class AnalyzerServiceBackfillTests
             new StubCalibrationService(),
             new StubThresholdTuningService(),
             sourcePricing,
+            new AiScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,

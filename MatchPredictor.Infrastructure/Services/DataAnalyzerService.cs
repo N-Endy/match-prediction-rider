@@ -165,7 +165,7 @@ public class DataAnalyzerService : IDataAnalyzerService
         var matchLocalDate = match.MatchLocalDate;
         var matchLocalTime = match.MatchLocalTime;
 
-        if (utcDateTime is null || !matchLocalDate.HasValue)
+        if (utcDateTime is null)
         {
             var normalizedDateTime = DateTimeProvider.ParseCanonicalMatchDateTime(match.Date, match.Time);
             date = DateTimeProvider.FormatLocalDate(normalizedDateTime.localDate);
@@ -176,6 +176,8 @@ public class DataAnalyzerService : IDataAnalyzerService
         }
         else
         {
+            matchLocalDate ??= DateTimeProvider.ConvertUtcToLocalDate(utcDateTime.Value);
+            matchLocalTime ??= DateTimeProvider.ConvertUtcToLocalTime(utcDateTime.Value);
             date = DateTimeProvider.FormatLocalDate(matchLocalDate.Value);
             time = matchLocalTime.HasValue ? DateTimeProvider.FormatLocalTime(matchLocalTime.Value) : time;
         }
@@ -216,33 +218,34 @@ public class DataAnalyzerService : IDataAnalyzerService
 
     private IEnumerable<PredictionCandidate> BuildForecastCandidatesForMatch(MatchData match)
     {
+        var probabilities = _probabilityCalculator.CalculateProbabilities(match);
         var candidates = new[]
         {
             BuildCandidate(
                 match,
                 PredictionMarket.BothTeamsScore,
                 "BTTS",
-                _probabilityCalculator.CalculateBttsProbability(match)),
+                probabilities.Btts),
             BuildCandidate(
                 match,
                 PredictionMarket.Over25Goals,
                 "Over 2.5",
-                _probabilityCalculator.CalculateOverTwoGoalsProbability(match)),
+                probabilities.Over25),
             BuildCandidate(
                 match,
                 PredictionMarket.Under25Goals,
                 "Under 2.5",
-                _probabilityCalculator.CalculateUnderTwoGoalsProbability(match)),
+                probabilities.Under25),
             BuildCandidate(
                 match,
                 PredictionMarket.HomeWin,
                 "Home Win",
-                _probabilityCalculator.CalculateHomeWinProbability(match)),
+                probabilities.HomeWin),
             BuildCandidate(
                 match,
                 PredictionMarket.AwayWin,
                 "Away Win",
-                _probabilityCalculator.CalculateAwayWinProbability(match))
+                probabilities.AwayWin)
         };
 
         return candidates

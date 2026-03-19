@@ -218,7 +218,9 @@ public class AnalyticsModel : PageModel
         IReadOnlySet<DateOnly> localDates)
     {
         return promotionHistory
-            .Where(history => localDates.Contains(DateOnly.FromDateTime(DateTimeProvider.ConvertUtcToLocal(history.EffectiveAt))))
+            .Where(history =>
+                history.Market != PredictionMarket.Draw &&
+                localDates.Contains(DateOnly.FromDateTime(DateTimeProvider.ConvertUtcToLocal(history.EffectiveAt))))
             .OrderByDescending(history => history.EffectiveAt)
             .Select(history =>
             {

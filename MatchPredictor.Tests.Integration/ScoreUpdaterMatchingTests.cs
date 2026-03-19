@@ -2,6 +2,7 @@ using MatchPredictor.Application.Services;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Services;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -235,6 +236,9 @@ public class ScoreUpdaterMatchingTests
 
         await context.SaveChangesAsync();
 
+        var aiScoreTracker = new AiScoreSourceHealthTracker();
+        aiScoreTracker.RecordFallback("api-football", 0, "Stubbed AiScore fallback produced no rows.");
+
         var service = CreateAnalyzerService(
             context,
             new StubWebScraperService
@@ -256,7 +260,8 @@ public class ScoreUpdaterMatchingTests
                         IsLive = false
                     }
                 ]
-            });
+            },
+            aiScoreTracker);
 
         await service.RunScoreUpdaterAsync();
 
@@ -1260,7 +1265,10 @@ public class ScoreUpdaterMatchingTests
         };
     }
 
-    private static AnalyzerService CreateAnalyzerService(ApplicationDbContext context, StubWebScraperService scraper)
+    private static AnalyzerService CreateAnalyzerService(
+        ApplicationDbContext context,
+        StubWebScraperService scraper,
+        AiScoreSourceHealthTracker? aiScoreSourceHealthTracker = null)
     {
         return new AnalyzerService(
             new StubDataAnalyzerService(),
@@ -1271,6 +1279,7 @@ public class ScoreUpdaterMatchingTests
             new StubCalibrationService(),
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
+            aiScoreSourceHealthTracker ?? new AiScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,

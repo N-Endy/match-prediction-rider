@@ -246,7 +246,7 @@ public class AnalyzerService  : IAnalyzerService
 
             var predictionRun = await CreatePredictionRunAsync(targetLocalDate, normalizedRunReason, forecastCandidates, publishedCandidates);
             await SaveForecastObservations(forecastCandidates, publishedCandidates, predictionRun);
-            var savedPredictions = await SavePredictions(publishedCandidates, predictionRun);
+            var savedPredictions = await SavePredictions(forecastCandidates, publishedCandidates, predictionRun);
             await CapturePublishOddsSnapshotsAsync(savedPredictions, generationMatches, publishPricingFixtures);
             predictionRun.Succeeded = true;
             predictionRun.CompletedAtUtc = DateTime.UtcNow;
@@ -1972,10 +1972,19 @@ public class AnalyzerService  : IAnalyzerService
         }
     }
     
-    private async Task<IReadOnlyList<Prediction>> SavePredictions(IEnumerable<PredictionCandidate> candidates, PredictionRun predictionRun)
+    private async Task<IReadOnlyList<Prediction>> SavePredictions(
+        IEnumerable<PredictionCandidate> forecastCandidates,
+        IEnumerable<PredictionCandidate> candidates,
+        PredictionRun predictionRun)
     {
         var candidateList = DeduplicatePublishedCandidates(candidates, predictionRun.TargetLocalDate.ToString("dd-MM-yyyy"));
-        if (!candidateList.Any())
+        var touchedFixtureKeys = BuildCandidateFixtureKeySet(forecastCandidates);
+        if (touchedFixtureKeys.Count == 0)
+        {
+            touchedFixtureKeys = BuildCandidateFixtureKeySet(candidateList);
+        }
+
+        if (touchedFixtureKeys.Count == 0)
         {
             return [];
         }
@@ -1989,7 +1998,7 @@ public class AnalyzerService  : IAnalyzerService
             .ToListAsync();
 
         var currentByKey = currentPredictions
-            .GroupBy(prediction => (prediction.FixtureKey, prediction.PredictionCategory))
+            .GroupBy(GetPredictionKey)
             .ToDictionary(
                 group => group.Key,
                 group => group
@@ -1998,11 +2007,12 @@ public class AnalyzerService  : IAnalyzerService
                     .ThenByDescending(prediction => prediction.Id)
                     .First());
         var revisionByKey = historicalPredictions
-            .GroupBy(prediction => (prediction.FixtureKey, prediction.PredictionCategory))
+            .GroupBy(GetPredictionKey)
             .ToDictionary(group => group.Key, group => group.Max(prediction => prediction.RevisionNumber));
 
         var createdPredictions = new List<Prediction>();
-        foreach (var existingRecord in currentPredictions)
+        foreach (var existingRecord in currentPredictions.Where(prediction =>
+                     touchedFixtureKeys.Contains(GetPredictionFixtureKey(prediction))))
         {
             existingRecord.IsCurrentRevision = false;
             existingRecord.SupersededAt = DateTime.UtcNow;
@@ -2010,7 +2020,7 @@ public class AnalyzerService  : IAnalyzerService
 
         foreach (var candidate in candidateList)
         {
-            var currentKey = (candidate.FixtureKey, candidate.PredictionCategory);
+            var currentKey = GetCandidatePredictionKey(candidate);
             currentByKey.TryGetValue(currentKey, out var currentRecord);
             var nextRevision = revisionByKey.TryGetValue(currentKey, out var revisionNumber)
                 ? revisionNumber + 1
@@ -2087,8 +2097,10 @@ public class AnalyzerService  : IAnalyzerService
         var revisionByKey = historicalForecasts
             .GroupBy(GetObservationKey)
             .ToDictionary(group => group.Key, group => group.Max(forecast => forecast.RevisionNumber));
+        var touchedFixtureKeys = BuildCandidateFixtureKeySet(forecastList);
 
-        foreach (var existingRecord in currentForecasts)
+        foreach (var existingRecord in currentForecasts.Where(forecast =>
+                     touchedFixtureKeys.Contains(GetForecastFixtureKey(forecast))))
         {
             existingRecord.IsCurrentRevision = false;
             existingRecord.SupersededAt = DateTime.UtcNow;
@@ -2247,14 +2259,56 @@ public class AnalyzerService  : IAnalyzerService
         return $"{ResolveFixtureKey(forecast.FixtureKey, forecast.MatchLocalDate, forecast.League, forecast.HomeTeam, forecast.AwayTeam)}|{forecast.Market}";
     }
 
+    private static string GetPredictionKey(Prediction prediction)
+    {
+        return $"{GetPredictionFixtureKey(prediction)}|{prediction.PredictionCategory}";
+    }
+
+    private static string GetPredictionFixtureKey(Prediction prediction)
+    {
+        return ResolveFixtureKey(
+            prediction.FixtureKey,
+            prediction.MatchLocalDate,
+            prediction.League,
+            prediction.HomeTeam,
+            prediction.AwayTeam);
+    }
+
+    private static string GetForecastFixtureKey(ForecastObservation forecast)
+    {
+        return ResolveFixtureKey(
+            forecast.FixtureKey,
+            forecast.MatchLocalDate,
+            forecast.League,
+            forecast.HomeTeam,
+            forecast.AwayTeam);
+    }
+
+    private static string GetCandidateFixtureKey(PredictionCandidate candidate)
+    {
+        return ResolveFixtureKey(
+            candidate.FixtureKey,
+            candidate.MatchLocalDate,
+            candidate.League,
+            candidate.HomeTeam,
+            candidate.AwayTeam);
+    }
+
+    private static HashSet<string> BuildCandidateFixtureKeySet(IEnumerable<PredictionCandidate> candidates)
+    {
+        return candidates
+            .Select(GetCandidateFixtureKey)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
     private static string GetCandidateObservationKey(PredictionCandidate candidate)
     {
-        return $"{ResolveFixtureKey(candidate.FixtureKey, candidate.MatchLocalDate, candidate.League, candidate.HomeTeam, candidate.AwayTeam)}|{candidate.Market}";
+        return $"{GetCandidateFixtureKey(candidate)}|{candidate.Market}";
     }
 
     private static string GetCandidatePredictionKey(PredictionCandidate candidate)
     {
-        return $"{ResolveFixtureKey(candidate.FixtureKey, candidate.MatchLocalDate, candidate.League, candidate.HomeTeam, candidate.AwayTeam)}|{candidate.PredictionCategory}";
+        return $"{GetCandidateFixtureKey(candidate)}|{candidate.PredictionCategory}";
     }
 
     private static MatchData? ResolveMatchDataForPrediction(

@@ -61,7 +61,7 @@ public class ThresholdTuningServiceTests
     }
 
     [Fact]
-    public async Task RebuildProfilesAsync_TracksThresholdWithoutPromoting_WhenValidationDoesNotImprove()
+    public async Task RebuildProfilesAsync_IgnoresLegacyDrawMarket_WhenRebuildingActiveThresholds()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
@@ -69,6 +69,26 @@ public class ThresholdTuningServiceTests
 
         await using var context = new ApplicationDbContext(options);
         var now = DateTime.UtcNow;
+
+        context.ThresholdProfiles.Add(new ThresholdProfile
+        {
+            Market = PredictionMarket.Draw,
+            BaselineThreshold = 0.30,
+            Threshold = 0.42,
+            SampleCount = 30,
+            HitRate = 0.55,
+            PublishedPerWeek = 2.0,
+            AverageCalibratedProbability = 0.44,
+            ObservedFrequency = 0.55,
+            BrierScore = 0.210,
+            TrainingSampleCount = 30,
+            ValidationSampleCount = 15,
+            BaselineHitRate = 0.50,
+            BaselineBrierScore = 0.220,
+            Improvement = 0.010,
+            IsPromoted = true,
+            LastUpdated = now
+        });
 
         SeedForecasts(
             context,
@@ -93,13 +113,18 @@ public class ThresholdTuningServiceTests
 
         await service.RebuildProfilesAsync();
 
-        var profile = await context.ThresholdProfiles.SingleAsync(p => p.Market == PredictionMarket.Draw);
         var decision = service.GetThresholdDecision(PredictionMarket.Draw, 0.54);
+        var drawProfiles = await context.ThresholdProfiles
+            .Where(p => p.Market == PredictionMarket.Draw)
+            .ToListAsync();
+        var drawHistory = await context.PromotionHistories
+            .Where(history => history.Market == PredictionMarket.Draw)
+            .ToListAsync();
 
-        Assert.False(profile.IsPromoted);
+        Assert.Empty(drawProfiles);
+        Assert.Empty(drawHistory);
         Assert.Equal(0.54, decision.Threshold, 3);
         Assert.Equal("Configured", decision.ThresholdSource);
-        Assert.True(profile.ValidationSampleCount >= 15);
     }
 
     [Fact]
@@ -223,6 +248,7 @@ public class ThresholdTuningServiceTests
             {
                 BttsScoreThreshold = 0.55,
                 OverTwoGoalsStrongThreshold = 0.58,
+                UnderTwoGoalsStrongThreshold = 0.58,
                 DrawStrongThreshold = 0.30,
                 HomeWinStrong = 0.68,
                 AwayWinStrong = 0.70

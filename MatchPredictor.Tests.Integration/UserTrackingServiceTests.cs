@@ -2,6 +2,7 @@ using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Web.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -13,7 +14,7 @@ public class UserTrackingServiceTests
     public async Task TrackPageViewAsync_CreatesVisitorSessionAndPageViewEvent()
     {
         await using var context = CreateContext();
-        var service = new UserTrackingService(context, NullLogger<UserTrackingService>.Instance);
+        var service = CreateService(context);
         var httpContext = CreateHttpContext("/predictions/btts");
 
         await service.TrackPageViewAsync(httpContext);
@@ -38,7 +39,7 @@ public class UserTrackingServiceTests
     public async Task TrackEventAsync_ReusesVisitorCookiesAndCountsActions()
     {
         await using var context = CreateContext();
-        var service = new UserTrackingService(context, NullLogger<UserTrackingService>.Instance);
+        var service = CreateService(context);
 
         var firstRequest = CreateHttpContext("/predictions/over2");
         await service.TrackPageViewAsync(firstRequest);
@@ -76,7 +77,7 @@ public class UserTrackingServiceTests
     public async Task TrackPageViewAsync_SkipsBotTraffic()
     {
         await using var context = CreateContext();
-        var service = new UserTrackingService(context, NullLogger<UserTrackingService>.Instance);
+        var service = CreateService(context);
         var httpContext = CreateHttpContext("/predictions/btts", userAgent: "Googlebot/2.1");
 
         await service.TrackPageViewAsync(httpContext);
@@ -89,7 +90,7 @@ public class UserTrackingServiceTests
     public async Task TrackPageViewAsync_DoesNotThrow_WhenRequestIsCanceled()
     {
         await using var context = CreateContext();
-        var service = new UserTrackingService(context, NullLogger<UserTrackingService>.Instance);
+        var service = CreateService(context);
         var httpContext = CreateHttpContext("/analytics");
         using var cts = new CancellationTokenSource();
         cts.Cancel();
@@ -106,6 +107,21 @@ public class UserTrackingServiceTests
             .Options;
 
         return new ApplicationDbContext(options);
+    }
+
+    private static UserTrackingService CreateService(ApplicationDbContext context)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(
+            [
+                new KeyValuePair<string, string?>("ENABLE_USER_TRACKING", "true")
+            ])
+            .Build();
+
+        return new UserTrackingService(
+            context,
+            configuration,
+            NullLogger<UserTrackingService>.Instance);
     }
 
     private static DefaultHttpContext CreateHttpContext(

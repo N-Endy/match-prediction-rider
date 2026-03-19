@@ -145,6 +145,74 @@ public class CalibrationServiceTests
     }
 
     [Fact]
+    public async Task RebuildProfilesAsync_IgnoresLegacyDrawMarket_WhenRebuildingActiveCalibrationProfiles()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var now = DateTime.UtcNow;
+
+        context.BetaCalibrationProfiles.Add(new BetaCalibrationProfile
+        {
+            Market = PredictionMarket.Draw,
+            Alpha = 1.5,
+            Beta = 0.9,
+            Gamma = 0.1,
+            TrainingSampleCount = 50,
+            ValidationSampleCount = 20,
+            BaselineBrierScore = 0.230,
+            ValidationBrierScore = 0.210,
+            Improvement = 0.020,
+            IsRecommended = true,
+            LastUpdated = now
+        });
+
+        for (var index = 0; index < 60; index++)
+        {
+            var occurred = index % 3 == 0;
+            context.ForecastObservations.Add(new ForecastObservation
+            {
+                Date = now.AddDays(-index).ToString("dd-MM-yyyy"),
+                Time = "18:00",
+                League = "League",
+                HomeTeam = $"DrawHome{index}",
+                AwayTeam = $"DrawAway{index}",
+                Market = PredictionMarket.Draw,
+                PredictedOutcome = "Draw",
+                RawProbability = occurred ? 0.36 : 0.28,
+                CalibratedProbability = occurred ? 0.34 : 0.26,
+                OutcomeOccurred = occurred,
+                IsSettled = true,
+                CreatedAt = now.AddDays(-index),
+                SettledAt = now.AddDays(-index)
+            });
+        }
+
+        await context.SaveChangesAsync();
+
+        var service = new CalibrationService(context);
+
+        await service.RebuildProfilesAsync();
+
+        var drawBucketProfiles = await context.MarketCalibrationProfiles
+            .Where(profile => profile.Market == PredictionMarket.Draw)
+            .ToListAsync();
+        var drawBetaProfiles = await context.BetaCalibrationProfiles
+            .Where(profile => profile.Market == PredictionMarket.Draw)
+            .ToListAsync();
+        var drawHistory = await context.PromotionHistories
+            .Where(history => history.Market == PredictionMarket.Draw)
+            .ToListAsync();
+
+        Assert.Empty(drawBucketProfiles);
+        Assert.Empty(drawBetaProfiles);
+        Assert.Empty(drawHistory);
+        Assert.Equal(0.34, service.Calibrate(PredictionMarket.Draw, 0.34), 6);
+    }
+
+    [Fact]
     public async Task RebuildProfilesAsync_UsesPointInTimeForecastRevisionPerFixture()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()

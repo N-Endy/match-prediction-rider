@@ -143,6 +143,31 @@ public class DataAnalyzerServiceTests
         Assert.True(candidate.WasPublished);
     }
 
+    [Fact]
+    public void BuildForecastCandidates_ComputesProbabilitySnapshotOncePerMatch()
+    {
+        var match = CreateMatch();
+        var probabilityCalculator = new FakeProbabilityCalculator
+        {
+            Btts = 0.61,
+            Over25 = 0.58,
+            Under25 = 0.42,
+            HomeWin = 0.55,
+            AwayWin = 0.23
+        };
+        var service = new DataAnalyzerService(
+            probabilityCalculator,
+            new FakeCalibrationService((_, raw) => raw),
+            new FakeThresholdTuningService(),
+            Options.Create(new PredictionSettings()));
+
+        var candidates = service.BuildForecastCandidates([match]);
+
+        Assert.Equal(5, candidates.Count);
+        Assert.Equal(1, probabilityCalculator.CalculateProbabilitiesCalls);
+        Assert.Equal(0, probabilityCalculator.SingleMarketCalls);
+    }
+
     private static MatchData CreateMatch()
     {
         return new MatchData
@@ -162,12 +187,50 @@ public class DataAnalyzerServiceTests
         public double Under25 { get; set; }
         public double HomeWin { get; set; }
         public double AwayWin { get; set; }
+        public int CalculateProbabilitiesCalls { get; private set; }
+        public int SingleMarketCalls { get; private set; }
 
-        public double CalculateBttsProbability(MatchData match) => Btts;
-        public double CalculateOverTwoGoalsProbability(MatchData match) => Over25;
-        public double CalculateUnderTwoGoalsProbability(MatchData match) => Under25;
-        public double CalculateHomeWinProbability(MatchData match) => HomeWin;
-        public double CalculateAwayWinProbability(MatchData match) => AwayWin;
+        public MatchProbabilities CalculateProbabilities(MatchData match)
+        {
+            CalculateProbabilitiesCalls++;
+            return new MatchProbabilities(
+                Btts: Btts,
+                Over25: Over25,
+                Under25: Under25,
+                Draw: Math.Clamp(1.0 - (HomeWin + AwayWin), 0.0, 1.0),
+                HomeWin: HomeWin,
+                AwayWin: AwayWin);
+        }
+
+        public double CalculateBttsProbability(MatchData match)
+        {
+            SingleMarketCalls++;
+            return Btts;
+        }
+
+        public double CalculateOverTwoGoalsProbability(MatchData match)
+        {
+            SingleMarketCalls++;
+            return Over25;
+        }
+
+        public double CalculateUnderTwoGoalsProbability(MatchData match)
+        {
+            SingleMarketCalls++;
+            return Under25;
+        }
+
+        public double CalculateHomeWinProbability(MatchData match)
+        {
+            SingleMarketCalls++;
+            return HomeWin;
+        }
+
+        public double CalculateAwayWinProbability(MatchData match)
+        {
+            SingleMarketCalls++;
+            return AwayWin;
+        }
     }
 
     private sealed class FakeCalibrationService : ICalibrationService

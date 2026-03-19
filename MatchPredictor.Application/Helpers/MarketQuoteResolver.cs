@@ -49,9 +49,13 @@ public static class MarketQuoteResolver
             return false;
         }
 
+        var effectiveMarketProbability = rawOdds is > 1d
+            ? impliedProbability
+            : selectedProbability.Value;
+
         quote = new MarketQuote
         {
-            MarketProbability = selectedProbability.Value,
+            MarketProbability = effectiveMarketProbability,
             DecimalOdds = decimalOdds,
             ImpliedProbability = impliedProbability,
             PricingSource = liveProbability is > 0d ? LivePricingSourceLabel : StoredPricingSourceLabel,

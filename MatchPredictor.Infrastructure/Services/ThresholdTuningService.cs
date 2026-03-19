@@ -18,6 +18,14 @@ public class ThresholdTuningService : IThresholdTuningService
     private const double ThresholdStep = 0.01;
     private const double MinimumThreshold = 0.50;
     private const double MaximumThreshold = 0.90;
+    private static readonly PredictionMarket[] ActiveThresholdMarkets =
+    [
+        PredictionMarket.BothTeamsScore,
+        PredictionMarket.Over25Goals,
+        PredictionMarket.Under25Goals,
+        PredictionMarket.HomeWin,
+        PredictionMarket.AwayWin
+    ];
 
     private readonly ApplicationDbContext _dbContext;
     private readonly PredictionSettings _settings;
@@ -29,6 +37,7 @@ public class ThresholdTuningService : IThresholdTuningService
         _settings = options.Value;
         _profiles = _dbContext.ThresholdProfiles
             .AsNoTracking()
+            .Where(profile => ActiveThresholdMarkets.Contains(profile.Market))
             .ToList();
     }
 
@@ -67,19 +76,15 @@ public class ThresholdTuningService : IThresholdTuningService
                 forecast.OutcomeOccurred != null &&
                 (forecast.SettledAt ?? forecast.CreatedAt) >= cutoff)
             .ToListAsync();
-        var pointInTimeForecasts = PointInTimeBacktestingSelector.SelectForecasts(forecasts);
+        var pointInTimeForecasts = PointInTimeBacktestingSelector.SelectForecasts(forecasts)
+            .Where(forecast => ActiveThresholdMarkets.Contains(forecast.Market))
+            .ToList();
 
         var rebuiltProfiles = new List<ThresholdProfile>();
 
-        var markets = new[]
-        {
-            (PredictionMarket.BothTeamsScore, _settings.BttsScoreThreshold),
-            (PredictionMarket.Over25Goals, _settings.OverTwoGoalsStrongThreshold),
-            (PredictionMarket.Under25Goals, _settings.UnderTwoGoalsStrongThreshold),
-            (PredictionMarket.Draw, _settings.DrawStrongThreshold),
-            (PredictionMarket.HomeWin, _settings.HomeWinStrong),
-            (PredictionMarket.AwayWin, _settings.AwayWinStrong)
-        };
+        var markets = ActiveThresholdMarkets
+            .Select(market => (Market: market, FallbackThreshold: ResolveFallbackThreshold(market)))
+            .ToArray();
 
         foreach (var (market, fallbackThreshold) in markets)
         {
@@ -269,15 +274,9 @@ public class ThresholdTuningService : IThresholdTuningService
         var history = new List<PromotionHistory>();
         var rebuiltLookup = rebuiltProfiles.ToDictionary(profile => profile.Market);
 
-        var markets = new[]
-        {
-            (PredictionMarket.BothTeamsScore, _settings.BttsScoreThreshold),
-            (PredictionMarket.Over25Goals, _settings.OverTwoGoalsStrongThreshold),
-            (PredictionMarket.Under25Goals, _settings.UnderTwoGoalsStrongThreshold),
-            (PredictionMarket.Draw, _settings.DrawStrongThreshold),
-            (PredictionMarket.HomeWin, _settings.HomeWinStrong),
-            (PredictionMarket.AwayWin, _settings.AwayWinStrong)
-        };
+        var markets = ActiveThresholdMarkets
+            .Select(market => (Market: market, FallbackThreshold: ResolveFallbackThreshold(market)))
+            .ToArray();
 
         foreach (var (market, fallbackThreshold) in markets)
         {
@@ -319,6 +318,19 @@ public class ThresholdTuningService : IThresholdTuningService
         }
 
         return history;
+    }
+
+    private double ResolveFallbackThreshold(PredictionMarket market)
+    {
+        return market switch
+        {
+            PredictionMarket.BothTeamsScore => _settings.BttsScoreThreshold,
+            PredictionMarket.Over25Goals => _settings.OverTwoGoalsStrongThreshold,
+            PredictionMarket.Under25Goals => _settings.UnderTwoGoalsStrongThreshold,
+            PredictionMarket.HomeWin => _settings.HomeWinStrong,
+            PredictionMarket.AwayWin => _settings.AwayWinStrong,
+            _ => throw new ArgumentOutOfRangeException(nameof(market), market, "Unsupported active threshold market.")
+        };
     }
 
     private sealed class ThresholdCandidate

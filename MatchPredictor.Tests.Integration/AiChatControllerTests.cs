@@ -105,6 +105,8 @@ public class AiChatControllerTests
 
     private sealed class FakeUserTrackingService : IUserTrackingService
     {
+        public bool IsEnabled => true;
+
         public Task EnsureTrackingContextAsync(HttpContext httpContext, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task TrackPageViewAsync(HttpContext httpContext, CancellationToken ct = default) => Task.CompletedTask;

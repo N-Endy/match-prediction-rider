@@ -1,5 +1,6 @@
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Services;
+using System.Reflection;
 using Xunit;
 
 namespace MatchPredictor.Tests.Integration;
@@ -110,5 +111,25 @@ public class ProbabilityCalculatorTests
 
         Assert.InRange(underProbability, 0.35, 0.50);
         Assert.True(Math.Abs(underProbability - 0.42) < 0.08);
+    }
+
+    [Fact]
+    public void EstimateStrengthBias_UsesNonDrawLeanInsteadOfRepeatingRawOneX2Gap()
+    {
+        var method = typeof(ProbabilityCalculator).GetMethod(
+            "EstimateStrengthBias",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+
+        var match = new MatchData();
+        const double homeWin = 0.46;
+        const double awayWin = 0.20;
+
+        var bias = (double)method!.Invoke(null, [match, homeWin, awayWin])!;
+        var expected = ((homeWin - awayWin) * 1.35 + (((homeWin - awayWin) / (homeWin + awayWin)) * 0.50)) / 1.85;
+
+        Assert.Equal(expected, bias, 6);
+        Assert.NotEqual(homeWin - awayWin, bias, 6);
     }
 }

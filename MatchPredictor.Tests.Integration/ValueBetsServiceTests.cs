@@ -73,10 +73,10 @@ public class ValueBetsServiceTests
             {
                 using var document = JsonDocument.Parse(payload);
                 var picks = document.RootElement.GetProperty("Picks").EnumerateArray().ToList();
-                var overPick = picks.Single(pick =>
-                    pick.GetProperty("PredictionCategory").GetString() == "Over2.5Goals");
+                var totalsPick = picks.Single(pick =>
+                    pick.GetProperty("PredictionCategory").GetString() == "Under2.5Goals");
 
-                var candidateKey = overPick.GetProperty("CandidateKey").GetString();
+                var candidateKey = totalsPick.GetProperty("CandidateKey").GetString();
                 return JsonSerializer.Serialize(new
                 {
                     picks = new[]
@@ -84,7 +84,7 @@ public class ValueBetsServiceTests
                         new
                         {
                             CandidateKey = candidateKey,
-                            AiJustification = "Calibrated over-goals probability still sits clearly above the market."
+                            AiJustification = "Calibrated under-goals probability still sits clearly above the market."
                         }
                     }
                 });
@@ -112,18 +112,17 @@ public class ValueBetsServiceTests
         Assert.Equal(0.48, under.MarketProbability, 3);
         Assert.Equal(0.16, under.Edge, 3);
         Assert.Equal(Math.Round(1d / 0.48d, 4), under.DecimalOdds, 4);
-        Assert.Contains("EV", under.AiJustification);
+        Assert.Equal("Calibrated under-goals probability still sits clearly above the market.", under.AiJustification);
 
-        var over = Assert.Single(results.Where(result => result.PredictionCategory == "Over2.5Goals"));
-        Assert.Equal(0.60, over.MathematicalProbability, 3);
-        Assert.Equal(0.52, over.MarketProbability, 3);
-        Assert.Equal(0.08, over.Edge, 3);
-        Assert.Equal(Math.Round(1d / 0.52d, 4), over.DecimalOdds, 4);
-        Assert.Equal(0.52, over.ImpliedProbability, 3);
-        Assert.True(over.ExpectedValuePercent > 0);
-        Assert.Equal("Derived from stored sync probability", over.OddsDerivationSource);
-        Assert.Equal("Tuned", over.ThresholdSource);
-        Assert.Equal("Calibrated over-goals probability still sits clearly above the market.", over.AiJustification);
+        Assert.DoesNotContain(results, result => result.PredictionCategory == "Over2.5Goals");
+
+        var homeWin = Assert.Single(results.Where(result => result.PredictionCategory == "StraightWin"));
+        Assert.Equal("Home Win", homeWin.PredictedOutcome);
+        Assert.Equal(0.69, homeWin.MathematicalProbability, 3);
+        Assert.Equal(0.60, homeWin.MarketProbability, 3);
+        Assert.Equal(0.09, homeWin.Edge, 3);
+        Assert.Equal(Math.Round(1d / 0.60d, 4), homeWin.DecimalOdds, 4);
+        Assert.Contains("EV", homeWin.AiJustification);
     }
 
     [Fact]
@@ -192,10 +191,10 @@ public class ValueBetsServiceTests
 
         var results = (await service.GetTopValueBetsAsync()).ToList();
 
-        var over = Assert.Single(results);
-        Assert.Equal("Over2.5Goals", over.PredictionCategory);
-        Assert.Equal("Over 2.5", over.PredictedOutcome);
-        Assert.Contains("model 61.0% vs market 54.0%", over.AiJustification);
+        var under = Assert.Single(results);
+        Assert.Equal("Under2.5Goals", under.PredictionCategory);
+        Assert.Equal("Under 2.5", under.PredictedOutcome);
+        Assert.Contains("model 60.0% vs market 46.0%", under.AiJustification);
     }
 
     [Fact]
@@ -279,8 +278,9 @@ public class ValueBetsServiceTests
         Assert.Equal("BothTeamsScore", btts.PredictionCategory);
         Assert.Equal("BTTS", btts.PredictedOutcome);
         Assert.Equal(0.63, btts.MathematicalProbability, 3);
-        Assert.Equal(0.55, btts.MarketProbability, 3);
-        Assert.Equal(0.08, btts.Edge, 3);
+        Assert.Equal(BetPricingMath.ConvertDecimalOddsToProbability(1.85) ?? 0d, btts.MarketProbability, 5);
+        Assert.Equal(btts.ImpliedProbability, btts.MarketProbability, 5);
+        Assert.Equal(Math.Round(0.63 - (BetPricingMath.ConvertDecimalOddsToProbability(1.85) ?? 0d), 6), Math.Round(btts.Edge, 6), 6);
         Assert.Equal(1.85, btts.DecimalOdds, 2);
         Assert.Equal("Source decimal odds", btts.OddsDerivationSource);
     }
@@ -384,7 +384,91 @@ public class ValueBetsServiceTests
         Assert.True(results[0].ExpectedValuePercent > results[1].ExpectedValuePercent);
         Assert.Equal(2.20, results[0].DecimalOdds, 2);
         Assert.Equal(0.454545, results[0].ImpliedProbability, 5);
+        Assert.Equal(results[0].ImpliedProbability, results[0].MarketProbability, 5);
         Assert.Equal("Source decimal odds", results[0].OddsDerivationSource);
+    }
+
+    [Fact]
+    public async Task GetTopValueBetsAsync_UsesOddsImpliedProbabilityForEdgeFiltering_WhenRawOddsExist()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetUpcomingKickoffForToday(5);
+        var date = DateTimeProvider.GetLocalDate().ToString("dd-MM-yyyy");
+        var time = kickoff.ToString("HH:mm");
+
+        context.MatchDatas.Add(new MatchData
+        {
+            Date = date,
+            Time = time,
+            MatchLocalDate = DateTimeProvider.GetLocalDate(),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+            MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            FixtureKey = "league|priced|edge-case",
+            League = "League",
+            HomeTeam = "Priced",
+            AwayTeam = "Edge Case",
+            HomeWin = 0.54,
+            Draw = 0.24,
+            AwayWin = 0.22
+        });
+
+        await context.SaveChangesAsync();
+
+        var analyzer = new FakeDataAnalyzerService();
+        analyzer.Seed(
+            "Priced",
+            "Edge Case",
+            [
+                CreateCandidate(
+                    PredictionMarket.HomeWin,
+                    "StraightWin",
+                    "Home Win",
+                    0.54,
+                    0.58,
+                    homeTeam: "Priced",
+                    awayTeam: "Edge Case")
+            ]);
+
+        var service = new ValueBetsService(
+            context,
+            analyzer,
+            new FakeThresholdTuningService
+            {
+                Decisions =
+                {
+                    [PredictionMarket.HomeWin] = new ThresholdDecision { Threshold = 0.55, ThresholdSource = "Configured" }
+                }
+            },
+            new FakeAiAdvisorService(_ => "{\"picks\":[]}"),
+            new FakeSourceMarketPricingService
+            {
+                Fixtures =
+                [
+                    new SourceMarketFixture
+                    {
+                        League = "League",
+                        HomeTeam = "Priced",
+                        AwayTeam = "Edge Case",
+                        MatchTimeUtc = DateTimeProvider.ConvertLocalToUtc(kickoff),
+                        HomeWinProbability = 0.54,
+                        HomeWinOdds = 1.75
+                    }
+                ]
+            },
+            Options.Create(new PredictionSettings
+            {
+                HomeWinStrong = 0.55,
+                ValueBetMinimumEdge = 0.02
+            }),
+            NullLogger<ValueBetsService>.Instance);
+
+        var results = (await service.GetTopValueBetsAsync()).ToList();
+
+        Assert.Empty(results);
     }
 
     [Fact]

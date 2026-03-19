@@ -9,6 +9,14 @@ public class CalibrationService : ICalibrationService
 {
     private const double BucketSize = 0.05;
     private const int MinimumBetaSampleCount = 40;
+    private static readonly PredictionMarket[] ActiveCalibrationMarkets =
+    [
+        PredictionMarket.BothTeamsScore,
+        PredictionMarket.Over25Goals,
+        PredictionMarket.Under25Goals,
+        PredictionMarket.HomeWin,
+        PredictionMarket.AwayWin
+    ];
     private readonly ApplicationDbContext _dbContext;
     private List<MarketCalibrationProfile> _profiles;
     private List<BetaCalibrationProfile> _betaProfiles;
@@ -18,9 +26,11 @@ public class CalibrationService : ICalibrationService
         _dbContext = dbContext;
         _profiles = _dbContext.MarketCalibrationProfiles
             .AsNoTracking()
+            .Where(profile => ActiveCalibrationMarkets.Contains(profile.Market))
             .ToList();
         _betaProfiles = _dbContext.BetaCalibrationProfiles
             .AsNoTracking()
+            .Where(profile => ActiveCalibrationMarkets.Contains(profile.Market))
             .ToList();
     }
 
@@ -63,7 +73,9 @@ public class CalibrationService : ICalibrationService
                 p.IsSettled &&
                 p.OutcomeOccurred != null)
             .ToListAsync();
-        var pointInTimeForecasts = PointInTimeBacktestingSelector.SelectForecasts(settledForecasts);
+        var pointInTimeForecasts = PointInTimeBacktestingSelector.SelectForecasts(settledForecasts)
+            .Where(forecast => ActiveCalibrationMarkets.Contains(forecast.Market))
+            .ToList();
 
         var rebuiltProfiles = pointInTimeForecasts
             .GroupBy(x => new
@@ -155,6 +167,7 @@ public class CalibrationService : ICalibrationService
 
         var markets = previousCalibratorByMarket.Keys
             .Union(nextCalibratorByMarket.Keys)
+            .Where(market => ActiveCalibrationMarkets.Contains(market))
             .Distinct()
             .ToList();
 

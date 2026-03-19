@@ -165,7 +165,7 @@ public class ForecastEvaluationServiceTests
     }
 
     [Fact]
-    public void CalculateStats_DerivesCompletedDrawResultFromAgedScoreWhenOutcomeIsMissing()
+    public void CalculateStats_ExcludesLegacyDrawRows_FromAnalyticsDashboardStats()
     {
         var service = new ForecastEvaluationService();
         var kickoff = DateTime.UtcNow.AddHours(-6);
@@ -173,6 +173,23 @@ public class ForecastEvaluationServiceTests
 
         var predictions = new[]
         {
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|under-home|under-away",
+                League = "League",
+                HomeTeam = "Under Home",
+                AwayTeam = "Under Away",
+                PredictionCategory = "Under2.5Goals",
+                PredictedOutcome = "Under 2.5",
+                ActualScore = "1:1",
+                ActualOutcome = "Under 2.5",
+                IsLive = false,
+                ConfidenceScore = 0.63m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
             new Prediction
             {
                 MatchLocalDate = localDate,
@@ -190,68 +207,43 @@ public class ForecastEvaluationServiceTests
                 ConfidenceScore = 0.35m,
                 CreatedAt = kickoff.AddHours(-2)
             },
-            new Prediction
-            {
-                MatchLocalDate = localDate,
-                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
-                MatchDateTime = kickoff,
-                FixtureKey = "league|alpha|beta",
-                League = "League",
-                HomeTeam = "Alpha",
-                AwayTeam = "Beta",
-                PredictionCategory = "Draw",
-                PredictedOutcome = "Draw",
-                ActualScore = "2:1",
-                ActualOutcome = "Not Draw",
-                IsLive = false,
-                ConfidenceScore = 0.31m,
-                CreatedAt = kickoff.AddHours(-2)
-            },
-            new Prediction
-            {
-                MatchLocalDate = localDate,
-                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
-                MatchDateTime = kickoff,
-                FixtureKey = "league|gamma|delta",
-                League = "League",
-                HomeTeam = "Gamma",
-                AwayTeam = "Delta",
-                PredictionCategory = "Draw",
-                PredictedOutcome = "Draw",
-                ActualScore = "3:1",
-                ActualOutcome = "Not Draw",
-                IsLive = false,
-                ConfidenceScore = 0.32m,
-                CreatedAt = kickoff.AddHours(-2)
-            },
-            new Prediction
-            {
-                MatchLocalDate = localDate,
-                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
-                MatchDateTime = kickoff,
-                FixtureKey = "league|epsilon|zeta",
-                League = "League",
-                HomeTeam = "Epsilon",
-                AwayTeam = "Zeta",
-                PredictionCategory = "Draw",
-                PredictedOutcome = "Draw",
-                ActualScore = "0:2",
-                ActualOutcome = "Not Draw",
-                IsLive = false,
-                ConfidenceScore = 0.30m,
-                CreatedAt = kickoff.AddHours(-2)
-            }
         };
 
-        var stats = service.CalculateStats(predictions, []);
-        var drawStats = Assert.Single(stats.CategoryStats.Values);
+        var forecasts = new[]
+        {
+            CreateForecast(
+                rawProbability: 0.66,
+                calibratedProbability: 0.63,
+                occurred: true,
+                calibratorUsed: "Bucket",
+                thresholdSource: "Configured",
+                isPublished: true,
+                market: PredictionMarket.Under25Goals,
+                predictedOutcome: "Under 2.5"),
+            CreateForecast(
+                rawProbability: 0.34,
+                calibratedProbability: 0.31,
+                occurred: false,
+                calibratorUsed: "Bucket",
+                thresholdSource: "Configured",
+                isPublished: true,
+                market: PredictionMarket.Draw,
+                predictedOutcome: "Draw")
+        };
 
-        Assert.Equal(4, stats.CompletedPredictions);
+        var stats = service.CalculateStats(predictions, forecasts);
+        var categoryStats = Assert.Single(stats.CategoryStats.Values);
+        var marketStats = Assert.Single(stats.ForecastMarketStats);
+
+        Assert.Equal(1, stats.TotalPredictions);
+        Assert.Equal(1, stats.CompletedPredictions);
         Assert.Equal(1, stats.CorrectPredictions);
-        Assert.Equal("Draw", drawStats.Category);
-        Assert.Equal(4, drawStats.Total);
-        Assert.Equal(1, drawStats.Correct);
-        Assert.Equal(0.25, drawStats.Accuracy, 5);
+        Assert.Equal("Under2.5Goals", categoryStats.Category);
+        Assert.Equal(1, categoryStats.Total);
+        Assert.Equal(1, categoryStats.Correct);
+        Assert.Equal(1.0, categoryStats.Accuracy, 5);
+        Assert.Equal(1, stats.SettledForecasts);
+        Assert.Equal(PredictionMarket.Under25Goals, marketStats.Market);
     }
 
     private static ForecastObservation CreateForecast(
@@ -260,7 +252,9 @@ public class ForecastEvaluationServiceTests
         bool occurred,
         string calibratorUsed,
         string thresholdSource,
-        bool isPublished)
+        bool isPublished,
+        PredictionMarket market = PredictionMarket.BothTeamsScore,
+        string predictedOutcome = "BTTS")
     {
         return new ForecastObservation
         {
@@ -273,8 +267,8 @@ public class ForecastEvaluationServiceTests
             League = "League",
             HomeTeam = Guid.NewGuid().ToString("N"),
             AwayTeam = Guid.NewGuid().ToString("N"),
-            Market = PredictionMarket.BothTeamsScore,
-            PredictedOutcome = "BTTS",
+            Market = market,
+            PredictedOutcome = predictedOutcome,
             RawProbability = rawProbability,
             CalibratedProbability = calibratedProbability,
             CalibratorUsed = calibratorUsed,

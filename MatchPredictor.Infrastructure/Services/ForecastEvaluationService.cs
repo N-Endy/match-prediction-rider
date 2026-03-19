@@ -10,7 +10,9 @@ public class ForecastEvaluationService : IForecastEvaluationService
 
     public AnalyticsStats CalculateStats(IEnumerable<Prediction> predictions, IEnumerable<ForecastObservation> forecasts)
     {
-        var predictionList = PointInTimeBacktestingSelector.SelectPredictions(predictions);
+        var predictionList = PointInTimeBacktestingSelector.SelectPredictions(predictions)
+            .Where(IsActiveAnalyticsPrediction)
+            .ToList();
         var completedPredictions = predictionList
             .Where(IsPredictionCompletedForAnalytics)
             .ToList();
@@ -49,6 +51,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
         }
 
         var settledForecasts = PointInTimeBacktestingSelector.SelectForecasts(forecasts)
+            .Where(IsActiveAnalyticsForecast)
             .Where(forecast => forecast.IsSettled && forecast.OutcomeOccurred.HasValue)
             .ToList();
 
@@ -69,6 +72,16 @@ public class ForecastEvaluationService : IForecastEvaluationService
         }
 
         return stats;
+    }
+
+    private static bool IsActiveAnalyticsPrediction(Prediction prediction)
+    {
+        return !string.Equals(prediction.PredictionCategory, "Draw", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsActiveAnalyticsForecast(ForecastObservation forecast)
+    {
+        return forecast.Market != PredictionMarket.Draw;
     }
 
     private static bool IsPredictionCompletedForAnalytics(Prediction prediction)
