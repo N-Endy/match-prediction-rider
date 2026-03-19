@@ -145,9 +145,10 @@ using (var scope = app.Services.CreateScope())
     try
     {
         logger.LogInformation(
-            "Runtime mode: background jobs {BackgroundJobsState}; browser scraping {BrowserScrapingState}.",
+            "Runtime mode: background jobs {BackgroundJobsState}; browser scraping {BrowserScrapingState}; user tracking {UserTrackingState}.",
             runtimeMode.RunBackgroundJobs ? "enabled" : "disabled",
-            runtimeMode.BrowserScrapingEnabled ? "enabled" : "disabled");
+            runtimeMode.BrowserScrapingEnabled ? "enabled" : "disabled",
+            runtimeMode.UserTrackingEnabled ? "enabled" : "disabled");
         if (runtimeMode.RunBackgroundJobs && !runtimeMode.BrowserScrapingEnabled)
         {
             logger.LogWarning(
@@ -368,7 +369,16 @@ app.UseStaticFiles();
 app.UseMiddleware<AdminUsageBasicAuthMiddleware>();
 app.UseRouting();
 app.UseRateLimiter();
-app.UseMiddleware<UserTrackingMiddleware>();
+if (runtimeMode.UserTrackingEnabled)
+{
+    app.UseMiddleware<UserTrackingMiddleware>();
+}
+else
+{
+    using var scope = app.Services.CreateScope();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    logger.LogInformation("Skipping user tracking middleware because ENABLE_USER_TRACKING is disabled.");
+}
 
 app.UseAuthorization();
 

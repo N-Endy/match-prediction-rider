@@ -1,13 +1,14 @@
 namespace MatchPredictor.Web.Configuration;
 
-public sealed record RuntimeModeOptions(bool RunBackgroundJobs, bool BrowserScrapingEnabled)
+public sealed record RuntimeModeOptions(bool RunBackgroundJobs, bool BrowserScrapingEnabled, bool UserTrackingEnabled)
 {
     public static RuntimeModeOptions FromConfiguration(IConfiguration configuration)
     {
         var runBackgroundJobs = GetBoolean(configuration, "RUN_BACKGROUND_JOBS", true);
         var browserScrapingEnabled = GetBoolean(configuration, "ENABLE_BROWSER_SCRAPING", runBackgroundJobs);
+        var userTrackingEnabled = GetBoolean(configuration, "ENABLE_USER_TRACKING", true);
 
-        return new RuntimeModeOptions(runBackgroundJobs, browserScrapingEnabled);
+        return new RuntimeModeOptions(runBackgroundJobs, browserScrapingEnabled, userTrackingEnabled);
     }
 
     private static bool GetBoolean(IConfiguration configuration, string key, bool defaultValue)

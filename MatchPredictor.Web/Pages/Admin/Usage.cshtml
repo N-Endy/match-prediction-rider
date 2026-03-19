@@ -18,6 +18,13 @@
         <p class="mp-usage-note">Endpoint: <code>/admin/usage</code></p>
     </div>
 
+    @if (!Model.TrackingEnabled)
+    {
+        <div class="mp-tracking-disabled">
+            User tracking is currently disabled via <code>ENABLE_USER_TRACKING=false</code>. Existing historical rows may still appear below, but no new visitor/session/activity data is being written.
+        </div>
+    }
+
     <div class="mp-stat-grid">
         <div class="mp-stat-card">
             <div class="mp-stat-label">Visitors 24h</div>
@@ -91,6 +98,16 @@
     .mp-usage-note {
         margin-top: 0.5rem;
         font-size: 0.9rem;
+    }
+
+    .mp-tracking-disabled {
+        margin-bottom: 1.5rem;
+        padding: 0.9rem 1rem;
+        border-radius: var(--radius-md);
+        border: 1px solid rgba(245, 158, 11, 0.24);
+        background: rgba(245, 158, 11, 0.12);
+        color: #fbbf24;
+        line-height: 1.6;
     }
 
     .mp-stat-grid {

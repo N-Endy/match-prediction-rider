@@ -4,6 +4,7 @@ namespace MatchPredictor.Web.Services;
 
 public interface IUserTrackingService
 {
+    bool IsEnabled { get; }
     Task EnsureTrackingContextAsync(HttpContext httpContext, CancellationToken ct = default);
     Task TrackPageViewAsync(HttpContext httpContext, CancellationToken ct = default);
     Task TrackEventAsync(

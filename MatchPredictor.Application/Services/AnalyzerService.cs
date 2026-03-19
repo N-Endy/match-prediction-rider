@@ -4,6 +4,7 @@ using MatchPredictor.Application.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Services;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -34,6 +35,7 @@ public class AnalyzerService  : IAnalyzerService
     private readonly ICalibrationService _calibrationService;
     private readonly IThresholdTuningService _thresholdTuningService;
     private readonly ISourceMarketPricingService _sourceMarketPricingService;
+    private readonly AiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
     private readonly PredictionSettings _predictionSettings;
     
     public AnalyzerService(
@@ -45,6 +47,7 @@ public class AnalyzerService  : IAnalyzerService
         ICalibrationService calibrationService,
         IThresholdTuningService thresholdTuningService,
         ISourceMarketPricingService sourceMarketPricingService,
+        AiScoreSourceHealthTracker aiScoreSourceHealthTracker,
         IOptions<PredictionSettings> predictionOptions,
         ILogger<AnalyzerService> logger)
     {
@@ -56,6 +59,7 @@ public class AnalyzerService  : IAnalyzerService
         _calibrationService = calibrationService;
         _thresholdTuningService = thresholdTuningService;
         _sourceMarketPricingService = sourceMarketPricingService;
+        _aiScoreSourceHealthTracker = aiScoreSourceHealthTracker;
         _predictionSettings = predictionOptions.Value;
         _logger = logger;
     }
@@ -275,6 +279,8 @@ public class AnalyzerService  : IAnalyzerService
             normalizedLookbackDays);
         try
         {
+            var allowSofaScoreFallback = false;
+
             // Score scraping is non-blocking
             try
             {
@@ -292,13 +298,21 @@ public class AnalyzerService  : IAnalyzerService
             {
                 var aiScores = await _webScraperService.ScrapeAiScoreMatchScoresAsync();
                 await SaveAiScoreMatchScores(aiScores);
+                var aiScoreSnapshot = _aiScoreSourceHealthTracker.GetSnapshot();
+                allowSofaScoreFallback = ShouldRunSofaScoreFallback(aiScoreSnapshot);
+                _logger.LogInformation(
+                    "AiScore stage finished with status {Status} at stage {Stage}. SofaScore fallback enabled: {AllowSofaScoreFallback}.",
+                    aiScoreSnapshot.Status,
+                    aiScoreSnapshot.LastStage ?? "unknown",
+                    allowSofaScoreFallback);
             }
             catch (Exception aiScoreEx)
             {
+                allowSofaScoreFallback = true;
                 _logger.LogWarning(aiScoreEx, "❌ AiScore scraping failed.");
             }
 
-            await UpdatePredictionsWithActualResults(normalizedLookbackDays, normalizedRunLabel);
+            await UpdatePredictionsWithActualResults(normalizedLookbackDays, normalizedRunLabel, allowSofaScoreFallback);
             _logger.LogInformation(
                 "✅ Predictions updated with actual results for the {RunLabel} window.",
                 normalizedRunLabel);
@@ -571,7 +585,7 @@ public class AnalyzerService  : IAnalyzerService
         match.NormalizeSourceProbabilities();
     }
 
-    private async Task UpdatePredictionsWithActualResults(int lookbackDays, string runLabel)
+    private async Task UpdatePredictionsWithActualResults(int lookbackDays, string runLabel, bool allowSofaScoreFallback)
     {
         var nowLocal = DateTimeProvider.GetLocalTime();
         var nowUtc = DateTime.UtcNow;
@@ -779,7 +793,7 @@ public class AnalyzerService  : IAnalyzerService
             .Where(NeedsFixtureSettlementRepair)
             .ToList();
 
-        if (incompleteFixtures.Count > 0)
+        if (allowSofaScoreFallback && incompleteFixtures.Count > 0)
         {
             var sofaScoreRequests = incompleteFixtures
                 .Select(BuildSofaScoreFixtureRequest)
@@ -802,7 +816,7 @@ public class AnalyzerService  : IAnalyzerService
                     fixture => fixture.ScheduledMatchTimeUtc);
 
                 _logger.LogInformation(
-                    "Attempting targeted fallback score match from SofaScore for {FixtureCount} incomplete fixtures using {CandidateCount} API/detail row(s).",
+                    "Attempting targeted fallback score match from SofaScore for {FixtureCount} incomplete fixtures using {CandidateCount} targeted row(s).",
                     incompleteFixtures.Count,
                     sofaScores.Count);
 
@@ -842,6 +856,12 @@ public class AnalyzerService  : IAnalyzerService
                     LogFixtureMatchingProgress("SofaScore", index + 1, incompleteFixtures.Count, sofaMatchedFixtures);
                 }
             }
+        }
+        else if (!allowSofaScoreFallback && incompleteFixtures.Count > 0)
+        {
+            _logger.LogInformation(
+                "Skipping SofaScore targeted fallback for {FixtureCount} incomplete fixtures because AiScore completed without using its fallback path.",
+                incompleteFixtures.Count);
         }
 
         ApplyExactFinishedSourceRepairs(eligibleSettlementFixtures, consolidatedFlashScores, consolidatedAiScores, sourceQualityLookup);
@@ -883,6 +903,16 @@ public class AnalyzerService  : IAnalyzerService
             runLabel);
 
         await _dbContext.SaveChangesAsync();
+    }
+
+    private static bool ShouldRunSofaScoreFallback(AiScoreSourceHealthSnapshot snapshot)
+    {
+        if (string.Equals(snapshot.LastStage, "api-football", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return snapshot.Status is "Fallback" or "CooldownFallback" or "Failed";
     }
 
     private static List<SettlementFixtureGroup> BuildSettlementFixtureGroups(

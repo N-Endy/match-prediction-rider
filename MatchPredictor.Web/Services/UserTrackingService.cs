@@ -28,15 +28,24 @@ public class UserTrackingService : IUserTrackingService
 
     private readonly ApplicationDbContext _dbContext;
     private readonly ILogger<UserTrackingService> _logger;
+    private readonly bool _trackingEnabled;
 
-    public UserTrackingService(ApplicationDbContext dbContext, ILogger<UserTrackingService> logger)
+    public bool IsEnabled => _trackingEnabled;
+
+    public UserTrackingService(ApplicationDbContext dbContext, IConfiguration configuration, ILogger<UserTrackingService> logger)
     {
         _dbContext = dbContext;
         _logger = logger;
+        _trackingEnabled = ResolveTrackingEnabled(configuration);
     }
 
     public async Task EnsureTrackingContextAsync(HttpContext httpContext, CancellationToken ct = default)
     {
+        if (!_trackingEnabled)
+        {
+            return;
+        }
+
         try
         {
             await EnsureTrackingContextCoreAsync(httpContext, ct);
@@ -53,6 +62,11 @@ public class UserTrackingService : IUserTrackingService
 
     public async Task TrackPageViewAsync(HttpContext httpContext, CancellationToken ct = default)
     {
+        if (!_trackingEnabled)
+        {
+            return;
+        }
+
         try
         {
             if (!ShouldTrackPath(httpContext.Request.Path))
@@ -97,6 +111,11 @@ public class UserTrackingService : IUserTrackingService
         IReadOnlyDictionary<string, string?>? metadata = null,
         CancellationToken ct = default)
     {
+        if (!_trackingEnabled)
+        {
+            return;
+        }
+
         if (!AllowedEventTypes.Contains(eventType))
         {
             _logger.LogDebug("Skipping unsupported tracking event type {EventType}.", eventType);
@@ -333,6 +352,26 @@ public class UserTrackingService : IUserTrackingService
             .ToDictionary(
                 pair => pair.Key,
                 pair => TrimToLength(pair.Value, 256)));
+    }
+
+    private static bool ResolveTrackingEnabled(IConfiguration configuration)
+    {
+        var rawValue = configuration["ENABLE_USER_TRACKING"];
+        if (bool.TryParse(rawValue, out var parsed))
+        {
+            return parsed;
+        }
+
+        return rawValue?.Trim().ToLowerInvariant() switch
+        {
+            "1" => true,
+            "yes" => true,
+            "on" => true,
+            "0" => false,
+            "no" => false,
+            "off" => false,
+            _ => true
+        };
     }
 
     private static string TrimToLength(string? value, int maxLength)
