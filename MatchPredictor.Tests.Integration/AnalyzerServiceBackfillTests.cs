@@ -381,6 +381,200 @@ public class AnalyzerServiceBackfillTests
     }
 
     [Fact]
+    public async Task GeneratePredictionsAsync_RestoresPreKickoffCurrentRevision_WhenRefreshAlreadyReplacedItAfterKickoff()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoffLocal = DateTimeProvider.GetLocalTime().AddMinutes(-30);
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal);
+        var targetDate = DateOnly.FromDateTime(kickoffLocal);
+        var targetDateString = targetDate.ToString("dd-MM-yyyy");
+        var fixtureKey = "league|alpha|beta";
+
+        context.MatchDatas.Add(new MatchData
+        {
+            Date = targetDateString,
+            Time = kickoffLocal.ToString("HH:mm"),
+            MatchLocalDate = targetDate,
+            MatchLocalTime = TimeOnly.FromDateTime(kickoffLocal),
+            MatchDateTime = kickoffUtc,
+            FixtureKey = fixtureKey,
+            League = "League",
+            HomeTeam = "Alpha",
+            AwayTeam = "Beta"
+        });
+
+        context.Predictions.AddRange(
+            new Prediction
+            {
+                Date = targetDateString,
+                Time = kickoffLocal.ToString("HH:mm"),
+                MatchLocalDate = targetDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoffLocal),
+                MatchDateTime = kickoffUtc,
+                FixtureKey = fixtureKey,
+                League = "League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                PredictionCategory = "StraightWin",
+                PredictedOutcome = "Home Win",
+                ConfidenceScore = 0.74m,
+                RawConfidenceScore = 0.72m,
+                CalibratorUsed = "Bucket",
+                ThresholdSource = "Configured",
+                ThresholdUsed = 0.68,
+                WasPublished = true,
+                PredictionRunId = Guid.NewGuid(),
+                RunLabel = "initial",
+                RunReason = "initial",
+                RevisionNumber = 1,
+                IsCurrentRevision = false,
+                CreatedAt = kickoffUtc.AddMinutes(-20)
+            },
+            new Prediction
+            {
+                Date = targetDateString,
+                Time = kickoffLocal.ToString("HH:mm"),
+                MatchLocalDate = targetDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoffLocal),
+                MatchDateTime = kickoffUtc,
+                FixtureKey = fixtureKey,
+                League = "League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                PredictionCategory = "StraightWin",
+                PredictedOutcome = "Home Win",
+                ConfidenceScore = 0.74m,
+                RawConfidenceScore = 0.72m,
+                CalibratorUsed = "Bucket",
+                ThresholdSource = "Configured",
+                ThresholdUsed = 0.68,
+                WasPublished = true,
+                PredictionRunId = Guid.NewGuid(),
+                RunLabel = "refresh",
+                RunReason = "refresh",
+                RevisionNumber = 2,
+                IsCurrentRevision = true,
+                ActualScore = "1:0",
+                ActualOutcome = "Home Win",
+                IsLive = false,
+                CreatedAt = kickoffUtc.AddMinutes(30)
+            });
+
+        context.ForecastObservations.AddRange(
+            new ForecastObservation
+            {
+                Date = targetDateString,
+                Time = kickoffLocal.ToString("HH:mm"),
+                MatchLocalDate = targetDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoffLocal),
+                MatchDateTime = kickoffUtc,
+                FixtureKey = fixtureKey,
+                League = "League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                Market = PredictionMarket.HomeWin,
+                PredictedOutcome = "Home Win",
+                RawProbability = 0.72,
+                CalibratedProbability = 0.74,
+                CalibratorUsed = "Bucket",
+                ThresholdSource = "Configured",
+                ThresholdUsed = 0.68,
+                IsPublished = true,
+                PredictionRunId = Guid.NewGuid(),
+                RunLabel = "initial",
+                RunReason = "initial",
+                RevisionNumber = 1,
+                IsCurrentRevision = false,
+                CreatedAt = kickoffUtc.AddMinutes(-20)
+            },
+            new ForecastObservation
+            {
+                Date = targetDateString,
+                Time = kickoffLocal.ToString("HH:mm"),
+                MatchLocalDate = targetDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoffLocal),
+                MatchDateTime = kickoffUtc,
+                FixtureKey = fixtureKey,
+                League = "League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                Market = PredictionMarket.HomeWin,
+                PredictedOutcome = "Home Win",
+                RawProbability = 0.72,
+                CalibratedProbability = 0.74,
+                CalibratorUsed = "Bucket",
+                ThresholdSource = "Configured",
+                ThresholdUsed = 0.68,
+                IsPublished = true,
+                PredictionRunId = Guid.NewGuid(),
+                RunLabel = "refresh",
+                RunReason = "refresh",
+                RevisionNumber = 2,
+                IsCurrentRevision = true,
+                ActualScore = "1:0",
+                ActualOutcome = "Home Win",
+                OutcomeOccurred = true,
+                IsLive = false,
+                IsSettled = true,
+                SettledAt = kickoffUtc.AddHours(2),
+                CreatedAt = kickoffUtc.AddMinutes(30)
+            });
+
+        await context.SaveChangesAsync();
+
+        var service = new AnalyzerService(
+            new StubDataAnalyzerService(),
+            new StubWebScraperService(),
+            context,
+            new StubExtractFromExcel(),
+            new StubRegressionPredictorService(),
+            new StubCalibrationService(),
+            new StubThresholdTuningService(),
+            new StubSourceMarketPricingService(),
+            new AiScoreSourceHealthTracker(),
+            Options.Create(new PredictionSettings
+            {
+                BttsScoreThreshold = 0.55,
+                OverTwoGoalsStrongThreshold = 0.58,
+                UnderTwoGoalsStrongThreshold = 0.58,
+                DrawStrongThreshold = 0.30,
+                HomeWinStrong = 0.68,
+                AwayWinStrong = 0.70
+            }),
+            NullLogger<AnalyzerService>.Instance);
+
+        await service.GeneratePredictionsAsync(targetDateString, "refresh-after-kickoff");
+
+        var predictions = await context.Predictions
+            .OrderBy(prediction => prediction.RevisionNumber)
+            .ToListAsync();
+        Assert.Equal(2, predictions.Count);
+
+        Assert.True(predictions[0].IsCurrentRevision);
+        Assert.False(predictions[1].IsCurrentRevision);
+        Assert.Equal("1:0", predictions[0].ActualScore);
+        Assert.Equal("Home Win", predictions[0].ActualOutcome);
+        Assert.NotNull(predictions[1].SupersededAt);
+
+        var forecasts = await context.ForecastObservations
+            .OrderBy(forecast => forecast.RevisionNumber)
+            .ToListAsync();
+        Assert.Equal(2, forecasts.Count);
+
+        Assert.True(forecasts[0].IsCurrentRevision);
+        Assert.False(forecasts[1].IsCurrentRevision);
+        Assert.Equal("1:0", forecasts[0].ActualScore);
+        Assert.Equal("Home Win", forecasts[0].ActualOutcome);
+        Assert.True(forecasts[0].OutcomeOccurred);
+        Assert.True(forecasts[0].IsSettled);
+        Assert.NotNull(forecasts[1].SupersededAt);
+    }
+
+    [Fact]
     public async Task GeneratePredictionsAsync_DeduplicatesDuplicateFixtureRowsBeforeSaving()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()

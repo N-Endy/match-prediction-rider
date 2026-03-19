@@ -800,6 +800,8 @@ public partial class AiChatRequestParser
             normalized.Contains("1x2") ||
             normalized.Contains("homewin") ||
             normalized.Contains("awaywin") ||
+            normalized == "win" ||
+            normalized == "wins" ||
             normalized == "straights")
         {
             return "StraightWin";
@@ -847,16 +849,16 @@ public partial class AiChatRequestParser
     }
 
     [GeneratedRegex(
-        @"(?:(?:\b(?:a\s+)?(?<count>\d{1,3}|couple|few|several|handful)\b)\s*(?:of\s+)?(?<market>\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|home wins?|away wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5))\b))|(?:(?<marketAfter>\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|home wins?|away wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5))\b)\s*(?<countAfter>\d{1,3}|couple|few|several|handful)\b)",
+        @"(?:(?:\b(?:a\s+)?(?<count>\d{1,3}|couple|few|several|handful)\b)\s*(?:of\s+)?(?<market>\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|home wins?|away wins?|wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b))|(?:(?<marketAfter>\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|home wins?|away wins?|wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b)\s*(?<countAfter>\d{1,3}|couple|few|several|handful)\b)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex ExplicitMarketCountRegex();
 
     [GeneratedRegex(@"\b(?:total(?:\s+of)?\s*(?<count>\d{1,3}|couple|few|several|handful)|(?<count>\d{1,3}|couple|few|several|handful)\s*total)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex TotalCountRegex();
 
-    [GeneratedRegex(@"\b(?<count>\d{1,3}|couple|few|several|handful)\s*(?:strong|safe|safer|best|top)?\s*(?:pick|picks|game|games|match|matches|leg|legs)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    [GeneratedRegex(@"\b(?<count>\d{1,3}|couple|few|several|handful)\s*(?:strong|safe|safer|best|top)?\s*(?:pick|picks|prediction|predictions|tip|tips|game|games|match|matches|leg|legs)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex GenericPickCountRegex();
 
-    [GeneratedRegex(@"\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|draws?|draw|straight wins?|straightwins?|straightwin|straights|1x2|overs?(?!\s*2(?:\.|,)?5))\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    [GeneratedRegex(@"\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|draws?|draw|straight wins?|straightwins?|straightwin|straights|1x2|wins?|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex MarketMentionRegex();
 }

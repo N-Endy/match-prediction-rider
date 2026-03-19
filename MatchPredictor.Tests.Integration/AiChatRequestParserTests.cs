@@ -87,6 +87,61 @@ public class AiChatRequestParserTests
     }
 
     [Fact]
+    public void ParseDeterministic_ParsesUnder25AndGenericWins()
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            "Give me 2 under 2.5 and 3 wins",
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.Equal(AiChatIntent.MixedMarketRecommendation, result.Request.Intent);
+        Assert.Equal(5, result.Request.RequestedTotalCount);
+        Assert.Contains(result.Request.RequestedMarkets, market =>
+            market.PredictionCategory == "Under2.5Goals" &&
+            market.Count == 2 &&
+            market.ExplicitCount);
+        Assert.Contains(result.Request.RequestedMarkets, market =>
+            market.PredictionCategory == "StraightWin" &&
+            market.Count == 3 &&
+            market.ExplicitCount);
+    }
+
+    [Fact]
+    public void ParseDeterministic_ParsesGenericMixedPrompt_WithOverUnderGgAndWin()
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            "Give me a mixture of over, under, gg, and win. Total 8",
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.Equal(AiChatIntent.MixedMarketRecommendation, result.Request.Intent);
+        Assert.Equal(8, result.Request.RequestedTotalCount);
+        Assert.True(result.Request.FlexibleMix);
+        Assert.Equal(4, result.Request.RequestedMarkets.Count);
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "Over2.5Goals");
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "Under2.5Goals");
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "BothTeamsScore");
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "StraightWin");
+    }
+
+    [Fact]
+    public void ParseDeterministic_ParsesGenericPredictionCountRequests()
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            "Give me 7 predictions for today",
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.Equal(AiChatIntent.RecommendPicks, result.Request.Intent);
+        Assert.Equal("today", result.Request.Scope);
+        Assert.Equal(7, result.Request.RequestedTotalCount);
+        Assert.True(result.Request.BookableOnly);
+    }
+
+    [Fact]
     public void ParseDeterministic_RecognizesGgAndGoalGoalAsBtts()
     {
         var result = AiChatRequestParser.ParseDeterministic(

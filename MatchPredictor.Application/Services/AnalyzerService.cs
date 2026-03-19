@@ -20,6 +20,7 @@ public class AnalyzerService  : IAnalyzerService
     private const double ExactFinishedRepairWindowMinutes = 65d;
     private const double ExtendedExactFinishedRepairWindowMinutes = 240d;
     private static readonly TimeSpan FutureFixtureSettlementTolerance = TimeSpan.Zero;
+    private static readonly TimeSpan CurrentRevisionKickoffGrace = TimeSpan.FromMinutes(5);
     private const string DataSyncEventName = "data_sync";
     private const string PredictionGenerationEventName = "prediction_generation";
     private const string DailyAnalysisEventName = "daily_analysis";
@@ -1977,11 +1978,15 @@ public class AnalyzerService  : IAnalyzerService
         IEnumerable<PredictionCandidate> candidates,
         PredictionRun predictionRun)
     {
+        var forecastCandidateList = forecastCandidates.ToList();
         var candidateList = DeduplicatePublishedCandidates(candidates, predictionRun.TargetLocalDate.ToString("dd-MM-yyyy"));
-        var touchedFixtureKeys = BuildCandidateFixtureKeySet(forecastCandidates);
+        var nowUtc = DateTime.UtcNow;
+        var touchedFixtureKeys = BuildCandidateFixtureKeySet(forecastCandidateList);
+        var lockedFixtureKeys = BuildLockedCandidateFixtureKeySet(forecastCandidateList, nowUtc);
         if (touchedFixtureKeys.Count == 0)
         {
             touchedFixtureKeys = BuildCandidateFixtureKeySet(candidateList);
+            lockedFixtureKeys = BuildLockedCandidateFixtureKeySet(candidateList, nowUtc);
         }
 
         if (touchedFixtureKeys.Count == 0)
@@ -2006,20 +2011,33 @@ public class AnalyzerService  : IAnalyzerService
                     .ThenByDescending(prediction => prediction.CreatedAt)
                     .ThenByDescending(prediction => prediction.Id)
                     .First());
+        var historicalByKey = historicalPredictions
+            .GroupBy(GetPredictionKey)
+            .ToDictionary(group => group.Key, group => group.ToList());
         var revisionByKey = historicalPredictions
             .GroupBy(GetPredictionKey)
             .ToDictionary(group => group.Key, group => group.Max(prediction => prediction.RevisionNumber));
 
+        RestoreLockedPredictionCurrents(candidateList, currentByKey, historicalByKey, nowUtc);
+
         var createdPredictions = new List<Prediction>();
         foreach (var existingRecord in currentPredictions.Where(prediction =>
-                     touchedFixtureKeys.Contains(GetPredictionFixtureKey(prediction))))
+                     touchedFixtureKeys.Contains(GetPredictionFixtureKey(prediction)) &&
+                     !lockedFixtureKeys.Contains(GetPredictionFixtureKey(prediction))))
         {
             existingRecord.IsCurrentRevision = false;
-            existingRecord.SupersededAt = DateTime.UtcNow;
+            existingRecord.SupersededAt = nowUtc;
         }
 
+        var skippedLockedCandidates = 0;
         foreach (var candidate in candidateList)
         {
+            if (lockedFixtureKeys.Contains(GetCandidateFixtureKey(candidate)))
+            {
+                skippedLockedCandidates++;
+                continue;
+            }
+
             var currentKey = GetCandidatePredictionKey(candidate);
             currentByKey.TryGetValue(currentKey, out var currentRecord);
             var nextRevision = revisionByKey.TryGetValue(currentKey, out var revisionNumber)
@@ -2059,6 +2077,13 @@ public class AnalyzerService  : IAnalyzerService
             _dbContext.Predictions.Add(prediction);
         }
 
+        if (skippedLockedCandidates > 0)
+        {
+            _logger.LogInformation(
+                "Skipped {SkippedCount} post-kickoff published prediction candidate(s) to preserve the pre-kickoff current revision.",
+                skippedLockedCandidates);
+        }
+
         await _dbContext.SaveChangesAsync();
         return createdPredictions;
     }
@@ -2073,6 +2098,7 @@ public class AnalyzerService  : IAnalyzerService
             predictionRun.TargetLocalDate.ToString("dd-MM-yyyy"));
         if (!forecastList.Any()) return;
 
+        var nowUtc = DateTime.UtcNow;
         var publishedKeys = publishedCandidates
             .Select(GetCandidateObservationKey)
             .ToHashSet(StringComparer.Ordinal);
@@ -2094,20 +2120,34 @@ public class AnalyzerService  : IAnalyzerService
                     .ThenByDescending(forecast => forecast.CreatedAt)
                     .ThenByDescending(forecast => forecast.Id)
                     .First());
+        var historicalByKey = historicalForecasts
+            .GroupBy(GetObservationKey)
+            .ToDictionary(group => group.Key, group => group.ToList());
         var revisionByKey = historicalForecasts
             .GroupBy(GetObservationKey)
             .ToDictionary(group => group.Key, group => group.Max(forecast => forecast.RevisionNumber));
         var touchedFixtureKeys = BuildCandidateFixtureKeySet(forecastList);
+        var lockedFixtureKeys = BuildLockedCandidateFixtureKeySet(forecastList, nowUtc);
+
+        RestoreLockedForecastCurrents(forecastList, currentByKey, historicalByKey, nowUtc);
 
         foreach (var existingRecord in currentForecasts.Where(forecast =>
-                     touchedFixtureKeys.Contains(GetForecastFixtureKey(forecast))))
+                     touchedFixtureKeys.Contains(GetForecastFixtureKey(forecast)) &&
+                     !lockedFixtureKeys.Contains(GetForecastFixtureKey(forecast))))
         {
             existingRecord.IsCurrentRevision = false;
-            existingRecord.SupersededAt = DateTime.UtcNow;
+            existingRecord.SupersededAt = nowUtc;
         }
 
+        var skippedLockedForecasts = 0;
         foreach (var candidate in forecastList)
         {
+            if (lockedFixtureKeys.Contains(GetCandidateFixtureKey(candidate)))
+            {
+                skippedLockedForecasts++;
+                continue;
+            }
+
             var key = GetCandidateObservationKey(candidate);
             var isPublished = publishedKeys.Contains(key);
             currentByKey.TryGetValue(key, out var currentRecord);
@@ -2146,6 +2186,13 @@ public class AnalyzerService  : IAnalyzerService
                 IsSettled = currentRecord?.IsSettled ?? false,
                 SettledAt = currentRecord?.SettledAt
             });
+        }
+
+        if (skippedLockedForecasts > 0)
+        {
+            _logger.LogInformation(
+                "Skipped {SkippedCount} post-kickoff forecast candidate(s) to preserve the pre-kickoff current revision.",
+                skippedLockedForecasts);
         }
 
         await _dbContext.SaveChangesAsync();
@@ -2299,6 +2346,119 @@ public class AnalyzerService  : IAnalyzerService
         return candidates
             .Select(GetCandidateFixtureKey)
             .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static HashSet<string> BuildLockedCandidateFixtureKeySet(IEnumerable<PredictionCandidate> candidates, DateTime nowUtc)
+    {
+        return candidates
+            .Where(candidate => IsFixturePastKickoffGrace(candidate.MatchDateTime, nowUtc))
+            .Select(GetCandidateFixtureKey)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private void RestoreLockedPredictionCurrents(
+        IEnumerable<PredictionCandidate> candidates,
+        IDictionary<string, Prediction> currentByKey,
+        IReadOnlyDictionary<string, List<Prediction>> historicalByKey,
+        DateTime nowUtc)
+    {
+        foreach (var lockedKey in candidates
+                     .Where(candidate => IsFixturePastKickoffGrace(candidate.MatchDateTime, nowUtc))
+                     .Select(GetCandidatePredictionKey)
+                     .Distinct(StringComparer.Ordinal))
+        {
+            if (!currentByKey.TryGetValue(lockedKey, out var currentRecord) ||
+                IsEligiblePreKickoffSnapshot(currentRecord.MatchDateTime, currentRecord.CreatedAt))
+            {
+                continue;
+            }
+
+            if (!historicalByKey.TryGetValue(lockedKey, out var history))
+            {
+                continue;
+            }
+
+            var restoredRecord = history
+                .Where(record => record.Id != currentRecord.Id && IsEligiblePreKickoffSnapshot(record.MatchDateTime, record.CreatedAt))
+                .OrderByDescending(record => record.RevisionNumber)
+                .ThenByDescending(record => record.CreatedAt)
+                .ThenByDescending(record => record.Id)
+                .FirstOrDefault();
+
+            if (restoredRecord is null)
+            {
+                continue;
+            }
+
+            restoredRecord.IsCurrentRevision = true;
+            restoredRecord.SupersededAt = null;
+            restoredRecord.ActualOutcome = currentRecord.ActualOutcome;
+            restoredRecord.ActualScore = currentRecord.ActualScore;
+            restoredRecord.IsLive = currentRecord.IsLive;
+
+            currentRecord.IsCurrentRevision = false;
+            currentRecord.SupersededAt = nowUtc;
+            currentByKey[lockedKey] = restoredRecord;
+        }
+    }
+
+    private void RestoreLockedForecastCurrents(
+        IEnumerable<PredictionCandidate> candidates,
+        IDictionary<string, ForecastObservation> currentByKey,
+        IReadOnlyDictionary<string, List<ForecastObservation>> historicalByKey,
+        DateTime nowUtc)
+    {
+        foreach (var lockedKey in candidates
+                     .Where(candidate => IsFixturePastKickoffGrace(candidate.MatchDateTime, nowUtc))
+                     .Select(GetCandidateObservationKey)
+                     .Distinct(StringComparer.Ordinal))
+        {
+            if (!currentByKey.TryGetValue(lockedKey, out var currentRecord) ||
+                IsEligiblePreKickoffSnapshot(currentRecord.MatchDateTime, currentRecord.CreatedAt))
+            {
+                continue;
+            }
+
+            if (!historicalByKey.TryGetValue(lockedKey, out var history))
+            {
+                continue;
+            }
+
+            var restoredRecord = history
+                .Where(record => record.Id != currentRecord.Id && IsEligiblePreKickoffSnapshot(record.MatchDateTime, record.CreatedAt))
+                .OrderByDescending(record => record.RevisionNumber)
+                .ThenByDescending(record => record.CreatedAt)
+                .ThenByDescending(record => record.Id)
+                .FirstOrDefault();
+
+            if (restoredRecord is null)
+            {
+                continue;
+            }
+
+            restoredRecord.IsCurrentRevision = true;
+            restoredRecord.SupersededAt = null;
+            restoredRecord.ActualOutcome = currentRecord.ActualOutcome;
+            restoredRecord.ActualScore = currentRecord.ActualScore;
+            restoredRecord.OutcomeOccurred = currentRecord.OutcomeOccurred;
+            restoredRecord.IsLive = currentRecord.IsLive;
+            restoredRecord.IsSettled = currentRecord.IsSettled;
+            restoredRecord.SettledAt = currentRecord.SettledAt;
+
+            currentRecord.IsCurrentRevision = false;
+            currentRecord.SupersededAt = nowUtc;
+            currentByKey[lockedKey] = restoredRecord;
+        }
+    }
+
+    private static bool IsFixturePastKickoffGrace(DateTime? kickoffUtc, DateTime nowUtc)
+    {
+        return kickoffUtc.HasValue && nowUtc > kickoffUtc.Value.Add(CurrentRevisionKickoffGrace);
+    }
+
+    private static bool IsEligiblePreKickoffSnapshot(DateTime? kickoffUtc, DateTime createdAtUtc)
+    {
+        return !kickoffUtc.HasValue || createdAtUtc <= kickoffUtc.Value.Add(CurrentRevisionKickoffGrace);
     }
 
     private static string GetCandidateObservationKey(PredictionCandidate candidate)

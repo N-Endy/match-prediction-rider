@@ -182,6 +182,54 @@ public class AiChatContextBuilderTests
     }
 
     [Fact]
+    public void BuildSelection_ReturnsAllNamedMarkets_ForGenericOverUnderGgAndWinMix()
+    {
+        var predictions = new[]
+        {
+            CreatePrediction(1, "BothTeamsScore", "BTTS", "Inter", "Milan", "Italy - Serie A", 0.79m),
+            CreatePrediction(2, "Over2.5Goals", "Over 2.5", "Barcelona", "Atletico Madrid", "Spain - La Liga", 0.77m),
+            CreatePrediction(3, "Under2.5Goals", "Under 2.5", "Getafe", "Osasuna", "Spain - La Liga", 0.76m),
+            CreatePrediction(4, "StraightWin", "Home Win", "Arsenal", "Chelsea", "England - Premier League", 0.81m, thresholdUsed: 0.68)
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me a mixture of over, under, gg, and win. Total 8",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Contains(selection.Candidates, candidate => candidate.PredictionCategory == "BothTeamsScore");
+        Assert.Contains(selection.Candidates, candidate => candidate.PredictionCategory == "Over2.5Goals");
+        Assert.Contains(selection.Candidates, candidate => candidate.PredictionCategory == "Under2.5Goals");
+        Assert.Contains(selection.Candidates, candidate => candidate.PredictionCategory == "StraightWin");
+    }
+
+    [Fact]
+    public void BuildSelection_ReturnsRequestedCount_ForGenericPredictionRequests()
+    {
+        var predictions = Enumerable.Range(1, 10)
+            .Select(index => CreatePrediction(
+                index,
+                "StraightWin",
+                index % 2 == 0 ? "Home Win" : "Away Win",
+                $"Home {index}",
+                $"Away {index}",
+                "England - Premier League",
+                0.90m - (index * 0.01m),
+                thresholdUsed: 0.68))
+            .ToArray();
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me 7 predictions for today",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(7, selection.Candidates.Count);
+        Assert.Equal(7, selection.RequestedCandidateCount);
+    }
+
+    [Fact]
     public void BuildSelection_DefaultsMixtureWithoutCounts_ToTwoPerNamedMarket()
     {
         var predictions = Enumerable.Range(1, 3)

@@ -816,7 +816,9 @@ public static partial class AiChatContextBuilder
             normalized.Contains("straightwins") ||
             normalized.Contains("1x2") ||
             normalized.Contains("homewin") ||
-            normalized.Contains("awaywin"))
+            normalized.Contains("awaywin") ||
+            normalized == "win" ||
+            normalized == "wins")
         {
             return "StraightWin";
         }
@@ -1030,11 +1032,11 @@ public static partial class AiChatContextBuilder
     private static partial Regex TokenRegex();
 
     [GeneratedRegex(
-        "(?<count>\\d{1,3})\\s*(?<market>btts|gg|goal\\s*goal|goalgoal|both teams to score|both teams score|over\\s*2(?:\\.|,)?5|over2(?:\\.|,)?5|over|straight\\s*wins?|straightwins?|straightwin|1x2|home\\s*wins?|away\\s*wins?|draws?|draw)",
+        "(?<count>\\d{1,3})\\s*(?<market>btts|gg|goal\\s*goal|goalgoal|both teams to score|both teams score|over\\s*2(?:\\.|,)?5|over2(?:\\.|,)?5|under\\s*2(?:\\.|,)?5|under2(?:\\.|,)?5|over|under|straight\\s*wins?|straightwins?|straightwin|wins?|1x2|home\\s*wins?|away\\s*wins?|draws?|draw)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex RequestedMarketSliceRegex();
 
-    [GeneratedRegex("(?<count>\\d{1,3})\\s*(?:strong|safe|safer|best|top)?\\s*(?:pick|picks|game|games|match|matches|leg|legs)\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    [GeneratedRegex("(?<count>\\d{1,3})\\s*(?:strong|safe|safer|best|top)?\\s*(?:pick|picks|prediction|predictions|tip|tips|game|games|match|matches|leg|legs)\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex GenericPickCountRegex();
 
     [GeneratedRegex("\\btotal(?:\\s+of)?\\s*(?<count>\\d{1,3})\\b|\\b(?<count>\\d{1,3})\\s*total\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
