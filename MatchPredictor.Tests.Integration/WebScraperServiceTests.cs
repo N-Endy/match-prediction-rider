@@ -73,7 +73,10 @@ namespace MatchPredictor.Tests.Integration
             var configBuilder = new ConfigurationBuilder();
             configBuilder.AddInMemoryCollection(new[]
             {
-                new System.Collections.Generic.KeyValuePair<string, string>("ScrapingValues:AiScoreWebsite", "https://m.aiscore.com")
+                new System.Collections.Generic.KeyValuePair<string, string>("ScrapingValues:AiScoreWebsite", "https://m.aiscore.com"),
+                new System.Collections.Generic.KeyValuePair<string, string>("ScrapingValues:SofaScoreWebsite", "https://www.sofascore.com"),
+                new System.Collections.Generic.KeyValuePair<string, string>("ScrapingValues:ScoresWebsite", "https://www.sofascore.com"),
+                new System.Collections.Generic.KeyValuePair<string, string>("ScrapingValues:BrowserScrapingEnabled", "true")
             });
 
             return new WebScraperService(
@@ -81,6 +84,28 @@ namespace MatchPredictor.Tests.Integration
                 NullLogger<WebScraperService>.Instance,
                 new AiScoreSourceHealthTracker(),
                 new SofaScoreSourceHealthTracker());
+        }
+
+        [Fact]
+        public async Task TestSofaScoreBrowserExtraction()
+        {
+            var scraper = CreateScraper();
+            
+            var fixtures = new[]
+            {
+                new SofaScoreFixtureRequest { HomeTeam = "Lyon", AwayTeam = "Celta" },
+                new SofaScoreFixtureRequest { HomeTeam = "Freiburg", AwayTeam = "Genk" }
+            };
+
+            var scores = await scraper.ScrapeSofaScoreMatchScoresAsync(fixtures);
+
+            _output.WriteLine($"Extracted {scores.Count} matches from SofaScore");
+            foreach (var match in scores)
+            {
+                _output.WriteLine($"[{match.League}] {match.HomeTeam} {match.Score} {match.AwayTeam} (Live: {match.IsLive})");
+            }
+
+            Assert.NotNull(scores);
         }
     }
 }
