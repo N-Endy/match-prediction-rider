@@ -184,6 +184,32 @@ public static partial class PredictionDisplayHelper
         };
     }
 
+    public static string GetScoreClass(Prediction prediction, DateTime utcNow)
+    {
+        var isActuallyLive = IsActuallyLive(prediction, utcNow);
+
+        if (isActuallyLive && string.Equals(prediction.PredictionCategory, "Under2.5Goals", StringComparison.OrdinalIgnoreCase))
+        {
+            if (TryParseScore(prediction.ActualScore, out var homeGoals, out var awayGoals) && homeGoals + awayGoals > 2)
+            {
+                return "mp-score-incorrect";
+            }
+
+            return "mp-score-live";
+        }
+
+        if (isActuallyLive)
+        {
+            return IsLivePredictionCorrect(prediction)
+                ? "mp-score-correct"
+                : "mp-score-live";
+        }
+
+        return IsPredictionCorrect(prediction)
+            ? "mp-score-correct"
+            : "mp-score-incorrect";
+    }
+
     public static bool IsPredictionCorrect(Prediction prediction)
     {
         if (TryParseScore(prediction.ActualScore, out var homeGoals, out var awayGoals))

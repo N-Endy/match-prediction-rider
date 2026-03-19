@@ -62,6 +62,41 @@ public class PredictionDisplayHelperTests
         Assert.True(isCorrect);
     }
 
+    [Fact]
+    public void GetScoreClass_KeepsLiveUnder25NeutralUntilItIsBusted()
+    {
+        var prediction = CreatePrediction("Under2.5Goals", "Under 2.5", "1:1");
+        prediction.IsLive = true;
+        prediction.MatchDateTime = DateTime.UtcNow.AddMinutes(-20);
+
+        var scoreClass = PredictionDisplayHelper.GetScoreClass(prediction, DateTime.UtcNow);
+
+        Assert.Equal("mp-score-live", scoreClass);
+    }
+
+    [Fact]
+    public void GetScoreClass_MarksLiveUnder25RedWhenThirdGoalArrives()
+    {
+        var prediction = CreatePrediction("Under2.5Goals", "Under 2.5", "2:1");
+        prediction.IsLive = true;
+        prediction.MatchDateTime = DateTime.UtcNow.AddMinutes(-35);
+
+        var scoreClass = PredictionDisplayHelper.GetScoreClass(prediction, DateTime.UtcNow);
+
+        Assert.Equal("mp-score-incorrect", scoreClass);
+    }
+
+    [Fact]
+    public void GetScoreClass_MarksFinishedUnder25GreenWhenItLands()
+    {
+        var prediction = CreatePrediction("Under2.5Goals", "Under 2.5", "1:1");
+        prediction.IsLive = false;
+
+        var scoreClass = PredictionDisplayHelper.GetScoreClass(prediction, DateTime.UtcNow);
+
+        Assert.Equal("mp-score-correct", scoreClass);
+    }
+
     private static Prediction CreatePrediction(string predictionCategory, string predictedOutcome, string actualScore)
     {
         return new Prediction

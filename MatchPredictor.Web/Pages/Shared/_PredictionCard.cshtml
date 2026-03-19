@@ -32,22 +32,15 @@
     <div class="mp-card-badges">
         @if (!string.IsNullOrEmpty(Model.ActualScore))
         {
-            var isCorrect = MatchPredictor.Web.Helpers.PredictionDisplayHelper.IsPredictionCorrect(Model);
+            var scoreClass = MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetScoreClass(Model, nowUtc);
 
             if (isActuallyLive)
             {
-                if (MatchPredictor.Web.Helpers.PredictionDisplayHelper.IsLivePredictionCorrect(Model))
-                {
-                    <span class="mp-score mp-score-correct"><span class="mp-live-indicator"></span>@Model.ActualScore</span>
-                }
-                else
-                {
-                    <span class="mp-score mp-score-live"><span class="mp-live-indicator"></span>@Model.ActualScore</span>
-                }
+                <span class="mp-score @scoreClass"><span class="mp-live-indicator"></span>@Model.ActualScore</span>
             }
             else
             {
-                <span class="mp-score @(isCorrect ? "mp-score-correct" : "mp-score-incorrect")">
+                <span class="mp-score @scoreClass">
                     @Model.ActualScore
                 </span>
             }
