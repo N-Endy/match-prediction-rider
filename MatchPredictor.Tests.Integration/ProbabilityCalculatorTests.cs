@@ -87,7 +87,7 @@ public class ProbabilityCalculatorTests
     }
 
     [Fact]
-    public void CalculateDrawProbability_StaysCloseToMarketWhenFixtureIsNotBalanced()
+    public void CalculateUnderTwoGoalsProbability_StaysCloseToUnderMarketWhenFixtureIsNotBalanced()
     {
         var calculator = new ProbabilityCalculator();
         var match = new MatchData
@@ -106,9 +106,9 @@ public class ProbabilityCalculatorTests
             AhZeroAway = 0.39
         };
 
-        var drawProbability = calculator.CalculateDrawProbability(match);
+        var underProbability = calculator.CalculateUnderTwoGoalsProbability(match);
 
-        Assert.InRange(drawProbability, 0.20, 0.27);
-        Assert.True(Math.Abs(drawProbability - 0.24) < 0.03);
+        Assert.InRange(underProbability, 0.35, 0.50);
+        Assert.True(Math.Abs(underProbability - 0.42) < 0.08);
     }
 }

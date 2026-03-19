@@ -95,17 +95,19 @@
                     const marketKey =
                         bet.predictionCategory === 'BothTeamsScore' ? 'BTTS' :
                         bet.predictionCategory === 'Over2.5Goals' ? 'Over2.5' :
+                        bet.predictionCategory === 'Under2.5Goals' ? 'Under2.5' :
                         'StraightWin';
                     
                     let badgeClass = 'mp-badge-combined'; 
                     if (bet.predictionCategory === 'BothTeamsScore') badgeClass = 'mp-badge-btts';
                     else if (bet.predictionCategory === 'Over2.5Goals') badgeClass = 'mp-badge-over';
-                    else if (bet.predictionCategory === 'Draw') badgeClass = 'mp-badge-draw';
+                    else if (bet.predictionCategory === 'Under2.5Goals') badgeClass = 'mp-badge-under';
                     else if (bet.predictionCategory === 'StraightWin' && bet.predictedOutcome === 'Away Win') badgeClass = 'mp-badge-win-away';
                     else if (bet.predictionCategory === 'StraightWin') badgeClass = 'mp-badge-win-home';
 
                     const badgeLabel =
                         bet.predictionCategory === 'Over2.5Goals' ? 'Over 2.5' :
+                        bet.predictionCategory === 'Under2.5Goals' ? 'Under 2.5' :
                         bet.predictionCategory === 'BothTeamsScore' ? 'BTTS' :
                         bet.predictionCategory === 'StraightWin' ? 'Straight Win' :
                         bet.predictionCategory;

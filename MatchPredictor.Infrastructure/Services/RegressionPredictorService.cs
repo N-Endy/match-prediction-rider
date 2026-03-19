@@ -105,6 +105,22 @@ public class RegressionPredictorService : IRegressionPredictorService
                     time));
             }
 
+            var under25 = Math.Clamp(1.0 - over25, 0.0, 1.0);
+            if (under25 >= 0.5)
+            {
+                predictions.Add(CreatePrediction(
+                    homeTeam,
+                    awayTeam,
+                    match.League,
+                    "Under2.5Goals",
+                    "Under 2.5",
+                    under25,
+                    lambdaHome,
+                    lambdaAway,
+                    date,
+                    time));
+            }
+
             if (btts >= 0.5)
             {
                 predictions.Add(CreatePrediction(
@@ -136,20 +152,6 @@ public class RegressionPredictorService : IRegressionPredictorService
                     time));
             }
 
-            if (drawProb >= 0.25)
-            {
-                predictions.Add(CreatePrediction(
-                    homeTeam,
-                    awayTeam,
-                    match.League,
-                    "Draw",
-                    "Draw",
-                    drawProb,
-                    lambdaHome,
-                    lambdaAway,
-                    date,
-                    time));
-            }
         }
 
         return predictions;

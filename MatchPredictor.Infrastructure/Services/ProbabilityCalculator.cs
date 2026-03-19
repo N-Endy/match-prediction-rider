@@ -21,10 +21,10 @@ public class ProbabilityCalculator : IProbabilityCalculator
         return model.Over25;
     }
 
-    public double CalculateDrawProbability(MatchData match)
+    public double CalculateUnderTwoGoalsProbability(MatchData match)
     {
         var model = BuildProbabilityModel(match);
-        return model.Draw;
+        return Math.Clamp(1.0 - model.Over25, 0.0, 1.0);
     }
 
     public double CalculateHomeWinProbability(MatchData match)

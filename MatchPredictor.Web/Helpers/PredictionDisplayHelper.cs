@@ -67,6 +67,7 @@ public static partial class PredictionDisplayHelper
         {
             "BothTeamsScore" => "mp-badge-btts",
             "Over2.5Goals" => "mp-badge-over",
+            "Under2.5Goals" => "mp-badge-under",
             "Draw" => "mp-badge-draw",
             "StraightWin" when string.Equals(prediction.PredictedOutcome, "Away Win", StringComparison.OrdinalIgnoreCase) => "mp-badge-win-away",
             "StraightWin" => "mp-badge-win-home",
@@ -79,7 +80,7 @@ public static partial class PredictionDisplayHelper
         return prediction.PredictionCategory switch
         {
             "BothTeamsScore" => "BTTS",
-            "Over2.5Goals" => "Over 2.5",
+            "Over2.5Goals" or "Under2.5Goals" => prediction.PredictedOutcome ?? prediction.PredictionCategory,
             "Draw" => "Draw",
             "StraightWin" => prediction.PredictedOutcome ?? "Win",
             _ => prediction.PredictedOutcome ?? prediction.PredictionCategory
@@ -92,6 +93,7 @@ public static partial class PredictionDisplayHelper
         {
             "BothTeamsScore" => "BTTS",
             "Over2.5Goals" => "Over2.5",
+            "Under2.5Goals" => "Under2.5",
             "Draw" => "1X2",
             "StraightWin" => "StraightWin",
             _ => prediction.PredictionCategory
@@ -177,6 +179,7 @@ public static partial class PredictionDisplayHelper
         {
             "BothTeamsScore" => DoesBttsPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
             "Over2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+            "Under2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
             _ => false
         };
     }
@@ -189,6 +192,7 @@ public static partial class PredictionDisplayHelper
             {
                 "BothTeamsScore" => DoesBttsPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 "Over2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+                "Under2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 "Draw" => DoesDrawPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 "StraightWin" => DoesStraightWinPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 _ => OutcomesMatch(prediction.PredictedOutcome, prediction.ActualOutcome)

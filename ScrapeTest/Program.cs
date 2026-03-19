@@ -535,7 +535,8 @@ static double CalculateProbabilityByMarket(IProbabilityCalculator calculator, Ma
     {
         PredictionMarket.BothTeamsScore => calculator.CalculateBttsProbability(match),
         PredictionMarket.Over25Goals => calculator.CalculateOverTwoGoalsProbability(match),
-        PredictionMarket.Draw => calculator.CalculateDrawProbability(match),
+        PredictionMarket.Under25Goals => calculator.CalculateUnderTwoGoalsProbability(match),
+        PredictionMarket.Draw => 0.0,
         PredictionMarket.HomeWin => calculator.CalculateHomeWinProbability(match),
         PredictionMarket.AwayWin => calculator.CalculateAwayWinProbability(match),
         _ => 0.0
@@ -594,10 +595,15 @@ sealed class LegacyProbabilityCalculator : IProbabilityCalculator
             : Math.Clamp(PoissonTailProbability(totalXg, 2), 0.0, 1.0);
     }
 
-    public double CalculateDrawProbability(MatchData match)
+    public double CalculateUnderTwoGoalsProbability(MatchData match)
     {
-        var (_, draw, _) = GetNormalizedOneX2(match);
-        return Math.Clamp(draw, 0.0, 1.0);
+        if (match.TryGetNormalizedOver25Pair(out var overUnder25))
+            return Math.Clamp(overUnder25.under25, 0.0, 1.0);
+
+        if (match.Under25() > 0)
+            return Math.Clamp(match.Under25(), 0.0, 1.0);
+
+        return Math.Clamp(1.0 - CalculateOverTwoGoalsProbability(match), 0.0, 1.0);
     }
 
     public double CalculateHomeWinProbability(MatchData match)

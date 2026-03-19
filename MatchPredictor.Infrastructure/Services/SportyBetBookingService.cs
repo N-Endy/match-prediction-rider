@@ -154,6 +154,8 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             AwayWinOdds = fixture.AwayOdds,
             Over25Probability = fixture.Over25Probability,
             Over25Odds = fixture.Over25Odds,
+            Under25Probability = fixture.Under25Probability,
+            Under25Odds = fixture.Under25Odds,
             BttsYesProbability = fixture.BttsYesProbability,
             BttsYesOdds = fixture.BttsYesOdds,
             BttsNoProbability = fixture.BttsNoProbability,
@@ -264,18 +266,21 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                             var awayOutcomeId = "";
                             var bttsOutcomeId = "";
                             var over25OutcomeId = "";
+                            var under25OutcomeId = "";
                             double? homeProbability = null;
                             double? drawProbability = null;
                             double? awayProbability = null;
                             double? bttsYesProbability = null;
                             double? bttsNoProbability = null;
                             double? over25Probability = null;
+                            double? under25Probability = null;
                             double? homeOdds = null;
                             double? drawOdds = null;
                             double? awayOdds = null;
                             double? bttsYesOdds = null;
                             double? bttsNoOdds = null;
                             double? over25Odds = null;
+                            double? under25Odds = null;
 
                             if (ev.TryGetProperty("markets", out var markets))
                             {
@@ -335,6 +340,12 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                                         over25Probability = probability;
                                                         over25Odds = decimalOdds;
                                                     }
+                                                    else if (oid == "13" || desc.Contains("Under", StringComparison.OrdinalIgnoreCase))
+                                                    {
+                                                        under25OutcomeId = oid;
+                                                        under25Probability = probability;
+                                                        under25Odds = decimalOdds;
+                                                    }
                                                 }
                                             }
                                         }
@@ -378,6 +389,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                 AwayOutcomeId = awayOutcomeId,
                                 BttsYesOutcomeId = bttsOutcomeId,
                                 Over25OutcomeId = over25OutcomeId,
+                                Under25OutcomeId = under25OutcomeId,
                                 HomeProbability = homeProbability,
                                 HomeOdds = homeOdds,
                                 DrawProbability = drawProbability,
@@ -386,6 +398,8 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                 AwayOdds = awayOdds,
                                 Over25Probability = over25Probability,
                                 Over25Odds = over25Odds,
+                                Under25Probability = under25Probability,
+                                Under25Odds = under25Odds,
                                 BttsYesProbability = bttsYesProbability,
                                 BttsYesOdds = bttsYesOdds,
                                 BttsNoProbability = bttsNoProbability,
@@ -511,6 +525,12 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         else if (prediction.Contains("over 2.5") || prediction.Contains("over2.5"))
         {
             outcomeId = best.Over25OutcomeId;
+            marketId = "18";
+            specifier = "total=2.5";
+        }
+        else if (prediction.Contains("under 2.5") || prediction.Contains("under2.5"))
+        {
+            outcomeId = best.Under25OutcomeId;
             marketId = "18";
             specifier = "total=2.5";
         }
@@ -722,6 +742,7 @@ public record SportyBetFixture
     public string AwayOutcomeId { get; init; } = "";
     public string BttsYesOutcomeId { get; init; } = "";
     public string Over25OutcomeId { get; init; } = "";
+    public string Under25OutcomeId { get; init; } = "";
     public double? HomeProbability { get; init; }
     public double? HomeOdds { get; init; }
     public double? DrawProbability { get; init; }
@@ -730,6 +751,8 @@ public record SportyBetFixture
     public double? AwayOdds { get; init; }
     public double? Over25Probability { get; init; }
     public double? Over25Odds { get; init; }
+    public double? Under25Probability { get; init; }
+    public double? Under25Odds { get; init; }
     public double? BttsYesProbability { get; init; }
     public double? BttsYesOdds { get; init; }
     public double? BttsNoProbability { get; init; }

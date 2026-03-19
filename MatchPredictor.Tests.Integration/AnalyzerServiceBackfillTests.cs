@@ -623,7 +623,7 @@ public class AnalyzerServiceBackfillTests
 
         public IReadOnlyList<PredictionCandidate> BothTeamsScore(IEnumerable<MatchData> matches) => [];
         public IReadOnlyList<PredictionCandidate> OverTwoGoals(IEnumerable<MatchData> matches) => [];
-        public IReadOnlyList<PredictionCandidate> Draw(IEnumerable<MatchData> matches) => [];
+        public IReadOnlyList<PredictionCandidate> UnderTwoGoals(IEnumerable<MatchData> matches) => [];
         public IReadOnlyList<PredictionCandidate> StraightWin(IEnumerable<MatchData> matches) => [];
     }
 

@@ -89,6 +89,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
             {
                 "BothTeamsScore" => DoesBttsPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 "Over2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+                "Under2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 "Draw" => DoesDrawPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 "StraightWin" => DoesStraightWinPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 _ => OutcomesMatch(prediction.PredictedOutcome, ResolvePredictionActualOutcome(prediction))
@@ -120,6 +121,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
         {
             "BothTeamsScore" => homeGoals > 0 && awayGoals > 0 ? "BTTS" : "No BTTS",
             "Over2.5Goals" => homeGoals + awayGoals > 2 ? "Over 2.5" : "Under 2.5",
+            "Under2.5Goals" => homeGoals + awayGoals > 2 ? "Over 2.5" : "Under 2.5",
             "Draw" => homeGoals == awayGoals ? "Draw" : "Not Draw",
             "StraightWin" => homeGoals > awayGoals ? "Home Win" : awayGoals > homeGoals ? "Away Win" : "Draw",
             _ => null

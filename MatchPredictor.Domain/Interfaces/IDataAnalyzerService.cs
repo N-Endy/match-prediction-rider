@@ -8,6 +8,6 @@ public interface IDataAnalyzerService
     IReadOnlyList<PredictionCandidate> SelectPublishedPredictions(IEnumerable<PredictionCandidate> forecastCandidates);
     IReadOnlyList<PredictionCandidate> BothTeamsScore(IEnumerable<MatchData> matches);
     IReadOnlyList<PredictionCandidate> OverTwoGoals(IEnumerable<MatchData> matches);
-    IReadOnlyList<PredictionCandidate> Draw(IEnumerable<MatchData> matches);
+    IReadOnlyList<PredictionCandidate> UnderTwoGoals(IEnumerable<MatchData> matches);
     IReadOnlyList<PredictionCandidate> StraightWin(IEnumerable<MatchData> matches);
 }

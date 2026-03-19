@@ -169,6 +169,7 @@ public class AnalyticsModel : PageModel
         DateTime generatedAtLocal)
     {
         var markets = Enum.GetValues<PredictionMarket>()
+            .Where(market => market != PredictionMarket.Draw)
             .OrderBy(market => market)
             .Select(market =>
             {
@@ -271,6 +272,7 @@ public class AnalyticsModel : PageModel
         {
             PredictionMarket.BothTeamsScore => _settings.BttsScoreThreshold,
             PredictionMarket.Over25Goals => _settings.OverTwoGoalsStrongThreshold,
+            PredictionMarket.Under25Goals => _settings.UnderTwoGoalsStrongThreshold,
             PredictionMarket.Draw => _settings.DrawStrongThreshold,
             PredictionMarket.HomeWin => _settings.HomeWinStrong,
             PredictionMarket.AwayWin => _settings.AwayWinStrong,

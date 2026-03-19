@@ -159,13 +159,13 @@ public class DataAnalyzerServiceTests
     {
         public double Btts { get; set; }
         public double Over25 { get; set; }
-        public double Draw { get; set; }
+        public double Under25 { get; set; }
         public double HomeWin { get; set; }
         public double AwayWin { get; set; }
 
         public double CalculateBttsProbability(MatchData match) => Btts;
         public double CalculateOverTwoGoalsProbability(MatchData match) => Over25;
-        public double CalculateDrawProbability(MatchData match) => Draw;
+        public double CalculateUnderTwoGoalsProbability(MatchData match) => Under25;
         public double CalculateHomeWinProbability(MatchData match) => HomeWin;
         public double CalculateAwayWinProbability(MatchData match) => AwayWin;
     }

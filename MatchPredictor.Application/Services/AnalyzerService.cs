@@ -1470,6 +1470,7 @@ public class AnalyzerService  : IAnalyzerService
             "BothTeamsScore" => DetermineBttsOutcome(score, bttsLabel),
             "Draw" => DetermineDrawOutcome(score),
             "Over2.5Goals" => DetermineOver25Outcome(score),
+            "Under2.5Goals" => DetermineOver25Outcome(score),
             "StraightWin" => DetermineStraightWinOutcome(score),
             _ => null
         };
@@ -1538,6 +1539,11 @@ public class AnalyzerService  : IAnalyzerService
                     ? homeOver + awayOver > 2
                     : null;
 
+            case PredictionMarket.Under25Goals:
+                return TryParseScore(score, out var homeUnder, out var awayUnder)
+                    ? homeUnder + awayUnder <= 2
+                    : null;
+
             case PredictionMarket.Draw:
                 return TryParseScore(score, out var homeDraw, out var awayDraw)
                     ? homeDraw == awayDraw
@@ -1567,6 +1573,7 @@ public class AnalyzerService  : IAnalyzerService
         {
             PredictionMarket.BothTeamsScore => (DetermineForecastOutcomeOccurred(market, score, bttsLabel) ?? false) ? "BTTS" : "No BTTS",
             PredictionMarket.Over25Goals => DetermineOver25Outcome(score),
+            PredictionMarket.Under25Goals => DetermineOver25Outcome(score),
             PredictionMarket.Draw => DetermineDrawOutcome(score),
             PredictionMarket.HomeWin => (DetermineForecastOutcomeOccurred(market, score, bttsLabel) ?? false) ? "Home Win" : "Not Home Win",
             PredictionMarket.AwayWin => (DetermineForecastOutcomeOccurred(market, score, bttsLabel) ?? false) ? "Away Win" : "Not Away Win",
@@ -2535,13 +2542,14 @@ public class AnalyzerService  : IAnalyzerService
         {
             "BothTeamsScore" => PredictionMarket.BothTeamsScore,
             "Over2.5Goals" => PredictionMarket.Over25Goals,
+            "Under2.5Goals" => PredictionMarket.Under25Goals,
             "Draw" => PredictionMarket.Draw,
             "StraightWin" when prediction.PredictedOutcome == "Home Win" => PredictionMarket.HomeWin,
             "StraightWin" when prediction.PredictedOutcome == "Away Win" => PredictionMarket.AwayWin,
             _ => default
         };
 
-        return prediction.PredictionCategory is "BothTeamsScore" or "Over2.5Goals" or "Draw" ||
+        return prediction.PredictionCategory is "BothTeamsScore" or "Over2.5Goals" or "Under2.5Goals" or "Draw" ||
                (prediction.PredictionCategory == "StraightWin" && prediction.PredictedOutcome is "Home Win" or "Away Win");
     }
 
@@ -2551,6 +2559,7 @@ public class AnalyzerService  : IAnalyzerService
         {
             PredictionMarket.BothTeamsScore => _predictionSettings.BttsScoreThreshold,
             PredictionMarket.Over25Goals => _predictionSettings.OverTwoGoalsStrongThreshold,
+            PredictionMarket.Under25Goals => _predictionSettings.UnderTwoGoalsStrongThreshold,
             PredictionMarket.Draw => _predictionSettings.DrawStrongThreshold,
             PredictionMarket.HomeWin => _predictionSettings.HomeWinStrong,
             PredictionMarket.AwayWin => _predictionSettings.AwayWinStrong,

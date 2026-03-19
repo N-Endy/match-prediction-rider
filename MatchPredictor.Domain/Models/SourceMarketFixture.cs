@@ -15,6 +15,8 @@ public class SourceMarketFixture
     public double? AwayWinOdds { get; set; }
     public double? Over25Probability { get; set; }
     public double? Over25Odds { get; set; }
+    public double? Under25Probability { get; set; }
+    public double? Under25Odds { get; set; }
     public double? BttsYesProbability { get; set; }
     public double? BttsYesOdds { get; set; }
     public double? BttsNoProbability { get; set; }

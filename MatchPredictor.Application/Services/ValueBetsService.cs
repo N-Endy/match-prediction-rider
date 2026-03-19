@@ -264,7 +264,7 @@ public class ValueBetsService : IValueBetsService
         var selected = new List<ValueBetCandidate>();
 
         var bestOneX2Candidate = candidateList
-            .Where(candidate => candidate.PredictionCategory is "StraightWin" or "Draw")
+            .Where(candidate => candidate.PredictionCategory == "StraightWin")
             .OrderByDescending(candidate => candidate.ExpectedValuePercent)
             .ThenByDescending(candidate => candidate.Edge)
             .ThenByDescending(candidate => candidate.MathematicalProbability)
@@ -275,7 +275,19 @@ public class ValueBetsService : IValueBetsService
             selected.Add(bestOneX2Candidate);
         }
 
-        selected.AddRange(candidateList.Where(candidate => candidate.PredictionCategory is "Over2.5Goals" or "BothTeamsScore"));
+        var bestTotalsCandidate = candidateList
+            .Where(candidate => candidate.PredictionCategory is "Over2.5Goals" or "Under2.5Goals")
+            .OrderByDescending(candidate => candidate.ExpectedValuePercent)
+            .ThenByDescending(candidate => candidate.Edge)
+            .ThenByDescending(candidate => candidate.MathematicalProbability)
+            .FirstOrDefault();
+
+        if (bestTotalsCandidate != null)
+        {
+            selected.Add(bestTotalsCandidate);
+        }
+
+        selected.AddRange(candidateList.Where(candidate => candidate.PredictionCategory == "BothTeamsScore"));
         return selected;
     }
 
@@ -285,6 +297,7 @@ public class ValueBetsService : IValueBetsService
         {
             PredictionMarket.BothTeamsScore => _thresholdTuningService.GetThresholdDecision(PredictionMarket.BothTeamsScore, _settings.BttsScoreThreshold),
             PredictionMarket.Over25Goals => _thresholdTuningService.GetThresholdDecision(PredictionMarket.Over25Goals, _settings.OverTwoGoalsStrongThreshold),
+            PredictionMarket.Under25Goals => _thresholdTuningService.GetThresholdDecision(PredictionMarket.Under25Goals, _settings.UnderTwoGoalsStrongThreshold),
             PredictionMarket.Draw => _thresholdTuningService.GetThresholdDecision(PredictionMarket.Draw, _settings.DrawStrongThreshold),
             PredictionMarket.HomeWin => _thresholdTuningService.GetThresholdDecision(PredictionMarket.HomeWin, _settings.HomeWinStrong),
             PredictionMarket.AwayWin => _thresholdTuningService.GetThresholdDecision(PredictionMarket.AwayWin, _settings.AwayWinStrong),

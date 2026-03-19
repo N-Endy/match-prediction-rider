@@ -785,6 +785,11 @@ public partial class AiChatRequestParser
             return "Over2.5Goals";
         }
 
+        if (normalized.Contains("under2.5") || normalized == "unders" || normalized == "under")
+        {
+            return "Under2.5Goals";
+        }
+
         if (normalized.Contains("draw"))
         {
             return "Draw";

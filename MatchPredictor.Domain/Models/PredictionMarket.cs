@@ -7,7 +7,8 @@ public enum PredictionMarket
     StraightWin = 2,
     Draw = 3,
     HomeWin = 4,
-    AwayWin = 5
+    AwayWin = 5,
+    Under25Goals = 6
 }
 
 public static class PredictionMarketExtensions
@@ -18,6 +19,7 @@ public static class PredictionMarketExtensions
         {
             PredictionMarket.BothTeamsScore => "BothTeamsScore",
             PredictionMarket.Over25Goals => "Over2.5Goals",
+            PredictionMarket.Under25Goals => "Under2.5Goals",
             PredictionMarket.HomeWin => "StraightWin",
             PredictionMarket.AwayWin => "StraightWin",
             PredictionMarket.StraightWin => "StraightWin",
@@ -32,6 +34,7 @@ public static class PredictionMarketExtensions
         {
             PredictionMarket.BothTeamsScore => "BTTS",
             PredictionMarket.Over25Goals => "Over 2.5",
+            PredictionMarket.Under25Goals => "Under 2.5",
             PredictionMarket.Draw => "Draw",
             PredictionMarket.HomeWin => "Home Win",
             PredictionMarket.AwayWin => "Away Win",
@@ -46,11 +49,12 @@ public static class PredictionMarketExtensions
         {
             "BothTeamsScore" => PredictionMarket.BothTeamsScore,
             "Over2.5Goals" => PredictionMarket.Over25Goals,
+            "Under2.5Goals" => PredictionMarket.Under25Goals,
             "StraightWin" => PredictionMarket.StraightWin,
             "Draw" => PredictionMarket.Draw,
             _ => default
         };
 
-        return category is "BothTeamsScore" or "Over2.5Goals" or "StraightWin" or "Draw";
+        return category is "BothTeamsScore" or "Over2.5Goals" or "Under2.5Goals" or "StraightWin" or "Draw";
     }
 }

@@ -1,5 +1,4 @@
 using MatchPredictor.Domain.Interfaces;
-using MatchPredictor.Infrastructure.Utils;
 using Microsoft.AspNetCore.Mvc;
 
 namespace MatchPredictor.Web.Pages.Predictions;
@@ -10,9 +9,9 @@ public class Draw : FilteredPredictionPageModel
         : base(predictionQueries)
     {
     }
-    
-    public async Task<IActionResult> OnGet()
+
+    public IActionResult OnGet()
     {
-        return await LoadAsync(PredictionQueries.GetDrawAsync(DateTimeProvider.GetLocalTime()));
+        return RedirectToPage("/Predictions/Under2");
     }
 }

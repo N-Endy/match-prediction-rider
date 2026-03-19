@@ -40,7 +40,7 @@ public class DataAnalyzerService : IDataAnalyzerService
         {
             [PredictionMarket.BothTeamsScore] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.BothTeamsScore, _settings.BttsScoreThreshold),
             [PredictionMarket.Over25Goals] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.Over25Goals, _settings.OverTwoGoalsStrongThreshold),
-            [PredictionMarket.Draw] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.Draw, _settings.DrawStrongThreshold),
+            [PredictionMarket.Under25Goals] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.Under25Goals, _settings.UnderTwoGoalsStrongThreshold),
             [PredictionMarket.HomeWin] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.HomeWin, _settings.HomeWinStrong),
             [PredictionMarket.AwayWin] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.AwayWin, _settings.AwayWinStrong)
         };
@@ -58,13 +58,28 @@ public class DataAnalyzerService : IDataAnalyzerService
             candidate.Market == PredictionMarket.BothTeamsScore &&
             candidate.CalibratedProbability >= thresholdDecisions[PredictionMarket.BothTeamsScore].Threshold)));
 
-        published.AddRange(MarkPublished(forecasts.Where(candidate =>
-            candidate.Market == PredictionMarket.Over25Goals &&
-            candidate.CalibratedProbability >= thresholdDecisions[PredictionMarket.Over25Goals].Threshold)));
+        foreach (var totalsGroup in forecasts
+                     .Where(candidate => candidate.Market is PredictionMarket.Over25Goals or PredictionMarket.Under25Goals)
+                     .GroupBy(candidate => (
+                         candidate.MatchLocalDate,
+                         candidate.HomeTeam,
+                         candidate.AwayTeam,
+                         candidate.League)))
+        {
+            var qualifiedTotals = totalsGroup
+                .Where(candidate =>
+                    thresholdDecisions.TryGetValue(candidate.Market, out var decision) &&
+                    candidate.CalibratedProbability >= decision.Threshold)
+                .OrderByDescending(candidate => candidate.CalibratedProbability)
+                .ThenByDescending(candidate => candidate.Market == PredictionMarket.Over25Goals ? 1 : 0)
+                .FirstOrDefault();
 
-        published.AddRange(MarkPublished(forecasts.Where(candidate =>
-            candidate.Market == PredictionMarket.Draw &&
-            candidate.CalibratedProbability >= thresholdDecisions[PredictionMarket.Draw].Threshold)));
+            if (qualifiedTotals is not null)
+            {
+                qualifiedTotals.WasPublished = true;
+                published.Add(qualifiedTotals);
+            }
+        }
 
         foreach (var matchGroup in forecasts
                      .Where(candidate => candidate.Market is PredictionMarket.HomeWin or PredictionMarket.AwayWin)
@@ -111,10 +126,10 @@ public class DataAnalyzerService : IDataAnalyzerService
             .ToList();
     }
 
-    public IReadOnlyList<PredictionCandidate> Draw(IEnumerable<MatchData> matches)
+    public IReadOnlyList<PredictionCandidate> UnderTwoGoals(IEnumerable<MatchData> matches)
     {
         return SelectPublishedPredictions(BuildForecastCandidates(matches))
-            .Where(candidate => candidate.Market == PredictionMarket.Draw)
+            .Where(candidate => candidate.Market == PredictionMarket.Under25Goals)
             .Cast<PredictionCandidate>()
             .ToList();
     }
@@ -215,9 +230,9 @@ public class DataAnalyzerService : IDataAnalyzerService
                 _probabilityCalculator.CalculateOverTwoGoalsProbability(match)),
             BuildCandidate(
                 match,
-                PredictionMarket.Draw,
-                "Draw",
-                _probabilityCalculator.CalculateDrawProbability(match)),
+                PredictionMarket.Under25Goals,
+                "Under 2.5",
+                _probabilityCalculator.CalculateUnderTwoGoalsProbability(match)),
             BuildCandidate(
                 match,
                 PredictionMarket.HomeWin,

@@ -244,7 +244,7 @@ public class AiAdvisorService : IAiAdvisorService
 
             var emptySelection = new AiChatResponse
             {
-                Message = "I couldn't find a useful slice of today's card for that request. Try asking for BTTS, Over 2.5, Draw, or Straight Win picks."
+                Message = "I couldn't find a useful slice of today's card for that request. Try asking for BTTS, Over 2.5, Under 2.5, or Straight Win picks."
             };
 
             MergeSelectionWarnings(emptySelection, selection, normalizedRequest, parseResult);
@@ -546,7 +546,8 @@ public class AiAdvisorService : IAiAdvisorService
             return marketProbability > 0;
         }
 
-        if (prediction.PredictionCategory == "Over2.5Goals" && match.TryGetNormalizedOver25Pair(out var overUnder25))
+        if ((prediction.PredictionCategory == "Over2.5Goals" || prediction.PredictionCategory == "Under2.5Goals") &&
+            match.TryGetNormalizedOver25Pair(out var overUnder25))
         {
             marketProbability = prediction.PredictedOutcome.Equals("Under 2.5", StringComparison.OrdinalIgnoreCase)
                 ? overUnder25.under25
@@ -1729,6 +1730,7 @@ public class AiAdvisorService : IAiAdvisorService
             {
                 "BothTeamsScore" => "BTTS",
                 "Over2.5Goals" => "Over2.5",
+                "Under2.5Goals" => "Under2.5",
                 _ => "1X2"
             },
             Prediction = candidate.PredictedOutcome,

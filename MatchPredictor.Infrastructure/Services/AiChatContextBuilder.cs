@@ -259,6 +259,7 @@ public static partial class AiChatContextBuilder
         {
             "BothTeamsScore" => "BTTS",
             "Over2.5Goals" => "Over2.5",
+            "Under2.5Goals" => "Under2.5",
             _ => "1X2"
         };
     }
@@ -510,6 +511,12 @@ public static partial class AiChatContextBuilder
             filters.Add("Over2.5Goals");
         }
 
+        if (promptTokens.Contains("under") ||
+            promptTokens.Any(token => token.StartsWith("under", StringComparison.OrdinalIgnoreCase)))
+        {
+            filters.Add("Under2.5Goals");
+        }
+
         if (promptTokens.Contains("draw") || promptTokens.Contains("draws"))
         {
             filters.Add("Draw");
@@ -678,6 +685,8 @@ public static partial class AiChatContextBuilder
         AddMarketMention(matches, userPrompt, "both teams to score", "BothTeamsScore");
         AddMarketMention(matches, userPrompt, "over 2.5", "Over2.5Goals");
         AddMarketMention(matches, userPrompt, "over2.5", "Over2.5Goals");
+        AddMarketMention(matches, userPrompt, "under 2.5", "Under2.5Goals");
+        AddMarketMention(matches, userPrompt, "under2.5", "Under2.5Goals");
         AddMarketMention(matches, userPrompt, "draw", "Draw");
         AddMarketMention(matches, userPrompt, "straight win", "StraightWin");
         AddMarketMention(matches, userPrompt, "straightwin", "StraightWin");
@@ -791,6 +800,11 @@ public static partial class AiChatContextBuilder
         if (normalized.Contains("over"))
         {
             return "Over2.5Goals";
+        }
+
+        if (normalized.Contains("under"))
+        {
+            return "Under2.5Goals";
         }
 
         if (normalized.Contains("draw"))
@@ -1096,6 +1110,7 @@ public static partial class AiChatContextBuilder
         {
             "BothTeamsScore" => "BTTS",
             "Over2.5Goals" => "Over 2.5",
+            "Under2.5Goals" => "Under 2.5",
             "Draw" => "Draw",
             "StraightWin" => "Straight Win",
             _ => PredictionCategory

@@ -125,6 +125,7 @@ public static class ScoreMatchingHelper
                     "BothTeamsScore" => match.BTTSLabel ? "BTTS" : "No BTTS",
                     "Draw"           => DetermineDrawOutcome(match.Score),
                     "Over2.5Goals"   => DetermineOver25Outcome(match.Score),
+                    "Under2.5Goals"  => DetermineOver25Outcome(match.Score),
                     "StraightWin"    => DetermineStraightWinOutcome(match.Score),
                     _                => null
                 };
@@ -161,6 +162,7 @@ public static class ScoreMatchingHelper
                 "BothTeamsScore" => match.BTTSLabel ? "BTTS" : "No BTTS",
                 "Draw"           => DetermineDrawOutcome(match.Score),
                 "Over2.5Goals"   => DetermineOver25Outcome(match.Score),
+                "Under2.5Goals"  => DetermineOver25Outcome(match.Score),
                 "StraightWin"    => DetermineStraightWinOutcome(match.Score),
                 _                => null
             };

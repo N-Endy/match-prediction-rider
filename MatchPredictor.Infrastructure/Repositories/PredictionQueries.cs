@@ -21,8 +21,8 @@ public class PredictionQueries : IPredictionQueries
     public Task<IReadOnlyList<Prediction>> GetOver25Async(DateTime date) =>
         GetByCategoryAsync(date, "Over2.5Goals");
 
-    public Task<IReadOnlyList<Prediction>> GetDrawAsync(DateTime date) =>
-        GetByCategoryAsync(date, "Draw");
+    public Task<IReadOnlyList<Prediction>> GetUnder25Async(DateTime date) =>
+        GetByCategoryAsync(date, "Under2.5Goals");
 
     public Task<IReadOnlyList<Prediction>> GetStraightWinAsync(DateTime date) =>
         GetByCategoryAsync(date, "StraightWin");

@@ -10,6 +10,7 @@ public class AiChatRequestedMarket
     {
         "BothTeamsScore" => "BTTS",
         "Over2.5Goals" => "Over 2.5",
+        "Under2.5Goals" => "Under 2.5",
         "Draw" => "Draw",
         "StraightWin" => "Straight Win",
         _ => PredictionCategory

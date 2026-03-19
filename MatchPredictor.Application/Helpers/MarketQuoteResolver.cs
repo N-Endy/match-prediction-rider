@@ -88,6 +88,7 @@ public static class MarketQuoteResolver
         {
             "BothTeamsScore" => PredictionMarket.BothTeamsScore,
             "Over2.5Goals" => PredictionMarket.Over25Goals,
+            "Under2.5Goals" => PredictionMarket.Under25Goals,
             "Draw" => PredictionMarket.Draw,
             "StraightWin" when prediction.PredictedOutcome.Equals("Home Win", StringComparison.OrdinalIgnoreCase) => PredictionMarket.HomeWin,
             "StraightWin" when prediction.PredictedOutcome.Equals("Away Win", StringComparison.OrdinalIgnoreCase) => PredictionMarket.AwayWin,
@@ -98,6 +99,7 @@ public static class MarketQuoteResolver
         {
             "BothTeamsScore" => true,
             "Over2.5Goals" => true,
+            "Under2.5Goals" => true,
             "Draw" => true,
             "StraightWin" => market is PredictionMarket.HomeWin or PredictionMarket.AwayWin,
             _ => false
@@ -112,6 +114,7 @@ public static class MarketQuoteResolver
             PredictionMarket.Draw => sourceFixture?.DrawProbability,
             PredictionMarket.AwayWin => sourceFixture?.AwayWinProbability,
             PredictionMarket.Over25Goals => sourceFixture?.Over25Probability,
+            PredictionMarket.Under25Goals => sourceFixture?.Under25Probability,
             PredictionMarket.BothTeamsScore => sourceFixture?.BttsYesProbability,
             _ => null
         };
@@ -125,6 +128,7 @@ public static class MarketQuoteResolver
             PredictionMarket.Draw => sourceFixture?.DrawOdds,
             PredictionMarket.AwayWin => sourceFixture?.AwayWinOdds,
             PredictionMarket.Over25Goals => sourceFixture?.Over25Odds,
+            PredictionMarket.Under25Goals => sourceFixture?.Under25Odds,
             PredictionMarket.BothTeamsScore => sourceFixture?.BttsYesOdds,
             _ => null
         };
@@ -147,6 +151,11 @@ public static class MarketQuoteResolver
         if (market == PredictionMarket.Over25Goals && match.TryGetNormalizedOver25Pair(out var overUnder25))
         {
             return overUnder25.over25;
+        }
+
+        if (market == PredictionMarket.Under25Goals && match.TryGetNormalizedOver25Pair(out var underOver25))
+        {
+            return underOver25.under25;
         }
 
         if (market == PredictionMarket.BothTeamsScore && match.TryGetNormalizedBttsPair(out var bttsPair))

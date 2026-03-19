@@ -52,8 +52,8 @@ public class ValueBetsServiceTests
             [
                 CreateCandidate(PredictionMarket.BothTeamsScore, "BothTeamsScore", "BTTS", 0.80, 0.80),
                 CreateCandidate(PredictionMarket.Over25Goals, "Over2.5Goals", "Over 2.5", 0.52, 0.60, "Beta"),
+                CreateCandidate(PredictionMarket.Under25Goals, "Under2.5Goals", "Under 2.5", 0.48, 0.64),
                 CreateCandidate(PredictionMarket.HomeWin, "StraightWin", "Home Win", 0.60, 0.69),
-                CreateCandidate(PredictionMarket.Draw, "Draw", "Draw", 0.25, 0.33),
                 CreateCandidate(PredictionMarket.AwayWin, "StraightWin", "Away Win", 0.15, 0.18)
             ]);
 
@@ -65,8 +65,8 @@ public class ValueBetsServiceTests
                 Decisions =
                 {
                     [PredictionMarket.Over25Goals] = new ThresholdDecision { Threshold = 0.58, ThresholdSource = "Tuned" },
+                    [PredictionMarket.Under25Goals] = new ThresholdDecision { Threshold = 0.58, ThresholdSource = "Configured" },
                     [PredictionMarket.HomeWin] = new ThresholdDecision { Threshold = 0.68, ThresholdSource = "Configured" },
-                    [PredictionMarket.Draw] = new ThresholdDecision { Threshold = 0.30, ThresholdSource = "Configured" }
                 }
             },
             new FakeAiAdvisorService(payload =>
@@ -94,8 +94,8 @@ public class ValueBetsServiceTests
             {
                 HomeWinStrong = 0.68,
                 AwayWinStrong = 0.70,
-                DrawStrongThreshold = 0.30,
                 OverTwoGoalsStrongThreshold = 0.58,
+                UnderTwoGoalsStrongThreshold = 0.58,
                 ValueBetMinimumEdge = 0.03
             }),
             NullLogger<ValueBetsService>.Instance);
@@ -104,15 +104,15 @@ public class ValueBetsServiceTests
 
         Assert.Equal(2, results.Count);
         Assert.DoesNotContain(results, result => result.PredictionCategory == "BothTeamsScore");
-        Assert.Equal("Draw", results[0].PredictionCategory);
+        Assert.Equal("Under2.5Goals", results[0].PredictionCategory);
         Assert.True(results[0].ExpectedValuePercent >= results[1].ExpectedValuePercent);
 
-        var draw = Assert.Single(results.Where(result => result.PredictionCategory == "Draw"));
-        Assert.Equal(0.33, draw.MathematicalProbability, 3);
-        Assert.Equal(0.25, draw.MarketProbability, 3);
-        Assert.Equal(0.08, draw.Edge, 3);
-        Assert.Equal(4.0, draw.DecimalOdds, 3);
-        Assert.Contains("EV", draw.AiJustification);
+        var under = Assert.Single(results.Where(result => result.PredictionCategory == "Under2.5Goals"));
+        Assert.Equal(0.64, under.MathematicalProbability, 3);
+        Assert.Equal(0.48, under.MarketProbability, 3);
+        Assert.Equal(0.16, under.Edge, 3);
+        Assert.Equal(Math.Round(1d / 0.48d, 4), under.DecimalOdds, 4);
+        Assert.Contains("EV", under.AiJustification);
 
         var over = Assert.Single(results.Where(result => result.PredictionCategory == "Over2.5Goals"));
         Assert.Equal(0.60, over.MathematicalProbability, 3);
@@ -164,8 +164,8 @@ public class ValueBetsServiceTests
             "Delta",
             [
                 CreateCandidate(PredictionMarket.Over25Goals, "Over2.5Goals", "Over 2.5", 0.54, 0.61, homeTeam: "Gamma", awayTeam: "Delta"),
+                CreateCandidate(PredictionMarket.Under25Goals, "Under2.5Goals", "Under 2.5", 0.46, 0.60, homeTeam: "Gamma", awayTeam: "Delta"),
                 CreateCandidate(PredictionMarket.HomeWin, "StraightWin", "Home Win", 0.44, 0.49, homeTeam: "Gamma", awayTeam: "Delta"),
-                CreateCandidate(PredictionMarket.Draw, "Draw", "Draw", 0.28, 0.31, homeTeam: "Gamma", awayTeam: "Delta"),
                 CreateCandidate(PredictionMarket.AwayWin, "StraightWin", "Away Win", 0.28, 0.30, homeTeam: "Gamma", awayTeam: "Delta")
             ]);
 
@@ -177,15 +177,15 @@ public class ValueBetsServiceTests
                 Decisions =
                 {
                     [PredictionMarket.Over25Goals] = new ThresholdDecision { Threshold = 0.58, ThresholdSource = "Configured" },
-                    [PredictionMarket.Draw] = new ThresholdDecision { Threshold = 0.30, ThresholdSource = "Configured" }
+                    [PredictionMarket.Under25Goals] = new ThresholdDecision { Threshold = 0.58, ThresholdSource = "Configured" }
                 }
             },
             new FakeAiAdvisorService(_ => "⚠️ busy"),
             new FakeSourceMarketPricingService(),
             Options.Create(new PredictionSettings
             {
-                DrawStrongThreshold = 0.30,
                 OverTwoGoalsStrongThreshold = 0.58,
+                UnderTwoGoalsStrongThreshold = 0.58,
                 ValueBetMinimumEdge = 0.03
             }),
             NullLogger<ValueBetsService>.Instance);
@@ -622,7 +622,7 @@ public class ValueBetsServiceTests
 
         public IReadOnlyList<PredictionCandidate> BothTeamsScore(IEnumerable<MatchData> matches) => BuildForecastCandidates(matches);
         public IReadOnlyList<PredictionCandidate> OverTwoGoals(IEnumerable<MatchData> matches) => BuildForecastCandidates(matches);
-        public IReadOnlyList<PredictionCandidate> Draw(IEnumerable<MatchData> matches) => BuildForecastCandidates(matches);
+        public IReadOnlyList<PredictionCandidate> UnderTwoGoals(IEnumerable<MatchData> matches) => BuildForecastCandidates(matches);
         public IReadOnlyList<PredictionCandidate> StraightWin(IEnumerable<MatchData> matches) => BuildForecastCandidates(matches);
 
         private static string BuildKey(string homeTeam, string awayTeam) =>

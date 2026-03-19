@@ -75,6 +75,7 @@ public class ThresholdTuningService : IThresholdTuningService
         {
             (PredictionMarket.BothTeamsScore, _settings.BttsScoreThreshold),
             (PredictionMarket.Over25Goals, _settings.OverTwoGoalsStrongThreshold),
+            (PredictionMarket.Under25Goals, _settings.UnderTwoGoalsStrongThreshold),
             (PredictionMarket.Draw, _settings.DrawStrongThreshold),
             (PredictionMarket.HomeWin, _settings.HomeWinStrong),
             (PredictionMarket.AwayWin, _settings.AwayWinStrong)
@@ -272,6 +273,7 @@ public class ThresholdTuningService : IThresholdTuningService
         {
             (PredictionMarket.BothTeamsScore, _settings.BttsScoreThreshold),
             (PredictionMarket.Over25Goals, _settings.OverTwoGoalsStrongThreshold),
+            (PredictionMarket.Under25Goals, _settings.UnderTwoGoalsStrongThreshold),
             (PredictionMarket.Draw, _settings.DrawStrongThreshold),
             (PredictionMarket.HomeWin, _settings.HomeWinStrong),
             (PredictionMarket.AwayWin, _settings.AwayWinStrong)
