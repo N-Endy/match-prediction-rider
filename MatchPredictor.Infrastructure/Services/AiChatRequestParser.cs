@@ -94,6 +94,7 @@ public partial class AiChatRequestParser
         var wantsBooking = MentionsBookingIntent(promptLower);
         var valueBias = DetectValueBias(promptLower, intent);
         var safetyBias = DetectSafetyBias(promptLower);
+        var randomSelection = DetectRandomSelection(promptLower);
         double? targetCombinedOdds = AiChatContextBuilder.TryExtractRolloverTargetOdds(prompt, out var parsedTargetOdds)
             ? parsedTargetOdds
             : null;
@@ -124,7 +125,7 @@ public partial class AiChatRequestParser
         }
 
         var requestedFilters = BuildRequestedFilters(scope, bookableOnly, safetyBias, valueBias, wantsBooking);
-        var interpretationNotes = BuildInterpretationNotes(promptLower, requestedMarkets, requestedTotalCount, targetCombinedOdds, scope);
+        var interpretationNotes = BuildInterpretationNotes(promptLower, requestedMarkets, requestedTotalCount, targetCombinedOdds, scope, randomSelection);
         var entityTerms = ExtractEntityTerms(prompt, requestedMarkets, intent);
         var flexibleMix = DetectFlexibleMix(promptLower, requestedMarkets);
         var needsSemanticFallback = DetermineNeedsSemanticFallback(
@@ -155,7 +156,8 @@ public partial class AiChatRequestParser
             EntityTerms = entityTerms,
             InterpretationNotes = interpretationNotes,
             NeedsSemanticFallback = needsSemanticFallback,
-            FlexibleMix = flexibleMix
+            FlexibleMix = flexibleMix,
+            RandomSelection = randomSelection
         };
 
         return new AiChatParseResult
@@ -192,6 +194,7 @@ public partial class AiChatRequestParser
                 .ToList(),
             NeedsSemanticFallback = request.NeedsSemanticFallback,
             FlexibleMix = request.FlexibleMix,
+            RandomSelection = request.RandomSelection,
             UsedSemanticFallback = request.UsedSemanticFallback
         };
 
@@ -528,7 +531,8 @@ public partial class AiChatRequestParser
         IReadOnlyList<AiChatRequestedMarket> requestedMarkets,
         int? requestedTotalCount,
         double? targetCombinedOdds,
-        string scope)
+        string scope,
+        bool randomSelection)
     {
         var notes = new List<string>();
 
@@ -548,6 +552,11 @@ public partial class AiChatRequestParser
         if (targetCombinedOdds.HasValue)
         {
             notes.Add($"Interpreted the target combined odds as {targetCombinedOdds.Value:0.##}.");
+        }
+
+        if (randomSelection)
+        {
+            notes.Add("Interpreted this as a random pick request, so selections should come from the eligible pool instead of only the top-ranked picks.");
         }
 
         if (requestedMarkets.Count > 0)
@@ -603,6 +612,14 @@ public partial class AiChatRequestParser
                 promptLower.Contains("across", StringComparison.Ordinal) ||
                 promptLower.Contains("combination", StringComparison.Ordinal) ||
                 promptLower.Contains("combo", StringComparison.Ordinal));
+    }
+
+    private static bool DetectRandomSelection(string promptLower)
+    {
+        return !string.IsNullOrWhiteSpace(promptLower) &&
+               (promptLower.Contains("random", StringComparison.Ordinal) ||
+                promptLower.Contains("randomly", StringComparison.Ordinal) ||
+                promptLower.Contains("at random", StringComparison.Ordinal));
     }
 
     private static bool DetermineNeedsSemanticFallback(
@@ -849,14 +866,14 @@ public partial class AiChatRequestParser
     }
 
     [GeneratedRegex(
-        @"(?:(?:\b(?:a\s+)?(?<count>\d{1,3}|couple|few|several|handful)\b)\s*(?:of\s+)?(?<market>\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|home wins?|away wins?|wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b))|(?:(?<marketAfter>\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|home wins?|away wins?|wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b)\s*(?<countAfter>\d{1,3}|couple|few|several|handful)\b)",
+        @"(?:(?:\b(?:a\s+)?(?<count>\d{1,3}|couple|few|several|handful)\b)\s*(?:of\s+)?(?:(?:random(?:ly)?|strong|safe|safer|best|top)\s+)*(?<market>\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|home wins?|away wins?|wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b))|(?:(?<marketAfter>\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|home wins?|away wins?|wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b)\s*(?:(?:random(?:ly)?|strong|safe|safer|best|top)\s+)*(?<countAfter>\d{1,3}|couple|few|several|handful)\b)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex ExplicitMarketCountRegex();
 
     [GeneratedRegex(@"\b(?:total(?:\s+of)?\s*(?<count>\d{1,3}|couple|few|several|handful)|(?<count>\d{1,3}|couple|few|several|handful)\s*total)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex TotalCountRegex();
 
-    [GeneratedRegex(@"\b(?<count>\d{1,3}|couple|few|several|handful)\s*(?:strong|safe|safer|best|top)?\s*(?:pick|picks|prediction|predictions|tip|tips|game|games|match|matches|leg|legs)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    [GeneratedRegex(@"\b(?<count>\d{1,3}|couple|few|several|handful)\s*(?:random(?:ly)?|strong|safe|safer|best|top)?\s*(?:pick|picks|prediction|predictions|tip|tips|game|games|match|matches|leg|legs)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex GenericPickCountRegex();
 
     [GeneratedRegex(@"\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|draws?|draw|straight wins?|straightwins?|straightwin|straights|1x2|wins?|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]

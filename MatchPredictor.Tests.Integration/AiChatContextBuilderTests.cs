@@ -230,6 +230,64 @@ public class AiChatContextBuilderTests
     }
 
     [Fact]
+    public void BuildSelection_UsesStableRandomOrdering_WhenPromptRequestsRandomPicks()
+    {
+        var nowUtc = DateTime.UtcNow;
+        var predictions = Enumerable.Range(1, 8)
+            .Select(index => CreatePrediction(
+                index,
+                "StraightWin",
+                index % 2 == 0 ? "Home Win" : "Away Win",
+                $"Home {index}",
+                $"Away {index}",
+                "England - Premier League",
+                0.94m - (index * 0.03m),
+                thresholdUsed: 0.68))
+            .ToArray();
+
+        var firstSelection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me 4 random straight wins for today",
+            nowUtc);
+        var secondSelection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me 4 random straight wins for today",
+            nowUtc);
+
+        Assert.False(firstSelection.NoRelevantMatchesFound);
+        Assert.Equal(4, firstSelection.Candidates.Count);
+        Assert.All(firstSelection.Candidates, candidate => Assert.Equal("StraightWin", candidate.PredictionCategory));
+        Assert.Equal(firstSelection.Candidates.Select(candidate => candidate.PredictionId), secondSelection.Candidates.Select(candidate => candidate.PredictionId));
+        Assert.NotEqual(new[] { 1, 2, 3, 4 }, firstSelection.Candidates.Select(candidate => candidate.PredictionId).ToArray());
+    }
+
+    [Fact]
+    public void BuildSelection_ReturnsRequestedRandomMixedTotalAcrossAllowedMarkets()
+    {
+        var predictions = Enumerable.Range(1, 8)
+            .Select(index => CreatePrediction(index, "Over2.5Goals", "Over 2.5", $"Over Home {index}", $"Over Away {index}", "Spain - La Liga", 0.90m - (index * 0.01m)))
+            .Concat(Enumerable.Range(9, 8)
+                .Select(index => CreatePrediction(index, "Under2.5Goals", "Under 2.5", $"Under Home {index}", $"Under Away {index}", "Italy - Serie A", 0.88m - ((index - 8) * 0.01m))))
+            .Concat(Enumerable.Range(17, 8)
+                .Select(index => CreatePrediction(index, "StraightWin", "Home Win", $"Win Home {index}", $"Win Away {index}", "England - Premier League", 0.86m - ((index - 16) * 0.01m), thresholdUsed: 0.68)))
+            .ToArray();
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me random over, under and straight win. Total 9",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(9, selection.Candidates.Count);
+        Assert.Equal(9, selection.RequestedCandidateCount);
+        Assert.All(selection.Candidates, candidate =>
+            Assert.Contains(candidate.PredictionCategory, new[] { "Over2.5Goals", "Under2.5Goals", "StraightWin" }));
+        Assert.Contains(selection.Candidates, candidate => candidate.PredictionCategory == "Over2.5Goals");
+        Assert.Contains(selection.Candidates, candidate => candidate.PredictionCategory == "Under2.5Goals");
+        Assert.Contains(selection.Candidates, candidate => candidate.PredictionCategory == "StraightWin");
+    }
+
+    [Fact]
     public void BuildSelection_DefaultsMixtureWithoutCounts_ToTwoPerNamedMarket()
     {
         var predictions = Enumerable.Range(1, 3)

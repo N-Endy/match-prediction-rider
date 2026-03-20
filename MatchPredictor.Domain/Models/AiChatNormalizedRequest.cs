@@ -19,5 +19,6 @@ public class AiChatNormalizedRequest
     public List<string> InterpretationNotes { get; set; } = [];
     public bool NeedsSemanticFallback { get; set; }
     public bool FlexibleMix { get; set; }
+    public bool RandomSelection { get; set; }
     public bool UsedSemanticFallback { get; set; }
 }

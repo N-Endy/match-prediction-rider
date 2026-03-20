@@ -127,6 +127,24 @@ public class AiChatRequestParserTests
     }
 
     [Fact]
+    public void ParseDeterministic_DetectsRandomSelectionForMixedPrompt()
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            "Give me random over, under and straight win. Total 30",
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.Equal(AiChatIntent.MixedMarketRecommendation, result.Request.Intent);
+        Assert.Equal(30, result.Request.RequestedTotalCount);
+        Assert.True(result.Request.RandomSelection);
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "Over2.5Goals");
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "Under2.5Goals");
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "StraightWin");
+        Assert.Contains(result.Request.InterpretationNotes, note => note.Contains("random pick request", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void ParseDeterministic_ParsesGenericPredictionCountRequests()
     {
         var result = AiChatRequestParser.ParseDeterministic(

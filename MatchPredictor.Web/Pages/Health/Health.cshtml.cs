@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Services;
@@ -12,6 +13,8 @@ namespace MatchPredictor.Web.Pages.Health;
 
 public class Health : PageModel
 {
+    private const string AiScoreRuntimeEventName = "source_runtime_aiscore";
+    private const string SofaScoreRuntimeEventName = "source_runtime_sofascore";
     private static readonly IReadOnlyList<SignalDefinition> SignalDefinitions =
     [
         new("Data Sync", "data_sync", TimeSpan.FromHours(8), true),
@@ -74,6 +77,7 @@ public class Health : PageModel
         var today = DateOnly.FromDateTime(nowLocal);
         var eventNames = SignalDefinitions
             .Select(definition => definition.EventName)
+            .Concat([AiScoreRuntimeEventName, SofaScoreRuntimeEventName])
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -143,8 +147,8 @@ public class Health : PageModel
             LivePredictionsToday = livePredictionsToday,
             PredictionCoverageExpected = predictionCoverageExpected,
             Signals = signals,
-            AiScoreRuntime = BuildAiScoreRuntimeStatus(_aiScoreSourceHealthTracker.GetSnapshot()),
-            SofaScoreRuntime = BuildSofaScoreRuntimeStatus(_sofaScoreSourceHealthTracker.GetSnapshot()),
+            AiScoreRuntime = BuildAiScoreRuntimeStatus(ResolveAiScoreRuntimeSnapshot(groupedLogs, _aiScoreSourceHealthTracker.GetSnapshot())),
+            SofaScoreRuntime = BuildSofaScoreRuntimeStatus(ResolveSofaScoreRuntimeSnapshot(groupedLogs, _sofaScoreSourceHealthTracker.GetSnapshot())),
             SourceQualityProfiles = sourceQualityProfiles
                 .Select(BuildSourceQualitySummary)
                 .ToList(),
@@ -245,6 +249,13 @@ public class Health : PageModel
         };
     }
 
+    private static AiScoreSourceHealthSnapshot ResolveAiScoreRuntimeSnapshot(
+        IReadOnlyDictionary<string, List<ScrapingLog>> groupedLogs,
+        AiScoreSourceHealthSnapshot fallbackSnapshot)
+    {
+        return TryDeserializeRuntimeSnapshot(groupedLogs, AiScoreRuntimeEventName, fallbackSnapshot);
+    }
+
     private static SofaScoreRuntimeStatus BuildSofaScoreRuntimeStatus(SofaScoreSourceHealthSnapshot snapshot)
     {
         var successDenominator = Math.Max(1, snapshot.TotalAttempts);
@@ -271,6 +282,46 @@ public class Health : PageModel
             SuccessRate = snapshot.TotalSuccesses / (double)successDenominator,
             BlockRate = snapshot.TotalBlocked / (double)successDenominator
         };
+    }
+
+    private static SofaScoreSourceHealthSnapshot ResolveSofaScoreRuntimeSnapshot(
+        IReadOnlyDictionary<string, List<ScrapingLog>> groupedLogs,
+        SofaScoreSourceHealthSnapshot fallbackSnapshot)
+    {
+        return TryDeserializeRuntimeSnapshot(groupedLogs, SofaScoreRuntimeEventName, fallbackSnapshot);
+    }
+
+    private static TSnapshot TryDeserializeRuntimeSnapshot<TSnapshot>(
+        IReadOnlyDictionary<string, List<ScrapingLog>> groupedLogs,
+        string eventName,
+        TSnapshot fallbackSnapshot)
+    {
+        if (!groupedLogs.TryGetValue(eventName, out var logsForSignal) || logsForSignal.Count == 0)
+        {
+            return fallbackSnapshot;
+        }
+
+        foreach (var log in logsForSignal)
+        {
+            if (string.IsNullOrWhiteSpace(log.Message))
+            {
+                continue;
+            }
+
+            try
+            {
+                var snapshot = JsonSerializer.Deserialize<TSnapshot>(log.Message);
+                if (snapshot is not null)
+                {
+                    return snapshot;
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        return fallbackSnapshot;
     }
 
     private static bool IsMissingSourceQualityTable(PostgresException ex)

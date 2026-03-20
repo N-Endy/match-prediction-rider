@@ -272,6 +272,50 @@ public class ScoreUpdaterMatchingTests
     }
 
     [Fact]
+    public async Task RunScoreUpdaterAsync_PersistsSharedSourceRuntimeSnapshotsToScrapingLogs()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var aiScoreTracker = new AiScoreSourceHealthTracker();
+        aiScoreTracker.RecordSuccess("http", 14, "Fetched 14 match(es) from AiScore.");
+
+        var sofaScoreTracker = new SofaScoreSourceHealthTracker();
+        sofaScoreTracker.RecordAttempt("browser-discovery", "Targeted fallback discovery.");
+        sofaScoreTracker.RecordSuccess("event-page", 2, 3, 2, "SofaScore returned 2 match(es).");
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService(),
+            aiScoreTracker,
+            sofaScoreTracker);
+
+        await service.RunScoreUpdaterAsync();
+
+        var runtimeLogs = await context.ScrapingLogs
+            .Where(log => log.EventName == "source_runtime_aiscore" || log.EventName == "source_runtime_sofascore")
+            .OrderBy(log => log.EventName)
+            .ToListAsync();
+
+        Assert.Collection(
+            runtimeLogs,
+            log =>
+            {
+                Assert.Equal("source_runtime_aiscore", log.EventName);
+                Assert.Equal("Healthy", log.Status);
+                Assert.Contains("\"LastMatchCount\":14", log.Message);
+            },
+            log =>
+            {
+                Assert.Equal("source_runtime_sofascore", log.EventName);
+                Assert.Equal("Healthy", log.Status);
+                Assert.Contains("\"LastMatchCount\":2", log.Message);
+            });
+    }
+
+    [Fact]
     public async Task RunScoreUpdaterAsync_EarlySettlesBttsAndOverMarketsWhileKeepingStraightWinLive()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
@@ -1268,7 +1312,8 @@ public class ScoreUpdaterMatchingTests
     private static AnalyzerService CreateAnalyzerService(
         ApplicationDbContext context,
         StubWebScraperService scraper,
-        AiScoreSourceHealthTracker? aiScoreSourceHealthTracker = null)
+        AiScoreSourceHealthTracker? aiScoreSourceHealthTracker = null,
+        SofaScoreSourceHealthTracker? sofaScoreSourceHealthTracker = null)
     {
         return new AnalyzerService(
             new StubDataAnalyzerService(),
@@ -1280,6 +1325,7 @@ public class ScoreUpdaterMatchingTests
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
             aiScoreSourceHealthTracker ?? new AiScoreSourceHealthTracker(),
+            sofaScoreSourceHealthTracker ?? new SofaScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,

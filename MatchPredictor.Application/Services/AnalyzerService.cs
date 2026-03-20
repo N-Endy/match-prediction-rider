@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Hangfire;
 using MatchPredictor.Application.Helpers;
 using MatchPredictor.Domain.Interfaces;
@@ -26,6 +27,8 @@ public class AnalyzerService  : IAnalyzerService
     private const string DailyAnalysisEventName = "daily_analysis";
     private const string SourceQualityEventName = "source_quality";
     private const string ClosingLineSnapshotEventName = "closing_line_snapshot";
+    private const string AiScoreRuntimeEventName = "source_runtime_aiscore";
+    private const string SofaScoreRuntimeEventName = "source_runtime_sofascore";
 
     private readonly IDataAnalyzerService _dataAnalyzerService;
     private readonly IWebScraperService _webScraperService;
@@ -37,6 +40,7 @@ public class AnalyzerService  : IAnalyzerService
     private readonly IThresholdTuningService _thresholdTuningService;
     private readonly ISourceMarketPricingService _sourceMarketPricingService;
     private readonly AiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
+    private readonly SofaScoreSourceHealthTracker _sofaScoreSourceHealthTracker;
     private readonly PredictionSettings _predictionSettings;
     
     public AnalyzerService(
@@ -51,6 +55,35 @@ public class AnalyzerService  : IAnalyzerService
         AiScoreSourceHealthTracker aiScoreSourceHealthTracker,
         IOptions<PredictionSettings> predictionOptions,
         ILogger<AnalyzerService> logger)
+        : this(
+            dataAnalyzerService,
+            webScraperService,
+            dbContext,
+            excelExtract,
+            regressionPredictorService,
+            calibrationService,
+            thresholdTuningService,
+            sourceMarketPricingService,
+            aiScoreSourceHealthTracker,
+            new SofaScoreSourceHealthTracker(),
+            predictionOptions,
+            logger)
+    {
+    }
+
+    public AnalyzerService(
+        IDataAnalyzerService dataAnalyzerService,
+        IWebScraperService webScraperService,
+        ApplicationDbContext dbContext,
+        IExtractFromExcel excelExtract,
+        IRegressionPredictorService regressionPredictorService,
+        ICalibrationService calibrationService,
+        IThresholdTuningService thresholdTuningService,
+        ISourceMarketPricingService sourceMarketPricingService,
+        AiScoreSourceHealthTracker aiScoreSourceHealthTracker,
+        SofaScoreSourceHealthTracker sofaScoreSourceHealthTracker,
+        IOptions<PredictionSettings> predictionOptions,
+        ILogger<AnalyzerService> logger)
     {
         _dataAnalyzerService = dataAnalyzerService;
         _webScraperService = webScraperService;
@@ -61,6 +94,7 @@ public class AnalyzerService  : IAnalyzerService
         _thresholdTuningService = thresholdTuningService;
         _sourceMarketPricingService = sourceMarketPricingService;
         _aiScoreSourceHealthTracker = aiScoreSourceHealthTracker;
+        _sofaScoreSourceHealthTracker = sofaScoreSourceHealthTracker;
         _predictionSettings = predictionOptions.Value;
         _logger = logger;
     }
@@ -332,6 +366,10 @@ public class AnalyzerService  : IAnalyzerService
                 $"Score Update Error: {ex.Message}");
             throw;
         }
+        finally
+        {
+            await PersistSourceRuntimeHealthSafelyAsync();
+        }
     }
 
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
@@ -536,6 +574,49 @@ public class AnalyzerService  : IAnalyzerService
         {
             _logger.LogError(ex, "Failed to write scraping log.");
         }
+    }
+
+    private async Task PersistSourceRuntimeHealthSafelyAsync()
+    {
+        try
+        {
+            var aiScoreSnapshot = _aiScoreSourceHealthTracker.GetSnapshot();
+            if (HasMeaningfulRuntimeSnapshot(aiScoreSnapshot.Status, aiScoreSnapshot.LastAttemptUtc, aiScoreSnapshot.LastSuccessUtc))
+            {
+                await PersistSourceRuntimeHealthAsync(AiScoreRuntimeEventName, aiScoreSnapshot.Status, aiScoreSnapshot);
+            }
+
+            var sofaScoreSnapshot = _sofaScoreSourceHealthTracker.GetSnapshot();
+            if (HasMeaningfulRuntimeSnapshot(sofaScoreSnapshot.Status, sofaScoreSnapshot.LastAttemptUtc, sofaScoreSnapshot.LastSuccessUtc))
+            {
+                await PersistSourceRuntimeHealthAsync(SofaScoreRuntimeEventName, sofaScoreSnapshot.Status, sofaScoreSnapshot);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to persist shared source runtime health snapshot.");
+        }
+    }
+
+    private async Task PersistSourceRuntimeHealthAsync<TSnapshot>(string eventName, string status, TSnapshot snapshot)
+    {
+        var log = new ScrapingLog
+        {
+            EventName = eventName,
+            Timestamp = DateTime.UtcNow,
+            Status = string.IsNullOrWhiteSpace(status) ? "Idle" : status,
+            Message = JsonSerializer.Serialize(snapshot)
+        };
+
+        await _dbContext.ScrapingLogs.AddAsync(log);
+        await _dbContext.SaveChangesAsync();
+    }
+
+    private static bool HasMeaningfulRuntimeSnapshot(string? status, DateTime? lastAttemptUtc, DateTime? lastSuccessUtc)
+    {
+        return lastAttemptUtc.HasValue ||
+               lastSuccessUtc.HasValue ||
+               !string.Equals(status, "Idle", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ResolveTargetDateString(string? targetDate)

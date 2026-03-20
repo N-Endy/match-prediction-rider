@@ -58,7 +58,7 @@ public class AiChatSchemaFallbackService : IAiChatSchemaFallbackService
                         Supported intents: RecommendPicks, MixedMarketRecommendation, WorkingSlipRefinement, MatchDiscussion, SettlementExplanation, AppHelp, ValueBetRequest.
                         Supported markets: BothTeamsScore, Over2.5Goals, Under2.5Goals, StraightWin.
                         Return exactly one JSON object with keys:
-                        intent, requestedMarkets, requestedTotalCount, scope, bookableOnly, wantsBooking, targetCombinedOdds, safetyBias, valueBias, referencedContextMode, actionDirective, entityTerms, interpretationNotes, needsSemanticFallback, flexibleMix.
+                        intent, requestedMarkets, requestedTotalCount, scope, bookableOnly, wantsBooking, targetCombinedOdds, safetyBias, valueBias, referencedContextMode, actionDirective, entityTerms, interpretationNotes, needsSemanticFallback, flexibleMix, randomSelection.
                         requestedMarkets must be an array of objects with predictionCategory, count, explicitCount.
                         If unsupported or unclear, return an object that keeps the likely intent but leaves unsupported fields empty.
                         Never invent fixtures or bookmaker data.
@@ -84,7 +84,8 @@ public class AiChatSchemaFallbackService : IAiChatSchemaFallbackService
                             deterministicRequest.ReferencedContextMode,
                             deterministicRequest.ActionDirective,
                             deterministicRequest.EntityTerms,
-                            deterministicRequest.InterpretationNotes
+                            deterministicRequest.InterpretationNotes,
+                            deterministicRequest.RandomSelection
                         }
                     })
                 }

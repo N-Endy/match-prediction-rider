@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Utils;
@@ -18,13 +20,13 @@ public static partial class AiChatContextBuilder
         "prediction", "predictions", "recent", "recommend", "recommended", "recommending", "recommendation", "recommendations", "result", "results", "safe", "safer", "score", "settle", "settled", "show", "slip", "some", "straight", "strong",
         "straightwin", "straightwins", "stronger", "rollover", "teams", "the", "them", "these", "this", "those", "ticket", "to",
         "today", "top", "total", "totals", "altogether", "value", "why", "won", "yesterday",
-        "want", "what", "which", "win", "wins", "with", "would", "you", "your", "red", "green", "finished", "lost", "landed", "did", "mix", "mixture", "suggest", "suggested",
+        "want", "what", "which", "win", "wins", "with", "would", "you", "your", "red", "green", "finished", "lost", "landed", "did", "mix", "mixture", "suggest", "suggested", "random", "randomly",
         "explain", "explained", "discuss", "discussion", "talk", "riskiest", "weakest", "remove", "swap", "replace", "fits"
     };
 
     private static readonly HashSet<string> RecommendationTokens = new(StringComparer.OrdinalIgnoreCase)
     {
-        "best", "safe", "safer", "strong", "stronger", "top", "pick", "picks", "list", "show", "give", "recommend", "recommended", "recommendation", "recommendations", "suggest", "suggested", "mix", "mixture", "combo", "combination"
+        "best", "safe", "safer", "strong", "stronger", "top", "pick", "picks", "list", "show", "give", "recommend", "recommended", "recommendation", "recommendations", "suggest", "suggested", "mix", "mixture", "combo", "combination", "random", "randomly"
     };
 
     private static readonly HashSet<string> SettlementTokens = new(StringComparer.OrdinalIgnoreCase)
@@ -121,11 +123,7 @@ public static partial class AiChatContextBuilder
                 .ToList();
         }
 
-        var orderedRanked = ranked
-            .OrderByDescending(item => item.Score)
-            .ThenByDescending(item => item.Candidate.ConfidenceScore ?? decimal.Zero)
-            .ThenByDescending(item => item.Candidate.EdgePoints ?? double.MinValue)
-            .ToList();
+        var orderedRanked = OrderRankedCandidates(ranked, request, nowUtc);
 
         var selectionOutcome = SelectRequestedCandidates(orderedRanked, request, limit);
 
@@ -925,6 +923,35 @@ public static partial class AiChatContextBuilder
         }
 
         return new SelectionOutcome(selected, requestedSlices, resolvedMarketMix, shortfallWarnings);
+    }
+
+    private static List<RankedCandidate> OrderRankedCandidates(
+        IReadOnlyList<RankedCandidate> ranked,
+        AiChatNormalizedRequest request,
+        DateTime nowUtc)
+    {
+        if (request.RandomSelection)
+        {
+            var promptSeed = string.IsNullOrWhiteSpace(request.RawPrompt) ? "random-selection" : request.RawPrompt;
+            var seedText = $"{promptSeed}|{nowUtc.ToString("O", CultureInfo.InvariantCulture)}";
+            return ranked
+                .OrderBy(item => ComputeStableRandomOrderKey(seedText, item.Candidate.ActionKey))
+                .ThenBy(item => item.Candidate.ActionKey, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        return ranked
+            .OrderByDescending(item => item.Score)
+            .ThenByDescending(item => item.Candidate.ConfidenceScore ?? decimal.Zero)
+            .ThenByDescending(item => item.Candidate.EdgePoints ?? double.MinValue)
+            .ToList();
+    }
+
+    private static ulong ComputeStableRandomOrderKey(string seedText, string actionKey)
+    {
+        var combinedBytes = Encoding.UTF8.GetBytes($"{seedText}\n{actionKey}");
+        var hashBytes = SHA256.HashData(combinedBytes);
+        return BitConverter.ToUInt64(hashBytes, 0);
     }
 
     private static List<RequestedMarketSlice> BuildRequestedMarketSlices(AiChatNormalizedRequest request)
