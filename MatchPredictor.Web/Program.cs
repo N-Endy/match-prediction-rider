@@ -1,3 +1,4 @@
+using System.Data;
 using Hangfire;
 using Hangfire.Common;
 using Hangfire.PostgreSql;
@@ -100,10 +101,9 @@ if (runtimeMode.RunBackgroundJobs)
     });
 }
 
-var port = Environment.GetEnvironmentVariable("PORT") ?? "10000";
 builder.WebHost.ConfigureKestrel(serverOptions =>
 {
-    serverOptions.ListenAnyIP(int.Parse(port));
+    serverOptions.ListenAnyIP(ResolveHttpPort());
 });
 
 var app = builder.Build();
@@ -129,17 +129,27 @@ using (var scope = app.Services.CreateScope())
         }
 
         var context = services.GetRequiredService<ApplicationDbContext>();
-        try
+        if (!await HasEfMigrationsHistoryAsync(context))
         {
-            await context.Database.MigrateAsync();
-        }
-        catch (InvalidOperationException ex) when (ContainsPendingModelChangesWarning(ex))
-        {
-            logger.LogWarning(
-                ex,
-                "Pending EF model changes detected while bootstrapping the tennis database. Falling back to EnsureCreated for this fresh standalone deployment.");
+            logger.LogInformation(
+                "No EF migration history table detected. Ensuring the tennis schema is created directly from the current model.");
 
             await context.Database.EnsureCreatedAsync();
+        }
+        else
+        {
+            try
+            {
+                await context.Database.MigrateAsync();
+            }
+            catch (InvalidOperationException ex) when (ContainsPendingModelChangesWarning(ex))
+            {
+                logger.LogWarning(
+                    ex,
+                    "Pending EF model changes detected while bootstrapping the tennis database. Falling back to EnsureCreated for this fresh standalone deployment.");
+
+                await context.Database.EnsureCreatedAsync();
+            }
         }
 
         startupState.MarkDatabaseInitialized();
@@ -329,6 +339,55 @@ static int ResolveHangfireWorkerCount(IConfiguration configuration)
     }
 
     return Math.Max(1, Math.Min(2, Environment.ProcessorCount));
+}
+
+static int ResolveHttpPort()
+{
+    var explicitPort = Environment.GetEnvironmentVariable("PORT");
+    if (int.TryParse(explicitPort, out var parsedPort) && parsedPort > 0)
+    {
+        return parsedPort;
+    }
+
+    var httpPorts = Environment.GetEnvironmentVariable("HTTP_PORTS");
+    if (!string.IsNullOrWhiteSpace(httpPorts))
+    {
+        var firstPort = httpPorts
+            .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault();
+
+        if (int.TryParse(firstPort, out parsedPort) && parsedPort > 0)
+        {
+            return parsedPort;
+        }
+    }
+
+    return 10000;
+}
+
+static async Task<bool> HasEfMigrationsHistoryAsync(ApplicationDbContext context)
+{
+    var connection = context.Database.GetDbConnection();
+    var shouldCloseConnection = connection.State != ConnectionState.Open;
+    if (shouldCloseConnection)
+    {
+        await connection.OpenAsync();
+    }
+
+    try
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "select to_regclass('__EFMigrationsHistory') is not null;";
+        var result = await command.ExecuteScalarAsync();
+        return result is bool exists && exists;
+    }
+    finally
+    {
+        if (shouldCloseConnection)
+        {
+            await connection.CloseAsync();
+        }
+    }
 }
 
 static bool ContainsPendingModelChangesWarning(Exception exception)
