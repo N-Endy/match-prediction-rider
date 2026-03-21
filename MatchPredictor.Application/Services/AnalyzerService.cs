@@ -471,8 +471,9 @@ public class AnalyzerService : IAnalyzerService
         var currentPredictions = await _dbContext.Predictions
             .Where(prediction => prediction.IsCurrentRevision)
             .Where(prediction => prediction.PredictionCategory == "MatchWinner")
-            .Where(prediction => prediction.MatchDateTime.HasValue)
-            .Where(prediction => prediction.MatchDateTime.Value >= nowUtc && prediction.MatchDateTime.Value <= upperBound)
+            .Where(prediction => prediction.MatchDateTime.HasValue &&
+                                 prediction.MatchDateTime >= nowUtc &&
+                                 prediction.MatchDateTime <= upperBound)
             .ToListAsync();
 
         if (currentPredictions.Count == 0)
@@ -938,7 +939,7 @@ public class AnalyzerService : IAnalyzerService
         if (prediction.MatchLocalTime != match.MatchLocalTime)
         {
             prediction.MatchLocalTime = match.MatchLocalTime;
-            prediction.Time = match.Time;
+            prediction.Time = match.Time ?? string.Empty;
             changed = true;
         }
 
@@ -963,7 +964,7 @@ public class AnalyzerService : IAnalyzerService
         if (forecast.MatchLocalTime != match.MatchLocalTime)
         {
             forecast.MatchLocalTime = match.MatchLocalTime;
-            forecast.Time = match.Time;
+            forecast.Time = match.Time ?? string.Empty;
             changed = true;
         }
 
