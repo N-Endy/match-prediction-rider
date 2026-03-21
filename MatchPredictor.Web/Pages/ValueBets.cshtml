@@ -143,7 +143,9 @@
                                             data-away="${escapeHtml(bet.awayTeam)}"
                                             data-league="${escapeHtml(bet.league)}"
                                             data-market="${escapeHtml(marketKey)}"
-                                            data-prediction="${escapeHtml(bet.predictedOutcome)}">
+                                            data-prediction="${escapeHtml(bet.predictedOutcome)}"
+                                            data-prediction-id="${bet.predictionId ? escapeHtml(bet.predictionId) : ''}"
+                                            data-match-datetime-utc="${bet.matchDateTimeUtc ? escapeHtml(bet.matchDateTimeUtc) : ''}">
                                         Add Bet
                                     </button>
                                 </div>

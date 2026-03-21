@@ -1,11 +1,15 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
 using System.Globalization;
+using Microsoft.EntityFrameworkCore;
+using System.Text.RegularExpressions;
 
 namespace MatchPredictor.Infrastructure.Services;
 
@@ -24,16 +28,44 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
     private const string PricingClientName = "SportyBetPricing";
     private const string BookingClientName = "SportyBetBooking";
     private const int DefaultPricingPageSize = 100;
-    private const int DefaultBookingPageSize = 40;
+    private const int DefaultBookingPageSize = 100;
     private const int DefaultPricingMaxPages = 10;
-    private const int DefaultBookingMaxPages = 4;
+    private const int DefaultBookingMaxPages = 10;
+    private const double MinimumDirectionalTeamScore = 0.72;
+    private const double MinimumConfidentMatchScore = 1.55;
+    private const double AmbiguousScoreGap = 0.12;
+    private static readonly TimeSpan TightKickoffWindow = TimeSpan.FromMinutes(20);
+    private static readonly TimeSpan LooseKickoffWindow = TimeSpan.FromMinutes(90);
+    private static readonly TimeSpan MaximumKickoffWindow = TimeSpan.FromHours(6);
     private static readonly TimeSpan FullFixtureCacheTtl = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan BackupFixtureCacheTtl = TimeSpan.FromHours(6);
+    private static readonly Regex NonWordRegex = new("[^a-z0-9]+", RegexOptions.Compiled);
+    private static readonly HashSet<string> TeamNoiseWords =
+    [
+        "fc", "cf", "sc", "afc", "club", "the", "de", "da", "do", "cd", "ud", "ac", "as", "fk", "sk", "nk", "if", "bk"
+    ];
+    private static readonly HashSet<string> LeagueNoiseWords =
+    [
+        "league", "division", "group", "round", "stage", "play", "offs"
+    ];
+    private static readonly Dictionary<string, string> TokenSynonyms = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["utd"] = "united",
+        ["st"] = "saint",
+        ["ii"] = "reserve",
+        ["iii"] = "reserve3",
+        ["b"] = "reserve",
+        ["res"] = "reserve",
+        ["reserves"] = "reserve",
+        ["ladies"] = "women",
+        ["fem"] = "women"
+    };
 
     private readonly IConfiguration _configuration;
     private readonly ILogger<SportyBetBookingService> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IDistributedCache _cache;
+    private readonly ApplicationDbContext _dbContext;
 
     // Values read from appsettings SportyBet section
 
@@ -41,12 +73,14 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         IConfiguration configuration,
         ILogger<SportyBetBookingService> logger,
         IHttpClientFactory httpClientFactory,
-        IDistributedCache cache)
+        IDistributedCache cache,
+        ApplicationDbContext dbContext)
     {
         _configuration = configuration;
         _logger = logger;
         _httpClientFactory = httpClientFactory;
         _cache = cache;
+        _dbContext = dbContext;
     }
 
     public async Task<BookingResult> BookGamesAsync(List<BookingSelection> selections)
@@ -57,10 +91,35 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         var baseUrl = _configuration["SportyBet:BaseUrl"] ?? "https://www.sportybet.com";
         var soccerSportId = _configuration["SportyBet:SoccerSportId"] ?? "sr:sport:1";
         var market1X2 = _configuration["SportyBet:Market1X2"] ?? "1";
+        var todayLocalDate = DateTimeProvider.GetLocalDate();
 
         try
         {
             _logger.LogInformation("Searching SportyBet API for {Count} selections...", selections.Count);
+            var canonicalSelections = await BuildCanonicalSelectionsAsync(selections, CancellationToken.None);
+            var matchableSelections = canonicalSelections
+                .Where(selection => !selection.MatchLocalDate.HasValue || selection.MatchLocalDate.Value == todayLocalDate)
+                .ToList();
+            var warnings = canonicalSelections
+                .Where(selection => selection.MatchLocalDate.HasValue && selection.MatchLocalDate.Value != todayLocalDate)
+                .Select(selection => BuildSelectionWarning(selection, BookingSelectionMatchStatus.OutsideTodayWindow))
+                .ToList();
+
+            foreach (var skippedSelection in canonicalSelections.Except(matchableSelections))
+            {
+                _logger.LogInformation(
+                    "Skipping SportyBet booking for {SelectionLabel} because it falls outside today's SportyBet card.",
+                    skippedSelection.SelectionLabel);
+            }
+
+            if (matchableSelections.Count == 0)
+            {
+                return BuildBookingFailureResult(
+                    "All selected matches fall outside today's SportyBet card.",
+                    bookedCount: 0,
+                    totalSelections: selections.Count,
+                    warnings);
+            }
 
             // Step 1: Fetch today's fixtures from SportyBet to get outcome IDs
             var fixtureMap = await FetchTodayFixturesAsync(
@@ -69,11 +128,15 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                 market1X2,
                 CancellationToken.None,
                 useBookingClient: true,
-                targetedSelections: selections);
+                targetedSelections: matchableSelections);
             if (fixtureMap.Count == 0)
             {
                 _logger.LogWarning("Could not fetch fixtures from SportyBet API.");
-                return new BookingResult { Success = false, Message = "Could not fetch today's fixtures from SportyBet." };
+                return BuildBookingFailureResult(
+                    "Could not fetch today's fixtures from SportyBet.",
+                    bookedCount: 0,
+                    totalSelections: selections.Count,
+                    warnings);
             }
 
             _logger.LogInformation("Fetched {Count} fixtures from SportyBet.", fixtureMap.Count);
@@ -81,32 +144,38 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             // Step 2: Match each selection to a SportyBet fixture and get the right outcome
             var selectedOutcomes = new List<SportyBetOutcome>();
 
-            foreach (var sel in selections)
+            foreach (var selection in matchableSelections)
             {
-                var matched = FindBestMatch(fixtureMap, sel);
-                if (matched != null)
+                var resolution = ResolveSelection(fixtureMap, selection);
+                if (resolution.Outcome is not null)
                 {
-                    selectedOutcomes.Add(matched);
+                    selectedOutcomes.Add(resolution.Outcome);
                     _logger.LogInformation("Matched: {Home} vs {Away} → outcomeId={OutcomeId}",
-                        sel.HomeTeam, sel.AwayTeam, matched.OutcomeId);
+                        selection.HomeTeam, selection.AwayTeam, resolution.Outcome.OutcomeId);
                 }
                 else
                 {
-                    _logger.LogWarning("No SportyBet match found for: {Home} vs {Away}", sel.HomeTeam, sel.AwayTeam);
+                    var warning = BuildSelectionWarning(selection, resolution.Status, resolution.MatchedFixture);
+                    warnings.Add(warning);
+                    _logger.LogWarning(
+                        "SportyBet booking skipped for {SelectionLabel}. Reason: {Reason}",
+                        selection.SelectionLabel,
+                        resolution.Status);
                 }
             }
 
             if (selectedOutcomes.Count == 0)
             {
-                return new BookingResult
-                {
-                    Success = false,
-                    Message = "None of the selected matches were found on SportyBet today."
-                };
+                return BuildBookingFailureResult(
+                    "None of the selected matches could be booked on SportyBet today.",
+                    bookedCount: 0,
+                    totalSelections: selections.Count,
+                    warnings);
             }
 
             // Step 3: Create booking code via API
             var (bookingCode, bookingUrl) = await CreateBookingCodeAsync(selectedOutcomes, baseUrl);
+            var skippedCount = selections.Count - selectedOutcomes.Count;
 
             if (!string.IsNullOrEmpty(bookingCode))
             {
@@ -115,20 +184,31 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                     Success = true,
                     BookingCode = bookingCode,
                     BookingUrl = bookingUrl ?? "",
-                    Message = $"Booked {selectedOutcomes.Count}/{selections.Count} games."
+                    Message = skippedCount > 0
+                        ? $"Booked {selectedOutcomes.Count}/{selections.Count} games. The skipped picks are listed below."
+                        : $"Booked {selectedOutcomes.Count}/{selections.Count} games.",
+                    BookedCount = selectedOutcomes.Count,
+                    SkippedCount = skippedCount,
+                    Warnings = warnings
                 };
             }
 
-            return new BookingResult
-            {
-                Success = false,
-                Message = $"Found {selectedOutcomes.Count} matches but could not generate booking code."
-            };
+            return BuildBookingFailureResult(
+                $"Found {selectedOutcomes.Count} matches but could not generate a SportyBet booking code.",
+                bookedCount: selectedOutcomes.Count,
+                totalSelections: selections.Count,
+                warnings);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error during SportyBet booking via API.");
-            return new BookingResult { Success = false, Message = $"Booking error: {ex.Message}" };
+            return new BookingResult
+            {
+                Success = false,
+                Message = $"Booking error: {ex.Message}",
+                BookedCount = 0,
+                SkippedCount = selections.Count
+            };
         }
     }
 
@@ -172,7 +252,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         string market1X2,
         CancellationToken ct,
         bool useBookingClient,
-        IReadOnlyCollection<BookingSelection>? targetedSelections = null)
+        IReadOnlyCollection<ResolvedBookingSelection>? targetedSelections = null)
     {
         var cacheKey = $"sportybet_fixtures_{DateTime.UtcNow:yyyyMMdd}";
         var backupCacheKey = $"{cacheKey}_backup";
@@ -189,11 +269,18 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
 
         if (!string.IsNullOrEmpty(cachedData))
         {
-            _logger.LogInformation("Returning SportyBet fixtures from Redis cache.");
-            return JsonSerializer.Deserialize<List<SportyBetFixture>>(cachedData) ?? new List<SportyBetFixture>();
+            var cachedFixtures = JsonSerializer.Deserialize<List<SportyBetFixture>>(cachedData) ?? new List<SportyBetFixture>();
+            var deduplicatedCachedFixtures = DeduplicateFixturesByEventId(cachedFixtures);
+            if (targetedSelections is null || CanResolveSelections(deduplicatedCachedFixtures, targetedSelections))
+            {
+                _logger.LogInformation("Returning SportyBet fixtures from Redis cache.");
+                return deduplicatedCachedFixtures;
+            }
+
+            _logger.LogInformation("Redis cache did not cover all targeted SportyBet booking selections. Continuing with live fetch.");
         }
 
-        var fixtures = new List<SportyBetFixture>();
+        var fixturesByEventId = new Dictionary<string, SportyBetFixture>(StringComparer.Ordinal);
         var client = CreateHttpClient(useBookingClient ? BookingClientName : PricingClientName);
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var pageSize = ResolvePageSize(useBookingClient);
@@ -264,7 +351,8 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                             var homeOutcomeId = "";
                             var drawOutcomeId = "";
                             var awayOutcomeId = "";
-                            var bttsOutcomeId = "";
+                            var bttsYesOutcomeId = "";
+                            var bttsNoOutcomeId = "";
                             var over25OutcomeId = "";
                             var under25OutcomeId = "";
                             double? homeProbability = null;
@@ -362,12 +450,13 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                                 var decimalOdds = TryParseDecimalOdds(o);
                                                 if (oid == "74" || desc.Equals("Yes", StringComparison.OrdinalIgnoreCase))
                                                 {
-                                                    bttsOutcomeId = oid;
+                                                    bttsYesOutcomeId = oid;
                                                     bttsYesProbability = probability;
                                                     bttsYesOdds = decimalOdds;
                                                 }
                                                 else if (oid == "76" || desc.Equals("No", StringComparison.OrdinalIgnoreCase))
                                                 {
+                                                    bttsNoOutcomeId = oid;
                                                     bttsNoProbability = probability;
                                                     bttsNoOdds = decimalOdds;
                                                 }
@@ -377,7 +466,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                 }
                             }
 
-                            fixtures.Add(new SportyBetFixture
+                            fixturesByEventId[eventId] = new SportyBetFixture
                             {
                                 EventId = eventId,
                                 League = league,
@@ -387,7 +476,8 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                 HomeOutcomeId = homeOutcomeId,
                                 DrawOutcomeId = drawOutcomeId,
                                 AwayOutcomeId = awayOutcomeId,
-                                BttsYesOutcomeId = bttsOutcomeId,
+                                BttsYesOutcomeId = bttsYesOutcomeId,
+                                BttsNoOutcomeId = bttsNoOutcomeId,
                                 Over25OutcomeId = over25OutcomeId,
                                 Under25OutcomeId = under25OutcomeId,
                                 HomeProbability = homeProbability,
@@ -404,7 +494,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                 BttsYesOdds = bttsYesOdds,
                                 BttsNoProbability = bttsNoProbability,
                                 BttsNoOdds = bttsNoOdds
-                            });
+                            };
                         }
                         catch (Exception ex)
                         {
@@ -413,6 +503,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                     }
                 }
 
+                var fixtures = fixturesByEventId.Values.ToList();
                 _logger.LogInformation("SportyBet page {Page}: {Tournaments} tournaments, {Fixtures} fixtures parsed.",
                     page, tournamentCount, fixtures.Count);
 
@@ -435,13 +526,14 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             }
         }
 
-        if (fixtures.Count > 0)
+        var deduplicatedFixtures = fixturesByEventId.Values.ToList();
+        if (deduplicatedFixtures.Count > 0)
         {
             try
             {
                 if (!useBookingClient || targetedSelections is null)
                 {
-                    var serialized = JsonSerializer.Serialize(fixtures);
+                    var serialized = JsonSerializer.Serialize(deduplicatedFixtures);
                     await _cache.SetStringAsync(
                         cacheKey,
                         serialized,
@@ -452,7 +544,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                         serialized,
                         new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = BackupFixtureCacheTtl },
                         ct);
-                    _logger.LogInformation("Cached {Count} SportyBet fixtures in Redis.", fixtures.Count);
+                    _logger.LogInformation("Cached {Count} SportyBet fixtures in Redis.", deduplicatedFixtures.Count);
                 }
             }
             catch (Exception ex)
@@ -468,7 +560,8 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                 if (!string.IsNullOrWhiteSpace(backupCachedData))
                 {
                     _logger.LogWarning("Using stale SportyBet fixture backup cache for booking after live fetch returned no fixtures.");
-                    return JsonSerializer.Deserialize<List<SportyBetFixture>>(backupCachedData) ?? new List<SportyBetFixture>();
+                    var backupFixtures = JsonSerializer.Deserialize<List<SportyBetFixture>>(backupCachedData) ?? new List<SportyBetFixture>();
+                    return DeduplicateFixturesByEventId(backupFixtures);
                 }
             }
             catch (Exception ex)
@@ -477,81 +570,123 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             }
         }
 
-        return fixtures;
+        return deduplicatedFixtures;
     }
 
-    /// <summary>
-    /// Finds the best-matching SportyBet fixture for a selection using fuzzy team name matching.
-    /// </summary>
-    private static SportyBetOutcome? FindBestMatch(List<SportyBetFixture> fixtures, BookingSelection selection)
+    private async Task<List<ResolvedBookingSelection>> BuildCanonicalSelectionsAsync(
+        IReadOnlyCollection<BookingSelection> selections,
+        CancellationToken ct)
     {
-        var homeNorm = NormalizeTeamName(selection.HomeTeam);
-        var awayNorm = NormalizeTeamName(selection.AwayTeam);
+        var predictionIds = selections
+            .Where(selection => selection.PredictionId.HasValue && selection.PredictionId.Value > 0)
+            .Select(selection => selection.PredictionId!.Value)
+            .Distinct()
+            .ToList();
 
-        SportyBetFixture? best = null;
-        var bestScore = 0;
+        var predictionsById = predictionIds.Count == 0
+            ? new Dictionary<int, Prediction>()
+            : await _dbContext.Predictions
+                .AsNoTracking()
+                .Where(prediction => predictionIds.Contains(prediction.Id))
+                .ToDictionaryAsync(prediction => prediction.Id, ct);
 
-        foreach (var fix in fixtures)
+        return selections.Select(selection =>
         {
-            var fixtureHomeNorm = NormalizeTeamName(fix.HomeTeam);
-            var fixtureAwayNorm = NormalizeTeamName(fix.AwayTeam);
+            predictionsById.TryGetValue(selection.PredictionId ?? 0, out var linkedPrediction);
+            var homeTeam = linkedPrediction?.HomeTeam ?? selection.HomeTeam;
+            var awayTeam = linkedPrediction?.AwayTeam ?? selection.AwayTeam;
+            var league = linkedPrediction?.League ?? selection.League;
+            var predictionText = linkedPrediction?.PredictedOutcome ?? selection.Prediction;
+            var market = linkedPrediction is not null ? ToCartMarket(linkedPrediction) : selection.Market;
+            var kickoffUtc = linkedPrediction?.MatchDateTime ?? selection.MatchDateTimeUtc;
+            var localDate = linkedPrediction is not null
+                ? linkedPrediction.MatchLocalDate != default
+                    ? linkedPrediction.MatchLocalDate
+                    : kickoffUtc.HasValue
+                        ? DateTimeProvider.ConvertUtcToLocalDate(kickoffUtc.Value)
+                        : (DateOnly?)null
+                : kickoffUtc.HasValue
+                    ? DateTimeProvider.ConvertUtcToLocalDate(kickoffUtc.Value)
+                    : (DateOnly?)null;
+            var requestedOutcome = ResolveRequestedOutcome(market, predictionText);
 
-            var score = 0;
-            if (fixtureHomeNorm.Contains(homeNorm) || homeNorm.Contains(fixtureHomeNorm)) score += 2;
-            if (fixtureAwayNorm.Contains(awayNorm) || awayNorm.Contains(fixtureAwayNorm)) score += 2;
-            if (fixtureHomeNorm.Contains(homeNorm[..Math.Min(4, homeNorm.Length)])) score += 1;
-            if (fixtureAwayNorm.Contains(awayNorm[..Math.Min(4, awayNorm.Length)])) score += 1;
+            return new ResolvedBookingSelection(
+                selection,
+                linkedPrediction?.Id,
+                homeTeam,
+                awayTeam,
+                league,
+                market,
+                predictionText,
+                kickoffUtc,
+                localDate,
+                requestedOutcome);
+        }).ToList();
+    }
 
-            if (score > bestScore)
+    private BookingSelectionResolution ResolveSelection(
+        IReadOnlyCollection<SportyBetFixture> fixtures,
+        ResolvedBookingSelection selection)
+    {
+        return ResolveSelectionCore(fixtures, selection);
+    }
+
+    private static FixtureMatchCandidate EvaluateFixtureCandidate(
+        SportyBetFixture fixture,
+        ResolvedBookingSelection selection)
+    {
+        var homeScore = ComputeTeamMatchScore(selection.HomeTeam, fixture.HomeTeam);
+        var awayScore = ComputeTeamMatchScore(selection.AwayTeam, fixture.AwayTeam);
+        if (homeScore < MinimumDirectionalTeamScore || awayScore < MinimumDirectionalTeamScore)
+        {
+            return FixtureMatchCandidate.NotCandidate(fixture);
+        }
+
+        var forwardScore = homeScore + awayScore;
+        var reverseHomeScore = ComputeTeamMatchScore(selection.HomeTeam, fixture.AwayTeam);
+        var reverseAwayScore = ComputeTeamMatchScore(selection.AwayTeam, fixture.HomeTeam);
+        var reverseLooksValid = reverseHomeScore >= MinimumDirectionalTeamScore && reverseAwayScore >= MinimumDirectionalTeamScore;
+        if (reverseLooksValid && (reverseHomeScore + reverseAwayScore) >= forwardScore - 0.04d)
+        {
+            return FixtureMatchCandidate.NotCandidate(fixture);
+        }
+
+        TimeSpan? kickoffDelta = null;
+        var score = forwardScore;
+
+        if (selection.MatchDateTimeUtc.HasValue)
+        {
+            if (!fixture.MatchTimeUtc.HasValue)
             {
-                bestScore = score;
-                best = fix;
+                return FixtureMatchCandidate.NotCandidate(fixture);
             }
+
+            var selectionLocalDate = DateTimeProvider.ConvertUtcToLocalDate(selection.MatchDateTimeUtc.Value);
+            var fixtureLocalDate = DateTimeProvider.ConvertUtcToLocalDate(fixture.MatchTimeUtc.Value);
+            if (fixtureLocalDate != selectionLocalDate)
+            {
+                return FixtureMatchCandidate.NotCandidate(fixture);
+            }
+
+            kickoffDelta = (fixture.MatchTimeUtc.Value - selection.MatchDateTimeUtc.Value).Duration();
+            if (kickoffDelta > MaximumKickoffWindow)
+            {
+                return FixtureMatchCandidate.NotCandidate(fixture);
+            }
+
+            score += kickoffDelta <= TightKickoffWindow
+                ? 0.35d
+                : kickoffDelta <= LooseKickoffWindow
+                    ? 0.2d
+                    : 0.08d;
         }
 
-        if (best == null || bestScore < 2) return null;
-
-        // Resolve which outcome ID to use based on prediction
-        var prediction = selection.Prediction?.ToLowerInvariant() ?? "";
-        string outcomeId;
-        string marketId = "1"; // Default to 1X2 market
-        string? specifier = null;
-
-        if (prediction.Contains("btts") || prediction.Contains("both teams"))
+        if (!string.IsNullOrWhiteSpace(selection.League) && !string.IsNullOrWhiteSpace(fixture.League))
         {
-            outcomeId = best.BttsYesOutcomeId;
-            marketId = "29";
+            score += ComputeLeagueMatchScore(selection.League, fixture.League) * 0.18d;
         }
-        else if (prediction.Contains("over 2.5") || prediction.Contains("over2.5"))
-        {
-            outcomeId = best.Over25OutcomeId;
-            marketId = "18";
-            specifier = "total=2.5";
-        }
-        else if (prediction.Contains("under 2.5") || prediction.Contains("under2.5"))
-        {
-            outcomeId = best.Under25OutcomeId;
-            marketId = "18";
-            specifier = "total=2.5";
-        }
-        else if (prediction.Contains("draw") || prediction == "x")
-            outcomeId = best.DrawOutcomeId;
-        else if (prediction.Contains("away") || prediction.Contains("2"))
-            outcomeId = best.AwayOutcomeId;
-        else // home win
-            outcomeId = best.HomeOutcomeId;
 
-        if (string.IsNullOrEmpty(outcomeId)) return null;
-
-        return new SportyBetOutcome
-        {
-            EventId = best.EventId,
-            OutcomeId = outcomeId,
-            MarketId = marketId,
-            Specifier = specifier,
-            HomeTeam = best.HomeTeam,
-            AwayTeam = best.AwayTeam
-        };
+        return new FixtureMatchCandidate(fixture, score, kickoffDelta, true);
     }
 
     /// <summary>
@@ -632,7 +767,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         var configKey = string.Equals(clientName, BookingClientName, StringComparison.Ordinal)
             ? "SportyBet:BookingTimeoutSeconds"
             : "SportyBet:PricingTimeoutSeconds";
-        var defaultSeconds = string.Equals(clientName, BookingClientName, StringComparison.Ordinal) ? 45 : 30;
+        var defaultSeconds = string.Equals(clientName, BookingClientName, StringComparison.Ordinal) ? 60 : 30;
         var configuredSeconds = _configuration.GetValue<int?>(configKey);
         return TimeSpan.FromSeconds(Math.Max(10, configuredSeconds ?? defaultSeconds));
     }
@@ -653,16 +788,257 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
 
     private static bool CanResolveSelections(
         IReadOnlyCollection<SportyBetFixture> fixtures,
-        IReadOnlyCollection<BookingSelection> selections)
+        IReadOnlyCollection<ResolvedBookingSelection> selections)
     {
-        return selections.All(selection => FindBestMatch(fixtures.ToList(), selection) is not null);
+        var fixtureList = fixtures.ToList();
+        return selections.All(selection => ResolveSelectionCore(fixtureList, selection).Status == BookingSelectionMatchStatus.Matched);
     }
 
-    private static string NormalizeTeamName(string name)
+    private static BookingSelectionResolution ResolveSelectionCore(
+        IReadOnlyCollection<SportyBetFixture> fixtures,
+        ResolvedBookingSelection selection)
     {
-        return name.ToLowerInvariant()
-            .Replace("fc", "").Replace("cf", "").Replace("afc", "").Replace("sc", "")
-            .Replace("united", "utd").Replace("  ", " ").Trim();
+        if (selection.RequestedOutcome is null)
+        {
+            return new BookingSelectionResolution(BookingSelectionMatchStatus.MarketUnavailable, null, null);
+        }
+
+        var evaluatedCandidates = fixtures
+            .Select(fixture => EvaluateFixtureCandidate(fixture, selection))
+            .Where(candidate => candidate.IsCandidate)
+            .OrderByDescending(candidate => candidate.Score)
+            .ThenBy(candidate => candidate.KickoffDelta ?? TimeSpan.MaxValue)
+            .ToList();
+
+        if (evaluatedCandidates.Count == 0)
+        {
+            return new BookingSelectionResolution(BookingSelectionMatchStatus.NoFixtureFound, null, null);
+        }
+
+        var bestCandidate = evaluatedCandidates[0];
+        var runnerUp = evaluatedCandidates.Count > 1 ? evaluatedCandidates[1] : null;
+        var isWeak = bestCandidate.Score < MinimumConfidentMatchScore;
+        var isTooClose = runnerUp is not null && bestCandidate.Score - runnerUp.Score < AmbiguousScoreGap;
+        if (isWeak || isTooClose)
+        {
+            return new BookingSelectionResolution(BookingSelectionMatchStatus.AmbiguousFixture, null, bestCandidate.Fixture);
+        }
+
+        return TryCreateOutcome(bestCandidate.Fixture, selection.RequestedOutcome.Value, out var outcome)
+            ? new BookingSelectionResolution(BookingSelectionMatchStatus.Matched, outcome, bestCandidate.Fixture)
+            : new BookingSelectionResolution(BookingSelectionMatchStatus.MarketUnavailable, null, bestCandidate.Fixture);
+    }
+
+    private static BookingResult BuildBookingFailureResult(
+        string message,
+        int bookedCount,
+        int totalSelections,
+        List<string> warnings)
+    {
+        return new BookingResult
+        {
+            Success = false,
+            Message = message,
+            BookedCount = bookedCount,
+            SkippedCount = Math.Max(0, totalSelections - bookedCount),
+            Warnings = warnings
+        };
+    }
+
+    private static string BuildSelectionWarning(
+        ResolvedBookingSelection selection,
+        BookingSelectionMatchStatus status,
+        SportyBetFixture? matchedFixture = null)
+    {
+        var label = selection.SelectionLabel;
+        return status switch
+        {
+            BookingSelectionMatchStatus.OutsideTodayWindow => $"{label}: outside today's SportyBet card.",
+            BookingSelectionMatchStatus.NoFixtureFound => $"{label}: no SportyBet fixture found for today's card.",
+            BookingSelectionMatchStatus.AmbiguousFixture => $"{label}: fixture match was ambiguous, so it was skipped.",
+            BookingSelectionMatchStatus.MarketUnavailable => matchedFixture is not null
+                ? $"{label}: SportyBet found {matchedFixture.HomeTeam} vs {matchedFixture.AwayTeam}, but the requested market was unavailable."
+                : $"{label}: requested market unavailable on SportyBet.",
+            _ => $"{label}: skipped."
+        };
+    }
+
+    private static bool TryCreateOutcome(
+        SportyBetFixture fixture,
+        RequestedSportyBetOutcome requestedOutcome,
+        out SportyBetOutcome outcome)
+    {
+        outcome = new SportyBetOutcome
+        {
+            EventId = fixture.EventId,
+            HomeTeam = fixture.HomeTeam,
+            AwayTeam = fixture.AwayTeam
+        };
+
+        switch (requestedOutcome)
+        {
+            case RequestedSportyBetOutcome.HomeWin when !string.IsNullOrWhiteSpace(fixture.HomeOutcomeId):
+                outcome = outcome with { OutcomeId = fixture.HomeOutcomeId, MarketId = "1" };
+                return true;
+            case RequestedSportyBetOutcome.Draw when !string.IsNullOrWhiteSpace(fixture.DrawOutcomeId):
+                outcome = outcome with { OutcomeId = fixture.DrawOutcomeId, MarketId = "1" };
+                return true;
+            case RequestedSportyBetOutcome.AwayWin when !string.IsNullOrWhiteSpace(fixture.AwayOutcomeId):
+                outcome = outcome with { OutcomeId = fixture.AwayOutcomeId, MarketId = "1" };
+                return true;
+            case RequestedSportyBetOutcome.BttsYes when !string.IsNullOrWhiteSpace(fixture.BttsYesOutcomeId):
+                outcome = outcome with { OutcomeId = fixture.BttsYesOutcomeId, MarketId = "29" };
+                return true;
+            case RequestedSportyBetOutcome.BttsNo when !string.IsNullOrWhiteSpace(fixture.BttsNoOutcomeId):
+                outcome = outcome with { OutcomeId = fixture.BttsNoOutcomeId, MarketId = "29" };
+                return true;
+            case RequestedSportyBetOutcome.Over25 when !string.IsNullOrWhiteSpace(fixture.Over25OutcomeId):
+                outcome = outcome with { OutcomeId = fixture.Over25OutcomeId, MarketId = "18", Specifier = "total=2.5" };
+                return true;
+            case RequestedSportyBetOutcome.Under25 when !string.IsNullOrWhiteSpace(fixture.Under25OutcomeId):
+                outcome = outcome with { OutcomeId = fixture.Under25OutcomeId, MarketId = "18", Specifier = "total=2.5" };
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static RequestedSportyBetOutcome? ResolveRequestedOutcome(string market, string prediction)
+    {
+        var normalizedMarket = market?.Trim().ToLowerInvariant() ?? string.Empty;
+        var normalizedPrediction = prediction?.Trim().ToLowerInvariant() ?? string.Empty;
+
+        if (normalizedMarket.Contains("btts") || normalizedPrediction.Contains("both teams") || normalizedPrediction.Contains("btts"))
+        {
+            return normalizedPrediction.Contains("no", StringComparison.OrdinalIgnoreCase)
+                ? RequestedSportyBetOutcome.BttsNo
+                : RequestedSportyBetOutcome.BttsYes;
+        }
+
+        if (normalizedMarket.Contains("under2.5") || normalizedPrediction.Contains("under 2.5") || normalizedPrediction.Contains("under2.5"))
+        {
+            return RequestedSportyBetOutcome.Under25;
+        }
+
+        if (normalizedMarket.Contains("over2.5") || normalizedPrediction.Contains("over 2.5") || normalizedPrediction.Contains("over2.5"))
+        {
+            return RequestedSportyBetOutcome.Over25;
+        }
+
+        if (normalizedPrediction == "x" || normalizedPrediction.Contains("draw"))
+        {
+            return RequestedSportyBetOutcome.Draw;
+        }
+
+        if (normalizedPrediction.Contains("away") || normalizedPrediction == "2")
+        {
+            return RequestedSportyBetOutcome.AwayWin;
+        }
+
+        if (normalizedPrediction.Contains("home") || normalizedPrediction == "1")
+        {
+            return RequestedSportyBetOutcome.HomeWin;
+        }
+
+        return normalizedMarket.Contains("1x2") ? RequestedSportyBetOutcome.HomeWin : null;
+    }
+
+    private static string ToCartMarket(Prediction prediction)
+    {
+        return prediction.PredictionCategory switch
+        {
+            "BothTeamsScore" => "BTTS",
+            "Over2.5Goals" => "Over2.5",
+            "Under2.5Goals" => "Under2.5",
+            _ => "1X2"
+        };
+    }
+
+    private static double ComputeTeamMatchScore(string expectedTeam, string actualTeam)
+    {
+        return ComputeTokenSimilarity(expectedTeam, actualTeam, TeamNoiseWords);
+    }
+
+    private static double ComputeLeagueMatchScore(string expectedLeague, string actualLeague)
+    {
+        return ComputeTokenSimilarity(expectedLeague, actualLeague, LeagueNoiseWords);
+    }
+
+    private static double ComputeTokenSimilarity(
+        string? expected,
+        string? actual,
+        HashSet<string> noiseWords)
+    {
+        var normalizedExpected = NormalizeValue(expected);
+        var normalizedActual = NormalizeValue(actual);
+        if (string.IsNullOrWhiteSpace(normalizedExpected) || string.IsNullOrWhiteSpace(normalizedActual))
+        {
+            return 0d;
+        }
+
+        if (string.Equals(normalizedExpected, normalizedActual, StringComparison.Ordinal))
+        {
+            return 1d;
+        }
+
+        var compactExpected = normalizedExpected.Replace(" ", string.Empty, StringComparison.Ordinal);
+        var compactActual = normalizedActual.Replace(" ", string.Empty, StringComparison.Ordinal);
+
+        var expectedTokens = Tokenize(normalizedExpected, noiseWords);
+        var actualTokens = Tokenize(normalizedActual, noiseWords);
+        if (expectedTokens.Count == 0 || actualTokens.Count == 0)
+        {
+            return 0d;
+        }
+
+        var overlap = expectedTokens.Intersect(actualTokens, StringComparer.Ordinal).Count();
+        var shorterCount = Math.Min(expectedTokens.Count, actualTokens.Count);
+        var ratio = shorterCount == 0 ? 0d : overlap / (double)shorterCount;
+
+        if (compactExpected.Contains(compactActual, StringComparison.Ordinal) ||
+            compactActual.Contains(compactExpected, StringComparison.Ordinal))
+        {
+            ratio = Math.Max(ratio, 0.88d);
+        }
+
+        if (expectedTokens[0] == actualTokens[0] && overlap > 0)
+        {
+            ratio = Math.Max(ratio, 0.78d);
+        }
+
+        return Math.Min(1d, ratio);
+    }
+
+    private static string NormalizeValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var normalized = NonWordRegex.Replace(value.ToLowerInvariant(), " ");
+        var words = normalized
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Select(word => TokenSynonyms.TryGetValue(word, out var replacement) ? replacement : word)
+            .ToArray();
+
+        return string.Join(' ', words).Trim();
+    }
+
+    private static List<string> Tokenize(string normalizedValue, HashSet<string> noiseWords)
+    {
+        return normalizedValue
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(word => !noiseWords.Contains(word))
+            .ToList();
+    }
+
+    private static List<SportyBetFixture> DeduplicateFixturesByEventId(IEnumerable<SportyBetFixture> fixtures)
+    {
+        return fixtures
+            .GroupBy(fixture => fixture.EventId, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToList();
     }
 
     private static string ExtractLeagueName(JsonElement fixtureElement)
@@ -741,6 +1117,7 @@ public record SportyBetFixture
     public string DrawOutcomeId { get; init; } = "";
     public string AwayOutcomeId { get; init; } = "";
     public string BttsYesOutcomeId { get; init; } = "";
+    public string BttsNoOutcomeId { get; init; } = "";
     public string Over25OutcomeId { get; init; } = "";
     public string Under25OutcomeId { get; init; } = "";
     public double? HomeProbability { get; init; }
@@ -767,4 +1144,53 @@ public record SportyBetOutcome
     public string? Specifier { get; init; }
     public string HomeTeam { get; init; } = "";
     public string AwayTeam { get; init; } = "";
+}
+
+internal sealed record ResolvedBookingSelection(
+    BookingSelection OriginalSelection,
+    int? PredictionId,
+    string HomeTeam,
+    string AwayTeam,
+    string League,
+    string Market,
+    string Prediction,
+    DateTime? MatchDateTimeUtc,
+    DateOnly? MatchLocalDate,
+    RequestedSportyBetOutcome? RequestedOutcome)
+{
+    public string SelectionLabel => $"{HomeTeam} vs {AwayTeam} ({Prediction})";
+}
+
+internal sealed record BookingSelectionResolution(
+    BookingSelectionMatchStatus Status,
+    SportyBetOutcome? Outcome,
+    SportyBetFixture? MatchedFixture);
+
+internal sealed record FixtureMatchCandidate(
+    SportyBetFixture Fixture,
+    double Score,
+    TimeSpan? KickoffDelta,
+    bool IsCandidate)
+{
+    public static FixtureMatchCandidate NotCandidate(SportyBetFixture fixture) => new(fixture, 0d, null, false);
+}
+
+internal enum BookingSelectionMatchStatus
+{
+    Matched,
+    OutsideTodayWindow,
+    NoFixtureFound,
+    AmbiguousFixture,
+    MarketUnavailable
+}
+
+internal enum RequestedSportyBetOutcome
+{
+    HomeWin,
+    Draw,
+    AwayWin,
+    BttsYes,
+    BttsNo,
+    Over25,
+    Under25
 }

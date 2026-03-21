@@ -56,6 +56,87 @@ public class CartJsTests
     }
 
     [Fact]
+    public void AddToCart_DoesNotCollapseSameTeamsWithDifferentKickoffs_AndUsesPredictionIdWhenPresent()
+    {
+        var script = File.ReadAllText(
+            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/wwwroot/js/cart.js");
+
+        var engine = new Engine();
+        engine.Execute("""
+            var __storage = {};
+            var window = { matchPredictorTracking: { track: function() {} } };
+            var localStorage = {
+                getItem: function(key) { return Object.prototype.hasOwnProperty.call(__storage, key) ? __storage[key] : null; },
+                setItem: function(key, value) { __storage[key] = String(value); },
+                removeItem: function(key) { delete __storage[key]; }
+            };
+            var document = {
+                body: { appendChild: function() {} },
+                getElementById: function() { return null; },
+                createElement: function() {
+                    return {
+                        id: '',
+                        className: '',
+                        textContent: '',
+                        style: {},
+                        classList: { add: function() {}, remove: function() {} },
+                        appendChild: function() {}
+                    };
+                },
+                addEventListener: function() {}
+            };
+            var setTimeout = function(fn) { return 0; };
+            """);
+        engine.Execute(script);
+
+        engine.Execute("""
+            addToCart({
+                homeTeam: 'Arsenal',
+                awayTeam: 'Chelsea',
+                league: 'England - Premier League',
+                market: 'StraightWin',
+                prediction: 'Home Win',
+                matchDateTimeUtc: '2030-01-01T12:00:00Z'
+            });
+            addToCart({
+                homeTeam: 'Arsenal',
+                awayTeam: 'Chelsea',
+                league: 'England - Premier League',
+                market: 'StraightWin',
+                prediction: 'Home Win',
+                matchDateTimeUtc: '2030-01-01T15:00:00Z'
+            });
+            addToCart({
+                homeTeam: 'Arsenal',
+                awayTeam: 'Chelsea',
+                league: 'England - Premier League',
+                market: 'StraightWin',
+                prediction: 'Home Win',
+                predictionId: 44,
+                matchDateTimeUtc: '2030-01-01T18:00:00Z'
+            });
+            addToCart({
+                homeTeam: 'Arsenal',
+                awayTeam: 'Chelsea',
+                league: 'England - Premier League',
+                market: 'StraightWin',
+                prediction: 'Home Win',
+                predictionId: 44,
+                matchDateTimeUtc: '2030-01-01T20:00:00Z'
+            });
+            """);
+
+        var cartJson = engine.Evaluate("JSON.stringify(getCart())").AsString();
+        using var document = JsonDocument.Parse(cartJson);
+        var items = document.RootElement.EnumerateArray().ToList();
+
+        Assert.Equal(3, items.Count);
+        Assert.Equal("2030-01-01T12:00:00Z", items[0].GetProperty("matchDateTimeUtc").GetString());
+        Assert.Equal("2030-01-01T15:00:00Z", items[1].GetProperty("matchDateTimeUtc").GetString());
+        Assert.Equal(44, items[2].GetProperty("predictionId").GetInt32());
+    }
+
+    [Fact]
     public void CartScript_TracksKeyClientSideEvents()
     {
         var script = File.ReadAllText(

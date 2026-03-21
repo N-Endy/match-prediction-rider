@@ -272,6 +272,67 @@ public class ScoreUpdaterMatchingTests
     }
 
     [Fact]
+    public async Task RunScoreUpdaterAsync_RunsSofaScoreAfterHealthyAiScoreWhenFixtureRemainsUnresolved()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(19);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        context.Predictions.Add(CreatePrediction(
+            date,
+            kickoff,
+            "Arsenal",
+            "Chelsea",
+            "StraightWin",
+            "Home Win",
+            "England - Premier League"));
+
+        await context.SaveChangesAsync();
+
+        var aiScoreTracker = new AiScoreSourceHealthTracker();
+        aiScoreTracker.RecordSuccess("http", 8, "Fetched 8 match(es) from AiScore.");
+
+        var scraper = new StubWebScraperService
+        {
+            SofaScoreMatchScores =
+            [
+                new SofaScoreMatchScore
+                {
+                    MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+                    League = "England - Premier League",
+                    HomeTeam = "Arsenal",
+                    AwayTeam = "Chelsea",
+                    Score = "1:0",
+                    DisplayedScore = "1:0",
+                    RegularTimeScore = "1:0",
+                    StatusText = "Finished",
+                    EventUrl = "https://www.sofascore.com/football/match/arsenal-chelsea/example",
+                    BTTSLabel = false,
+                    IsLive = false
+                }
+            ]
+        };
+
+        var service = CreateAnalyzerService(
+            context,
+            scraper,
+            aiScoreTracker);
+
+        await service.RunScoreUpdaterAsync();
+
+        var prediction = await context.Predictions.SingleAsync();
+        Assert.Equal("1:0", prediction.ActualScore);
+        Assert.Equal("Home Win", prediction.ActualOutcome);
+        Assert.Single(scraper.ReceivedSofaScoreRequests);
+        Assert.Equal("Arsenal", scraper.ReceivedSofaScoreRequests[0].HomeTeam);
+        Assert.Equal("Chelsea", scraper.ReceivedSofaScoreRequests[0].AwayTeam);
+    }
+
+    [Fact]
     public async Task RunScoreUpdaterAsync_PersistsSharedSourceRuntimeSnapshotsToScrapingLogs()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
@@ -1352,11 +1413,16 @@ public class ScoreUpdaterMatchingTests
         public List<MatchScore> MatchScores { get; init; } = [];
         public List<AiScoreMatchScore> AiScoreMatchScores { get; init; } = [];
         public List<SofaScoreMatchScore> SofaScoreMatchScores { get; init; } = [];
+        public List<SofaScoreFixtureRequest> ReceivedSofaScoreRequests { get; } = [];
 
         public Task ScrapeMatchDataAsync() => Task.CompletedTask;
         public Task<List<MatchScore>> ScrapeMatchScoresAsync() => Task.FromResult(MatchScores);
         public Task<List<AiScoreMatchScore>> ScrapeAiScoreMatchScoresAsync() => Task.FromResult(AiScoreMatchScores);
-        public Task<List<SofaScoreMatchScore>> ScrapeSofaScoreMatchScoresAsync(IEnumerable<SofaScoreFixtureRequest> fixtures) => Task.FromResult(SofaScoreMatchScores);
+        public Task<List<SofaScoreMatchScore>> ScrapeSofaScoreMatchScoresAsync(IEnumerable<SofaScoreFixtureRequest> fixtures)
+        {
+            ReceivedSofaScoreRequests.AddRange(fixtures);
+            return Task.FromResult(SofaScoreMatchScores);
+        }
     }
 
     private sealed class StubExtractFromExcel : IExtractFromExcel

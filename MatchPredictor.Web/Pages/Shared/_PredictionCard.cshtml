@@ -52,7 +52,9 @@
                 data-away="@Model.AwayTeam"
                 data-league="@Model.League"
                 data-market="@cartMarket"
-                data-prediction="@badgeText">
+                data-prediction="@badgeText"
+                data-prediction-id="@Model.Id"
+                data-match-datetime-utc="@(Model.MatchDateTime?.ToString("O") ?? string.Empty)">
             Add Bet
         </button>
         @if (isActuallyLive)

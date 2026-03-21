@@ -1724,6 +1724,7 @@ public class AiAdvisorService : IAiAdvisorService
             League = candidate.League,
             MatchDateLabel = candidate.MatchLocalDate.ToString("dd MMM", CultureInfo.InvariantCulture),
             KickoffTime = candidate.KickoffTime,
+            MatchDateTimeUtc = candidate.MatchDateTimeUtc,
             Status = candidate.MatchState,
             ActualScore = candidate.ActualScore,
             Market = candidate.PredictionCategory switch
@@ -1758,6 +1759,7 @@ public class AiAdvisorService : IAiAdvisorService
             League = prediction.League,
             MatchDateLabel = prediction.MatchLocalDate.ToString("dd MMM", CultureInfo.InvariantCulture),
             KickoffTime = prediction.MatchLocalTime?.ToString("HH:mm", CultureInfo.InvariantCulture) ?? prediction.Time,
+            MatchDateTimeUtc = prediction.MatchDateTime,
             Status = status,
             ActualScore = prediction.ActualScore,
             Market = AiChatContextBuilder.ToCartMarket(prediction),

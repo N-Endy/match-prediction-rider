@@ -87,6 +87,24 @@ public class ValueBetsService : IValueBetsService
         }
 
         var candidateBets = new List<ValueBetCandidate>();
+        var currentPredictions = await _dbContext.Predictions
+            .AsNoTracking()
+            .Where(prediction => prediction.MatchLocalDate == todayLocalDate)
+            .Where(prediction => prediction.IsCurrentRevision)
+            .ToListAsync(ct);
+        var currentPredictionLookup = currentPredictions
+            .GroupBy(prediction => BuildCurrentPredictionLookupKey(
+                FixtureIdentityFactory.FromPrediction(prediction).FixtureKey,
+                prediction.PredictionCategory,
+                prediction.PredictedOutcome),
+                StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .OrderByDescending(prediction => prediction.RevisionNumber)
+                    .ThenByDescending(prediction => prediction.CreatedAt)
+                    .First(),
+                StringComparer.Ordinal);
 
         foreach (var match in upcomingMatches)
         {
@@ -95,6 +113,7 @@ public class ValueBetsService : IValueBetsService
                 var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates([match]);
                 report.ConsideredCandidateCount += forecastCandidates.Count;
                 var pricedCandidates = new List<ValueBetCandidate>();
+                var matchFixtureKey = FixtureIdentityFactory.FromMatchData(match).FixtureKey;
                 var sourceFixture = SourceMarketFixtureMatcher.FindBestFixture(
                     sourceMarketFixtures,
                     match.HomeTeam,
@@ -130,6 +149,12 @@ public class ValueBetsService : IValueBetsService
                     }
 
                     var expectedValuePercent = BetPricingMath.CalculateExpectedValuePercent(calibratedProbability, marketQuote.DecimalOdds) ?? 0d;
+                    currentPredictionLookup.TryGetValue(
+                        BuildCurrentPredictionLookupKey(
+                            matchFixtureKey,
+                            forecastCandidate.PredictionCategory,
+                            forecastCandidate.PredictedOutcome),
+                        out var linkedPrediction);
 
                     pricedCandidates.Add(new ValueBetCandidate
                     {
@@ -141,6 +166,8 @@ public class ValueBetsService : IValueBetsService
                             forecastCandidate.AwayTeam,
                             forecastCandidate.PredictionCategory,
                             forecastCandidate.PredictedOutcome),
+                        PredictionId = linkedPrediction?.Id,
+                        MatchDateTimeUtc = match.MatchDateTime ?? ResolveScheduledUtc(match),
                         League = forecastCandidate.League,
                         HomeTeam = forecastCandidate.HomeTeam,
                         AwayTeam = forecastCandidate.AwayTeam,
@@ -465,6 +492,8 @@ public class ValueBetsService : IValueBetsService
     private sealed class ValueBetCandidate
     {
         public string CandidateKey { get; init; } = string.Empty;
+        public int? PredictionId { get; init; }
+        public DateTime? MatchDateTimeUtc { get; init; }
         public string League { get; init; } = string.Empty;
         public string HomeTeam { get; init; } = string.Empty;
         public string AwayTeam { get; init; } = string.Empty;
@@ -490,6 +519,8 @@ public class ValueBetsService : IValueBetsService
         {
             return new ValueBetDto
             {
+                PredictionId = PredictionId,
+                MatchDateTimeUtc = MatchDateTimeUtc,
                 League = League,
                 HomeTeam = HomeTeam,
                 AwayTeam = AwayTeam,
@@ -512,5 +543,17 @@ public class ValueBetsService : IValueBetsService
                 AiJustification = AiJustification
             };
         }
+    }
+
+    private static string BuildCurrentPredictionLookupKey(
+        string fixtureKey,
+        string predictionCategory,
+        string predictedOutcome)
+    {
+        return string.Join(
+            "|",
+            fixtureKey,
+            predictionCategory.Trim(),
+            predictedOutcome.Trim());
     }
 }

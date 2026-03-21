@@ -10,6 +10,7 @@ public class AiChatAction
     public string League { get; set; } = string.Empty;
     public string MatchDateLabel { get; set; } = string.Empty;
     public string KickoffTime { get; set; } = string.Empty;
+    public DateTime? MatchDateTimeUtc { get; set; }
     public string Status { get; set; } = "Upcoming";
     public string? ActualScore { get; set; }
     public string Market { get; set; } = string.Empty;

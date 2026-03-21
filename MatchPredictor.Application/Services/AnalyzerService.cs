@@ -314,8 +314,6 @@ public class AnalyzerService  : IAnalyzerService
             normalizedLookbackDays);
         try
         {
-            var allowSofaScoreFallback = false;
-
             // Score scraping is non-blocking
             try
             {
@@ -334,20 +332,17 @@ public class AnalyzerService  : IAnalyzerService
                 var aiScores = await _webScraperService.ScrapeAiScoreMatchScoresAsync();
                 await SaveAiScoreMatchScores(aiScores);
                 var aiScoreSnapshot = _aiScoreSourceHealthTracker.GetSnapshot();
-                allowSofaScoreFallback = ShouldRunSofaScoreFallback(aiScoreSnapshot);
                 _logger.LogInformation(
-                    "AiScore stage finished with status {Status} at stage {Stage}. SofaScore fallback enabled: {AllowSofaScoreFallback}.",
+                    "AiScore stage finished with status {Status} at stage {Stage}. SofaScore stage will run for unresolved fixtures.",
                     aiScoreSnapshot.Status,
-                    aiScoreSnapshot.LastStage ?? "unknown",
-                    allowSofaScoreFallback);
+                    aiScoreSnapshot.LastStage ?? "unknown");
             }
             catch (Exception aiScoreEx)
             {
-                allowSofaScoreFallback = true;
                 _logger.LogWarning(aiScoreEx, "❌ AiScore scraping failed.");
             }
 
-            await UpdatePredictionsWithActualResults(normalizedLookbackDays, normalizedRunLabel, allowSofaScoreFallback);
+            await UpdatePredictionsWithActualResults(normalizedLookbackDays, normalizedRunLabel);
             _logger.LogInformation(
                 "✅ Predictions updated with actual results for the {RunLabel} window.",
                 normalizedRunLabel);
@@ -667,7 +662,7 @@ public class AnalyzerService  : IAnalyzerService
         match.NormalizeSourceProbabilities();
     }
 
-    private async Task UpdatePredictionsWithActualResults(int lookbackDays, string runLabel, bool allowSofaScoreFallback)
+    private async Task UpdatePredictionsWithActualResults(int lookbackDays, string runLabel)
     {
         var nowLocal = DateTimeProvider.GetLocalTime();
         var nowUtc = DateTime.UtcNow;
@@ -875,7 +870,7 @@ public class AnalyzerService  : IAnalyzerService
             .Where(NeedsFixtureSettlementRepair)
             .ToList();
 
-        if (allowSofaScoreFallback && incompleteFixtures.Count > 0)
+        if (incompleteFixtures.Count > 0)
         {
             var sofaScoreRequests = incompleteFixtures
                 .Select(BuildSofaScoreFixtureRequest)
@@ -939,12 +934,6 @@ public class AnalyzerService  : IAnalyzerService
                 }
             }
         }
-        else if (!allowSofaScoreFallback && incompleteFixtures.Count > 0)
-        {
-            _logger.LogInformation(
-                "Skipping SofaScore targeted fallback for {FixtureCount} incomplete fixtures because AiScore completed without using its fallback path.",
-                incompleteFixtures.Count);
-        }
 
         ApplyExactFinishedSourceRepairs(eligibleSettlementFixtures, consolidatedFlashScores, consolidatedAiScores, sourceQualityLookup);
         ApplyExactLiveSourceReopens(eligibleSettlementFixtures, consolidatedFlashScores, consolidatedAiScores, sourceQualityLookup);
@@ -985,16 +974,6 @@ public class AnalyzerService  : IAnalyzerService
             runLabel);
 
         await _dbContext.SaveChangesAsync();
-    }
-
-    private static bool ShouldRunSofaScoreFallback(AiScoreSourceHealthSnapshot snapshot)
-    {
-        if (string.Equals(snapshot.LastStage, "api-football", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return snapshot.Status is "Fallback" or "CooldownFallback" or "Failed";
     }
 
     private static List<SettlementFixtureGroup> BuildSettlementFixtureGroups(

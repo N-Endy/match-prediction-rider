@@ -321,6 +321,7 @@ public static partial class AiChatContextBuilder
             ActionKey = CreateActionKey(prediction),
             PredictionId = prediction.Id,
             MatchLocalDate = prediction.MatchLocalDate,
+            MatchDateTimeUtc = prediction.MatchDateTime,
             League = prediction.League,
             KickoffTime = prediction.MatchLocalTime?.ToString("HH:mm", CultureInfo.InvariantCulture) ?? prediction.Time,
             HomeTeam = prediction.HomeTeam,
@@ -1103,6 +1104,7 @@ public static partial class AiChatContextBuilder
         public string ActionKey { get; init; } = string.Empty;
         public int PredictionId { get; init; }
         public DateOnly MatchLocalDate { get; init; }
+        public DateTime? MatchDateTimeUtc { get; init; }
         public string League { get; init; } = string.Empty;
         public string KickoffTime { get; init; } = string.Empty;
         public string HomeTeam { get; init; } = string.Empty;

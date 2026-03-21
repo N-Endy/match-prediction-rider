@@ -16,15 +16,7 @@ function saveCart(cart) {
 
 function addToCart(match) {
     const cart = getCart();
-    // Avoid duplicates by checking the full bet identity, not just the fixture.
-    const exists = cart.some(
-        m =>
-            m.homeTeam === match.homeTeam &&
-            m.awayTeam === match.awayTeam &&
-            m.league === match.league &&
-            (m.market || '') === (match.market || '') &&
-            (m.prediction || '') === (match.prediction || '')
-    );
+    const exists = cart.some(m => getCartIdentity(m) === getCartIdentity(match));
     if (exists) {
         showToast('Already in betslip');
         return;
@@ -153,7 +145,9 @@ async function bookGames() {
             awayTeam: item.awayTeam,
             league: item.league,
             market: item.market || 'Unknown',
-            prediction: item.prediction
+            prediction: item.prediction,
+            predictionId: Number.isFinite(Number(item.predictionId)) ? Number(item.predictionId) : null,
+            matchDateTimeUtc: item.matchDateTimeUtc || null
         }));
 
         const response = await fetch('/api/booking/book', {
@@ -169,6 +163,8 @@ async function bookGames() {
                 const urlHtml = result.bookingUrl
                     ? `<a href="${result.bookingUrl}" target="_blank" class="mp-booking-url-btn">🔗 Open in SportyBet</a>`
                     : '';
+                const warningHtml = renderBookingWarnings(result.warnings);
+                const summaryHtml = renderBookingSummary(result);
 
                 resultDiv.innerHTML = `
                     <div class="mp-booking-success">
@@ -179,15 +175,23 @@ async function bookGames() {
                             <button class="mp-copy-code-btn" onclick="copyBookingCode('${result.bookingCode}')">📋 Copy</button>
                             ${urlHtml}
                         </div>
-                        <p class="mp-booking-msg">${result.message}</p>
+                        ${summaryHtml}
+                        <p class="mp-booking-msg">${escapeHtml(result.message || '')}</p>
+                        ${warningHtml}
                     </div>
                 `;
-                clearCart();
+                if ((result.skippedCount || 0) === 0) {
+                    clearCart();
+                }
             } else {
+                const warningHtml = renderBookingWarnings(result.warnings);
+                const summaryHtml = renderBookingSummary(result);
                 resultDiv.innerHTML = `
                     <div class="mp-booking-error">
                         <button class="mp-booking-close" onclick="this.closest('.mp-booking-error').parentElement.style.display='none'">&times;</button>
-                        <p>❌ ${result.message}</p>
+                        ${summaryHtml}
+                        <p>❌ ${escapeHtml(result.message || 'Booking failed.')}</p>
+                        ${warningHtml}
                     </div>
                 `;
             }
@@ -232,7 +236,65 @@ document.addEventListener('DOMContentLoaded', () => {
             awayTeam: btn.dataset.away || '',
             league: btn.dataset.league || '',
             market: btn.dataset.market || '',
-            prediction: btn.dataset.prediction || ''
+            prediction: btn.dataset.prediction || '',
+            predictionId: btn.dataset.predictionId ? Number(btn.dataset.predictionId) : null,
+            matchDateTimeUtc: btn.dataset.matchDatetimeUtc || null
         });
     });
 });
+
+function getCartIdentity(match) {
+    const predictionId = Number(match?.predictionId);
+    if (Number.isFinite(predictionId) && predictionId > 0) {
+        return `prediction:${predictionId}`;
+    }
+
+    return [
+        match?.homeTeam || '',
+        match?.awayTeam || '',
+        match?.league || '',
+        match?.market || '',
+        match?.prediction || '',
+        match?.matchDateTimeUtc || ''
+    ].join('|');
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function renderBookingSummary(result) {
+    const bookedCount = Number(result?.bookedCount || 0);
+    const skippedCount = Number(result?.skippedCount || 0);
+    if (bookedCount === 0 && skippedCount === 0) {
+        return '';
+    }
+
+    return `
+        <div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap; margin-bottom:12px; color:var(--text-secondary); font-size:0.9rem;">
+            <span><strong>${bookedCount}</strong> booked</span>
+            <span><strong>${skippedCount}</strong> skipped</span>
+        </div>
+    `;
+}
+
+function renderBookingWarnings(warnings) {
+    const items = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+    if (items.length === 0) {
+        return '';
+    }
+
+    return `
+        <div style="text-align:left; margin-top:12px;">
+            <div style="font-weight:700; margin-bottom:6px;">Skipped selections</div>
+            <ul style="margin:0; padding-left:20px; color:var(--text-secondary);">
+                ${items.map(item => `<li style="margin-bottom:4px;">${escapeHtml(item)}</li>`).join('')}
+            </ul>
+        </div>
+    `;
+}

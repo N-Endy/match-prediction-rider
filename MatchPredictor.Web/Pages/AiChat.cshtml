@@ -245,6 +245,8 @@ else
                     btn.dataset.league = action.league || '';
                     btn.dataset.market = action.market || '';
                     btn.dataset.prediction = action.prediction || '';
+                    btn.dataset.predictionId = action.predictionId ? String(action.predictionId) : '';
+                    btn.dataset.matchDatetimeUtc = action.matchDateTimeUtc || '';
                     card.appendChild(btn);
                 }
                 actions.appendChild(card);
@@ -428,7 +430,9 @@ else
                     awayTeam: b.dataset.away || '',
                     league: b.dataset.league || '',
                     market: b.dataset.market || '',
-                    prediction: b.dataset.prediction || ''
+                    prediction: b.dataset.prediction || '',
+                    predictionId: b.dataset.predictionId ? Number(b.dataset.predictionId) : null,
+                    matchDateTimeUtc: b.dataset.matchDatetimeUtc || null
                 });
                 addedCount++;
             }
