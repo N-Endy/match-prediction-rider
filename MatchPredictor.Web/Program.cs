@@ -129,7 +129,19 @@ using (var scope = app.Services.CreateScope())
         }
 
         var context = services.GetRequiredService<ApplicationDbContext>();
-        await context.Database.MigrateAsync();
+        try
+        {
+            await context.Database.MigrateAsync();
+        }
+        catch (InvalidOperationException ex) when (ContainsPendingModelChangesWarning(ex))
+        {
+            logger.LogWarning(
+                ex,
+                "Pending EF model changes detected while bootstrapping the tennis database. Falling back to EnsureCreated for this fresh standalone deployment.");
+
+            await context.Database.EnsureCreatedAsync();
+        }
+
         startupState.MarkDatabaseInitialized();
         logger.LogInformation("TennisPredictor database initialized successfully.");
 
@@ -317,4 +329,10 @@ static int ResolveHangfireWorkerCount(IConfiguration configuration)
     }
 
     return Math.Max(1, Math.Min(2, Environment.ProcessorCount));
+}
+
+static bool ContainsPendingModelChangesWarning(Exception exception)
+{
+    return exception.Message.Contains("PendingModelChangesWarning", StringComparison.Ordinal) ||
+           (exception.InnerException is not null && ContainsPendingModelChangesWarning(exception.InnerException));
 }
