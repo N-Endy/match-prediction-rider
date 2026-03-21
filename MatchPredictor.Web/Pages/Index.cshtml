@@ -2,91 +2,82 @@
 @model MatchPredictor.Web.Pages.IndexModel
 
 @{
-    ViewData["Title"] = "Smart Daily Football Predictions";
+    ViewData["Title"] = "Daily Tennis Predictions";
 }
 
-<!-- Hero Section -->
 <section class="mp-hero">
     <div class="mp-hero-badge">
         <span class="mp-live-dot"></span>
-        Updated Daily · AI-Powered
+        Updated Daily · Tennis-Only Pipeline
     </div>
-    <h1>Smart Football<br>Predictions</h1>
-    <p>Daily AI-driven football tips backed by smart analysis. BTTS, Over 2.5, Under 2.5, Straight Win and more — updated every day.</p>
-    <a href="/predictions/btts" class="mp-hero-cta">
-        Explore Today's Tips →
+    <h1>Daily Tennis<br>Predictions</h1>
+    <p>Standalone tennis picks built from workbook probabilities, dedicated settlement jobs, and winner-only value betting where market prices are available.</p>
+    <a href="/predictions/combined" class="mp-hero-cta">
+        Explore Today's Card →
     </a>
 </section>
 
-<!-- Prediction Categories -->
 <div class="mp-container">
-    <h2 class="mp-section-heading">Today's Predictions</h2>
-    <p class="mp-section-subtitle">Choose a prediction category to see today's picks</p>
+    <h2 class="mp-section-heading">Today's Markets</h2>
+    <p class="mp-section-subtitle">Browse the tennis card by market type</p>
 
     <div class="mp-category-grid">
-        <a href="/predictions/btts" class="mp-category-card">
-            <div class="mp-category-icon" style="background: rgba(16, 185, 129, 0.1);">⚽</div>
+        <a href="/predictions/matchwinner" class="mp-category-card">
+            <div class="mp-category-icon" style="background: rgba(13, 148, 136, 0.14);">🎾</div>
             <div class="mp-category-info">
-                <h3>Both Teams to Score</h3>
-                <p>Matches where both teams are likely to score</p>
+                <h3>Match Winner</h3>
+                <p>Home or away player to win the match</p>
             </div>
         </a>
-        <a href="/predictions/over2" class="mp-category-card">
-            <div class="mp-category-icon" style="background: rgba(59, 130, 246, 0.1);">🎯</div>
+        <a href="/predictions/over-under-sets" class="mp-category-card">
+            <div class="mp-category-icon" style="background: rgba(59, 130, 246, 0.12);">📈</div>
             <div class="mp-category-info">
-                <h3>Over 2.5 Goals</h3>
-                <p>Matches likely to have 3 or more total goals</p>
+                <h3>Over / Under Sets</h3>
+                <p>Find matches likely to end in two sets or go the distance</p>
             </div>
         </a>
-        <a href="/predictions/straightwin" class="mp-category-card">
-            <div class="mp-category-icon" style="background: rgba(139, 92, 246, 0.1);">🏆</div>
+        <a href="/predictions/set-handicap" class="mp-category-card">
+            <div class="mp-category-icon" style="background: rgba(245, 158, 11, 0.12);">🧮</div>
             <div class="mp-category-info">
-                <h3>Straight Win</h3>
-                <p>Strong home or away win predictions</p>
+                <h3>Set Handicap</h3>
+                <p>Worksheet-backed handicap lines for player-side coverage</p>
             </div>
         </a>
-        <a href="/predictions/under2" class="mp-category-card">
-            <div class="mp-category-icon" style="background: rgba(245, 158, 11, 0.1);">🧊</div>
+        <a href="/valuebets" class="mp-category-card">
+            <div class="mp-category-icon" style="background: rgba(6, 182, 212, 0.12);">🎯</div>
             <div class="mp-category-info">
-                <h3>Under 2.5 Goals</h3>
-                <p>Matches likely to stay at two goals or fewer</p>
+                <h3>Value Bets</h3>
+                <p>Winner-only edges where model probability beats real market pricing</p>
             </div>
         </a>
     </div>
 
-    <!-- How It Works -->
     <div style="margin-top: 4rem;">
         <h2 class="mp-section-heading">How It Works</h2>
-        <p class="mp-section-subtitle">Three steps to smarter predictions</p>
+        <p class="mp-section-subtitle">A dedicated pipeline for tennis, built for tennis from the ground up</p>
 
         <div class="mp-features">
             <div class="mp-feature-card">
-                <div class="mp-feature-icon" style="background: rgba(59, 130, 246, 0.1);">🕵️</div>
-                <h3>Collect & Analyze</h3>
-                <p>We scrape AI-generated odds from a reliable source every day and run them through intelligent logic.</p>
+                <div class="mp-feature-icon" style="background: rgba(59, 130, 246, 0.1);">📥</div>
+                <h3>Read The Tennis Sheet</h3>
+                <p>The extractor now targets the tennis worksheet inside the downloaded workbook and normalizes the two-way markets for each fixture.</p>
             </div>
             <div class="mp-feature-card">
                 <div class="mp-feature-icon" style="background: rgba(16, 185, 129, 0.1);">🧠</div>
-                <h3>Smart Filtering</h3>
-                <p>Our algorithms filter for high-probability matches across multiple prediction categories.</p>
+                <h3>Publish Calibrated Picks</h3>
+                <p>Winner, set totals, and set handicap predictions are filtered through the active thresholds and calibration layer before publication.</p>
             </div>
             <div class="mp-feature-card">
-                <div class="mp-feature-icon" style="background: rgba(6, 182, 212, 0.1);">📲</div>
-                <h3>Publish Daily</h3>
-                <p>Get a clean, curated list of daily football tips — no clutter, no ads, just picks.</p>
+                <div class="mp-feature-icon" style="background: rgba(6, 182, 212, 0.1);">✅</div>
+                <h3>Settle Against Match Results</h3>
+                <p>Background jobs update live scores, settle completed matches, and keep analytics and value-bet reporting fresh.</p>
             </div>
         </div>
     </div>
 
-    <!-- Ad Banner Slot -->
-    <div style="margin: 3rem 0;">
-        <partial name="_AdBanner" />
-    </div>
-
-    <!-- CTA -->
     <div style="text-align: center; margin: 4rem 0 2rem;">
-        <a href="/predictions/combined" class="mp-hero-cta">
-            View Combined Picks →
+        <a href="/analytics" class="mp-hero-cta">
+            View Performance Analytics →
         </a>
     </div>
 </div>

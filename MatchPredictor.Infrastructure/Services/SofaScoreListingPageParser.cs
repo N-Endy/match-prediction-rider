@@ -39,7 +39,7 @@ public static partial class SofaScoreListingPageParser
 
     private static void ParseSectionEvents(HtmlNode sectionNode, string leagueLabel, string baseUrl, ICollection<SofaScoreListingEntry> entries)
     {
-        var eventNodes = sectionNode.SelectNodes(".//a[@data-id and contains(@href, '/football/match/')]");
+        var eventNodes = sectionNode.SelectNodes(".//a[@data-id and contains(@href, '/tennis/match/')]");
         if (eventNodes is null)
         {
             return;
@@ -252,12 +252,12 @@ public static partial class SofaScoreListingPageParser
             .FirstOrDefault(node => HasAllClassTokens(node, "d_flex", "flex-d_column", "jc_center", "ov_hidden"));
 
         var league = ReadText(
-            leagueHeader?.SelectSingleNode(".//a[contains(@href, '/football/tournament/')]//bdi[normalize-space()][1]") ??
-            sectionNode.SelectSingleNode(".//a[contains(@href, '/football/tournament/')]//bdi[normalize-space()][1]"));
+            leagueHeader?.SelectSingleNode(".//a[contains(@href, '/tennis/tournament/')]//bdi[normalize-space()][1]") ??
+            sectionNode.SelectSingleNode(".//a[contains(@href, '/tennis/tournament/')]//bdi[normalize-space()][1]"));
 
         var country = ReadText(
-            leagueHeader?.SelectSingleNode(".//a[starts-with(@href, '/football/') and not(contains(@href, '/football/tournament/')) and not(contains(@href, '/football/match/'))]//bdi[normalize-space()][1]") ??
-            sectionNode.SelectSingleNode(".//a[starts-with(@href, '/football/') and not(contains(@href, '/football/tournament/')) and not(contains(@href, '/football/match/'))]//bdi[normalize-space()][1]"));
+            leagueHeader?.SelectSingleNode(".//a[starts-with(@href, '/tennis/') and not(contains(@href, '/tennis/tournament/')) and not(contains(@href, '/tennis/match/'))]//bdi[normalize-space()][1]") ??
+            sectionNode.SelectSingleNode(".//a[starts-with(@href, '/tennis/') and not(contains(@href, '/tennis/tournament/')) and not(contains(@href, '/tennis/match/'))]//bdi[normalize-space()][1]"));
 
         if (string.IsNullOrWhiteSpace(league))
         {

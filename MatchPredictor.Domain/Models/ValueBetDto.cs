@@ -2,6 +2,8 @@ namespace MatchPredictor.Domain.Models;
 
 public class ValueBetDto
 {
+    public int? PredictionId { get; set; }
+    public DateTime? MatchDateTimeUtc { get; set; }
     public string League { get; set; } = null!;
     public string HomeTeam { get; set; } = null!;
     public string AwayTeam { get; set; } = null!;

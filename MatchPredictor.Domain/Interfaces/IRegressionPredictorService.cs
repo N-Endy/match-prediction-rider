@@ -6,10 +6,7 @@ namespace MatchPredictor.Domain.Interfaces;
 public interface IRegressionPredictorService
 {
     /// <summary>
-    /// Generate regression-based predictions for upcoming matches using historical MatchScores.
-    /// Returns RegressionPrediction objects with categories:
-    /// - "Over2.5Goals"
-    /// - "BTTS"
-    /// - "StraightWin"
+    /// Legacy interface retained for compatibility.
+    /// TennisPredictor v1 does not use regression-generated predictions for publication or value-bet analysis.
     IEnumerable<RegressionPrediction> GeneratePredictions(IEnumerable<MatchData> upcomingMatches);
 }

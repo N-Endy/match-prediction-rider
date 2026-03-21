@@ -25,12 +25,12 @@ public static partial class PredictionDisplayHelper
                 DateTimeStyles.None,
                 out var parsedTime))
         {
-            return parsedTime.ToString("h:mm tt");
+            return parsedTime.ToString("h:mm tt", CultureInfo.InvariantCulture);
         }
 
         if (prediction.MatchDateTime.HasValue)
         {
-            return DateTimeProvider.ConvertUtcToLocal(prediction.MatchDateTime.Value).ToString("h:mm tt");
+            return DateTimeProvider.ConvertUtcToLocal(prediction.MatchDateTime.Value).ToString("h:mm tt", CultureInfo.InvariantCulture);
         }
 
         return prediction.Time;
@@ -65,12 +65,11 @@ public static partial class PredictionDisplayHelper
     {
         return prediction.PredictionCategory switch
         {
-            "BothTeamsScore" => "mp-badge-btts",
-            "Over2.5Goals" => "mp-badge-over",
-            "Under2.5Goals" => "mp-badge-under",
-            "Draw" => "mp-badge-draw",
-            "StraightWin" when string.Equals(prediction.PredictedOutcome, "Away Win", StringComparison.OrdinalIgnoreCase) => "mp-badge-win-away",
-            "StraightWin" => "mp-badge-win-home",
+            "MatchWinner" when string.Equals(prediction.PredictedOutcome, "Away Win", StringComparison.OrdinalIgnoreCase) => "mp-badge-win-away",
+            "MatchWinner" => "mp-badge-win-home",
+            "OverUnderSets" when string.Equals(prediction.PredictedOutcome, "Under 2.5 Sets", StringComparison.OrdinalIgnoreCase) => "mp-badge-under",
+            "OverUnderSets" => "mp-badge-over",
+            "SetHandicap" => "mp-badge-combined",
             _ => "mp-badge-combined"
         };
     }
@@ -79,10 +78,9 @@ public static partial class PredictionDisplayHelper
     {
         return prediction.PredictionCategory switch
         {
-            "BothTeamsScore" => "BTTS",
-            "Over2.5Goals" or "Under2.5Goals" => prediction.PredictedOutcome ?? prediction.PredictionCategory,
-            "Draw" => "Draw",
-            "StraightWin" => prediction.PredictedOutcome ?? "Win",
+            "MatchWinner" => "Match Winner",
+            "OverUnderSets" => prediction.PredictedOutcome ?? "Set Total",
+            "SetHandicap" => "Set Handicap",
             _ => prediction.PredictedOutcome ?? prediction.PredictionCategory
         };
     }
@@ -91,13 +89,18 @@ public static partial class PredictionDisplayHelper
     {
         return prediction.PredictionCategory switch
         {
-            "BothTeamsScore" => "BTTS",
-            "Over2.5Goals" => "Over2.5",
-            "Under2.5Goals" => "Under2.5",
-            "Draw" => "1X2",
-            "StraightWin" => "StraightWin",
+            "MatchWinner" => "MatchWinner",
+            "OverUnderSets" => "OverUnderSets",
+            "SetHandicap" => "SetHandicap",
             _ => prediction.PredictionCategory
         };
+    }
+
+    public static bool IsBookable(Prediction prediction)
+    {
+        return string.Equals(prediction.PredictionCategory, "MatchWinner", StringComparison.OrdinalIgnoreCase) &&
+               (string.Equals(prediction.PredictedOutcome, "Home Win", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(prediction.PredictedOutcome, "Away Win", StringComparison.OrdinalIgnoreCase));
     }
 
     public static string GetConfidenceChip(Prediction prediction)
@@ -145,12 +148,13 @@ public static partial class PredictionDisplayHelper
             ? "configured"
             : prediction.ThresholdSource.ToLowerInvariant();
 
-        if (prediction.PredictionCategory == "StraightWin")
+        return prediction.PredictionCategory switch
         {
-            return $"{prediction.PredictedOutcome} was published because calibrated confidence sits {margin:+0.0;-0.0;0.0} pts above the {source} gate at {confidence:F1}%.";
-        }
-
-        return $"{GetPredictionBadgeText(prediction)} cleared the {source} threshold with {confidence:F1}% calibrated confidence and {margin:+0.0;-0.0;0.0} pts of breathing room.";
+            "MatchWinner" => $"{prediction.PredictedOutcome} cleared the {source} match-winner gate by {margin:+0.0;-0.0;0.0} pts at {confidence:F1}% calibrated confidence.",
+            "OverUnderSets" => $"{prediction.PredictedOutcome} stayed above the {source} totals gate with {confidence:F1}% calibrated confidence and {margin:+0.0;-0.0;0.0} pts of room.",
+            "SetHandicap" => $"{prediction.PredictedOutcome} was published because the handicap edge remained {margin:+0.0;-0.0;0.0} pts above the {source} threshold.",
+            _ => $"{prediction.PredictedOutcome} cleared the {source} threshold with {confidence:F1}% calibrated confidence."
+        };
     }
 
     public static bool IsActuallyLive(Prediction prediction, DateTime utcNow)
@@ -160,26 +164,14 @@ public static partial class PredictionDisplayHelper
             return false;
         }
 
-        return !prediction.MatchDateTime.HasValue || utcNow <= prediction.MatchDateTime.Value.AddMinutes(200);
+        return !prediction.MatchDateTime.HasValue || utcNow <= prediction.MatchDateTime.Value.AddHours(6);
     }
 
     public static bool IsLivePredictionCorrect(Prediction prediction)
     {
-        if (!prediction.IsLive)
-        {
-            return IsPredictionCorrect(prediction);
-        }
-
-        if (!TryParseScore(prediction.ActualScore, out var homeGoals, out var awayGoals))
-        {
-            return false;
-        }
-
         return prediction.PredictionCategory switch
         {
-            "BothTeamsScore" => DoesBttsPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
-            "Over2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
-            "Under2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+            "OverUnderSets" => IsPredictionCorrect(prediction),
             _ => false
         };
     }
@@ -187,16 +179,6 @@ public static partial class PredictionDisplayHelper
     public static string GetScoreClass(Prediction prediction, DateTime utcNow)
     {
         var isActuallyLive = IsActuallyLive(prediction, utcNow);
-
-        if (isActuallyLive && string.Equals(prediction.PredictionCategory, "Under2.5Goals", StringComparison.OrdinalIgnoreCase))
-        {
-            if (TryParseScore(prediction.ActualScore, out var homeGoals, out var awayGoals) && homeGoals + awayGoals > 2)
-            {
-                return "mp-score-incorrect";
-            }
-
-            return "mp-score-live";
-        }
 
         if (isActuallyLive)
         {
@@ -212,15 +194,13 @@ public static partial class PredictionDisplayHelper
 
     public static bool IsPredictionCorrect(Prediction prediction)
     {
-        if (TryParseScore(prediction.ActualScore, out var homeGoals, out var awayGoals))
+        if (TryParseSetScore(prediction.ActualScore, out var homeSetsWon, out var awaySetsWon))
         {
             return prediction.PredictionCategory switch
             {
-                "BothTeamsScore" => DoesBttsPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
-                "Over2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
-                "Under2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
-                "Draw" => DoesDrawPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
-                "StraightWin" => DoesStraightWinPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+                "MatchWinner" => DoesMatchWinnerPredictionMatch(prediction.PredictedOutcome, homeSetsWon, awaySetsWon),
+                "OverUnderSets" => DoesSetTotalPredictionMatch(prediction.PredictedOutcome, homeSetsWon, awaySetsWon),
+                "SetHandicap" => DoesSetHandicapPredictionMatch(prediction.PredictedOutcome, homeSetsWon, awaySetsWon),
                 _ => OutcomesMatch(prediction.PredictedOutcome, prediction.ActualOutcome)
             };
         }
@@ -228,93 +208,106 @@ public static partial class PredictionDisplayHelper
         return OutcomesMatch(prediction.PredictedOutcome, prediction.ActualOutcome);
     }
 
-    private static bool TryParseScore(string? score, out int homeGoals, out int awayGoals)
+    public static string FormatOutcome(Prediction prediction)
     {
-        homeGoals = 0;
-        awayGoals = 0;
+        return prediction.PredictedOutcome;
+    }
+
+    private static bool TryParseSetScore(string? score, out int homeSetsWon, out int awaySetsWon)
+    {
+        homeSetsWon = 0;
+        awaySetsWon = 0;
 
         if (string.IsNullOrWhiteSpace(score))
         {
             return false;
         }
 
-        var scoreParts = ScoreRegex()
+        var matches = ScoreRegex()
             .Matches(score)
             .Select(match => match.Value)
             .ToArray();
 
-        return scoreParts.Length >= 2
-            && int.TryParse(scoreParts[0], out homeGoals)
-            && int.TryParse(scoreParts[1], out awayGoals);
+        return matches.Length >= 2 &&
+               int.TryParse(matches[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out homeSetsWon) &&
+               int.TryParse(matches[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out awaySetsWon);
     }
 
     [GeneratedRegex(@"\d+")]
     private static partial Regex ScoreRegex();
 
-    private static bool DoesBttsPredictionMatch(string? predictedOutcome, int homeGoals, int awayGoals)
-    {
-        var bothTeamsScored = homeGoals > 0 && awayGoals > 0;
-
-        return NormalizeOutcome(predictedOutcome) switch
-        {
-            "btts" or "yes" or "gg" => bothTeamsScored,
-            "no btts" or "no" or "ng" => !bothTeamsScored,
-            _ => bothTeamsScored
-        };
-    }
-
-    private static bool DoesOverPredictionMatch(string? predictedOutcome, int homeGoals, int awayGoals)
-    {
-        var isOver = homeGoals + awayGoals > 2;
-
-        return NormalizeOutcome(predictedOutcome) switch
-        {
-            "over" or "over 2.5" or "over2.5" => isOver,
-            "under" or "under 2.5" or "under2.5" => !isOver,
-            _ => isOver
-        };
-    }
-
-    private static bool DoesDrawPredictionMatch(string? predictedOutcome, int homeGoals, int awayGoals)
-    {
-        var isDraw = homeGoals == awayGoals;
-
-        return NormalizeOutcome(predictedOutcome) switch
-        {
-            "draw" => isDraw,
-            "not draw" => !isDraw,
-            _ => isDraw
-        };
-    }
-
-    private static bool DoesStraightWinPredictionMatch(string? predictedOutcome, int homeGoals, int awayGoals)
+    private static bool DoesMatchWinnerPredictionMatch(string? predictedOutcome, int homeSetsWon, int awaySetsWon)
     {
         return NormalizeOutcome(predictedOutcome) switch
         {
-            "home win" or "home" or "1" => homeGoals > awayGoals,
-            "away win" or "away" or "2" => awayGoals > homeGoals,
-            "draw" or "x" => homeGoals == awayGoals,
+            "home win" => homeSetsWon > awaySetsWon,
+            "away win" => awaySetsWon > homeSetsWon,
             _ => false
         };
     }
 
-    private static bool OutcomesMatch(string? predictedOutcome, string? actualOutcome)
+    private static bool DoesSetTotalPredictionMatch(string? predictedOutcome, int homeSetsWon, int awaySetsWon)
     {
-        var normalizedPredicted = NormalizeOutcome(predictedOutcome);
-        var normalizedActual = NormalizeOutcome(actualOutcome);
+        var isOver = homeSetsWon + awaySetsWon > 2;
 
-        return normalizedPredicted.Length > 0 &&
-               normalizedActual.Length > 0 &&
-               normalizedPredicted == normalizedActual;
+        return NormalizeOutcome(predictedOutcome) switch
+        {
+            "over 2.5 sets" => isOver,
+            "under 2.5 sets" => !isOver,
+            _ => false
+        };
     }
 
-    private static string NormalizeOutcome(string? outcome)
+    private static bool DoesSetHandicapPredictionMatch(string? predictedOutcome, int homeSetsWon, int awaySetsWon)
     {
-        if (string.IsNullOrWhiteSpace(outcome))
+        if (!TryParseHandicapOutcome(predictedOutcome, out var side, out var line))
         {
-            return string.Empty;
+            return false;
         }
 
-        return Regex.Replace(outcome.Trim().ToLowerInvariant(), @"\s+", " ");
+        return side.Equals("Home", StringComparison.OrdinalIgnoreCase)
+            ? homeSetsWon + line > awaySetsWon
+            : awaySetsWon + line > homeSetsWon;
     }
+
+    private static bool TryParseHandicapOutcome(string? predictedOutcome, out string side, out double line)
+    {
+        side = string.Empty;
+        line = 0d;
+
+        if (string.IsNullOrWhiteSpace(predictedOutcome))
+        {
+            return false;
+        }
+
+        var match = HandicapRegex().Match(predictedOutcome.Trim());
+        if (match.Success == false)
+        {
+            return false;
+        }
+
+        side = CultureInfo.InvariantCulture.TextInfo.ToTitleCase(match.Groups["side"].Value.ToLowerInvariant());
+        return double.TryParse(match.Groups["line"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out line);
+    }
+
+    [GeneratedRegex(@"^(?<side>Home|Away)\s+(?<line>[+-]?\d+(?:\.\d+)?)\s+Sets$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex HandicapRegex();
+
+    private static bool OutcomesMatch(string? predictedOutcome, string? actualOutcome)
+    {
+        return string.Equals(
+            NormalizeOutcome(predictedOutcome),
+            NormalizeOutcome(actualOutcome),
+            StringComparison.Ordinal);
+    }
+
+    private static string NormalizeOutcome(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : WhitespaceRegex().Replace(value.Trim().ToLowerInvariant(), " ");
+    }
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex WhitespaceRegex();
 }

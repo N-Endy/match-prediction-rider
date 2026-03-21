@@ -60,7 +60,13 @@ public static partial class SofaScoreEventPageParser
             return false;
         }
 
-        matchScore.BTTSLabel = ComputeBtts(matchScore.Score);
+        if (TryParseSetScore(matchScore.Score, out var homeSetsWon, out var awaySetsWon))
+        {
+            matchScore.NormalizedScoreline = $"{homeSetsWon}:{awaySetsWon}";
+            matchScore.HomeSetsWon = homeSetsWon;
+            matchScore.AwaySetsWon = awaySetsWon;
+        }
+
         matchScore.IsLive = DetermineLiveState(matchScore.StatusText, text);
         return true;
     }
@@ -155,14 +161,15 @@ public static partial class SofaScoreEventPageParser
         return true;
     }
 
-    private static bool ComputeBtts(string score)
+    private static bool TryParseSetScore(string score, out int homeSetsWon, out int awaySetsWon)
     {
+        homeSetsWon = 0;
+        awaySetsWon = 0;
+
         var parts = score.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         return parts.Length == 2 &&
-               int.TryParse(parts[0], out var home) &&
-               int.TryParse(parts[1], out var away) &&
-               home > 0 &&
-               away > 0;
+               int.TryParse(parts[0], out homeSetsWon) &&
+               int.TryParse(parts[1], out awaySetsWon);
     }
 
     [GeneratedRegex(@"\s+")]

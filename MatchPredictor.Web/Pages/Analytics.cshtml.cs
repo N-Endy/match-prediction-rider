@@ -64,12 +64,15 @@ public class AnalyticsModel : PageModel
         var last7Forecasts = await _db.ForecastObservations
             .Where(forecast => dateSetLast7.Contains(forecast.MatchLocalDate))
             .ToListAsync();
+
         var thresholdProfiles = await _db.ThresholdProfiles
             .AsNoTracking()
             .ToDictionaryAsync(profile => profile.Market);
+
         var betaProfiles = await _db.BetaCalibrationProfiles
             .AsNoTracking()
             .ToDictionaryAsync(profile => profile.Market);
+
         var recentPromotionHistory = await _db.PromotionHistories
             .AsNoTracking()
             .Where(history => history.EffectiveAt >= DateTime.UtcNow.AddDays(-30))
@@ -151,13 +154,19 @@ public class AnalyticsModel : PageModel
     private string SelectDefaultTab()
     {
         if (TodayStats.SettledForecasts > 0 || TodayStats.ForecastMarketStats.Any())
+        {
             return "today";
+        }
 
         if (YesterdayStats.SettledForecasts > 0 || YesterdayStats.ForecastMarketStats.Any())
+        {
             return "yesterday";
+        }
 
         if (Last3DaysStats.SettledForecasts > 0 || Last3DaysStats.ForecastMarketStats.Any())
+        {
             return "3days";
+        }
 
         return "7days";
     }
@@ -169,7 +178,6 @@ public class AnalyticsModel : PageModel
         DateTime generatedAtLocal)
     {
         var markets = Enum.GetValues<PredictionMarket>()
-            .Where(market => market != PredictionMarket.Draw)
             .OrderBy(market => market)
             .Select(market =>
             {
@@ -218,9 +226,7 @@ public class AnalyticsModel : PageModel
         IReadOnlySet<DateOnly> localDates)
     {
         return promotionHistory
-            .Where(history =>
-                history.Market != PredictionMarket.Draw &&
-                localDates.Contains(DateOnly.FromDateTime(DateTimeProvider.ConvertUtcToLocal(history.EffectiveAt))))
+            .Where(history => localDates.Contains(DateOnly.FromDateTime(DateTimeProvider.ConvertUtcToLocal(history.EffectiveAt))))
             .OrderByDescending(history => history.EffectiveAt)
             .Select(history =>
             {
@@ -265,19 +271,19 @@ public class AnalyticsModel : PageModel
 
     private static string FormatNumeric(double? value)
     {
-        return value.HasValue ? value.Value.ToString("F2") : "--";
+        return value.HasValue ? value.Value.ToString("F2", CultureInfo.InvariantCulture) : "--";
     }
 
     private double GetFallbackThreshold(PredictionMarket market)
     {
         return market switch
         {
-            PredictionMarket.BothTeamsScore => _settings.BttsScoreThreshold,
-            PredictionMarket.Over25Goals => _settings.OverTwoGoalsStrongThreshold,
-            PredictionMarket.Under25Goals => _settings.UnderTwoGoalsStrongThreshold,
-            PredictionMarket.Draw => _settings.DrawStrongThreshold,
             PredictionMarket.HomeWin => _settings.HomeWinStrong,
             PredictionMarket.AwayWin => _settings.AwayWinStrong,
+            PredictionMarket.Over25Sets => _settings.OverTwoPointFiveSetsStrongThreshold,
+            PredictionMarket.Under25Sets => _settings.UnderTwoPointFiveSetsStrongThreshold,
+            PredictionMarket.HomeSetHandicap => _settings.HomeSetHandicapStrongThreshold,
+            PredictionMarket.AwaySetHandicap => _settings.AwaySetHandicapStrongThreshold,
             _ => 0.0
         };
     }

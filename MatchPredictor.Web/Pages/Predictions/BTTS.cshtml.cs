@@ -1,18 +1,11 @@
-using MatchPredictor.Domain.Interfaces;
-using MatchPredictor.Infrastructure.Utils;
 using Microsoft.AspNetCore.Mvc;
 
 namespace MatchPredictor.Web.Pages.Predictions;
 
-public class BTTS : FilteredPredictionPageModel
+public class BTTS : Microsoft.AspNetCore.Mvc.RazorPages.PageModel
 {
-    public BTTS(IPredictionQueries predictionQueries)
-        : base(predictionQueries)
+    public IActionResult OnGet()
     {
-    }
-    
-    public async Task<IActionResult> OnGet()
-    {
-        return await LoadAsync(PredictionQueries.GetBTTSAsync(DateTimeProvider.GetLocalTime()));
+        return RedirectToPage("/Predictions/SetHandicap");
     }
 }

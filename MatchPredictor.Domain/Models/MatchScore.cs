@@ -9,7 +9,9 @@ public class MatchScore
     public string HomeTeam { get; set; } = string.Empty;
     public string AwayTeam { get; set; } = string.Empty;
     public string Score { get; set; } = string.Empty;
+    public string? NormalizedScoreline { get; set; }
+    public int? HomeSetsWon { get; set; }
+    public int? AwaySetsWon { get; set; }
     public DateTime MatchTime { get; set; }
-    public bool BTTSLabel { get; set; }
     public bool IsLive { get; set; }
 }

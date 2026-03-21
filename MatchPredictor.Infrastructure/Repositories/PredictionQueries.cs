@@ -15,17 +15,14 @@ public class PredictionQueries : IPredictionQueries
         _context = context;
     }
 
-    public Task<IReadOnlyList<Prediction>> GetBTTSAsync(DateTime date) =>
-        GetByCategoryAsync(date, "BothTeamsScore");
+    public Task<IReadOnlyList<Prediction>> GetMatchWinnerAsync(DateTime date) =>
+        GetByCategoryAsync(date, "MatchWinner");
 
-    public Task<IReadOnlyList<Prediction>> GetOver25Async(DateTime date) =>
-        GetByCategoryAsync(date, "Over2.5Goals");
+    public Task<IReadOnlyList<Prediction>> GetOverUnderSetsAsync(DateTime date) =>
+        GetByCategoryAsync(date, "OverUnderSets");
 
-    public Task<IReadOnlyList<Prediction>> GetUnder25Async(DateTime date) =>
-        GetByCategoryAsync(date, "Under2.5Goals");
-
-    public Task<IReadOnlyList<Prediction>> GetStraightWinAsync(DateTime date) =>
-        GetByCategoryAsync(date, "StraightWin");
+    public Task<IReadOnlyList<Prediction>> GetSetHandicapAsync(DateTime date) =>
+        GetByCategoryAsync(date, "SetHandicap");
 
     public async Task<IReadOnlyList<Prediction>> GetCombinedSampleAsync(DateTime date, int count)
     {
@@ -59,13 +56,10 @@ public class PredictionQueries : IPredictionQueries
             .Where(p => p.PredictionCategory == category && p.MatchLocalDate == localDate && p.IsCurrentRevision)
             .ToListAsync();
 
-        var list = filteredPredictions
+        return filteredPredictions
             .OrderBy(p => p.MatchLocalTime ?? DateTimeProvider.ParseLocalTimeOrNull(p.Time))
             .ThenBy(p => p.League)
             .ThenBy(p => p.HomeTeam)
-            .ToList();
-
-        return list
             .DistinctBy(p => !string.IsNullOrWhiteSpace(p.FixtureKey)
                 ? p.FixtureKey
                 : $"{Normalize(p.League)}|{Normalize(p.HomeTeam)}|{Normalize(p.AwayTeam)}|{p.MatchLocalDate}")

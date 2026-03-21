@@ -20,11 +20,12 @@ public class ThresholdTuningService : IThresholdTuningService
     private const double MaximumThreshold = 0.90;
     private static readonly PredictionMarket[] ActiveThresholdMarkets =
     [
-        PredictionMarket.BothTeamsScore,
-        PredictionMarket.Over25Goals,
-        PredictionMarket.Under25Goals,
+        PredictionMarket.Over25Sets,
+        PredictionMarket.Under25Sets,
         PredictionMarket.HomeWin,
-        PredictionMarket.AwayWin
+        PredictionMarket.AwayWin,
+        PredictionMarket.HomeSetHandicap,
+        PredictionMarket.AwaySetHandicap
     ];
 
     private readonly ApplicationDbContext _dbContext;
@@ -324,11 +325,12 @@ public class ThresholdTuningService : IThresholdTuningService
     {
         return market switch
         {
-            PredictionMarket.BothTeamsScore => _settings.BttsScoreThreshold,
-            PredictionMarket.Over25Goals => _settings.OverTwoGoalsStrongThreshold,
-            PredictionMarket.Under25Goals => _settings.UnderTwoGoalsStrongThreshold,
+            PredictionMarket.Over25Sets => _settings.OverTwoPointFiveSetsStrongThreshold,
+            PredictionMarket.Under25Sets => _settings.UnderTwoPointFiveSetsStrongThreshold,
             PredictionMarket.HomeWin => _settings.HomeWinStrong,
             PredictionMarket.AwayWin => _settings.AwayWinStrong,
+            PredictionMarket.HomeSetHandicap => _settings.HomeSetHandicapStrongThreshold,
+            PredictionMarket.AwaySetHandicap => _settings.AwaySetHandicapStrongThreshold,
             _ => throw new ArgumentOutOfRangeException(nameof(market), market, "Unsupported active threshold market.")
         };
     }

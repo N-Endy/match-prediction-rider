@@ -36,8 +36,8 @@ namespace MatchPredictor.Tests.Integration
             var js = (IJavaScriptExecutor)driver;
             js.ExecuteScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
 
-            _output.WriteLine("Navigating to AiScore...");
-            await driver.Navigate().GoToUrlAsync("https://m.aiscore.com");
+            _output.WriteLine("Navigating to AiScore tennis...");
+            await driver.Navigate().GoToUrlAsync("https://m.aiscore.com/tennis");
 
             var maxWait = 25;
             var elapsed = 0;

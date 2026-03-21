@@ -28,22 +28,13 @@ public class DataAnalyzerService : IDataAnalyzerService
     {
         return matches
             .SelectMany(BuildForecastCandidatesForMatch)
-            .Cast<PredictionCandidate>()
             .ToList();
     }
 
     public IReadOnlyList<PredictionCandidate> SelectPublishedPredictions(IEnumerable<PredictionCandidate> forecastCandidates)
     {
         var forecasts = forecastCandidates.ToList();
-        var published = new List<PredictionCandidate>();
-        var thresholdDecisions = new Dictionary<PredictionMarket, ThresholdDecision>
-        {
-            [PredictionMarket.BothTeamsScore] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.BothTeamsScore, _settings.BttsScoreThreshold),
-            [PredictionMarket.Over25Goals] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.Over25Goals, _settings.OverTwoGoalsStrongThreshold),
-            [PredictionMarket.Under25Goals] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.Under25Goals, _settings.UnderTwoGoalsStrongThreshold),
-            [PredictionMarket.HomeWin] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.HomeWin, _settings.HomeWinStrong),
-            [PredictionMarket.AwayWin] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.AwayWin, _settings.AwayWinStrong)
-        };
+        var thresholdDecisions = BuildThresholdDecisions();
 
         foreach (var candidate in forecasts)
         {
@@ -54,202 +45,144 @@ public class DataAnalyzerService : IDataAnalyzerService
             }
         }
 
-        published.AddRange(MarkPublished(forecasts.Where(candidate =>
-            candidate.Market == PredictionMarket.BothTeamsScore &&
-            candidate.CalibratedProbability >= thresholdDecisions[PredictionMarket.BothTeamsScore].Threshold)));
-
-        foreach (var totalsGroup in forecasts
-                     .Where(candidate => candidate.Market is PredictionMarket.Over25Goals or PredictionMarket.Under25Goals)
-                     .GroupBy(candidate => (
-                         candidate.MatchLocalDate,
-                         candidate.HomeTeam,
-                         candidate.AwayTeam,
-                         candidate.League)))
+        var published = new List<PredictionCandidate>();
+        foreach (var fixtureGroup in forecasts.GroupBy(candidate =>
+                     (candidate.MatchLocalDate, candidate.HomeTeam, candidate.AwayTeam, candidate.League)))
         {
-            var qualifiedTotals = totalsGroup
-                .Where(candidate =>
-                    thresholdDecisions.TryGetValue(candidate.Market, out var decision) &&
-                    candidate.CalibratedProbability >= decision.Threshold)
-                .OrderByDescending(candidate => candidate.CalibratedProbability)
-                .ThenByDescending(candidate => candidate.Market == PredictionMarket.Over25Goals ? 1 : 0)
-                .FirstOrDefault();
-
-            if (qualifiedTotals is not null)
-            {
-                qualifiedTotals.WasPublished = true;
-                published.Add(qualifiedTotals);
-            }
-        }
-
-        foreach (var matchGroup in forecasts
-                     .Where(candidate => candidate.Market is PredictionMarket.HomeWin or PredictionMarket.AwayWin)
-                     .GroupBy(candidate => (
-                         candidate.MatchLocalDate,
-                         candidate.HomeTeam,
-                         candidate.AwayTeam,
-                         candidate.League)))
-        {
-            var bestSide = matchGroup
-                .OrderByDescending(candidate => candidate.CalibratedProbability)
-                .First();
-
-            var threshold = bestSide.Market switch
-            {
-                PredictionMarket.HomeWin => thresholdDecisions[PredictionMarket.HomeWin].Threshold,
-                PredictionMarket.AwayWin => thresholdDecisions[PredictionMarket.AwayWin].Threshold,
-                _ => double.MaxValue
-            };
-
-            if (bestSide.CalibratedProbability >= threshold)
-            {
-                bestSide.WasPublished = true;
-                published.Add(bestSide);
-            }
+            PublishBestInPair(fixtureGroup, published, thresholdDecisions, PredictionMarket.HomeWin, PredictionMarket.AwayWin);
+            PublishBestInPair(fixtureGroup, published, thresholdDecisions, PredictionMarket.Over25Sets, PredictionMarket.Under25Sets);
+            PublishBestInPair(fixtureGroup, published, thresholdDecisions, PredictionMarket.HomeSetHandicap, PredictionMarket.AwaySetHandicap);
         }
 
         return published;
     }
 
-    public IReadOnlyList<PredictionCandidate> BothTeamsScore(IEnumerable<MatchData> matches)
-    {
-        return SelectPublishedPredictions(BuildForecastCandidates(matches))
-            .Where(candidate => candidate.Market == PredictionMarket.BothTeamsScore)
-            .Cast<PredictionCandidate>()
-            .ToList();
-    }
-
-    public IReadOnlyList<PredictionCandidate> OverTwoGoals(IEnumerable<MatchData> matches)
-    {
-        return SelectPublishedPredictions(BuildForecastCandidates(matches))
-            .Where(candidate => candidate.Market == PredictionMarket.Over25Goals)
-            .Cast<PredictionCandidate>()
-            .ToList();
-    }
-
-    public IReadOnlyList<PredictionCandidate> UnderTwoGoals(IEnumerable<MatchData> matches)
-    {
-        return SelectPublishedPredictions(BuildForecastCandidates(matches))
-            .Where(candidate => candidate.Market == PredictionMarket.Under25Goals)
-            .Cast<PredictionCandidate>()
-            .ToList();
-    }
-
-    public IReadOnlyList<PredictionCandidate> StraightWin(IEnumerable<MatchData> matches)
+    public IReadOnlyList<PredictionCandidate> MatchWinner(IEnumerable<MatchData> matches)
     {
         return SelectPublishedPredictions(BuildForecastCandidates(matches))
             .Where(candidate => candidate.Market is PredictionMarket.HomeWin or PredictionMarket.AwayWin)
-            .Cast<PredictionCandidate>()
             .ToList();
     }
 
-    private PredictionCandidate? BuildCandidate(MatchData match, PredictionMarket market, string predictedOutcome, double rawProbability)
+    public IReadOnlyList<PredictionCandidate> OverUnderSets(IEnumerable<MatchData> matches)
     {
-        if (!HasRequiredTeams(match) || rawProbability <= 0)
-            return null;
-
-        var calibration = _calibrationService.CalibrateWithDecision(market, rawProbability);
-        return CreateCandidate(match, market, predictedOutcome, rawProbability, calibration.Probability, calibration.CalibratorUsed);
+        return SelectPublishedPredictions(BuildForecastCandidates(matches))
+            .Where(candidate => candidate.Market is PredictionMarket.Over25Sets or PredictionMarket.Under25Sets)
+            .ToList();
     }
 
-    private static PredictionCandidate CreateCandidate(
-        MatchData match,
-        PredictionMarket market,
-        string predictedOutcome,
-        double rawProbability,
-        double calibratedProbability,
-        string calibratorUsed)
+    public IReadOnlyList<PredictionCandidate> SetHandicap(IEnumerable<MatchData> matches)
     {
-        var date = match.Date?.Trim() ?? string.Empty;
-        var time = match.Time?.Trim() ?? string.Empty;
-        DateTime? utcDateTime = match.MatchDateTime;
-        var matchLocalDate = match.MatchLocalDate;
-        var matchLocalTime = match.MatchLocalTime;
+        return SelectPublishedPredictions(BuildForecastCandidates(matches))
+            .Where(candidate => candidate.Market is PredictionMarket.HomeSetHandicap or PredictionMarket.AwaySetHandicap)
+            .ToList();
+    }
 
-        if (utcDateTime is null)
+    private IDictionary<PredictionMarket, ThresholdDecision> BuildThresholdDecisions()
+    {
+        return new Dictionary<PredictionMarket, ThresholdDecision>
         {
-            var normalizedDateTime = DateTimeProvider.ParseCanonicalMatchDateTime(match.Date, match.Time);
-            date = DateTimeProvider.FormatLocalDate(normalizedDateTime.localDate);
-            time = DateTimeProvider.FormatLocalTime(normalizedDateTime.localTime);
-            utcDateTime = normalizedDateTime.utcDateTime;
-            matchLocalDate = normalizedDateTime.localDate;
-            matchLocalTime = normalizedDateTime.localTime;
-        }
-        else
-        {
-            matchLocalDate ??= DateTimeProvider.ConvertUtcToLocalDate(utcDateTime.Value);
-            matchLocalTime ??= DateTimeProvider.ConvertUtcToLocalTime(utcDateTime.Value);
-            date = DateTimeProvider.FormatLocalDate(matchLocalDate.Value);
-            time = matchLocalTime.HasValue ? DateTimeProvider.FormatLocalTime(matchLocalTime.Value) : time;
-        }
-
-        return new PredictionCandidate
-        {
-            Market = market,
-            Date = date,
-            Time = time,
-            MatchLocalDate = matchLocalDate ?? DateOnly.ParseExact(date, "dd-MM-yyyy", System.Globalization.CultureInfo.InvariantCulture),
-            MatchLocalTime = matchLocalTime,
-            MatchDateTime = utcDateTime,
-            FixtureKey = string.Empty,
-            League = match.League?.Trim() ?? string.Empty,
-            HomeTeam = match.HomeTeam?.Trim() ?? string.Empty,
-            AwayTeam = match.AwayTeam?.Trim() ?? string.Empty,
-            PredictionCategory = market.ToCategory(),
-            PredictedOutcome = predictedOutcome,
-            RawProbability = Math.Clamp(rawProbability, 0.0, 1.0),
-            CalibratedProbability = Math.Clamp(calibratedProbability, 0.0, 1.0),
-            CalibratorUsed = calibratorUsed
+            [PredictionMarket.HomeWin] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.HomeWin, _settings.HomeWinStrong),
+            [PredictionMarket.AwayWin] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.AwayWin, _settings.AwayWinStrong),
+            [PredictionMarket.Over25Sets] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.Over25Sets, _settings.OverTwoPointFiveSetsStrongThreshold),
+            [PredictionMarket.Under25Sets] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.Under25Sets, _settings.UnderTwoPointFiveSetsStrongThreshold),
+            [PredictionMarket.HomeSetHandicap] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.HomeSetHandicap, _settings.HomeSetHandicapStrongThreshold),
+            [PredictionMarket.AwaySetHandicap] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.AwaySetHandicap, _settings.AwaySetHandicapStrongThreshold)
         };
     }
 
-    private static IEnumerable<PredictionCandidate> MarkPublished(IEnumerable<PredictionCandidate> candidates)
+    private static void PublishBestInPair(
+        IGrouping<(DateOnly MatchLocalDate, string HomeTeam, string AwayTeam, string League), PredictionCandidate> fixtureGroup,
+        ICollection<PredictionCandidate> published,
+        IReadOnlyDictionary<PredictionMarket, ThresholdDecision> thresholdDecisions,
+        PredictionMarket firstMarket,
+        PredictionMarket secondMarket)
     {
-        foreach (var candidate in candidates)
-        {
-            candidate.WasPublished = true;
-            yield return candidate;
-        }
-    }
+        var bestCandidate = fixtureGroup
+            .Where(candidate => candidate.Market == firstMarket || candidate.Market == secondMarket)
+            .OrderByDescending(candidate => candidate.CalibratedProbability)
+            .FirstOrDefault();
 
-    private static bool HasRequiredTeams(MatchData match)
-    {
-        return !string.IsNullOrWhiteSpace(match.HomeTeam) && !string.IsNullOrWhiteSpace(match.AwayTeam);
+        if (bestCandidate is null)
+        {
+            return;
+        }
+
+        if (!thresholdDecisions.TryGetValue(bestCandidate.Market, out var decision) ||
+            bestCandidate.CalibratedProbability < decision.Threshold)
+        {
+            return;
+        }
+
+        bestCandidate.WasPublished = true;
+        published.Add(bestCandidate);
     }
 
     private IEnumerable<PredictionCandidate> BuildForecastCandidatesForMatch(MatchData match)
     {
         var probabilities = _probabilityCalculator.CalculateProbabilities(match);
-        var candidates = new[]
+        var candidates = new PredictionCandidate?[]
         {
-            BuildCandidate(
-                match,
-                PredictionMarket.BothTeamsScore,
-                "BTTS",
-                probabilities.Btts),
-            BuildCandidate(
-                match,
-                PredictionMarket.Over25Goals,
-                "Over 2.5",
-                probabilities.Over25),
-            BuildCandidate(
-                match,
-                PredictionMarket.Under25Goals,
-                "Under 2.5",
-                probabilities.Under25),
-            BuildCandidate(
-                match,
-                PredictionMarket.HomeWin,
-                "Home Win",
-                probabilities.HomeWin),
-            BuildCandidate(
-                match,
-                PredictionMarket.AwayWin,
-                "Away Win",
-                probabilities.AwayWin)
+            BuildCandidate(match, PredictionMarket.HomeWin, "Home Win", probabilities.HomeWin),
+            BuildCandidate(match, PredictionMarket.AwayWin, "Away Win", probabilities.AwayWin),
+            BuildCandidate(match, PredictionMarket.Over25Sets, "Over 2.5 Sets", probabilities.Over25Sets),
+            BuildCandidate(match, PredictionMarket.Under25Sets, "Under 2.5 Sets", probabilities.Under25Sets),
+            BuildCandidate(match, PredictionMarket.HomeSetHandicap, BuildSetHandicapOutcome(match, true), probabilities.HomeSetHandicap),
+            BuildCandidate(match, PredictionMarket.AwaySetHandicap, BuildSetHandicapOutcome(match, false), probabilities.AwaySetHandicap)
         };
 
-        return candidates
-            .Where(candidate => candidate != null)
-            .Cast<PredictionCandidate>();
+        return candidates.Where(candidate => candidate is not null).Cast<PredictionCandidate>();
+    }
+
+    private PredictionCandidate? BuildCandidate(MatchData match, PredictionMarket market, string predictedOutcome, double rawProbability)
+    {
+        if (string.IsNullOrWhiteSpace(match.HomeTeam) || string.IsNullOrWhiteSpace(match.AwayTeam) || rawProbability <= 0)
+        {
+            return null;
+        }
+
+        var calibration = _calibrationService.CalibrateWithDecision(market, rawProbability);
+        var kickoff = ResolveCanonicalKickoff(match);
+
+        return new PredictionCandidate
+        {
+            Market = market,
+            Date = DateTimeProvider.FormatLocalDate(kickoff.localDate),
+            Time = DateTimeProvider.FormatLocalTime(kickoff.localTime),
+            MatchLocalDate = kickoff.localDate,
+            MatchLocalTime = kickoff.localTime,
+            MatchDateTime = kickoff.utcDateTime,
+            FixtureKey = string.Empty,
+            League = match.Tournament?.Trim() ?? match.League?.Trim() ?? string.Empty,
+            HomeTeam = match.HomeTeam?.Trim() ?? string.Empty,
+            AwayTeam = match.AwayTeam?.Trim() ?? string.Empty,
+            PredictionCategory = market.ToCategory(),
+            PredictedOutcome = predictedOutcome,
+            RawProbability = Math.Clamp(rawProbability, 0.0, 1.0),
+            CalibratedProbability = Math.Clamp(calibration.Probability, 0.0, 1.0),
+            CalibratorUsed = calibration.CalibratorUsed
+        };
+    }
+
+    private static (DateOnly localDate, TimeOnly localTime, DateTime utcDateTime) ResolveCanonicalKickoff(MatchData match)
+    {
+        if (match.MatchDateTime.HasValue)
+        {
+            var utc = match.MatchDateTime.Value;
+            return (
+                match.MatchLocalDate ?? DateTimeProvider.ConvertUtcToLocalDate(utc),
+                match.MatchLocalTime ?? DateTimeProvider.ConvertUtcToLocalTime(utc),
+                utc);
+        }
+
+        return DateTimeProvider.ParseCanonicalMatchDateTime(match.Date, match.Time);
+    }
+
+    private static string BuildSetHandicapOutcome(MatchData match, bool homeSide)
+    {
+        var line = Math.Abs(match.SetHandicapLine) > 0 ? match.SetHandicapLine : -1.5;
+        var sideLine = homeSide ? line : -line;
+        var side = homeSide ? "Home" : "Away";
+        return $"{side} {sideLine:+0.0;-0.0} Sets";
     }
 }

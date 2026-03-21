@@ -2,13 +2,12 @@ namespace MatchPredictor.Domain.Models;
 
 public enum PredictionMarket
 {
-    BothTeamsScore = 0,
-    Over25Goals = 1,
-    StraightWin = 2,
-    Draw = 3,
-    HomeWin = 4,
-    AwayWin = 5,
-    Under25Goals = 6
+    HomeWin = 0,
+    AwayWin = 1,
+    Over25Sets = 2,
+    Under25Sets = 3,
+    HomeSetHandicap = 4,
+    AwaySetHandicap = 5
 }
 
 public static class PredictionMarketExtensions
@@ -17,13 +16,12 @@ public static class PredictionMarketExtensions
     {
         return market switch
         {
-            PredictionMarket.BothTeamsScore => "BothTeamsScore",
-            PredictionMarket.Over25Goals => "Over2.5Goals",
-            PredictionMarket.Under25Goals => "Under2.5Goals",
-            PredictionMarket.HomeWin => "StraightWin",
-            PredictionMarket.AwayWin => "StraightWin",
-            PredictionMarket.StraightWin => "StraightWin",
-            PredictionMarket.Draw => "Draw",
+            PredictionMarket.HomeWin => "MatchWinner",
+            PredictionMarket.AwayWin => "MatchWinner",
+            PredictionMarket.Over25Sets => "OverUnderSets",
+            PredictionMarket.Under25Sets => "OverUnderSets",
+            PredictionMarket.HomeSetHandicap => "SetHandicap",
+            PredictionMarket.AwaySetHandicap => "SetHandicap",
             _ => throw new ArgumentOutOfRangeException(nameof(market), market, null)
         };
     }
@@ -32,13 +30,12 @@ public static class PredictionMarketExtensions
     {
         return market switch
         {
-            PredictionMarket.BothTeamsScore => "BTTS",
-            PredictionMarket.Over25Goals => "Over 2.5",
-            PredictionMarket.Under25Goals => "Under 2.5",
-            PredictionMarket.Draw => "Draw",
             PredictionMarket.HomeWin => "Home Win",
             PredictionMarket.AwayWin => "Away Win",
-            PredictionMarket.StraightWin => "Straight Win",
+            PredictionMarket.Over25Sets => "Over 2.5 Sets",
+            PredictionMarket.Under25Sets => "Under 2.5 Sets",
+            PredictionMarket.HomeSetHandicap => "Home Set Handicap",
+            PredictionMarket.AwaySetHandicap => "Away Set Handicap",
             _ => market.ToString()
         };
     }
@@ -47,14 +44,12 @@ public static class PredictionMarketExtensions
     {
         market = category switch
         {
-            "BothTeamsScore" => PredictionMarket.BothTeamsScore,
-            "Over2.5Goals" => PredictionMarket.Over25Goals,
-            "Under2.5Goals" => PredictionMarket.Under25Goals,
-            "StraightWin" => PredictionMarket.StraightWin,
-            "Draw" => PredictionMarket.Draw,
+            "MatchWinner" => PredictionMarket.HomeWin,
+            "OverUnderSets" => PredictionMarket.Over25Sets,
+            "SetHandicap" => PredictionMarket.HomeSetHandicap,
             _ => default
         };
 
-        return category is "BothTeamsScore" or "Over2.5Goals" or "Under2.5Goals" or "StraightWin" or "Draw";
+        return category is "MatchWinner" or "OverUnderSets" or "SetHandicap";
     }
 }

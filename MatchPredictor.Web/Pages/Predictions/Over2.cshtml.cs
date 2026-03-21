@@ -1,18 +1,11 @@
-using MatchPredictor.Domain.Interfaces;
-using MatchPredictor.Infrastructure.Utils;
 using Microsoft.AspNetCore.Mvc;
 
 namespace MatchPredictor.Web.Pages.Predictions;
 
-public class Over2 : FilteredPredictionPageModel
+public class Over2 : Microsoft.AspNetCore.Mvc.RazorPages.PageModel
 {
-    public Over2(IPredictionQueries predictionQueries)
-        : base(predictionQueries)
+    public IActionResult OnGet()
     {
-    }
-    
-    public async Task<IActionResult> OnGet()
-    {
-        return await LoadAsync(PredictionQueries.GetOver25Async(DateTimeProvider.GetLocalTime()));
+        return RedirectToPage("/Predictions/OverUnderSets");
     }
 }

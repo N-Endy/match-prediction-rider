@@ -1,18 +1,18 @@
-@page
-@model MatchPredictor.Web.Pages.Predictions.Combined
+@page "/predictions/over-under-sets"
+@model MatchPredictor.Web.Pages.Predictions.OverUnderSets
 
 @{
-    ViewData["Title"] = "Combined Predictions";
+    ViewData["Title"] = "Over / Under Sets";
     var today = MatchPredictor.Infrastructure.Utils.DateTimeProvider.GetLocalTime().ToString("dd MMM yyyy");
 }
 
 <div class="mp-container">
     <div class="mp-page-header">
         <div class="mp-page-title">
-            <div class="mp-page-title-icon" style="background: rgba(6, 182, 212, 0.1);">📊</div>
+            <div class="mp-page-title-icon" style="background: rgba(59, 130, 246, 0.1);">📈</div>
             <div>
-                <h1>Combined Predictions</h1>
-                <p class="mp-page-subtext">A mixed tennis card spanning match winner, over/under sets, and set handicap markets.</p>
+                <h1>Over / Under 2.5 Sets</h1>
+                <p class="mp-page-subtext">Totals picks for matches expected to finish in straight sets or go the full distance.</p>
             </div>
         </div>
         <div class="mp-date-badge">📅 @today</div>
@@ -32,10 +32,10 @@
     else
     {
         <div class="mp-empty-state">
-            <div class="mp-empty-state-icon">📊</div>
-            <p>@(Model.TotalMatchCount > 0 ? "No combined predictions match the current filters." : "No combined predictions available for today yet.")</p>
+            <div class="mp-empty-state-icon">📈</div>
+            <p>@(Model.TotalMatchCount > 0 ? "No over/under sets predictions match the current filters." : "No set-total predictions are available for today yet.")</p>
             <p style="font-size: 0.85rem; margin-top: 0.5rem;">
-                @(Model.TotalMatchCount > 0 ? "Try resetting the filters to bring more of the tennis card back in." : "Predictions are updated daily. Check back soon!")
+                @(Model.TotalMatchCount > 0 ? "Try widening the filters or checking another time window." : "The tennis card refreshes daily. Check back soon.")
             </p>
         </div>
     }

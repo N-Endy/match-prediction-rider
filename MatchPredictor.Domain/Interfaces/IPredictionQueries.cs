@@ -4,9 +4,8 @@ namespace MatchPredictor.Domain.Interfaces;
 
 public interface IPredictionQueries
 {
-    Task<IReadOnlyList<Prediction>> GetBTTSAsync(DateTime date);
-    Task<IReadOnlyList<Prediction>> GetOver25Async(DateTime date);
-    Task<IReadOnlyList<Prediction>> GetUnder25Async(DateTime date);
-    Task<IReadOnlyList<Prediction>> GetStraightWinAsync(DateTime date);
+    Task<IReadOnlyList<Prediction>> GetMatchWinnerAsync(DateTime date);
+    Task<IReadOnlyList<Prediction>> GetOverUnderSetsAsync(DateTime date);
+    Task<IReadOnlyList<Prediction>> GetSetHandicapAsync(DateTime date);
     Task<IReadOnlyList<Prediction>> GetCombinedSampleAsync(DateTime date, int count);
 }

@@ -9,39 +9,22 @@ public class MatchData
     public TimeOnly? MatchLocalTime { get; set; }
     public DateTime? MatchDateTime { get; set; }
     public string FixtureKey { get; set; } = string.Empty;
-    public string? League { get; set;}
+    public string? League { get; set; }
+    public string? Tournament { get; set; }
+    public string? Surface { get; set; }
     public string? HomeTeam { get; set; }
     public string? AwayTeam { get; set; }
     public double HomeWin { get; set; }
-    public double Draw { get; set; }
     public double AwayWin { get; set; }
-    public double OverTwoGoals { get; set; }
-    public double OverThreeGoals { get; set; }
-    public double UnderTwoGoals { get; set; }
-    public double UnderThreeGoals { get; set; }
-    public double OverFourGoals { get; set; }
-    public double BttsYes { get; set; }
-    public double BttsNo { get; set; }
-    
-    // Granular Over/Under lines for better goal expectation modeling
-    public double OverOneGoal { get; set; }
-    public double OverOnePointFive { get; set; }
-    public double UnderOnePointFive { get; set; }
-    
-    // Asian Handicap data — key for implied goal expectation
-    // ah_0: level handicap (pure win probability without draw)
-    public double AhZeroHome { get; set; }
-    public double AhZeroAway { get; set; }
-    // ah_-0.5: most important AH line — home must win by 1+ goal
-    public double AhMinusHalfHome { get; set; }
-    public double AhMinusHalfAway { get; set; }
-    // ah_-1: home must win by 2+ goals
-    public double AhMinusOneHome { get; set; }
-    public double AhMinusOneAway { get; set; }
-    // ah_+0.5: away doesn't lose (draw or win)
-    public double AhPlusHalfHome { get; set; }
-    public double AhPlusHalfAway { get; set; }
-    
+    public double OverTwoPointFiveSets { get; set; }
+    public double UnderTwoPointFiveSets { get; set; }
+    public double SetHandicapHome { get; set; }
+    public double SetHandicapAway { get; set; }
+    public double SetHandicapLine { get; set; } = 1.5;
+    public string? SetHandicapLabel { get; set; }
+    public string? SourceMatchId { get; set; }
     public string? Score { get; set; }
-    public int BttsLabel { get; set; }
+    public string? NormalizedScoreline { get; set; }
+    public int? HomeSetsWon { get; set; }
+    public int? AwaySetsWon { get; set; }
 }

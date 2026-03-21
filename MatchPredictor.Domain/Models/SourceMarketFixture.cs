@@ -9,16 +9,6 @@ public class SourceMarketFixture
     public DateTime? MatchTimeUtc { get; set; }
     public double? HomeWinProbability { get; set; }
     public double? HomeWinOdds { get; set; }
-    public double? DrawProbability { get; set; }
-    public double? DrawOdds { get; set; }
     public double? AwayWinProbability { get; set; }
     public double? AwayWinOdds { get; set; }
-    public double? Over25Probability { get; set; }
-    public double? Over25Odds { get; set; }
-    public double? Under25Probability { get; set; }
-    public double? Under25Odds { get; set; }
-    public double? BttsYesProbability { get; set; }
-    public double? BttsYesOdds { get; set; }
-    public double? BttsNoProbability { get; set; }
-    public double? BttsNoOdds { get; set; }
 }

@@ -253,7 +253,7 @@ public static partial class SofaScoreDiscoveryHelper
             : null;
     }
 
-    [GeneratedRegex(@"(?:https?:\/\/www\.sofascore\.com)?\/football\/match\/[A-Za-z0-9\-]+\/[A-Za-z0-9]+", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:https?:\/\/www\.sofascore\.com)?\/tennis\/match\/[A-Za-z0-9\-]+\/[A-Za-z0-9]+", RegexOptions.IgnoreCase)]
     private static partial Regex MatchUrlRegex();
 }
 

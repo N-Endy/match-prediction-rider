@@ -33,7 +33,7 @@ public static class ScoreMatchingHelper
         "de", "da", "do", "la", "le", "los", "del", "al", "el", "di", "il", "des", "den", "het"
     };
 
-    // Common football terms that are too generic to identify a club on their own.
+    // Common opponent-name terms that are too generic to identify a player or team on their own.
     private static readonly HashSet<string> WeakTeamTokens = new(StringComparer.OrdinalIgnoreCase)
     {
         "athletic", "atletico", "boys", "city", "deportivo", "dynamo",
@@ -122,12 +122,9 @@ public static class ScoreMatchingHelper
                 prediction.IsLive = match.IsLive;
                 prediction.ActualOutcome = prediction.PredictionCategory switch
                 {
-                    "BothTeamsScore" => match.BTTSLabel ? "BTTS" : "No BTTS",
-                    "Draw"           => DetermineDrawOutcome(match.Score),
-                    "Over2.5Goals"   => DetermineOver25Outcome(match.Score),
-                    "Under2.5Goals"  => DetermineOver25Outcome(match.Score),
-                    "StraightWin"    => DetermineStraightWinOutcome(match.Score),
-                    _                => null
+                    "MatchWinner" => DetermineMatchWinnerOutcome(match.NormalizedScoreline ?? match.Score),
+                    "OverUnderSets" => DetermineOverUnderSetsOutcome(match.NormalizedScoreline ?? match.Score),
+                    _ => null
                 };
             }
             else if (!match.IsLive)
@@ -159,12 +156,9 @@ public static class ScoreMatchingHelper
             prediction.IsLive = match.IsLive;
             prediction.ActualOutcome = prediction.PredictionCategory switch
             {
-                "BothTeamsScore" => match.BTTSLabel ? "BTTS" : "No BTTS",
-                "Draw"           => DetermineDrawOutcome(match.Score),
-                "Over2.5Goals"   => DetermineOver25Outcome(match.Score),
-                "Under2.5Goals"  => DetermineOver25Outcome(match.Score),
-                "StraightWin"    => DetermineStraightWinOutcome(match.Score),
-                _                => null
+                "MatchWinner" => DetermineMatchWinnerOutcome(match.NormalizedScoreline ?? match.Score),
+                "OverUnderSets" => DetermineOverUnderSetsOutcome(match.NormalizedScoreline ?? match.Score),
+                _ => null
             };
         }
     }
@@ -533,12 +527,15 @@ public static class ScoreMatchingHelper
         return sb.ToString().Normalize(NormalizationForm.FormC);
     }
 
-    // Combined parsing logic to avoid duplicating string splits
     private static (int Home, int Away, bool IsValid) ParseScore(string score)
     {
-        var parts = score.Split(':');
-        if (parts.Length == 2 && 
-            int.TryParse(parts[0], out var h) && 
+        var parts = Regex.Split(score, @"\D+")
+            .Where(part => !string.IsNullOrWhiteSpace(part))
+            .Take(2)
+            .ToArray();
+
+        if (parts.Length == 2 &&
+            int.TryParse(parts[0], out var h) &&
             int.TryParse(parts[1], out var a))
         {
             return (h, a, true);
@@ -546,25 +543,17 @@ public static class ScoreMatchingHelper
         return (0, 0, false);
     }
 
-    private static string DetermineDrawOutcome(string score)
-    {
-        var (h, a, isValid) = ParseScore(score);
-        return isValid ? (h == a ? "Draw" : "Not Draw") : "Unknown";
-    }
-
-    private static string DetermineOver25Outcome(string score)
-    {
-        var (h, a, isValid) = ParseScore(score);
-        return isValid ? ((h + a) > 2 ? "Over 2.5" : "Under 2.5") : "Unknown";
-    }
-
-    private static string DetermineStraightWinOutcome(string score)
+    private static string DetermineMatchWinnerOutcome(string score)
     {
         var (h, a, isValid) = ParseScore(score);
         if (!isValid) return "Unknown";
-        
-        if (h > a) return "Home Win";
-        return h < a ? "Away Win" : "Draw";
+        return h > a ? "Home Win" : "Away Win";
+    }
+
+    private static string DetermineOverUnderSetsOutcome(string score)
+    {
+        var (h, a, isValid) = ParseScore(score);
+        return isValid ? ((h + a) > 2 ? "Over 2.5 Sets" : "Under 2.5 Sets") : "Unknown";
     }
     
     /// <summary>

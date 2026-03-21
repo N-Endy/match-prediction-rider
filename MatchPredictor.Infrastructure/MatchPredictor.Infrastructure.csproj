@@ -32,4 +32,13 @@
       <Folder Include="Persistence\Migrations\" />
     </ItemGroup>
 
+    <ItemGroup>
+      <Compile Remove="Services\AiAdvisorService.cs" />
+      <Compile Remove="Services\AiChatContextBuilder.cs" />
+      <Compile Remove="Services\AiChatKnowledgeService.cs" />
+      <Compile Remove="Services\AiChatRequestParser.cs" />
+      <Compile Remove="Services\AiChatSchemaFallbackService.cs" />
+      <Compile Remove="Services\RegressionPredictorService.cs" />
+    </ItemGroup>
+
 </Project>

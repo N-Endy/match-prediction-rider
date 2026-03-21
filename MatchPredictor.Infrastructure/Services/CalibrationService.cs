@@ -11,11 +11,12 @@ public class CalibrationService : ICalibrationService
     private const int MinimumBetaSampleCount = 40;
     private static readonly PredictionMarket[] ActiveCalibrationMarkets =
     [
-        PredictionMarket.BothTeamsScore,
-        PredictionMarket.Over25Goals,
-        PredictionMarket.Under25Goals,
+        PredictionMarket.Over25Sets,
+        PredictionMarket.Under25Sets,
         PredictionMarket.HomeWin,
-        PredictionMarket.AwayWin
+        PredictionMarket.AwayWin,
+        PredictionMarket.HomeSetHandicap,
+        PredictionMarket.AwaySetHandicap
     ];
     private readonly ApplicationDbContext _dbContext;
     private List<MarketCalibrationProfile> _profiles;

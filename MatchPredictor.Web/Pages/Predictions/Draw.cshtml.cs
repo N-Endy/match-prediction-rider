@@ -12,6 +12,6 @@ public class Draw : FilteredPredictionPageModel
 
     public IActionResult OnGet()
     {
-        return RedirectToPage("/Predictions/Under2");
+        return RedirectToPage("/Predictions/OverUnderSets");
     }
 }

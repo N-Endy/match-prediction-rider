@@ -4,13 +4,13 @@
     <div class="mp-prediction-toolbar-grid">
         <label class="mp-filter-field">
             <span>Search</span>
-            <input type="search" name="Search" value="@Model.Search" placeholder="Team, league, or pick" class="mp-filter-input" />
+            <input type="search" name="Search" value="@Model.Search" placeholder="Player, tournament, or pick" class="mp-filter-input" />
         </label>
 
         <label class="mp-filter-field">
-            <span>League</span>
+            <span>Tournament</span>
             <select name="League" class="mp-filter-select">
-                <option value="">All leagues</option>
+                <option value="">All tournaments</option>
                 @foreach (var league in Model.LeagueOptions)
                 {
                     <option value="@league" selected="@(string.Equals(Model.League, league, StringComparison.OrdinalIgnoreCase) ? "selected" : null)">@league</option>

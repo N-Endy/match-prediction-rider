@@ -122,109 +122,11 @@ public partial class WebScraperService : IWebScraperService
 
     public async Task<List<MatchScore>> ScrapeMatchScoresAsync()
     {
-        EnsureBrowserScrapingEnabled("primary score scraping");
-
         try
         {
-            return await RunWithChromeSessionAsync(
-                async driver =>
-                {
-                    var downloadUrl = _configuration["ScrapingValues:ScoresWebsite"] ??
-                                      throw new InvalidOperationException("Download URL for scores is not configured in appsettings.json");
-
-                    _logger.LogInformation("Checking URL for scores...");
-                    await driver.Navigate().GoToUrlAsync(downloadUrl);
-
-                    _logger.LogInformation("Commencing scrapping for scores in inner HTML...");
-
-                    // Wait for dynamic content to render
-                    await Task.Delay(3000);
-
-                    var container = driver.FindElement(By.Id("score-data"));
-                    var rawHtml = container.GetAttribute("innerHTML");
-
-                    var doc = new HtmlDocument();
-                    doc.LoadHtml($"<div>{rawHtml}</div>");
-
-                    var currentLeague = "";
-
-                    // Use direct ChildNodes — NOT recursive Nodes() which flattens the tree
-                    var nodes = doc.DocumentNode.FirstChild.ChildNodes.ToList();
-
-                    var matchScores = new List<MatchScore>();
-
-                    for (var i = 0; i < nodes.Count; i++)
-                    {
-                        var node = nodes[i];
-
-                        switch (node.Name)
-                        {
-                            case "h4":
-                                currentLeague = node.InnerText.Split("Standings")[0].Trim();
-                                break;
-                            case "span":
-                            {
-                                var currentTime = node.InnerText.Trim();
-                                var isLive = node.GetAttributeValue("class", "") == "live";
-
-                                // Look ahead for teams (text node) and score (a.fin or live score link)
-                                string? teams = null;
-                                string? score = null;
-
-                                for (var j = 1; j <= 4 && i + j < nodes.Count; j++)
-                                {
-                                    var next = nodes[i + j];
-
-                                    if (next.Name == "#text" && next.InnerText.Contains(" - "))
-                                    {
-                                        teams = next.InnerText.Trim();
-                                    }
-                                    else if (next.Name == "a")
-                                    {
-                                        var cls = next.GetAttributeValue("class", "");
-                                        // Accept both finished ("fin") and live scores
-                                        if (cls == "fin" || isLive || cls == "")
-                                        {
-                                            var rawString = next.InnerText.Trim();
-                                            var m = MyRegex().Match(rawString);
-                                            if (m.Success)
-                                            {
-                                                score = m.Value;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if (!string.IsNullOrWhiteSpace(score) && !string.IsNullOrWhiteSpace(teams) && teams.Contains(" - "))
-                                {
-                                    var split = teams.Split(" - ");
-                                    var home = split[0].Trim();
-                                    var away = split[1].Trim();
-
-                                    DateTime matchTime;
-                                    try { matchTime = ParseScoreMatchTime(currentTime, isLive); }
-                                    catch { matchTime = DateTime.UtcNow; } // Live matches may not expose a kickoff time in the listing
-
-                                    matchScores.Add(new MatchScore
-                                    {
-                                        League = currentLeague,
-                                        HomeTeam = home,
-                                        AwayTeam = away,
-                                        Score = score,
-                                        MatchTime = matchTime,
-                                        BTTSLabel = IsBtts(score),
-                                        IsLive = isLive
-                                    });
-                                }
-
-                                break;
-                            }
-                        }
-                    }
-
-                    return matchScores;
-                },
-                purpose: "score scraping");
+            var dayOffset = ParseConfiguredSignedInt("ScrapingValues:ScoresDayOffset", 0);
+            var html = await FetchFlashScoreTennisHtmlAsync(dayOffset);
+            return ParseFlashScoreTennisHtml(html, dayOffset);
         }
         catch (Exception e)
         {
@@ -240,7 +142,7 @@ public partial class WebScraperService : IWebScraperService
             _logger.LogWarning(
                 "AiScore is in cooldown for another {RemainingSeconds:0}s after a recent block. Skipping direct fetch and falling back immediately.",
                 remaining.TotalSeconds);
-            return await FetchAndTrackApiFootballFallbackAsync("AiScore cooldown active.");
+            return await FetchAndTrackAiScoreFallbackAsync("AiScore cooldown active.");
         }
 
         _aiScoreSourceHealthTracker.RecordAttempt("http");
@@ -275,10 +177,10 @@ public partial class WebScraperService : IWebScraperService
 
         if (!_browserScrapingEnabled)
         {
-            var detail = "Browser scraping is disabled. Skipping AiScore headless browser fallback and using API-Football.";
+            var detail = "Browser scraping is disabled. Skipping AiScore headless browser fallback; TennisPredictor has no legacy non-tennis fallback.";
             _aiScoreSourceHealthTracker.RecordAttempt("browser-disabled", detail);
             _logger.LogWarning("{Detail}", detail);
-            return await FetchAndTrackApiFootballFallbackAsync("Browser scraping disabled.");
+            return await FetchAndTrackAiScoreFallbackAsync("Browser scraping disabled.");
         }
 
         // ── Secondary: Headless Browser → extract window.__NUXT__ state from AiScore ──
@@ -296,21 +198,21 @@ public partial class WebScraperService : IWebScraperService
             if (browserAttempt.Status == AiScoreAttemptStatus.Blocked)
             {
                 _aiScoreSourceHealthTracker.RecordBrowserBlocked(browserAttempt.Detail, AiScoreBlockedCooldown);
-                _logger.LogWarning("{Detail} Falling back to API-Football.", browserAttempt.Detail);
+                _logger.LogWarning("{Detail} No additional AiScore fallback is available for TennisPredictor.", browserAttempt.Detail);
             }
             else
             {
                 _aiScoreSourceHealthTracker.RecordEmpty("browser", browserAttempt.Detail);
-                _logger.LogWarning("AiScore Browser extraction returned 0 matches. Falling back to API-Football.");
+                _logger.LogWarning("AiScore Browser extraction returned 0 matches. No additional AiScore fallback is available for TennisPredictor.");
             }
         }
         catch (Exception ex)
         {
             _aiScoreSourceHealthTracker.RecordFailure("browser", ex.Message);
-            _logger.LogWarning(ex, "AiScore Browser extraction failed. Falling back to API-Football.");
+            _logger.LogWarning(ex, "AiScore Browser extraction failed. No additional AiScore fallback is available for TennisPredictor.");
         }
 
-        return await FetchAndTrackApiFootballFallbackAsync("AiScore unavailable after direct attempts.");
+        return await FetchAndTrackAiScoreFallbackAsync("AiScore unavailable after direct attempts.");
     }
 
     public async Task<List<SofaScoreMatchScore>> ScrapeSofaScoreMatchScoresAsync(IEnumerable<SofaScoreFixtureRequest> fixtures)
@@ -377,7 +279,7 @@ public partial class WebScraperService : IWebScraperService
     /// </summary>
     private async Task<AiScoreAttemptResult> ScrapeAiScoreViaHttpAttemptAsync()
     {
-        var aiScoreUrl = _configuration["ScrapingValues:AiScoreWebsite"] ?? "https://m.aiscore.com";
+        var aiScoreUrl = ResolveAiScoreTennisUrl(_configuration["ScrapingValues:AiScoreWebsite"]);
 
         _logger.LogInformation("Fetching AiScore SSR HTML via HTTP...");
 
@@ -423,7 +325,7 @@ public partial class WebScraperService : IWebScraperService
     /// </summary>
     private async Task<AiScoreAttemptResult> ScrapeAiScoreViaBrowserAttemptAsync()
     {
-        var aiScoreUrl = _configuration["ScrapingValues:AiScoreWebsite"] ?? "https://m.aiscore.com";
+        var aiScoreUrl = ResolveAiScoreTennisUrl(_configuration["ScrapingValues:AiScoreWebsite"]);
 
         _logger.LogInformation("Fetching AiScore SSR HTML via Headless Browser...");
 
@@ -472,8 +374,8 @@ public partial class WebScraperService : IWebScraperService
                     if (hasNuxt)
                     {
                         _logger.LogInformation("Found window.__NUXT__ via JS executor.");
-                        var nuxtJson = js.ExecuteScript(@"
-                    var s = window.__NUXT__ && window.__NUXT__.state && window.__NUXT__.state['football/home'];
+                    var nuxtJson = js.ExecuteScript(@"
+                    var s = window.__NUXT__ && window.__NUXT__.state && window.__NUXT__.state['tennis/home'];
                     if (!s) return JSON.stringify({matches:[], teams:[], comps:[]});
                     return JSON.stringify({ 
                         matches: s.matchesData_matches || [], 
@@ -585,8 +487,8 @@ public partial class WebScraperService : IWebScraperService
                         homeScores.GetArrayLength() == 0 || awayScores.GetArrayLength() == 0)
                         continue;
 
-                    var homeGoals = homeScores[0].GetInt32();
-                    var awayGoals = awayScores[0].GetInt32();
+                    var homeSetsWon = homeScores[0].GetInt32();
+                    var awaySetsWon = awayScores[0].GetInt32();
 
                     var htId = m.TryGetProperty("homeTeam", out var ht) ? ht.GetProperty("id").GetString() : m.TryGetProperty("homeTeamId", out var hti) ? hti.GetString() : "";
                     var atId = m.TryGetProperty("awayTeam", out var at) ? at.GetProperty("id").GetString() : m.TryGetProperty("awayTeamId", out var ati) ? ati.GetString() : "";
@@ -601,15 +503,18 @@ public partial class WebScraperService : IWebScraperService
                         ? DateTimeOffset.FromUnixTimeSeconds(matchTimeUnix).UtcDateTime
                         : DateTime.UtcNow;
 
-                    var score = $"{homeGoals}:{awayGoals}";
+                    var score = $"{homeSetsWon}:{awaySetsWon}";
+                    var scoreSummary = BuildSetScoreSummary(score);
                     matchScores.Add(new AiScoreMatchScore
                     {
                         League = leagueName,
                         HomeTeam = homeName,
                         AwayTeam = awayName,
                         Score = score,
+                        NormalizedScoreline = scoreSummary.NormalizedScoreline,
+                        HomeSetsWon = scoreSummary.HomeSetsWon,
+                        AwaySetsWon = scoreSummary.AwaySetsWon,
                         MatchTime = matchTime,
-                        BTTSLabel = IsBtts(score),
                         IsLive = isLive
                     });
                 }
@@ -660,9 +565,9 @@ public partial class WebScraperService : IWebScraperService
             engine.Execute("var nuxt = " + jsonStr);
             var extractedJson = engine.Evaluate(@"
                 JSON.stringify({ 
-                    matches: (nuxt.state['football/home'] || {}).matchesData_matches || [], 
-                    teams: (nuxt.state['football/home'] || {}).matchesData_teams || [], 
-                    comps: (nuxt.state['football/home'] || {}).matchesData_competitions || [] 
+                    matches: (nuxt.state['tennis/home'] || {}).matchesData_matches || [], 
+                    teams: (nuxt.state['tennis/home'] || {}).matchesData_teams || [], 
+                    comps: (nuxt.state['tennis/home'] || {}).matchesData_competitions || [] 
                 })
             ").AsString();
 
@@ -708,8 +613,8 @@ public partial class WebScraperService : IWebScraperService
                         awayScores.GetArrayLength() == 0) 
                         continue;
 
-                    var homeGoals = homeScores[0].GetInt32();
-                    var awayGoals = awayScores[0].GetInt32();
+                    var homeSetsWon = homeScores[0].GetInt32();
+                    var awaySetsWon = awayScores[0].GetInt32();
                     
                     var htId = m.TryGetProperty("homeTeam", out var ht) ? ht.GetProperty("id").GetString() : m.TryGetProperty("homeTeamId", out var hti) ? hti.GetString() : "";
                     var atId = m.TryGetProperty("awayTeam", out var at) ? at.GetProperty("id").GetString() : m.TryGetProperty("awayTeamId", out var ati) ? ati.GetString() : "";
@@ -724,7 +629,8 @@ public partial class WebScraperService : IWebScraperService
                         ? DateTimeOffset.FromUnixTimeSeconds(matchTimeUnix).UtcDateTime
                         : DateTime.UtcNow;
 
-                    var score = $"{homeGoals}:{awayGoals}";
+                    var score = $"{homeSetsWon}:{awaySetsWon}";
+                    var scoreSummary = BuildSetScoreSummary(score);
 
                     matchScores.Add(new AiScoreMatchScore
                     {
@@ -732,8 +638,10 @@ public partial class WebScraperService : IWebScraperService
                         HomeTeam = homeName,
                         AwayTeam = awayName,
                         Score = score,
+                        NormalizedScoreline = scoreSummary.NormalizedScoreline,
+                        HomeSetsWon = scoreSummary.HomeSetsWon,
+                        AwaySetsWon = scoreSummary.AwaySetsWon,
                         MatchTime = matchTime,
-                        BTTSLabel = IsBtts(score),
                         IsLive = isLive
                     });
                 }
@@ -751,119 +659,13 @@ public partial class WebScraperService : IWebScraperService
         return matchScores;
     }
 
-    /// <summary>
-    /// Fallback: Fetches scores from API-Football REST API (free tier, 100 req/day).
-    /// </summary>
-    private async Task<List<AiScoreMatchScore>> FetchFromApiFootballAsync()
+    private Task<List<AiScoreMatchScore>> FetchAndTrackAiScoreFallbackAsync(string reason)
     {
-        var apiKey = _configuration["ApiFootball:ApiKey"];
-        if (string.IsNullOrEmpty(apiKey))
-        {
-            _logger.LogWarning("API-Football API key not configured. Skipping fallback.");
-            return new List<AiScoreMatchScore>();
-        }
-
-        var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
-        var baseUrl = _configuration["ApiFootball:BaseUrl"] ?? "https://v3.football.api-sports.io";
-
-        using var httpClient = new HttpClient();
-        httpClient.DefaultRequestHeaders.Add("x-apisports-key", apiKey);
-        httpClient.Timeout = TimeSpan.FromSeconds(30);
-
-        _logger.LogInformation("Fetching match scores from API-Football for {Date}...", today);
-        var response = await httpClient.GetAsync($"{baseUrl}/fixtures?date={today}");
-
-        if (!response.IsSuccessStatusCode)
-        {
-            _logger.LogWarning("API-Football returned {Status}.", response.StatusCode);
-            return new List<AiScoreMatchScore>();
-        }
-
-        var json = await response.Content.ReadAsStringAsync();
-        var doc = System.Text.Json.JsonDocument.Parse(json);
-        var root = doc.RootElement;
-
-        if (root.TryGetProperty("errors", out var errors))
-        {
-            if (errors.ValueKind == System.Text.Json.JsonValueKind.Array && errors.GetArrayLength() > 0)
-                return new List<AiScoreMatchScore>();
-            if (errors.ValueKind == System.Text.Json.JsonValueKind.Object && errors.EnumerateObject().Any())
-                return new List<AiScoreMatchScore>();
-        }
-
-        var matchScores = new List<AiScoreMatchScore>();
-        var fixtures = root.GetProperty("response");
-
-        foreach (var fixture in fixtures.EnumerateArray())
-        {
-            try
-            {
-                var fixtureInfo = fixture.GetProperty("fixture");
-                var teams = fixture.GetProperty("teams");
-                var goals = fixture.GetProperty("goals");
-                var league = fixture.GetProperty("league");
-                var statusShort = fixtureInfo.GetProperty("status").GetProperty("short").GetString() ?? "";
-
-                var liveStatuses = new HashSet<string> { "1H", "2H", "HT", "ET", "BT", "P" };
-                var finishedStatuses = new HashSet<string> { "FT", "AET", "PEN" };
-
-                if (!liveStatuses.Contains(statusShort) && !finishedStatuses.Contains(statusShort))
-                    continue;
-
-                var homeGoals = goals.GetProperty("home");
-                var awayGoals = goals.GetProperty("away");
-                if (homeGoals.ValueKind == System.Text.Json.JsonValueKind.Null ||
-                    awayGoals.ValueKind == System.Text.Json.JsonValueKind.Null)
-                    continue;
-
-                var score = $"{homeGoals.GetInt32()}:{awayGoals.GetInt32()}";
-                var dateStr = fixtureInfo.GetProperty("date").GetString();
-                var matchTime = DateTime.TryParse(dateStr, out var parsed) ? parsed.ToUniversalTime() : DateTime.UtcNow;
-
-                matchScores.Add(new AiScoreMatchScore
-                {
-                    League = league.GetProperty("name").GetString() ?? "",
-                    HomeTeam = teams.GetProperty("home").GetProperty("name").GetString() ?? "",
-                    AwayTeam = teams.GetProperty("away").GetProperty("name").GetString() ?? "",
-                    Score = score,
-                    MatchTime = matchTime,
-                    BTTSLabel = IsBtts(score),
-                    IsLive = liveStatuses.Contains(statusShort)
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Skipping API-Football fixture");
-            }
-        }
-
-        _logger.LogInformation("Fetched {Count} from API-Football.", matchScores.Count);
-        return matchScores;
-    }
-
-    private async Task<List<AiScoreMatchScore>> FetchAndTrackApiFootballFallbackAsync(string reason)
-    {
-        try
-        {
-            var matchScores = await FetchFromApiFootballAsync();
-            _aiScoreSourceHealthTracker.RecordFallback(
-                "api-football",
-                matchScores.Count,
-                $"{reason} API-Football returned {matchScores.Count} match(es).");
-
-            if (matchScores.Count > 0)
-            {
-                _logger.LogInformation("Fetched {Count} match scores from API-Football (fallback).", matchScores.Count);
-            }
-
-            return matchScores;
-        }
-        catch (Exception ex)
-        {
-            _aiScoreSourceHealthTracker.RecordFailure("api-football", ex.Message);
-            _logger.LogWarning(ex, "API-Football fallback also failed.");
-            return [];
-        }
+        _aiScoreSourceHealthTracker.RecordEmpty(
+            "legacy-fallback-disabled",
+            $"{reason} Legacy non-tennis fallback is disabled for TennisPredictor.");
+        _logger.LogWarning("AiScore direct sources were unavailable. The legacy non-tennis fallback is disabled for TennisPredictor.");
+        return Task.FromResult(new List<AiScoreMatchScore>());
     }
 
     private static string NormalizeFixtureKeyPart(string? value)
@@ -1227,7 +1029,7 @@ public partial class WebScraperService : IWebScraperService
         var baseUrl = (_configuration["ScrapingValues:SofaScoreBaseUrl"] ?? "https://www.sofascore.com").TrimEnd('/');
         return
         [
-            $"{baseUrl}/football",
+            $"{baseUrl}/tennis",
             baseUrl
         ];
     }
@@ -1373,18 +1175,22 @@ public partial class WebScraperService : IWebScraperService
                 continue;
             }
 
+            var scoreSummary = BuildSetScoreSummary(bestCandidate.Score);
+
             resolvedScores.Add(new SofaScoreMatchScore
             {
                 League = string.IsNullOrWhiteSpace(bestCandidate.League) ? fixture.League : bestCandidate.League,
                 HomeTeam = bestCandidate.HomeTeam,
                 AwayTeam = bestCandidate.AwayTeam,
                 Score = bestCandidate.Score,
+                NormalizedScoreline = scoreSummary.NormalizedScoreline,
+                HomeSetsWon = scoreSummary.HomeSetsWon,
+                AwaySetsWon = scoreSummary.AwaySetsWon,
                 DisplayedScore = bestCandidate.Score,
                 RegularTimeScore = bestCandidate.IsLive ? null : bestCandidate.Score,
                 StatusText = bestCandidate.StatusText,
                 EventUrl = bestCandidate.EventUrl,
                 MatchTime = ResolveSofaScoreListingMatchTimeUtc(fixture, bestCandidate),
-                BTTSLabel = IsBtts(bestCandidate.Score),
                 IsLive = bestCandidate.IsLive
             });
 
@@ -1548,7 +1354,7 @@ public partial class WebScraperService : IWebScraperService
         {
             _sofaScoreSourceHealthTracker.RecordEmpty(
                 "discovery",
-                $"SofaScore processed {candidateUrlPool.SitemapsProcessed} sitemap(s) but discovered no football match URLs.");
+                $"SofaScore processed {candidateUrlPool.SitemapsProcessed} sitemap(s) but discovered no tennis event URLs.");
             return eventUrlsByFixture;
         }
 
@@ -1584,7 +1390,7 @@ public partial class WebScraperService : IWebScraperService
         {
             _sofaScoreSourceHealthTracker.RecordEmpty(
                 "discovery",
-                $"SofaScore discovered {candidateUrls.Count} football event URL(s) across {candidateUrlPool.SitemapsProcessed} sitemap(s) but none matched the {unresolvedFixtures.Count} targeted fixture slug pairs.");
+                $"SofaScore discovered {candidateUrls.Count} tennis event URL(s) across {candidateUrlPool.SitemapsProcessed} sitemap(s) but none matched the {unresolvedFixtures.Count} targeted fixture slug pairs.");
         }
 
         return eventUrlsByFixture;
@@ -1655,7 +1461,7 @@ public partial class WebScraperService : IWebScraperService
                          .OrderByDescending(entry => ScoreSofaScoreLocationPriority(entry.Location))
                          .ThenByDescending(entry => entry.LastModifiedUtc ?? DateTime.MinValue))
             {
-                if (entry.Location.Contains("/football/match/", StringComparison.OrdinalIgnoreCase))
+                if (entry.Location.Contains("/tennis/match/", StringComparison.OrdinalIgnoreCase))
                 {
                     eventUrls.Add(entry.Location);
                     continue;
@@ -1761,6 +1567,13 @@ public partial class WebScraperService : IWebScraperService
             : fallback;
     }
 
+    private int ParseConfiguredSignedInt(string key, int fallback)
+    {
+        return int.TryParse(_configuration[key], out var parsed)
+            ? parsed
+            : fallback;
+    }
+
     private static bool ResolveBrowserScrapingEnabled(IConfiguration configuration)
     {
         var rawValue = configuration["ENABLE_BROWSER_SCRAPING"];
@@ -1819,12 +1632,12 @@ public partial class WebScraperService : IWebScraperService
         }
 
         var score = 0;
-        if (location.Contains("/football/match/", StringComparison.OrdinalIgnoreCase))
+        if (location.Contains("/tennis/match/", StringComparison.OrdinalIgnoreCase))
         {
             score += 100;
         }
 
-        if (location.Contains("football", StringComparison.OrdinalIgnoreCase))
+        if (location.Contains("tennis", StringComparison.OrdinalIgnoreCase))
         {
             score += 25;
         }
@@ -2041,36 +1854,432 @@ public partial class WebScraperService : IWebScraperService
     }
 
     
-    private static bool IsBtts(string score)
+    private static TennisSetScoreSummary BuildSetScoreSummary(string score)
     {
-        var parts = score.Split(":"); // Split "2:1" into ["2", "1"]
-        return parts.Length == 2 &&
-               int.TryParse(parts[0], out var h) && // Convert "2" to integer h = 2
-               int.TryParse(parts[1], out var a) && // Convert "1" to integer a = 1
-               h > 0 && a > 0; // Check that both teams scored
+        return BuildSetScoreSummary(score, isLive: false);
+    }
+
+    private static TennisSetScoreSummary BuildSetScoreSummary(string score, bool isLive)
+    {
+        return TryParseSetScore(score, isLive, out var homeSetsWon, out var awaySetsWon)
+            ? new TennisSetScoreSummary($"{homeSetsWon}:{awaySetsWon}", homeSetsWon, awaySetsWon)
+            : new TennisSetScoreSummary(score, null, null);
+    }
+
+    private static bool TryParseSetScore(string? score, out int homeSetsWon, out int awaySetsWon)
+    {
+        return TryParseSetScore(score, isLive: false, out homeSetsWon, out awaySetsWon);
+    }
+
+    private static bool TryParseSetScore(string? score, bool isLive, out int homeSetsWon, out int awaySetsWon)
+    {
+        homeSetsWon = 0;
+        awaySetsWon = 0;
+
+        if (string.IsNullOrWhiteSpace(score))
+        {
+            return false;
+        }
+
+        var scorePairs = ScorePairRegex().Matches(score);
+        if (scorePairs.Count == 0)
+        {
+            return false;
+        }
+
+        if (scorePairs.Count == 1)
+        {
+            var directParts = scorePairs[0].Value.Split(':', StringSplitOptions.TrimEntries);
+            if (directParts.Length == 2 &&
+                int.TryParse(directParts[0], out var directHome) &&
+                int.TryParse(directParts[1], out var directAway))
+            {
+                if (directHome <= 5 && directAway <= 5)
+                {
+                    homeSetsWon = directHome;
+                    awaySetsWon = directAway;
+                    return true;
+                }
+
+                if (LooksLikeCompletedTennisSet(directHome, directAway))
+                {
+                    homeSetsWon = directHome > directAway ? 1 : 0;
+                    awaySetsWon = directAway > directHome ? 1 : 0;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        foreach (Match scorePair in scorePairs)
+        {
+            var parts = scorePair.Value.Split(':', StringSplitOptions.TrimEntries);
+            if (parts.Length != 2 ||
+                !int.TryParse(parts[0], out var setHomeGames) ||
+                !int.TryParse(parts[1], out var setAwayGames) ||
+                !LooksLikeCompletedTennisSet(setHomeGames, setAwayGames))
+            {
+                continue;
+            }
+
+            if (setHomeGames > setAwayGames)
+            {
+                homeSetsWon += 1;
+            }
+            else if (setAwayGames > setHomeGames)
+            {
+                awaySetsWon += 1;
+            }
+        }
+
+        if (homeSetsWon + awaySetsWon == 0 && isLive)
+        {
+            return false;
+        }
+
+        return homeSetsWon + awaySetsWon > 0;
+    }
+
+    private static bool LooksLikeCompletedTennisSet(int homeGames, int awayGames)
+    {
+        var winnerGames = Math.Max(homeGames, awayGames);
+        var loserGames = Math.Min(homeGames, awayGames);
+
+        if (winnerGames == loserGames)
+        {
+            return false;
+        }
+
+        if (winnerGames == 7 && (loserGames == 5 || loserGames == 6))
+        {
+            return true;
+        }
+
+        return winnerGames >= 6 && winnerGames - loserGames >= 2;
     }
     
     private DateTime ParseScoreMatchTime(string rawTime, bool isLive)
+    {
+        return ParseScoreMatchTime(rawTime, isLive, DateTimeProvider.GetLocalDate(), applyCurrentDateRolloverHeuristic: true);
+    }
+
+    private DateTime ParseScoreMatchTime(
+        string rawTime,
+        bool isLive,
+        DateOnly targetLocalDate,
+        bool applyCurrentDateRolloverHeuristic)
     {
         if (isLive)
         {
             return DateTime.UtcNow;
         }
 
-        var nowLocal = DateTimeProvider.GetLocalTime();
         var extractedTime = ExtractClockTime(rawTime);
         var parsedLocal = DateTime.ParseExact(
-            $"{nowLocal:dd-MM-yyyy} {extractedTime}",
+            $"{targetLocalDate:dd-MM-yyyy} {extractedTime}",
             "dd-MM-yyyy HH:mm",
             CultureInfo.InvariantCulture);
 
-        // FlashScore's mobile summary mixes prior-day finished rows with today's slate.
-        if (parsedLocal > nowLocal.AddHours(2))
+        if (applyCurrentDateRolloverHeuristic)
         {
-            parsedLocal = parsedLocal.AddDays(-1);
+            var nowLocal = DateTimeProvider.GetLocalTime();
+
+            // FlashScore's mobile summary mixes prior-day finished rows with today's slate.
+            if (parsedLocal > nowLocal.AddHours(2))
+            {
+                parsedLocal = parsedLocal.AddDays(-1);
+            }
         }
 
         return DateTimeProvider.ConvertLocalToUtc(parsedLocal);
+    }
+
+    private async Task<string> FetchFlashScoreTennisHtmlAsync(int dayOffset)
+    {
+        var downloadUrl = ResolveFlashScoreTennisUrl(_configuration["ScrapingValues:ScoresWebsite"], dayOffset);
+
+        _logger.LogInformation("Fetching FlashScore tennis scores via HTTP from {Url}.", downloadUrl);
+
+        using var handler = new HttpClientHandler
+        {
+            AutomaticDecompression = System.Net.DecompressionMethods.GZip |
+                                     System.Net.DecompressionMethods.Deflate |
+                                     System.Net.DecompressionMethods.Brotli
+        };
+        using var client = new HttpClient(handler);
+
+        client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1");
+        client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9");
+        client.Timeout = TimeSpan.FromSeconds(20);
+
+        using var response = await client.GetAsync(downloadUrl);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException($"FlashScore HTTP returned {(int)response.StatusCode} {response.ReasonPhrase} for {downloadUrl}.");
+        }
+
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    private List<MatchScore> ParseFlashScoreTennisHtml(string html, int dayOffset)
+    {
+        var doc = new HtmlDocument();
+        doc.LoadHtml(html);
+
+        var container = doc.DocumentNode.SelectSingleNode("//div[@id='score-data']")
+            ?? throw new InvalidOperationException("FlashScore tennis HTML did not contain div#score-data.");
+
+        var targetLocalDate = DateTimeProvider.GetLocalDate().AddDays(dayOffset);
+        return ParseFlashScoreScoreDataHtml(
+            container.InnerHtml,
+            targetLocalDate,
+            applyCurrentDateRolloverHeuristic: dayOffset == 0);
+    }
+
+    private List<MatchScore> ParseFlashScoreScoreDataHtml(
+        string scoreDataHtml,
+        DateOnly targetLocalDate,
+        bool applyCurrentDateRolloverHeuristic)
+    {
+        var doc = new HtmlDocument();
+        doc.LoadHtml($"<div>{scoreDataHtml}</div>");
+
+        var root = doc.DocumentNode.FirstChild;
+        if (root is null)
+        {
+            return [];
+        }
+
+        var currentLeague = string.Empty;
+        var nodes = root.ChildNodes.ToList();
+        var matchScores = new List<MatchScore>();
+
+        for (var i = 0; i < nodes.Count; i++)
+        {
+            var node = nodes[i];
+
+            switch (node.Name)
+            {
+                case "h4":
+                    currentLeague = NormalizeFlashScoreText(node.InnerText).Split("Standings")[0].Trim();
+                    break;
+                case "span":
+                {
+                    var currentTime = NormalizeFlashScoreText(node.InnerText);
+                    var className = node.GetAttributeValue("class", string.Empty);
+                    var isLive = className.Contains("live", StringComparison.OrdinalIgnoreCase);
+
+                    string? teams = null;
+                    string? score = null;
+
+                    for (var j = 1; j <= 5 && i + j < nodes.Count; j++)
+                    {
+                        var next = nodes[i + j];
+
+                        if (next.Name == "#text")
+                        {
+                            var text = NormalizeFlashScoreText(next.InnerText);
+                            if (string.IsNullOrWhiteSpace(teams) && text.Contains(" - ", StringComparison.Ordinal))
+                            {
+                                teams = text;
+                            }
+
+                            if (string.IsNullOrWhiteSpace(score) && TryExtractFlashScoreScoreText(text, out var extractedScore))
+                            {
+                                score = extractedScore;
+                            }
+
+                            continue;
+                        }
+
+                        if (next.Name != "a")
+                        {
+                            continue;
+                        }
+
+                        var nextClass = next.GetAttributeValue("class", string.Empty);
+                        if (nextClass is "fin" or "live" || isLive || string.IsNullOrWhiteSpace(nextClass))
+                        {
+                            var text = NormalizeFlashScoreText(next.InnerText);
+                            if (string.IsNullOrWhiteSpace(score) && TryExtractFlashScoreScoreText(text, out var extractedScore))
+                            {
+                                score = extractedScore;
+                            }
+                        }
+                    }
+
+                    if (string.IsNullOrWhiteSpace(score) || string.IsNullOrWhiteSpace(teams) || !teams.Contains(" - ", StringComparison.Ordinal))
+                    {
+                        break;
+                    }
+
+                    var split = teams.Split(" - ", 2, StringSplitOptions.TrimEntries);
+                    if (split.Length != 2)
+                    {
+                        break;
+                    }
+
+                    DateTime matchTime;
+                    try
+                    {
+                        matchTime = ParseScoreMatchTime(currentTime, isLive, targetLocalDate, applyCurrentDateRolloverHeuristic);
+                    }
+                    catch
+                    {
+                        matchTime = DateTime.UtcNow;
+                    }
+
+                    var scoreSummary = BuildSetScoreSummary(score, isLive);
+
+                    matchScores.Add(new MatchScore
+                    {
+                        League = currentLeague,
+                        HomeTeam = split[0],
+                        AwayTeam = split[1],
+                        Score = score,
+                        NormalizedScoreline = scoreSummary.NormalizedScoreline,
+                        HomeSetsWon = scoreSummary.HomeSetsWon,
+                        AwaySetsWon = scoreSummary.AwaySetsWon,
+                        MatchTime = matchTime,
+                        IsLive = isLive
+                    });
+
+                    break;
+                }
+            }
+        }
+
+        return matchScores;
+    }
+
+    private static string NormalizeFlashScoreText(string? value)
+    {
+        return string.Join(
+            " ",
+            HtmlEntity.DeEntitize(value ?? string.Empty)
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
+    private static bool TryExtractFlashScoreScoreText(string rawText, out string? score)
+    {
+        score = null;
+
+        var matches = ScorePairRegex().Matches(rawText ?? string.Empty);
+        if (matches.Count == 0)
+        {
+            return false;
+        }
+
+        score = string.Join(", ", matches.Select(match => NormalizeScorePair(match.Value)));
+        return true;
+    }
+
+    private static string NormalizeScorePair(string value)
+    {
+        var parts = value.Split(':', StringSplitOptions.TrimEntries);
+        return parts.Length == 2 ? $"{parts[0]}:{parts[1]}" : value.Trim();
+    }
+
+    private static string ResolveFlashScoreTennisUrl(string? configuredUrl, int dayOffset = 0)
+    {
+        var baseUrl = ResolveTennisEndpoint(
+            configuredUrl,
+            "https://www.flashscore.mobi/tennis",
+            "flashscore.mobi",
+            "/tennis");
+
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))
+        {
+            return baseUrl;
+        }
+
+        var builder = new UriBuilder(uri);
+        var queryParameters = ParseQueryParameters(builder.Query);
+
+        if (dayOffset == 0)
+        {
+            queryParameters.Remove("d");
+        }
+        else
+        {
+            queryParameters["d"] = dayOffset.ToString(CultureInfo.InvariantCulture);
+        }
+
+        builder.Query = BuildQueryString(queryParameters);
+        return builder.Uri.ToString().TrimEnd('/');
+    }
+
+    private static string ResolveAiScoreTennisUrl(string? configuredUrl)
+    {
+        return ResolveTennisEndpoint(
+            configuredUrl,
+            "https://m.aiscore.com/tennis",
+            "aiscore.com",
+            "/tennis");
+    }
+
+    private static string ResolveTennisEndpoint(
+        string? configuredUrl,
+        string defaultUrl,
+        string expectedHostFragment,
+        string requiredPath)
+    {
+        var candidate = string.IsNullOrWhiteSpace(configuredUrl)
+            ? defaultUrl
+            : configuredUrl.Trim();
+
+        if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri))
+        {
+            return defaultUrl;
+        }
+
+        var builder = new UriBuilder(uri);
+        if (builder.Host.Contains(expectedHostFragment, StringComparison.OrdinalIgnoreCase) &&
+            !builder.Path.StartsWith(requiredPath, StringComparison.OrdinalIgnoreCase))
+        {
+            builder.Path = requiredPath;
+            builder.Query = string.Empty;
+        }
+
+        return builder.Uri.ToString().TrimEnd('/');
+    }
+
+    private static Dictionary<string, string> ParseQueryParameters(string query)
+    {
+        var parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return parameters;
+        }
+
+        foreach (var segment in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var parts = segment.Split('=', 2);
+            var key = Uri.UnescapeDataString(parts[0]);
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            var value = parts.Length == 2 ? Uri.UnescapeDataString(parts[1]) : string.Empty;
+            parameters[key] = value;
+        }
+
+        return parameters;
+    }
+
+    private static string BuildQueryString(IReadOnlyDictionary<string, string> parameters)
+    {
+        if (parameters.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        return string.Join(
+            "&",
+            parameters.Select(parameter => $"{Uri.EscapeDataString(parameter.Key)}={Uri.EscapeDataString(parameter.Value)}"));
     }
 
     private static string ExtractClockTime(string rawTime)
@@ -2084,8 +2293,8 @@ public partial class WebScraperService : IWebScraperService
         return match.Value;
     }
 
-    [GeneratedRegex(@"^\d{1,2}:\d{1,2}")]
-    private static partial Regex MyRegex();
+    [GeneratedRegex(@"\d{1,2}\s*:\s*\d{1,2}")]
+    private static partial Regex ScorePairRegex();
 
     [GeneratedRegex(@"\d{1,2}:\d{2}")]
     private static partial Regex ClockRegex();
@@ -2352,5 +2561,7 @@ public partial class WebScraperService : IWebScraperService
             }
         }
     }
+
+    private sealed record TennisSetScoreSummary(string NormalizedScoreline, int? HomeSetsWon, int? AwaySetsWon);
 
 }

@@ -1,13 +1,13 @@
 @page "/valuebets"
 @model MatchPredictor.Web.Pages.ValueBetsModel
 @{
-    ViewData["Title"] = "AI Value Bets";
+    ViewData["Title"] = "Tennis Value Bets";
 }
 
 <div class="mp-container">
     <div class="mp-header-area">
-        <h1 class="mp-page-title">🎯 AI Value Bets</h1>
-        <h3 class="mp-page-subtitle">Calibrated model-vs-market edges, with short AI notes layered on top.</h3>
+        <h1 class="mp-page-title">🎯 Tennis Value Bets</h1>
+        <h3 class="mp-page-subtitle">Model-vs-market edges for bookable tennis match-winner selections.</h3>
     </div>
 
     <!-- AI Loading State -->
@@ -15,14 +15,14 @@
         <div style="display: flex; justify-content: center; margin-bottom: 1.5rem;">
             <div class="mp-spinner"></div>
         </div>
-        <h3>🧠 AI is analyzing the top value plays...</h3>
-        <p style="color: var(--text-muted); font-size: 0.95rem;">Comparing calibrated model probabilities against source market pricing.</p>
+        <h3>Comparing calibrated winner probabilities against market pricing...</h3>
+        <p style="color: var(--text-muted); font-size: 0.95rem;">Tennis v1 only returns markets with real bookable pricing.</p>
     </div>
 
     <!-- No Bets State -->
     <div id="noBetsState" style="display: none; text-align: center; padding: 4rem 1rem; background: var(--card-bg); border-radius: 12px; border: 1px solid var(--border-color);">
         <h3 style="margin-bottom: 0.5rem;">No Value Bets Right Now</h3>
-        <p style="color: var(--text-muted);">We only show markets where the calibrated model clears its threshold and still beats the source market by a real edge.</p>
+        <p style="color: var(--text-muted);">We only show tennis match-winner markets where the calibrated model clears its threshold and still beats the source market by a real edge.</p>
     </div>
 
     <div id="valueBetsSummary" style="display: none; margin-bottom: 1.5rem;"></div>
@@ -92,25 +92,12 @@
                     const edgeString = '+' + (bet.edge * 100).toFixed(1) + ' pts';
                     const thresholdString = (bet.thresholdUsed * 100).toFixed(1) + '%';
                     const thresholdSource = (bet.thresholdSource || 'Configured').toLowerCase();
-                    const marketKey =
-                        bet.predictionCategory === 'BothTeamsScore' ? 'BTTS' :
-                        bet.predictionCategory === 'Over2.5Goals' ? 'Over2.5' :
-                        bet.predictionCategory === 'Under2.5Goals' ? 'Under2.5' :
-                        'StraightWin';
-                    
-                    let badgeClass = 'mp-badge-combined'; 
-                    if (bet.predictionCategory === 'BothTeamsScore') badgeClass = 'mp-badge-btts';
-                    else if (bet.predictionCategory === 'Over2.5Goals') badgeClass = 'mp-badge-over';
-                    else if (bet.predictionCategory === 'Under2.5Goals') badgeClass = 'mp-badge-under';
-                    else if (bet.predictionCategory === 'StraightWin' && bet.predictedOutcome === 'Away Win') badgeClass = 'mp-badge-win-away';
-                    else if (bet.predictionCategory === 'StraightWin') badgeClass = 'mp-badge-win-home';
+                    const marketKey = 'MatchWinner';
 
-                    const badgeLabel =
-                        bet.predictionCategory === 'Over2.5Goals' ? 'Over 2.5' :
-                        bet.predictionCategory === 'Under2.5Goals' ? 'Under 2.5' :
-                        bet.predictionCategory === 'BothTeamsScore' ? 'BTTS' :
-                        bet.predictionCategory === 'StraightWin' ? 'Straight Win' :
-                        bet.predictionCategory;
+                    let badgeClass = 'mp-badge-win-home';
+                    if (bet.predictedOutcome === 'Away Win') badgeClass = 'mp-badge-win-away';
+
+                    const badgeLabel = 'Match Winner';
 
                     const insightChips = [
                         bet.pricingSource ? `<span class="mp-insight-chip">${escapeHtml(bet.pricingSource)}</span>` : '',
@@ -143,7 +130,9 @@
                                             data-away="${escapeHtml(bet.awayTeam)}"
                                             data-league="${escapeHtml(bet.league)}"
                                             data-market="${escapeHtml(marketKey)}"
-                                            data-prediction="${escapeHtml(bet.predictedOutcome)}">
+                                            data-prediction="${escapeHtml(bet.predictedOutcome)}"
+                                            data-prediction-id="${bet.predictionId ? escapeHtml(bet.predictionId) : ''}"
+                                            data-match-datetime-utc="${bet.matchDateTimeUtc ? escapeHtml(bet.matchDateTimeUtc) : ''}">
                                         Add Bet
                                     </button>
                                 </div>
@@ -190,10 +179,10 @@
                                 </div>
 
                                 <div style="font-size: 0.95rem; line-height: 1.6; color: var(--text-secondary); display: flex; gap: 12px; align-items: flex-start;">
-                                    <span style="font-size: 1.4rem; line-height: 1;">🤖</span>
-                                    <em style="font-style: italic;">"${escapeHtml(bet.aiJustification || '')}"</em>
+                                        <span style="font-size: 1.4rem; line-height: 1;">🎾</span>
+                                        <em style="font-style: italic;">"${escapeHtml(bet.aiJustification || '')}"</em>
+                                    </div>
                                 </div>
-                            </div>
 
                         </div>
                     `;
@@ -266,7 +255,7 @@
                     </div>
                 </div>
                 <div class="mp-analytics-note" style="margin-bottom: 1rem;">
-                    We only surface picks that clear the publish threshold and still beat the source market by a real edge. The cards below are now ranked by expected value, with the market price source and freshness shown on each fixture.
+                    We only surface tennis selections that clear the publish threshold and still beat the source market by a real edge. In v1 this is winner-only, so totals and handicap picks are intentionally excluded until external pricing is available.
                 </div>
                 ${exclusionCards ? `<div class="mp-stat-grid">${exclusionCards}</div>` : ''}
             `;

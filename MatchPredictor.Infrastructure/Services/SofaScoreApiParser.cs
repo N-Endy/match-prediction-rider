@@ -78,7 +78,6 @@ public static class SofaScoreApiParser
             StatusText = matchScore.StatusText,
             EventUrl = matchScore.EventUrl,
             MatchTime = matchScore.MatchTime,
-            BTTSLabel = matchScore.BTTSLabel,
             IsLive = matchScore.IsLive
         };
 
@@ -115,12 +114,25 @@ public static class SofaScoreApiParser
             return false;
         }
 
+        var normalizedScoreline = scoreBundle.SettlementScore;
+        var homeSetsWon = default(int?);
+        var awaySetsWon = default(int?);
+        if (TryParseSetScore(scoreBundle.SettlementScore, out var parsedHomeSets, out var parsedAwaySets))
+        {
+            normalizedScoreline = $"{parsedHomeSets}:{parsedAwaySets}";
+            homeSetsWon = parsedHomeSets;
+            awaySetsWon = parsedAwaySets;
+        }
+
         matchScore = new SofaScoreMatchScore
         {
             League = league,
             HomeTeam = homeTeam,
             AwayTeam = awayTeam,
             Score = scoreBundle.SettlementScore,
+            NormalizedScoreline = normalizedScoreline,
+            HomeSetsWon = homeSetsWon,
+            AwaySetsWon = awaySetsWon,
             DisplayedScore = scoreBundle.DisplayedScore,
             RegularTimeScore = scoreBundle.RegularTimeScore,
             HalfTimeScore = scoreBundle.HalfTimeScore,
@@ -130,11 +142,6 @@ public static class SofaScoreApiParser
                 ? $"{baseUrl.TrimEnd('/')}/api/v1/event/{eventId.Value}"
                 : string.Empty,
             MatchTime = matchTime,
-            BTTSLabel = scoreBundle.SettlementScore.Split(':') is [var home, var away] &&
-                        int.TryParse(home, out var homeGoals) &&
-                        int.TryParse(away, out var awayGoals) &&
-                        homeGoals > 0 &&
-                        awayGoals > 0,
             IsLive = isLive
         };
 
@@ -386,6 +393,22 @@ public static class SofaScoreApiParser
         return null;
     }
 
+    private static bool TryParseSetScore(string? score, out int homeSetsWon, out int awaySetsWon)
+    {
+        homeSetsWon = 0;
+        awaySetsWon = 0;
+
+        if (string.IsNullOrWhiteSpace(score))
+        {
+            return false;
+        }
+
+        var parts = score.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length == 2 &&
+               int.TryParse(parts[0], out homeSetsWon) &&
+               int.TryParse(parts[1], out awaySetsWon);
+    }
+
     private sealed record SofaScoreScoreBundle
     {
         public string? SettlementScore { get; init; }
@@ -420,17 +443,29 @@ public sealed class SofaScoreApiEventSummary
     public string? StatusText { get; init; }
     public string EventUrl { get; init; } = string.Empty;
     public DateTime MatchTime { get; init; }
-    public bool BTTSLabel { get; init; }
     public bool IsLive { get; init; }
 
     public SofaScoreMatchScore ToMatchScore()
     {
+        var normalizedScoreline = Score;
+        var homeSetsWon = default(int?);
+        var awaySetsWon = default(int?);
+        if (TryParseSetScore(Score, out var parsedHomeSets, out var parsedAwaySets))
+        {
+            normalizedScoreline = $"{parsedHomeSets}:{parsedAwaySets}";
+            homeSetsWon = parsedHomeSets;
+            awaySetsWon = parsedAwaySets;
+        }
+
         return new SofaScoreMatchScore
         {
             League = League,
             HomeTeam = HomeTeam,
             AwayTeam = AwayTeam,
             Score = Score,
+            NormalizedScoreline = normalizedScoreline,
+            HomeSetsWon = homeSetsWon,
+            AwaySetsWon = awaySetsWon,
             DisplayedScore = DisplayedScore,
             RegularTimeScore = RegularTimeScore,
             HalfTimeScore = HalfTimeScore,
@@ -438,8 +473,23 @@ public sealed class SofaScoreApiEventSummary
             StatusText = StatusText,
             EventUrl = EventUrl,
             MatchTime = MatchTime,
-            BTTSLabel = BTTSLabel,
             IsLive = IsLive
         };
+    }
+
+    private static bool TryParseSetScore(string? score, out int homeSetsWon, out int awaySetsWon)
+    {
+        homeSetsWon = 0;
+        awaySetsWon = 0;
+
+        if (string.IsNullOrWhiteSpace(score))
+        {
+            return false;
+        }
+
+        var parts = score.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length == 2 &&
+               int.TryParse(parts[0], out homeSetsWon) &&
+               int.TryParse(parts[1], out awaySetsWon);
     }
 }

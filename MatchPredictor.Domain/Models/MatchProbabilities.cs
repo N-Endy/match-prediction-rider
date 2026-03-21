@@ -1,9 +1,9 @@
 namespace MatchPredictor.Domain.Models;
 
 public sealed record MatchProbabilities(
-    double Btts,
-    double Over25,
-    double Under25,
-    double Draw,
+    double Over25Sets,
+    double Under25Sets,
     double HomeWin,
-    double AwayWin);
+    double AwayWin,
+    double HomeSetHandicap,
+    double AwaySetHandicap);

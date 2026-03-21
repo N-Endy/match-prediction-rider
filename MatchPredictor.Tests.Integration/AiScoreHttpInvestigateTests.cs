@@ -22,7 +22,7 @@ namespace MatchPredictor.Tests.Integration
             using var client = new HttpClient();
             client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
             
-            var response = await client.GetAsync("https://m.aiscore.com");
+            var response = await client.GetAsync("https://m.aiscore.com/tennis");
             _output.WriteLine($"Status: {response.StatusCode}");
             
             var html = await response.Content.ReadAsStringAsync();
