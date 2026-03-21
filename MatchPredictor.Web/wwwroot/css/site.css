@@ -1309,6 +1309,14 @@ a:hover {
   margin-bottom: 0.75rem;
 }
 
+.mp-booking-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-bottom: 15px;
+  flex-wrap: wrap;
+}
+
 .mp-copy-code-btn {
   background: rgba(16, 185, 129, 0.15);
   border: 1px solid rgba(16, 185, 129, 0.3);
@@ -1336,12 +1344,38 @@ a:hover {
   text-decoration: none;
   font-size: 0.8rem;
   font-weight: 600;
+  cursor: pointer;
   transition: var(--transition);
 }
 
 .mp-booking-url-btn:hover {
   background: rgba(59, 130, 246, 0.25);
   color: var(--accent-blue);
+}
+
+.mp-booking-warnings {
+  text-align: left;
+  margin-top: 12px;
+}
+
+.mp-booking-warnings-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.mp-booking-warnings-list {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-secondary);
+  max-height: min(34vh, 280px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 10px;
+}
+
+.mp-booking-warnings-item {
+  margin-bottom: 8px;
 }
 
 .mp-booking-msg {

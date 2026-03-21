@@ -161,7 +161,7 @@ async function bookGames() {
         if (resultDiv) {
             if (result.success) {
                 const urlHtml = result.bookingUrl
-                    ? `<a href="${result.bookingUrl}" target="_blank" class="mp-booking-url-btn">🔗 Open in SportyBet</a>`
+                    ? `<button type="button" class="mp-booking-url-btn" onclick='openSportyBetBooking(${JSON.stringify(result.bookingUrl)})'>🔗 Open in SportyBet</button>`
                     : '';
                 const warningHtml = renderBookingWarnings(result.warnings);
                 const summaryHtml = renderBookingSummary(result);
@@ -171,7 +171,7 @@ async function bookGames() {
                         <button class="mp-booking-close" onclick="this.closest('.mp-booking-success').parentElement.style.display='none'">&times;</button>
                         <div class="mp-booking-code-label">Booking Code</div>
                         <div class="mp-booking-code">${result.bookingCode}</div>
-                        <div style="display:flex; gap:10px; justify-content:center; margin-bottom:15px;">
+                        <div class="mp-booking-actions">
                             <button class="mp-copy-code-btn" onclick="copyBookingCode('${result.bookingCode}')">📋 Copy</button>
                             ${urlHtml}
                         </div>
@@ -180,9 +180,6 @@ async function bookGames() {
                         ${warningHtml}
                     </div>
                 `;
-                if ((result.skippedCount || 0) === 0) {
-                    clearCart();
-                }
             } else {
                 const warningHtml = renderBookingWarnings(result.warnings);
                 const summaryHtml = renderBookingSummary(result);
@@ -219,6 +216,28 @@ function copyBookingCode(code) {
             showToast('Copied!');
         })
         .catch(() => showToast('Copy failed'));
+}
+
+function openSportyBetBooking(url) {
+    if (!url) {
+        return;
+    }
+
+    clearCart();
+    closeCartModal();
+    showToast('Betslip cleared');
+
+    try {
+        const popup = window.open(url, '_blank', 'noopener,noreferrer');
+        if (popup) {
+            popup.opener = null;
+            return;
+        }
+    } catch {
+        // Fall back to same-tab navigation below.
+    }
+
+    window.location.href = url;
 }
 
 // ── Init ──
@@ -290,10 +309,10 @@ function renderBookingWarnings(warnings) {
     }
 
     return `
-        <div style="text-align:left; margin-top:12px;">
-            <div style="font-weight:700; margin-bottom:6px;">Skipped selections</div>
-            <ul style="margin:0; padding-left:20px; color:var(--text-secondary);">
-                ${items.map(item => `<li style="margin-bottom:4px;">${escapeHtml(item)}</li>`).join('')}
+        <div class="mp-booking-warnings">
+            <div class="mp-booking-warnings-title">Skipped selections</div>
+            <ul class="mp-booking-warnings-list">
+                ${items.map(item => `<li class="mp-booking-warnings-item">${escapeHtml(item)}</li>`).join('')}
             </ul>
         </div>
     `;

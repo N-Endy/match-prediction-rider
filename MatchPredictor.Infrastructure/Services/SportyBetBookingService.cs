@@ -50,6 +50,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
     ];
     private static readonly Dictionary<string, string> TokenSynonyms = new(StringComparer.OrdinalIgnoreCase)
     {
+        ["psg"] = "paris saint germain",
         ["utd"] = "united",
         ["st"] = "saint",
         ["ii"] = "reserve",
@@ -157,10 +158,24 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                 {
                     var warning = BuildSelectionWarning(selection, resolution.Status, resolution.MatchedFixture);
                     warnings.Add(warning);
-                    _logger.LogWarning(
-                        "SportyBet booking skipped for {SelectionLabel}. Reason: {Reason}",
-                        selection.SelectionLabel,
-                        resolution.Status);
+                    if (resolution.MatchedFixture is not null)
+                    {
+                        _logger.LogWarning(
+                            "SportyBet booking skipped for {SelectionLabel}. Reason: {Reason}. Closest candidate: {FixtureHome} vs {FixtureAway} ({League}, {KickoffUtc}).",
+                            selection.SelectionLabel,
+                            resolution.Status,
+                            resolution.MatchedFixture.HomeTeam,
+                            resolution.MatchedFixture.AwayTeam,
+                            resolution.MatchedFixture.League,
+                            resolution.MatchedFixture.MatchTimeUtc);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "SportyBet booking skipped for {SelectionLabel}. Reason: {Reason}",
+                            selection.SelectionLabel,
+                            resolution.Status);
+                    }
                 }
             }
 
@@ -812,7 +827,10 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
 
         if (evaluatedCandidates.Count == 0)
         {
-            return new BookingSelectionResolution(BookingSelectionMatchStatus.NoFixtureFound, null, null);
+            return new BookingSelectionResolution(
+                BookingSelectionMatchStatus.NoFixtureFound,
+                null,
+                FindClosestFixturePreview(fixtures, selection));
         }
 
         var bestCandidate = evaluatedCandidates[0];
@@ -827,6 +845,53 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         return TryCreateOutcome(bestCandidate.Fixture, selection.RequestedOutcome.Value, out var outcome)
             ? new BookingSelectionResolution(BookingSelectionMatchStatus.Matched, outcome, bestCandidate.Fixture)
             : new BookingSelectionResolution(BookingSelectionMatchStatus.MarketUnavailable, null, bestCandidate.Fixture);
+    }
+
+    private static SportyBetFixture? FindClosestFixturePreview(
+        IReadOnlyCollection<SportyBetFixture> fixtures,
+        ResolvedBookingSelection selection)
+    {
+        return fixtures
+            .Select(fixture =>
+            {
+                var homeScore = ComputeTeamMatchScore(selection.HomeTeam, fixture.HomeTeam);
+                var awayScore = ComputeTeamMatchScore(selection.AwayTeam, fixture.AwayTeam);
+                var forwardScore = homeScore + awayScore;
+
+                var reverseHomeScore = ComputeTeamMatchScore(selection.HomeTeam, fixture.AwayTeam);
+                var reverseAwayScore = ComputeTeamMatchScore(selection.AwayTeam, fixture.HomeTeam);
+                var reverseScore = reverseHomeScore + reverseAwayScore;
+                if (reverseScore >= forwardScore - 0.04d)
+                {
+                    forwardScore -= 0.5d;
+                }
+
+                if (selection.MatchDateTimeUtc.HasValue && fixture.MatchTimeUtc.HasValue)
+                {
+                    var selectionLocalDate = DateTimeProvider.ConvertUtcToLocalDate(selection.MatchDateTimeUtc.Value);
+                    var fixtureLocalDate = DateTimeProvider.ConvertUtcToLocalDate(fixture.MatchTimeUtc.Value);
+                    if (selectionLocalDate == fixtureLocalDate)
+                    {
+                        forwardScore += 0.15d;
+                    }
+
+                    var kickoffDelta = (fixture.MatchTimeUtc.Value - selection.MatchDateTimeUtc.Value).Duration();
+                    if (kickoffDelta <= LooseKickoffWindow)
+                    {
+                        forwardScore += 0.08d;
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(selection.League) && !string.IsNullOrWhiteSpace(fixture.League))
+                {
+                    forwardScore += ComputeLeagueMatchScore(selection.League, fixture.League) * 0.08d;
+                }
+
+                return new FixtureMatchCandidate(fixture, forwardScore, null, forwardScore > 0d);
+            })
+            .OrderByDescending(candidate => candidate.Score)
+            .Select(candidate => candidate.Fixture)
+            .FirstOrDefault();
     }
 
     private static BookingResult BuildBookingFailureResult(
@@ -854,7 +919,9 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         return status switch
         {
             BookingSelectionMatchStatus.OutsideTodayWindow => $"{label}: outside today's SportyBet card.",
-            BookingSelectionMatchStatus.NoFixtureFound => $"{label}: no SportyBet fixture found for today's card.",
+            BookingSelectionMatchStatus.NoFixtureFound => matchedFixture is not null
+                ? $"{label}: no confident SportyBet fixture match found for today's card. Closest candidate was {matchedFixture.HomeTeam} vs {matchedFixture.AwayTeam}."
+                : $"{label}: no confident SportyBet fixture match found for today's card.",
             BookingSelectionMatchStatus.AmbiguousFixture => $"{label}: fixture match was ambiguous, so it was skipped.",
             BookingSelectionMatchStatus.MarketUnavailable => matchedFixture is not null
                 ? $"{label}: SportyBet found {matchedFixture.HomeTeam} vs {matchedFixture.AwayTeam}, but the requested market was unavailable."

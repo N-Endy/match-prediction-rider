@@ -265,6 +265,81 @@ public class SportyBetBookingServiceTests
         Assert.Empty(handler.SharedEventIds);
     }
 
+
+    [Fact]
+    public async Task BookGamesAsync_MatchesPsgAlias_ForBttsSelection()
+    {
+        await using var context = CreateContext();
+        var cache = CreateCache();
+        var todayLocalDate = DateTimeProvider.GetLocalDate();
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(todayLocalDate.ToDateTime(new TimeOnly(20, 0), DateTimeKind.Unspecified));
+        var handler = new SportyBetTestHandler(
+            upcomingPages: new Dictionary<int, string>
+            {
+                [1] = BuildUpcomingResponse(
+                    new SportyFixtureSpec("evt-psg", "Nice", "PSG", "France - Ligue 1", kickoffUtc))
+            },
+            bookingResponse: BuildBookingShareResponse("BTTSPSG"));
+        var service = CreateService(context, cache, handler);
+
+        var result = await service.BookGamesAsync(
+        [
+            new BookingSelection
+            {
+                HomeTeam = "Nice",
+                AwayTeam = "Paris Saint-Germain",
+                League = "France - Ligue 1",
+                Market = "BTTS",
+                Prediction = "BTTS",
+                MatchDateTimeUtc = kickoffUtc
+            }
+        ]);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, result.BookedCount);
+        Assert.Equal(0, result.SkippedCount);
+        Assert.Single(handler.SharedEventIds);
+        Assert.Equal("evt-psg", handler.SharedEventIds[0]);
+    }
+
+    [Fact]
+    public async Task BookGamesAsync_UsesNoConfidentMatchWarning_WhenOnlyLooseLookalikeExists()
+    {
+        await using var context = CreateContext();
+        var cache = CreateCache();
+        var todayLocalDate = DateTimeProvider.GetLocalDate();
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(todayLocalDate.ToDateTime(new TimeOnly(20, 0), DateTimeKind.Unspecified));
+        var handler = new SportyBetTestHandler(
+            upcomingPages: new Dictionary<int, string>
+            {
+                [1] = BuildUpcomingResponse(
+                    new SportyFixtureSpec("evt-close", "Nice", "Marseille", "France - Ligue 1", kickoffUtc))
+            });
+        var service = CreateService(context, cache, handler);
+
+        var result = await service.BookGamesAsync(
+        [
+            new BookingSelection
+            {
+                HomeTeam = "Nice",
+                AwayTeam = "Paris Saint-Germain",
+                League = "France - Ligue 1",
+                Market = "BTTS",
+                Prediction = "BTTS",
+                MatchDateTimeUtc = kickoffUtc
+            }
+        ]);
+
+        Assert.False(result.Success);
+        Assert.Equal(0, result.BookedCount);
+        Assert.Contains(
+            result.Warnings,
+            warning => warning.Contains("no confident SportyBet fixture match found", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            result.Warnings,
+            warning => warning.Contains("Closest candidate was Nice vs Marseille", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static SportyBetBookingService CreateService(
         ApplicationDbContext context,
         IDistributedCache cache,

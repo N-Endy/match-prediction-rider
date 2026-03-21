@@ -496,9 +496,27 @@ public class AnalyzerService  : IAnalyzerService
 
         try
         {
-            await RebuildSourceQualityProfilesAsync();
-            _logger.LogInformation("✅ Source quality rebuild completed.");
-            await LogScrapingStatus(SourceQualityEventName, "Success", "✅ Source quality profiles rebuilt successfully.");
+            var sourceQualityRebuild = await RebuildSourceQualityProfilesAsync();
+            if (sourceQualityRebuild.Completed)
+            {
+                _logger.LogInformation(
+                    "✅ Source quality rebuild completed with {ProfileCount} profile(s).",
+                    sourceQualityRebuild.ProfileCount);
+                await LogScrapingStatus(
+                    SourceQualityEventName,
+                    "Success",
+                    $"✅ Source quality profiles rebuilt successfully ({sourceQualityRebuild.ProfileCount} profile(s)).");
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "⚠️ Source quality rebuild skipped: {Reason}",
+                    sourceQualityRebuild.StatusMessage);
+                await LogScrapingStatus(
+                    SourceQualityEventName,
+                    "Failed",
+                    $"Source quality rebuild skipped: {sourceQualityRebuild.StatusMessage}");
+            }
         }
         catch (Exception ex)
         {
@@ -876,6 +894,7 @@ public class AnalyzerService  : IAnalyzerService
                 .Select(BuildSofaScoreFixtureRequest)
                 .ToList();
             var sofaScores = await _webScraperService.ScrapeSofaScoreMatchScoresAsync(sofaScoreRequests);
+            await SaveSofaScoreMatchScores(sofaScores);
 
             if (sofaScores.Count > 0)
             {
@@ -3124,10 +3143,19 @@ public class AnalyzerService  : IAnalyzerService
             .ToList();
     }
 
-    private static (string Date, string Home, string Away, string League) GetStoredScoreSnapshotKey(MatchScore score)
+    private static (string Date, string Home, string Away, string League) GetStoredScoreSnapshotKey<T>(T score)
+        where T : class
     {
-        var localDate = DateTimeProvider.ConvertUtcToLocal(score.MatchTime).ToString("dd-MM-yyyy");
-        return CreateScoreFixtureKey(localDate, score.HomeTeam, score.AwayTeam, score.League);
+        var (matchTime, homeTeam, awayTeam, league) = score switch
+        {
+            MatchScore flashScore => (flashScore.MatchTime, flashScore.HomeTeam, flashScore.AwayTeam, flashScore.League),
+            AiScoreMatchScore aiScore => (aiScore.MatchTime, aiScore.HomeTeam, aiScore.AwayTeam, aiScore.League),
+            SofaScoreMatchScore sofaScore => (sofaScore.MatchTime, sofaScore.HomeTeam, sofaScore.AwayTeam, sofaScore.League),
+            _ => throw new ArgumentOutOfRangeException(nameof(score), "Unsupported stored score type.")
+        };
+
+        var localDate = DateTimeProvider.ConvertUtcToLocal(matchTime).ToString("dd-MM-yyyy");
+        return CreateScoreFixtureKey(localDate, homeTeam, awayTeam, league);
     }
 
     private static DateTime ResolvePreferredStoredMatchTime(DateTime existingMatchTime, DateTime incomingMatchTime, bool existingIsLive, bool incomingIsLive)
@@ -3157,24 +3185,28 @@ public class AnalyzerService  : IAnalyzerService
         {
             MatchScore flashScore => flashScore.Score,
             AiScoreMatchScore aiScore => aiScore.Score,
+            SofaScoreMatchScore sofaScore => sofaScore.Score,
             _ => string.Empty
         };
         var incomingBttsLabel = incomingScore switch
         {
             MatchScore flashScore => flashScore.BTTSLabel,
             AiScoreMatchScore aiScore => aiScore.BTTSLabel,
+            SofaScoreMatchScore sofaScore => sofaScore.BTTSLabel,
             _ => false
         };
         var incomingIsLive = incomingScore switch
         {
             MatchScore flashScore => flashScore.IsLive,
             AiScoreMatchScore aiScore => aiScore.IsLive,
+            SofaScoreMatchScore sofaScore => sofaScore.IsLive,
             _ => true
         };
         var incomingMatchTime = incomingScore switch
         {
             MatchScore flashScore => flashScore.MatchTime,
             AiScoreMatchScore aiScore => aiScore.MatchTime,
+            SofaScoreMatchScore sofaScore => sofaScore.MatchTime,
             _ => existingMatchTime
         };
 
@@ -3317,7 +3349,7 @@ public class AnalyzerService  : IAnalyzerService
         return (reliability * 0.55) + (timeScore * 0.30) + (leagueScore * 0.15);
     }
 
-    private async Task RebuildSourceQualityProfilesAsync(int lookbackDays = 30)
+    private async Task<SourceQualityRebuildResult> RebuildSourceQualityProfilesAsync(int lookbackDays = 30)
     {
         var today = DateOnly.FromDateTime(DateTimeProvider.GetLocalTime());
         var earliestSettlementDate = today.AddDays(-Math.Max(lookbackDays, 1));
@@ -3337,8 +3369,10 @@ public class AnalyzerService  : IAnalyzerService
 
         if (settledPredictions.Count == 0)
         {
-            await ReplaceSourceQualityProfilesAsync([]);
-            return;
+            var clearedEmptyProfiles = await ReplaceSourceQualityProfilesAsync([]);
+            return clearedEmptyProfiles
+                ? new SourceQualityRebuildResult(true, 0, "No settled predictions were available in the source-quality lookback window.")
+                : SourceQualityRebuildResult.Skipped("The SourceQualityProfiles table is missing.");
         }
 
         var fixtures = BuildSettlementFixtureGroups(settledPredictions, []);
@@ -3350,6 +3384,20 @@ public class AnalyzerService  : IAnalyzerService
             .AsNoTracking()
             .Where(score => score.MatchTime >= startOfWindowUtc && score.MatchTime < endOfWindowUtc)
             .ToListAsync();
+        List<SofaScoreMatchScore> sofaScores;
+        try
+        {
+            sofaScores = await _dbContext.SofaScoreMatchScores
+                .AsNoTracking()
+                .Where(score => score.MatchTime >= startOfWindowUtc && score.MatchTime < endOfWindowUtc)
+                .ToListAsync();
+        }
+        catch (PostgresException ex) when (IsMissingSofaScoreTable(ex))
+        {
+            _logger.LogWarning(
+                "Skipping source quality profile refresh because the SofaScoreMatchScores table is missing. Apply the latest EF migration to enable SofaScore source-quality training.");
+            return SourceQualityRebuildResult.Skipped("The SofaScoreMatchScores table is missing.");
+        }
 
         var flashFinishedIndex = BuildExactFinishedCandidateIndex(
             flashScores.Where(score => !score.IsLive),
@@ -3371,6 +3419,18 @@ public class AnalyzerService  : IAnalyzerService
             score => score.League);
         var aiLiveIndex = BuildExactFinishedCandidateIndex(
             aiScores.Where(score => score.IsLive),
+            score => score.HomeTeam,
+            score => score.AwayTeam,
+            score => score.MatchTime,
+            score => score.League);
+        var sofaFinishedIndex = BuildExactFinishedCandidateIndex(
+            sofaScores.Where(score => !score.IsLive),
+            score => score.HomeTeam,
+            score => score.AwayTeam,
+            score => score.MatchTime,
+            score => score.League);
+        var sofaLiveIndex = BuildExactFinishedCandidateIndex(
+            sofaScores.Where(score => score.IsLive),
             score => score.HomeTeam,
             score => score.AwayTeam,
             score => score.MatchTime,
@@ -3424,6 +3484,24 @@ public class AnalyzerService  : IAnalyzerService
                 score => score.Score,
                 score => score.MatchTime,
                 settledScore);
+
+            RecordSourceQualitySample(
+                accumulators,
+                "SofaScore",
+                fixture,
+                FindExactFinishedSourceCandidate(
+                    fixture,
+                    sofaFinishedIndex,
+                    score => score.MatchTime,
+                    score => score.League,
+                    score => score.Score),
+                FindLatestExactLiveSourceCandidate(
+                    fixture,
+                    sofaLiveIndex,
+                    score => score.MatchTime),
+                score => score.Score,
+                score => score.MatchTime,
+                settledScore);
         }
 
         var nowUtc = DateTime.UtcNow;
@@ -3432,7 +3510,10 @@ public class AnalyzerService  : IAnalyzerService
             .Where(profile => profile.SampleCount > 0)
             .ToList();
 
-        await ReplaceSourceQualityProfilesAsync(profiles);
+        var replacedProfiles = await ReplaceSourceQualityProfilesAsync(profiles);
+        return replacedProfiles
+            ? new SourceQualityRebuildResult(true, profiles.Count, "Source quality profiles rebuilt successfully.")
+            : SourceQualityRebuildResult.Skipped("The SourceQualityProfiles table is missing.");
     }
 
     private void RecordSourceQualitySample<T>(
@@ -3480,7 +3561,7 @@ public class AnalyzerService  : IAnalyzerService
         }
     }
 
-    private async Task ReplaceSourceQualityProfilesAsync(IReadOnlyCollection<SourceQualityProfile> profiles)
+    private async Task<bool> ReplaceSourceQualityProfilesAsync(IReadOnlyCollection<SourceQualityProfile> profiles)
     {
         try
         {
@@ -3495,12 +3576,84 @@ public class AnalyzerService  : IAnalyzerService
         {
             _logger.LogWarning(
                 "Skipping source quality profile refresh because the SourceQualityProfiles table is missing. Apply the latest EF migration to enable this feature.");
-            return;
+            return false;
         }
 
         if (profiles.Count > 0)
         {
             await _dbContext.SourceQualityProfiles.AddRangeAsync(profiles);
+        }
+
+        await _dbContext.SaveChangesAsync();
+        return true;
+    }
+
+    private async Task SaveSofaScoreMatchScores(List<SofaScoreMatchScore> scores)
+    {
+        if (scores.Count == 0)
+        {
+            return;
+        }
+
+        var minTime = scores.Min(s => s.MatchTime);
+        var maxTime = scores.Max(s => s.MatchTime);
+
+        List<SofaScoreMatchScore> existingScoresList;
+        try
+        {
+            existingScoresList = await _dbContext.SofaScoreMatchScores
+                .Where(s => s.MatchTime >= minTime && s.MatchTime <= maxTime)
+                .ToListAsync();
+        }
+        catch (PostgresException ex) when (IsMissingSofaScoreTable(ex))
+        {
+            _logger.LogWarning(
+                "Skipping SofaScore score persistence because the SofaScoreMatchScores table is missing. Apply the latest EF migration to enable SofaScore source-quality history.");
+            return;
+        }
+
+        var existingScoresDict = existingScoresList
+            .GroupBy(GetStoredScoreSnapshotKey)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        foreach (var incomingScore in scores)
+        {
+            var key = GetStoredScoreSnapshotKey(incomingScore);
+
+            if (existingScoresDict.TryGetValue(key, out var existingRecord))
+            {
+                existingRecord.MatchTime = ResolvePreferredStoredMatchTime(
+                    existingRecord.MatchTime,
+                    incomingScore.MatchTime,
+                    existingRecord.IsLive,
+                    incomingScore.IsLive);
+
+                if (ShouldOverwriteStoredScore(
+                        existingRecord.Score,
+                        existingRecord.BTTSLabel,
+                        existingRecord.IsLive,
+                        existingRecord.MatchTime,
+                        incomingScore))
+                {
+                    existingRecord.Score = incomingScore.Score;
+                    existingRecord.IsLive = incomingScore.IsLive;
+                    existingRecord.BTTSLabel = incomingScore.BTTSLabel;
+                    existingRecord.DisplayedScore = incomingScore.DisplayedScore;
+                    existingRecord.RegularTimeScore = incomingScore.RegularTimeScore;
+                    existingRecord.HalfTimeScore = incomingScore.HalfTimeScore;
+                    existingRecord.ExtraTimeScore = incomingScore.ExtraTimeScore;
+                    existingRecord.StatusText = incomingScore.StatusText;
+                    existingRecord.EventUrl = incomingScore.EventUrl;
+                    existingRecord.League = string.IsNullOrWhiteSpace(incomingScore.League)
+                        ? existingRecord.League
+                        : incomingScore.League;
+                }
+            }
+            else
+            {
+                _dbContext.SofaScoreMatchScores.Add(incomingScore);
+                existingScoresDict[key] = incomingScore;
+            }
         }
 
         await _dbContext.SaveChangesAsync();
@@ -3595,8 +3748,18 @@ public class AnalyzerService  : IAnalyzerService
 
     private static bool IsMissingSourceQualityTable(PostgresException ex)
     {
+        return IsMissingTable(ex, "SourceQualityProfiles");
+    }
+
+    private static bool IsMissingSofaScoreTable(PostgresException ex)
+    {
+        return IsMissingTable(ex, "SofaScoreMatchScores");
+    }
+
+    private static bool IsMissingTable(PostgresException ex, string tableName)
+    {
         return ex.SqlState == PostgresErrorCodes.UndefinedTable &&
-               string.Equals(ex.TableName, "SourceQualityProfiles", StringComparison.Ordinal);
+               string.Equals(ex.TableName, tableName, StringComparison.Ordinal);
     }
 
     private sealed class SettlementFixtureGroup
@@ -3707,6 +3870,11 @@ public class AnalyzerService  : IAnalyzerService
                 LastUpdated = updatedAtUtc
             };
         }
+    }
+
+    private sealed record SourceQualityRebuildResult(bool Completed, int ProfileCount, string StatusMessage)
+    {
+        public static SourceQualityRebuildResult Skipped(string reason) => new(false, 0, reason);
     }
 
     private sealed class FixtureCandidateIndex<T>

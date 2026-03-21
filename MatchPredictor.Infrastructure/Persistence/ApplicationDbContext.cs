@@ -17,6 +17,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<ScrapingLog> ScrapingLogs => Set<ScrapingLog>();
     public DbSet<MatchScore> MatchScores => Set<MatchScore>();
     public DbSet<AiScoreMatchScore> AiScoreMatchScores => Set<AiScoreMatchScore>();
+    public DbSet<SofaScoreMatchScore> SofaScoreMatchScores => Set<SofaScoreMatchScore>();
     public DbSet<ModelAccuracy> ModelAccuracies => Set<ModelAccuracy>();
     public DbSet<MarketCalibrationProfile> MarketCalibrationProfiles => Set<MarketCalibrationProfile>();
     public DbSet<BetaCalibrationProfile> BetaCalibrationProfiles => Set<BetaCalibrationProfile>();
@@ -85,6 +86,12 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
         });
 
         modelBuilder.Entity<AiScoreMatchScore>(entity =>
+        {
+            entity.HasIndex(e => new { e.MatchTime, e.HomeTeam, e.AwayTeam });
+            entity.HasIndex(e => new { e.MatchTime, e.IsLive });
+        });
+
+        modelBuilder.Entity<SofaScoreMatchScore>(entity =>
         {
             entity.HasIndex(e => new { e.MatchTime, e.HomeTeam, e.AwayTeam });
             entity.HasIndex(e => new { e.MatchTime, e.IsLive });

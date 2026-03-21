@@ -827,6 +827,67 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.ToTable("ScrapingLogs");
                 });
 
+            modelBuilder.Entity("MatchPredictor.Domain.Models.SofaScoreMatchScore", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("AwayTeam")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("BTTSLabel")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("DisplayedScore")
+                        .HasColumnType("text");
+
+                    b.Property<string>("EventUrl")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ExtraTimeScore")
+                        .HasColumnType("text");
+
+                    b.Property<string>("HalfTimeScore")
+                        .HasColumnType("text");
+
+                    b.Property<string>("HomeTeam")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsLive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("League")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("MatchTime")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RegularTimeScore")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Score")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("StatusText")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MatchTime", "IsLive");
+
+                    b.HasIndex("MatchTime", "HomeTeam", "AwayTeam");
+
+                    b.ToTable("SofaScoreMatchScores");
+                });
+
             modelBuilder.Entity("MatchPredictor.Domain.Models.SourceQualityProfile", b =>
                 {
                     b.Property<int>("Id")

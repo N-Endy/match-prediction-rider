@@ -2,6 +2,7 @@ namespace MatchPredictor.Domain.Models;
 
 public class SofaScoreMatchScore
 {
+    public int Id { get; set; }
     public string League { get; set; } = string.Empty;
     public string HomeTeam { get; set; } = string.Empty;
     public string AwayTeam { get; set; } = string.Empty;

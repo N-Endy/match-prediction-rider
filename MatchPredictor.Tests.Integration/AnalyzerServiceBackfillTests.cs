@@ -689,6 +689,28 @@ public class AnalyzerServiceBackfillTests
             BTTSLabel = true,
             IsLive = false
         });
+        context.AiScoreMatchScores.Add(new AiScoreMatchScore
+        {
+            MatchTime = kickoff,
+            League = "League",
+            HomeTeam = "Alpha",
+            AwayTeam = "Beta",
+            Score = "2:1",
+            BTTSLabel = true,
+            IsLive = false
+        });
+        context.SofaScoreMatchScores.Add(new SofaScoreMatchScore
+        {
+            MatchTime = kickoff,
+            League = "League",
+            HomeTeam = "Alpha",
+            AwayTeam = "Beta",
+            Score = "2:1",
+            DisplayedScore = "2:1",
+            EventUrl = "https://www.sofascore.com/football/match/alpha-beta/test-id",
+            BTTSLabel = true,
+            IsLive = false
+        });
 
         await context.SaveChangesAsync();
 
@@ -714,7 +736,16 @@ public class AnalyzerServiceBackfillTests
 
         await service.RunDailyAnalysisAsync();
 
-        Assert.NotEmpty(await context.SourceQualityProfiles.ToListAsync());
+        var profiles = await context.SourceQualityProfiles.ToListAsync();
+        Assert.NotEmpty(profiles);
+        Assert.Contains(profiles, profile => profile.SourceName == "FlashScore");
+        Assert.Contains(profiles, profile => profile.SourceName == "AiScore");
+        Assert.Contains(profiles, profile => profile.SourceName == "SofaScore");
+
+        var latestSourceQualityLog = await context.ScrapingLogs
+            .OrderByDescending(log => log.Timestamp)
+            .FirstAsync(log => log.EventName == "source_quality");
+        Assert.Equal("Success", latestSourceQualityLog.Status);
     }
 
     [Fact]
