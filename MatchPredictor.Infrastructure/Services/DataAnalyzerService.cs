@@ -78,7 +78,7 @@ public class DataAnalyzerService : IDataAnalyzerService
             .ToList();
     }
 
-    private IDictionary<PredictionMarket, ThresholdDecision> BuildThresholdDecisions()
+    private IReadOnlyDictionary<PredictionMarket, ThresholdDecision> BuildThresholdDecisions()
     {
         return new Dictionary<PredictionMarket, ThresholdDecision>
         {

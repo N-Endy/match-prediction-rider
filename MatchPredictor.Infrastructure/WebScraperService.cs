@@ -2156,9 +2156,10 @@ public partial class WebScraperService : IWebScraperService
 
     private static string NormalizeFlashScoreText(string? value)
     {
+        var decoded = HtmlEntity.DeEntitize(value ?? string.Empty) ?? string.Empty;
         return string.Join(
             " ",
-            HtmlEntity.DeEntitize(value ?? string.Empty)
+            decoded
                 .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     }
 
