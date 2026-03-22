@@ -108,6 +108,10 @@ function renderCartItems() {
     if (footer) footer.style.display = 'flex';
 
     cart.forEach((item, index) => {
+        const marketLabel = getMarketLabel(item.market);
+        const supportLabel = isSportyBetBookableSelection(item)
+            ? 'SportyBet ready'
+            : 'Analysis only on SportyBet';
         const div = document.createElement('div');
         div.className = 'mp-cart-item';
         div.innerHTML = `
@@ -115,7 +119,9 @@ function renderCartItems() {
                 <div class="mp-cart-item-teams">${item.homeTeam} vs ${item.awayTeam}</div>
                 <div class="mp-cart-item-meta">
                     <span class="mp-cart-item-league">${item.league}</span>
+                    <span class="mp-cart-item-market">${escapeHtml(marketLabel)}</span>
                     <span class="mp-cart-item-prediction">${item.prediction}</span>
+                    <span class="mp-cart-item-support ${isSportyBetBookableSelection(item) ? '' : 'mp-cart-item-support-warning'}">${escapeHtml(supportLabel)}</span>
                 </div>
             </div>
             <button class="mp-cart-item-remove" onclick="removeFromCart(${index})" title="Remove">✕</button>
@@ -132,6 +138,11 @@ async function bookGames() {
         return;
     }
 
+    const bookableSelections = cart.filter(isSportyBetBookableSelection);
+    const clientWarnings = cart
+        .filter(item => !isSportyBetBookableSelection(item))
+        .map(item => `${item.homeTeam} vs ${item.awayTeam} (${item.prediction}): only tennis match-winner picks can be booked on SportyBet right now.`);
+
     const bookBtn = document.getElementById('bookGamesBtn');
     const resultDiv = document.getElementById('bookingResult');
     if (bookBtn) {
@@ -140,7 +151,20 @@ async function bookGames() {
     }
 
     try {
-        const selections = cart.map(item => ({
+        if (bookableSelections.length === 0) {
+            if (resultDiv) {
+                resultDiv.innerHTML = `
+                    <div class="mp-booking-error">
+                        <p>❌ Only tennis match-winner picks can be booked on SportyBet right now.</p>
+                        ${renderBookingWarnings(clientWarnings)}
+                    </div>
+                `;
+                resultDiv.style.display = 'block';
+            }
+            return;
+        }
+
+        const selections = bookableSelections.map(item => ({
             homeTeam: item.homeTeam,
             awayTeam: item.awayTeam,
             league: item.league,
@@ -159,12 +183,21 @@ async function bookGames() {
         const result = await response.json();
 
         if (resultDiv) {
+            const combinedWarnings = [
+                ...clientWarnings,
+                ...(Array.isArray(result.warnings) ? result.warnings.filter(Boolean) : [])
+            ];
+            const resultWithClientSkips = {
+                ...result,
+                skippedCount: Number(result?.skippedCount || 0) + clientWarnings.length
+            };
+
             if (result.success) {
                 const urlHtml = result.bookingUrl
                     ? `<a href="${result.bookingUrl}" target="_blank" class="mp-booking-url-btn">🔗 Open in SportyBet</a>`
                     : '';
-                const warningHtml = renderBookingWarnings(result.warnings);
-                const summaryHtml = renderBookingSummary(result);
+                const warningHtml = renderBookingWarnings(combinedWarnings);
+                const summaryHtml = renderBookingSummary(resultWithClientSkips);
 
                 resultDiv.innerHTML = `
                     <div class="mp-booking-success">
@@ -180,12 +213,12 @@ async function bookGames() {
                         ${warningHtml}
                     </div>
                 `;
-                if ((result.skippedCount || 0) === 0) {
+                if ((resultWithClientSkips.skippedCount || 0) === 0) {
                     clearCart();
                 }
             } else {
-                const warningHtml = renderBookingWarnings(result.warnings);
-                const summaryHtml = renderBookingSummary(result);
+                const warningHtml = renderBookingWarnings(combinedWarnings);
+                const summaryHtml = renderBookingSummary(resultWithClientSkips);
                 resultDiv.innerHTML = `
                     <div class="mp-booking-error">
                         <button class="mp-booking-close" onclick="this.closest('.mp-booking-error').parentElement.style.display='none'">&times;</button>
@@ -257,6 +290,25 @@ function getCartIdentity(match) {
         match?.prediction || '',
         match?.matchDateTimeUtc || ''
     ].join('|');
+}
+
+function isSportyBetBookableSelection(item) {
+    const market = String(item?.market || '').trim().toLowerCase();
+    const prediction = String(item?.prediction || '').trim().toLowerCase();
+    return market === 'matchwinner' && (prediction === 'home win' || prediction === 'away win');
+}
+
+function getMarketLabel(market) {
+    switch (String(market || '').trim().toLowerCase()) {
+        case 'matchwinner':
+            return 'Match Winner';
+        case 'overundersets':
+            return 'Over / Under Sets';
+        case 'sethandicap':
+            return 'Set Handicap';
+        default:
+            return market || 'Unknown market';
+    }
 }
 
 function escapeHtml(value) {

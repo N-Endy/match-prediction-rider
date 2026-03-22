@@ -617,17 +617,15 @@ a:hover {
 }
 
 .mp-badge-win-home {
-  background: rgba(13, 148, 136, 0.12);
-  color: var(--accent-teal);
-  /* Now Teal */
-  border: 1px solid rgba(13, 148, 136, 0.2);
+  background: rgba(16, 185, 129, 0.16);
+  color: #6ee7b7;
+  border: 1px solid rgba(16, 185, 129, 0.28);
 }
 
 .mp-badge-win-away {
-  background: rgba(14, 165, 233, 0.12);
-  color: var(--accent-pink);
-  /* Now Sky Blue */
-  border: 1px solid rgba(14, 165, 233, 0.2);
+  background: rgba(244, 63, 94, 0.16);
+  color: #fda4af;
+  border: 1px solid rgba(244, 63, 94, 0.28);
 }
 
 .mp-badge-combined {
@@ -1190,15 +1188,28 @@ a:hover {
 
 .mp-cart-item-meta {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 0.75rem;
   color: var(--text-muted);
   margin-top: 2px;
 }
 
+.mp-cart-item-market {
+  color: var(--text-secondary);
+}
+
 .mp-cart-item-prediction {
   color: var(--accent-blue);
   font-weight: 600;
+}
+
+.mp-cart-item-support {
+  color: var(--accent-emerald);
+}
+
+.mp-cart-item-support-warning {
+  color: var(--accent-amber);
 }
 
 .mp-cart-item-remove {

@@ -198,6 +198,11 @@ public static class ScoreMatchingHelper
             return new TeamMatchResult(true, 1.0, true, false);
         }
 
+        if (TryMatchAbbreviatedPlayerName(teamA, teamB) || TryMatchAbbreviatedPlayerName(teamB, teamA))
+        {
+            return new TeamMatchResult(true, 0.96, false, false);
+        }
+
         var shorter = teamA.TotalWeight <= teamB.TotalWeight ? teamA : teamB;
         var longer = ReferenceEquals(shorter, teamA) ? teamB : teamA;
 
@@ -308,6 +313,7 @@ public static class ScoreMatchingHelper
     private static TeamIdentity ParseTeamIdentity(string? name, string? league)
     {
         var coreTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var orderedTokens = new List<string>();
         var qualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var normalized = PreNormalizeTeamName(name);
@@ -341,6 +347,7 @@ public static class ScoreMatchingHelper
             }
 
             if (TeamStopWords.Contains(token)) continue;
+            orderedTokens.Add(token);
             coreTokens.Add(token);
         }
 
@@ -353,6 +360,7 @@ public static class ScoreMatchingHelper
         {
             return TeamIdentity.Empty with
             {
+                OrderedTokens = orderedTokens,
                 Qualifiers = qualifiers,
                 LookupKey = BuildLookupKey(Array.Empty<string>(), qualifiers)
             };
@@ -368,6 +376,7 @@ public static class ScoreMatchingHelper
         {
             CoreTokens = orderedCore,
             CoreTokenSet = coreTokens,
+            OrderedTokens = orderedTokens,
             Qualifiers = qualifiers,
             TotalWeight = totalWeight,
             StrongTokenCount = strongTokenCount,
@@ -489,6 +498,115 @@ public static class ScoreMatchingHelper
         return youthA == youthB;
     }
 
+    private static bool TryMatchAbbreviatedPlayerName(TeamIdentity abbreviated, TeamIdentity full)
+    {
+        if (!LooksLikeAbbreviatedPlayerName(abbreviated.OrderedTokens) || full.OrderedTokens.Count < 2)
+        {
+            return false;
+        }
+
+        var abbreviatedGivenCount = CountTrailingAbbreviationTokens(abbreviated.OrderedTokens);
+        var abbreviatedSurnameCount = abbreviated.OrderedTokens.Count - abbreviatedGivenCount;
+        if (abbreviatedSurnameCount <= 0 || abbreviatedSurnameCount >= full.OrderedTokens.Count)
+        {
+            return false;
+        }
+
+        var abbreviatedSurnameTokens = abbreviated.OrderedTokens.Take(abbreviatedSurnameCount).ToArray();
+        var fullSurnameTokens = full.OrderedTokens.Skip(full.OrderedTokens.Count - abbreviatedSurnameCount).ToArray();
+        for (var i = 0; i < abbreviatedSurnameTokens.Length; i++)
+        {
+            if (!TokensEquivalent(abbreviatedSurnameTokens[i], fullSurnameTokens[i]))
+            {
+                return false;
+            }
+        }
+
+        var abbreviatedGivenTokens = abbreviated.OrderedTokens.Skip(abbreviatedSurnameCount).ToArray();
+        var fullGivenTokens = full.OrderedTokens.Take(full.OrderedTokens.Count - abbreviatedSurnameCount).ToArray();
+        if (fullGivenTokens.Length < abbreviatedGivenTokens.Length || fullGivenTokens.Length == 0)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < abbreviatedGivenTokens.Length; i++)
+        {
+            if (!AbbreviationMatchesToken(abbreviatedGivenTokens[i], fullGivenTokens[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool LooksLikeAbbreviatedPlayerName(IReadOnlyList<string> tokens)
+    {
+        var trailingCount = CountTrailingAbbreviationTokens(tokens);
+        return trailingCount > 0 && trailingCount < tokens.Count;
+    }
+
+    private static int CountTrailingAbbreviationTokens(IReadOnlyList<string> tokens)
+    {
+        var count = 0;
+        for (var i = tokens.Count - 1; i >= 0; i--)
+        {
+            if (!LooksLikeGivenNameAbbreviation(tokens[i]))
+            {
+                break;
+            }
+
+            count++;
+        }
+
+        return count;
+    }
+
+    private static bool LooksLikeGivenNameAbbreviation(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return false;
+        }
+
+        if (token.Any(char.IsDigit))
+        {
+            return false;
+        }
+
+        return token.Length is >= 1 and <= 3;
+    }
+
+    private static bool AbbreviationMatchesToken(string abbreviation, string fullToken)
+    {
+        if (string.IsNullOrWhiteSpace(abbreviation) || string.IsNullOrWhiteSpace(fullToken))
+        {
+            return false;
+        }
+
+        return fullToken.StartsWith(abbreviation, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TokensEquivalent(string left, string right)
+    {
+        if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (left.Length >= 4 && right.StartsWith(left, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (right.Length >= 4 && left.StartsWith(right, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
     private static double GetTokenWeight(string token)
     {
         return WeakTeamTokens.Contains(token) ? 0.35 : 1.0;
@@ -593,6 +711,7 @@ public static class ScoreMatchingHelper
         {
             CoreTokens = Array.Empty<string>(),
             CoreTokenSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            OrderedTokens = Array.Empty<string>(),
             Qualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
             LookupKey = string.Empty,
             TotalWeight = 0,
@@ -601,6 +720,7 @@ public static class ScoreMatchingHelper
 
         public IReadOnlyList<string> CoreTokens { get; init; } = Array.Empty<string>();
         public HashSet<string> CoreTokenSet { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+        public IReadOnlyList<string> OrderedTokens { get; init; } = Array.Empty<string>();
         public HashSet<string> Qualifiers { get; init; } = new(StringComparer.OrdinalIgnoreCase);
         public string LookupKey { get; init; } = string.Empty;
         public double TotalWeight { get; init; }

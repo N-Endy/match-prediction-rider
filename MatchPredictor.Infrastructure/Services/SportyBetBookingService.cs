@@ -21,6 +21,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
     private const int DefaultBookingPageSize = 100;
     private const int DefaultPricingMaxPages = 10;
     private const int DefaultBookingMaxPages = 10;
+    private const string DefaultTennisUpcomingMarketId = "1";
     private const double MinimumDirectionalTeamScore = 0.72;
     private const double MinimumConfidentMatchScore = 1.55;
     private const double AmbiguousScoreGap = 0.12;
@@ -80,7 +81,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
 
         var baseUrl = _configuration["SportyBet:BaseUrl"] ?? "https://www.sportybet.com";
         var tennisSportId = _configuration["SportyBet:TennisSportId"] ?? "sr:sport:5";
-        var matchWinnerMarketId = _configuration["SportyBet:MatchWinnerMarketId"] ?? "1";
+        var matchWinnerMarketId = _configuration["SportyBet:MatchWinnerMarketId"] ?? DefaultTennisUpcomingMarketId;
         var todayLocalDate = DateTimeProvider.GetLocalDate();
 
         try
@@ -183,7 +184,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
     {
         var baseUrl = _configuration["SportyBet:BaseUrl"] ?? "https://www.sportybet.com";
         var tennisSportId = _configuration["SportyBet:TennisSportId"] ?? "sr:sport:5";
-        var matchWinnerMarketId = _configuration["SportyBet:MatchWinnerMarketId"] ?? "1";
+        var matchWinnerMarketId = _configuration["SportyBet:MatchWinnerMarketId"] ?? DefaultTennisUpcomingMarketId;
 
         var fixtures = await FetchTodayFixturesAsync(baseUrl, tennisSportId, matchWinnerMarketId, ct, useBookingClient: false);
         return fixtures.Select(fixture => new SourceMarketFixture
@@ -208,7 +209,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         bool useBookingClient,
         IReadOnlyCollection<ResolvedBookingSelection>? targetedSelections = null)
     {
-        var cacheKey = $"sportybet_tennis_fixtures_{DateTime.UtcNow:yyyyMMdd}";
+        var cacheKey = $"sportybet_tennis_fixtures_v2_{DateTime.UtcNow:yyyyMMdd}";
         var backupCacheKey = $"{cacheKey}_backup";
 
         try
@@ -217,7 +218,11 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             if (!string.IsNullOrWhiteSpace(cachedData))
             {
                 var cachedFixtures = JsonSerializer.Deserialize<List<SportyBetFixture>>(cachedData) ?? new List<SportyBetFixture>();
-                var deduplicated = DeduplicateFixturesByEventId(cachedFixtures);
+                var deduplicated = await HydrateMissingWinnerMarketsAsync(
+                    DeduplicateFixturesByEventId(cachedFixtures),
+                    baseUrl,
+                    useBookingClient,
+                    ct);
                 if (targetedSelections is null || CanResolveSelections(deduplicated, targetedSelections))
                 {
                     return deduplicated;
@@ -315,7 +320,11 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             }
         }
 
-        var deduplicatedFixtures = DeduplicateFixturesByEventId(fixturesByEventId.Values);
+        var deduplicatedFixtures = await HydrateMissingWinnerMarketsAsync(
+            DeduplicateFixturesByEventId(fixturesByEventId.Values),
+            baseUrl,
+            useBookingClient,
+            ct);
         if (deduplicatedFixtures.Count > 0)
         {
             try
@@ -348,7 +357,11 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                 if (!string.IsNullOrWhiteSpace(backupCachedData))
                 {
                     var backupFixtures = JsonSerializer.Deserialize<List<SportyBetFixture>>(backupCachedData) ?? new List<SportyBetFixture>();
-                    return DeduplicateFixturesByEventId(backupFixtures);
+                    return await HydrateMissingWinnerMarketsAsync(
+                        DeduplicateFixturesByEventId(backupFixtures),
+                        baseUrl,
+                        useBookingClient,
+                        ct);
                 }
             }
             catch (Exception ex)
@@ -367,7 +380,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         string awayTeam,
         string league,
         DateTime? kickoffTimeUtc,
-        string matchWinnerMarketId)
+        string preferredMarketId)
     {
         var fixture = new SportyBetFixture
         {
@@ -376,7 +389,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             HomeTeam = homeTeam,
             AwayTeam = awayTeam,
             MatchTimeUtc = kickoffTimeUtc,
-            WinnerMarketId = matchWinnerMarketId
+            WinnerMarketId = preferredMarketId
         };
 
         if (!eventElement.TryGetProperty("markets", out var markets))
@@ -384,57 +397,151 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             return fixture;
         }
 
-        foreach (var market in markets.EnumerateArray())
+        var winnerMarket = SelectMatchWinnerMarket(markets, preferredMarketId);
+        if (winnerMarket is null)
         {
-            var marketId = market.TryGetProperty("id", out var marketIdElement)
-                ? marketIdElement.GetString() ?? string.Empty
-                : string.Empty;
-            if (!string.Equals(marketId, matchWinnerMarketId, StringComparison.Ordinal))
+            return fixture;
+        }
+
+        var marketElement = winnerMarket.Value;
+        var marketId = marketElement.TryGetProperty("id", out var marketIdElement)
+            ? marketIdElement.GetString() ?? string.Empty
+            : string.Empty;
+        var outcomes = marketElement.TryGetProperty("outcomes", out var outcomesElement)
+            ? outcomesElement.EnumerateArray().Select(ParseOutcome).ToList()
+            : new List<ParsedOutcome>();
+        if (outcomes.Count == 0)
+        {
+            return fixture;
+        }
+
+        var homeOutcome = outcomes.FirstOrDefault(outcome => IsHomeOutcome(outcome, homeTeam, awayTeam));
+        var awayOutcome = outcomes.FirstOrDefault(outcome => IsAwayOutcome(outcome, homeTeam, awayTeam));
+
+        if ((homeOutcome is null || awayOutcome is null) && outcomes.Count == 2)
+        {
+            homeOutcome ??= outcomes[0];
+            awayOutcome ??= outcomes[1];
+        }
+
+        if (homeOutcome is not null)
+        {
+            fixture = fixture with
             {
-                continue;
-            }
+                WinnerMarketId = string.IsNullOrWhiteSpace(marketId) ? fixture.WinnerMarketId : marketId,
+                HomeOutcomeId = homeOutcome.OutcomeId,
+                HomeProbability = ResolveProbability(homeOutcome),
+                HomeOdds = homeOutcome.DecimalOdds
+            };
+        }
 
-            var outcomes = market.TryGetProperty("outcomes", out var outcomesElement)
-                ? outcomesElement.EnumerateArray().Select(ParseOutcome).ToList()
-                : new List<ParsedOutcome>();
-            if (outcomes.Count == 0)
+        if (awayOutcome is not null)
+        {
+            fixture = fixture with
             {
-                break;
-            }
-
-            var homeOutcome = outcomes.FirstOrDefault(outcome => IsHomeOutcome(outcome, homeTeam, awayTeam));
-            var awayOutcome = outcomes.FirstOrDefault(outcome => IsAwayOutcome(outcome, homeTeam, awayTeam));
-
-            if ((homeOutcome is null || awayOutcome is null) && outcomes.Count == 2)
-            {
-                homeOutcome ??= outcomes[0];
-                awayOutcome ??= outcomes[1];
-            }
-
-            if (homeOutcome is not null)
-            {
-                fixture = fixture with
-                {
-                    HomeOutcomeId = homeOutcome.OutcomeId,
-                    HomeProbability = ResolveProbability(homeOutcome),
-                    HomeOdds = homeOutcome.DecimalOdds
-                };
-            }
-
-            if (awayOutcome is not null)
-            {
-                fixture = fixture with
-                {
-                    AwayOutcomeId = awayOutcome.OutcomeId,
-                    AwayProbability = ResolveProbability(awayOutcome),
-                    AwayOdds = awayOutcome.DecimalOdds
-                };
-            }
-
-            break;
+                WinnerMarketId = string.IsNullOrWhiteSpace(marketId) ? fixture.WinnerMarketId : marketId,
+                AwayOutcomeId = awayOutcome.OutcomeId,
+                AwayProbability = ResolveProbability(awayOutcome),
+                AwayOdds = awayOutcome.DecimalOdds
+            };
         }
 
         return fixture;
+    }
+
+    private async Task<List<SportyBetFixture>> HydrateMissingWinnerMarketsAsync(
+        List<SportyBetFixture> fixtures,
+        string baseUrl,
+        bool useBookingClient,
+        CancellationToken ct)
+    {
+        if (fixtures.Count == 0)
+        {
+            return fixtures;
+        }
+
+        var client = CreateHttpClient(useBookingClient ? BookingClientName : PricingClientName);
+        var hydratedFixtures = new List<SportyBetFixture>(fixtures.Count);
+
+        foreach (var fixture in fixtures)
+        {
+            if (!NeedsWinnerMarketHydration(fixture))
+            {
+                hydratedFixtures.Add(fixture);
+                continue;
+            }
+
+            try
+            {
+                hydratedFixtures.Add(await FetchEventFixtureDetailAsync(client, baseUrl, fixture, ct));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to hydrate SportyBet tennis market data for {EventId}.", fixture.EventId);
+                hydratedFixtures.Add(fixture);
+            }
+        }
+
+        return hydratedFixtures;
+    }
+
+    private async Task<SportyBetFixture> FetchEventFixtureDetailAsync(
+        HttpClient client,
+        string baseUrl,
+        SportyBetFixture fixture,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(fixture.EventId))
+        {
+            return fixture;
+        }
+
+        var response = await client.GetAsync(
+            $"{baseUrl}/api/ng/factsCenter/event?eventId={Uri.EscapeDataString(fixture.EventId)}",
+            ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            return fixture;
+        }
+
+        var responseBody = await response.Content.ReadAsStringAsync(ct);
+        using var document = JsonDocument.Parse(responseBody);
+        if (!document.RootElement.TryGetProperty("data", out var eventData))
+        {
+            return fixture;
+        }
+
+        var homeTeam = eventData.TryGetProperty("homeTeamName", out var homeTeamElement)
+            ? homeTeamElement.GetString() ?? fixture.HomeTeam
+            : fixture.HomeTeam;
+        var awayTeam = eventData.TryGetProperty("awayTeamName", out var awayTeamElement)
+            ? awayTeamElement.GetString() ?? fixture.AwayTeam
+            : fixture.AwayTeam;
+        var eventId = eventData.TryGetProperty("eventId", out var eventIdElement)
+            ? eventIdElement.GetString() ?? fixture.EventId
+            : fixture.EventId;
+        var kickoffTimeUtc = eventData.TryGetProperty("estimateStartTime", out var estimateStartTimeElement) &&
+                             estimateStartTimeElement.TryGetInt64(out var estimateStartTime)
+            ? DateTimeOffset.FromUnixTimeMilliseconds(estimateStartTime).UtcDateTime
+            : fixture.MatchTimeUtc;
+
+        var hydratedFixture = ParseFixture(
+            eventData,
+            eventId,
+            homeTeam,
+            awayTeam,
+            string.IsNullOrWhiteSpace(ExtractLeagueName(eventData)) ? fixture.League : ExtractLeagueName(eventData),
+            kickoffTimeUtc,
+            fixture.WinnerMarketId);
+
+        return hydratedFixture with
+        {
+            EventId = fixture.EventId,
+            League = string.IsNullOrWhiteSpace(hydratedFixture.League) ? fixture.League : hydratedFixture.League,
+            HomeTeam = string.IsNullOrWhiteSpace(hydratedFixture.HomeTeam) ? fixture.HomeTeam : hydratedFixture.HomeTeam,
+            AwayTeam = string.IsNullOrWhiteSpace(hydratedFixture.AwayTeam) ? fixture.AwayTeam : hydratedFixture.AwayTeam,
+            MatchTimeUtc = hydratedFixture.MatchTimeUtc ?? fixture.MatchTimeUtc
+        };
     }
 
     private async Task<List<ResolvedBookingSelection>> BuildCanonicalSelectionsAsync(
@@ -860,6 +967,62 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         return outcome.DecimalOdds is > 1d
             ? 1d / outcome.DecimalOdds.Value
             : null;
+    }
+
+    private static bool NeedsWinnerMarketHydration(SportyBetFixture fixture)
+    {
+        return string.IsNullOrWhiteSpace(fixture.HomeOutcomeId) ||
+               string.IsNullOrWhiteSpace(fixture.AwayOutcomeId) ||
+               fixture.HomeOdds is null ||
+               fixture.AwayOdds is null;
+    }
+
+    private static JsonElement? SelectMatchWinnerMarket(JsonElement marketsElement, string preferredMarketId)
+    {
+        JsonElement? preferredById = null;
+        JsonElement? bestWinnerMarket = null;
+
+        foreach (var market in marketsElement.EnumerateArray())
+        {
+            if (!market.TryGetProperty("outcomes", out var outcomesElement) ||
+                outcomesElement.ValueKind != JsonValueKind.Array ||
+                outcomesElement.GetArrayLength() != 2)
+            {
+                continue;
+            }
+
+            var marketId = market.TryGetProperty("id", out var marketIdElement)
+                ? marketIdElement.GetString() ?? string.Empty
+                : string.Empty;
+            if (string.Equals(marketId, preferredMarketId, StringComparison.Ordinal))
+            {
+                preferredById = market;
+            }
+
+            var description = GetMarketText(market, "desc");
+            var name = GetMarketText(market, "name");
+            var title = GetMarketText(market, "title");
+            var guide = GetMarketText(market, "marketGuide");
+            var normalizedText = $"{description} {name} {title} {guide}".Trim();
+
+            if (guide.Contains("win the match", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(description, "winner", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "winner", StringComparison.OrdinalIgnoreCase) ||
+                (normalizedText.Contains("winner", StringComparison.OrdinalIgnoreCase) &&
+                 !normalizedText.Contains("set", StringComparison.OrdinalIgnoreCase)))
+            {
+                bestWinnerMarket ??= market;
+            }
+        }
+
+        return bestWinnerMarket ?? preferredById;
+    }
+
+    private static string GetMarketText(JsonElement market, string propertyName)
+    {
+        return market.TryGetProperty(propertyName, out var property)
+            ? property.GetString() ?? string.Empty
+            : string.Empty;
     }
 
     private static double ComputeTeamMatchScore(string expectedTeam, string actualTeam)

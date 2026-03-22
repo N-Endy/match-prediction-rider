@@ -78,7 +78,7 @@ public static partial class PredictionDisplayHelper
     {
         return prediction.PredictionCategory switch
         {
-            "MatchWinner" => "Match Winner",
+            "MatchWinner" => prediction.PredictedOutcome ?? "Match Winner",
             "OverUnderSets" => prediction.PredictedOutcome ?? "Set Total",
             "SetHandicap" => "Set Handicap",
             _ => prediction.PredictedOutcome ?? prediction.PredictionCategory
@@ -96,7 +96,12 @@ public static partial class PredictionDisplayHelper
         };
     }
 
-    public static bool IsBookable(Prediction prediction)
+    public static bool SupportsBetslip(Prediction prediction)
+    {
+        return prediction.PredictionCategory is "MatchWinner" or "OverUnderSets" or "SetHandicap";
+    }
+
+    public static bool IsSportyBetBookable(Prediction prediction)
     {
         return string.Equals(prediction.PredictionCategory, "MatchWinner", StringComparison.OrdinalIgnoreCase) &&
                (string.Equals(prediction.PredictedOutcome, "Home Win", StringComparison.OrdinalIgnoreCase) ||

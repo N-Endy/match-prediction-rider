@@ -124,8 +124,9 @@ public partial class WebScraperService : IWebScraperService
     {
         try
         {
+            EnsureBrowserScrapingEnabled("FlashScore tennis score scraping");
             var dayOffset = ParseConfiguredSignedInt("ScrapingValues:ScoresDayOffset", 0);
-            var html = await FetchFlashScoreTennisHtmlAsync(dayOffset);
+            var html = await FetchFlashScoreTennisHtmlViaBrowserAsync(dayOffset);
             return ParseFlashScoreTennisHtml(html, dayOffset);
         }
         catch (Exception e)
@@ -1995,32 +1996,34 @@ public partial class WebScraperService : IWebScraperService
         return DateTimeProvider.ConvertLocalToUtc(parsedLocal);
     }
 
-    private async Task<string> FetchFlashScoreTennisHtmlAsync(int dayOffset)
+    private async Task<string> FetchFlashScoreTennisHtmlViaBrowserAsync(int dayOffset)
     {
         var downloadUrl = ResolveFlashScoreTennisUrl(_configuration["ScrapingValues:ScoresWebsite"], dayOffset);
 
-        _logger.LogInformation("Fetching FlashScore tennis scores via HTTP from {Url}.", downloadUrl);
+        _logger.LogInformation("Fetching FlashScore tennis scores via Chrome from {Url}.", downloadUrl);
 
-        using var handler = new HttpClientHandler
-        {
-            AutomaticDecompression = System.Net.DecompressionMethods.GZip |
-                                     System.Net.DecompressionMethods.Deflate |
-                                     System.Net.DecompressionMethods.Brotli
-        };
-        using var client = new HttpClient(handler);
+        return await RunWithChromeSessionAsync(
+            async driver =>
+            {
+                await driver.Navigate().GoToUrlAsync(downloadUrl);
+                WaitForDocumentReady(driver);
+                await Task.Delay(500);
 
-        client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1");
-        client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-        client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9");
-        client.Timeout = TimeSpan.FromSeconds(20);
+                var pageSource = driver.PageSource;
+                if (string.IsNullOrWhiteSpace(pageSource) ||
+                    !pageSource.Contains("score-data", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException($"FlashScore browser page source did not include score-data for {downloadUrl}.");
+                }
 
-        using var response = await client.GetAsync(downloadUrl);
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new HttpRequestException($"FlashScore HTTP returned {(int)response.StatusCode} {response.ReasonPhrase} for {downloadUrl}.");
-        }
-
-        return await response.Content.ReadAsStringAsync();
+                return pageSource;
+            },
+            configureOptions: options =>
+            {
+                options.AddArgument("--window-size=430,932");
+                options.AddArgument("--user-agent=Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1");
+            },
+            purpose: "FlashScore tennis score scraping");
     }
 
     private List<MatchScore> ParseFlashScoreTennisHtml(string html, int dayOffset)

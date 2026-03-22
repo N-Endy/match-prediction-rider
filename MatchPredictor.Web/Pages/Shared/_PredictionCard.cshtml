@@ -7,7 +7,8 @@
     var cartMarket = MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetCartMarket(Model);
     var isActuallyLive = MatchPredictor.Web.Helpers.PredictionDisplayHelper.IsActuallyLive(Model, nowUtc);
     var statusLabel = MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetStatusLabel(Model, nowUtc);
-    var isBookable = MatchPredictor.Web.Helpers.PredictionDisplayHelper.IsBookable(Model);
+    var supportsBetslip = MatchPredictor.Web.Helpers.PredictionDisplayHelper.SupportsBetslip(Model);
+    var isSportyBetBookable = MatchPredictor.Web.Helpers.PredictionDisplayHelper.IsSportyBetBookable(Model);
 }
 
 <div class="mp-prediction-card mp-prediction-card-rich">
@@ -47,7 +48,7 @@
 
         <span class="mp-prediction-badge @badgeClass">@badgeText</span>
 
-        @if (isBookable)
+        @if (supportsBetslip)
         {
             <button class="mp-add-cart-btn" title="Add Bet"
                     data-home="@Model.HomeTeam"
@@ -56,13 +57,14 @@
                     data-market="@cartMarket"
                     data-prediction="@Model.PredictedOutcome"
                     data-prediction-id="@Model.Id"
+                    data-bookable="@isSportyBetBookable.ToString().ToLowerInvariant()"
                     data-match-datetime-utc="@(Model.MatchDateTime?.ToString("O") ?? string.Empty)">
                 Add Bet
             </button>
-        }
-        else
-        {
-            <span class="mp-insight-chip">Analysis only</span>
+            @if (!isSportyBetBookable)
+            {
+                <span class="mp-insight-chip">SportyBet winner-only</span>
+            }
         }
     </div>
 </div>

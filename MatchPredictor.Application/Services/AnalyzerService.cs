@@ -79,8 +79,21 @@ public class AnalyzerService : IAnalyzerService
 
         try
         {
-            await _webScraperService.ScrapeMatchDataAsync();
-            var scrapedMatches = _excelExtract.ExtractMatchDatasetFromFile(targetLocalDateTime).ToList();
+            List<MatchData> scrapedMatches;
+            try
+            {
+                await _webScraperService.ScrapeMatchDataAsync();
+                scrapedMatches = _excelExtract.ExtractMatchDatasetFromFile(targetLocalDateTime).ToList();
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("Browser scraping is disabled", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Browser download is unavailable for {TargetDate}. Falling back to any already-downloaded workbook on disk.",
+                    targetDateString);
+                scrapedMatches = _excelExtract.ExtractMatchDatasetFromFile(targetLocalDateTime).ToList();
+            }
+
             foreach (var match in scrapedMatches)
             {
                 ApplyCanonicalMatchFields(match);

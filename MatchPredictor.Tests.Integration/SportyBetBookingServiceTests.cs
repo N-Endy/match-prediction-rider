@@ -265,6 +265,55 @@ public class SportyBetBookingServiceTests
         Assert.Empty(handler.SharedEventIds);
     }
 
+    [Fact]
+    public async Task BookGamesAsync_HydratesTennisWinnerMarketFromEventDetail_WhenUpcomingFeedOmitsMarkets()
+    {
+        await using var context = CreateContext();
+        var cache = CreateCache();
+        var todayLocalDate = DateTimeProvider.GetLocalDate();
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(todayLocalDate.ToDateTime(new TimeOnly(0, 40), DateTimeKind.Unspecified));
+        var handler = new SportyBetTestHandler(
+            upcomingPages: new Dictionary<int, string>
+            {
+                [1] = BuildUpcomingResponse(
+                    new SportyFixtureSpec("evt-tennis", "Mmoh, Michael", "Zink, Tyler", "Challenger - Morelos", kickoffUtc, Include1X2: false))
+            },
+            eventDetails: new Dictionary<string, string>
+            {
+                ["evt-tennis"] = BuildTennisEventDetailResponse(
+                    "evt-tennis",
+                    "Mmoh, Michael",
+                    "Zink, Tyler",
+                    "Challenger - Morelos",
+                    kickoffUtc,
+                    winnerMarketId: "186",
+                    homeOutcomeId: "4",
+                    awayOutcomeId: "5")
+            },
+            bookingResponse: BuildBookingShareResponse("TENNIS186"));
+        var service = CreateService(context, cache, handler);
+
+        var result = await service.BookGamesAsync(
+        [
+            new BookingSelection
+            {
+                HomeTeam = "Michael Mmoh",
+                AwayTeam = "Tyler Zink",
+                League = "Challenger - Morelos",
+                Market = "MatchWinner",
+                Prediction = "Home Win",
+                MatchDateTimeUtc = kickoffUtc
+            }
+        ]);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, result.BookedCount);
+        Assert.Contains("evt-tennis", handler.SharedEventIds);
+        Assert.Contains("186", handler.SharedMarketIds);
+        Assert.Contains("4", handler.SharedOutcomeIds);
+        Assert.Contains("evt-tennis", handler.RequestedEventDetails);
+    }
+
     private static SportyBetBookingService CreateService(
         ApplicationDbContext context,
         IDistributedCache cache,
@@ -274,8 +323,8 @@ public class SportyBetBookingServiceTests
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["SportyBet:BaseUrl"] = "https://sporty.test",
-                ["SportyBet:SoccerSportId"] = "sr:sport:1",
-                ["SportyBet:Market1X2"] = "1",
+                ["SportyBet:TennisSportId"] = "sr:sport:5",
+                ["SportyBet:MatchWinnerMarketId"] = "1",
                 ["SportyBet:BookingPageSize"] = "100",
                 ["SportyBet:BookingMaxPages"] = "10",
                 ["SportyBet:BookingTimeoutSeconds"] = "60"
@@ -348,6 +397,63 @@ public class SportyBetBookingServiceTests
         });
     }
 
+    private static string BuildTennisEventDetailResponse(
+        string eventId,
+        string homeTeam,
+        string awayTeam,
+        string league,
+        DateTime? kickoffUtc,
+        string winnerMarketId,
+        string homeOutcomeId,
+        string awayOutcomeId)
+    {
+        var (country, tournament) = SplitLeague(league);
+
+        return JsonSerializer.Serialize(new
+        {
+            data = new
+            {
+                eventId,
+                homeTeamName = homeTeam,
+                awayTeamName = awayTeam,
+                estimateStartTime = kickoffUtc.HasValue
+                    ? new DateTimeOffset(kickoffUtc.Value).ToUnixTimeMilliseconds()
+                    : (long?)null,
+                sport = new
+                {
+                    id = "sr:sport:5",
+                    name = "Tennis",
+                    category = new
+                    {
+                        id = "sr:category:72",
+                        name = country,
+                        tournament = new
+                        {
+                            id = "sr:tournament:test",
+                            name = tournament
+                        }
+                    }
+                },
+                markets = new[]
+                {
+                    new
+                    {
+                        id = winnerMarketId,
+                        product = 3,
+                        desc = "Winner",
+                        name = "Winner",
+                        marketGuide = "Who will win the match.",
+                        outcomes = new[]
+                        {
+                            new { id = homeOutcomeId, desc = "Home", probability = "0.75", odds = "1.25" },
+                            new { id = awayOutcomeId, desc = "Away", probability = "0.25", odds = "4.00" }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     private static object[] BuildMarkets(SportyFixtureSpec fixture)
     {
         var markets = new List<object>();
@@ -359,9 +465,8 @@ public class SportyBetBookingServiceTests
                 id = "1",
                 outcomes = new[]
                 {
-                    new { id = "1", desc = "Home", probability = "0.40", odds = "2.50" },
-                    new { id = "2", desc = "Draw", probability = "0.30", odds = "3.10" },
-                    new { id = "3", desc = "Away", probability = "0.30", odds = "3.00" }
+                    new { id = "1", desc = "Home", probability = "0.55", odds = "1.82" },
+                    new { id = "2", desc = "Away", probability = "0.45", odds = "2.20" }
                 }
             });
         }
@@ -432,18 +537,24 @@ public class SportyBetBookingServiceTests
     private sealed class SportyBetTestHandler : HttpMessageHandler
     {
         private readonly IReadOnlyDictionary<int, string> _upcomingPages;
+        private readonly IReadOnlyDictionary<string, string> _eventDetails;
         private readonly string? _bookingResponse;
 
         public SportyBetTestHandler(
             IReadOnlyDictionary<int, string>? upcomingPages = null,
+            IReadOnlyDictionary<string, string>? eventDetails = null,
             string? bookingResponse = null)
         {
             _upcomingPages = upcomingPages ?? new Dictionary<int, string>();
+            _eventDetails = eventDetails ?? new Dictionary<string, string>();
             _bookingResponse = bookingResponse;
         }
 
         public List<int> RequestedPages { get; } = [];
         public List<string> SharedEventIds { get; } = [];
+        public List<string> SharedMarketIds { get; } = [];
+        public List<string> SharedOutcomeIds { get; } = [];
+        public List<string> RequestedEventDetails { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -459,14 +570,31 @@ public class SportyBetBookingServiceTests
                 return CreateJsonResponse(body);
             }
 
+            if (request.Method == HttpMethod.Get && path.Contains("factsCenter/event", StringComparison.Ordinal))
+            {
+                var eventId = ParseStringQueryValue(request.RequestUri?.Query, "eventId");
+                if (!string.IsNullOrWhiteSpace(eventId))
+                {
+                    RequestedEventDetails.Add(eventId);
+                }
+
+                var body = !string.IsNullOrWhiteSpace(eventId) && _eventDetails.TryGetValue(eventId, out var response)
+                    ? response
+                    : "{\"data\":{}}";
+
+                return CreateJsonResponse(body);
+            }
+
             if (request.Method == HttpMethod.Post && path.Contains("orders/share", StringComparison.Ordinal))
             {
                 var payload = await request.Content!.ReadAsStringAsync(cancellationToken);
                 using var document = JsonDocument.Parse(payload);
-                SharedEventIds.AddRange(document.RootElement
-                    .GetProperty("selections")
-                    .EnumerateArray()
-                    .Select(selection => selection.GetProperty("eventId").GetString() ?? string.Empty));
+                foreach (var selection in document.RootElement.GetProperty("selections").EnumerateArray())
+                {
+                    SharedEventIds.Add(selection.GetProperty("eventId").GetString() ?? string.Empty);
+                    SharedMarketIds.Add(selection.GetProperty("marketId").GetString() ?? string.Empty);
+                    SharedOutcomeIds.Add(selection.GetProperty("outcomeId").GetString() ?? string.Empty);
+                }
 
                 return CreateJsonResponse(_bookingResponse ?? BuildBookingShareResponse("DEFAULT"));
             }
@@ -505,6 +633,27 @@ public class SportyBetBookingServiceTests
             }
 
             return 0;
+        }
+
+        private static string ParseStringQueryValue(string? query, string key)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return string.Empty;
+            }
+
+            var trimmed = query.TrimStart('?');
+            foreach (var pair in trimmed.Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = pair.Split('=', 2);
+                if (parts.Length == 2 &&
+                    string.Equals(parts[0], key, StringComparison.OrdinalIgnoreCase))
+                {
+                    return Uri.UnescapeDataString(parts[1]);
+                }
+            }
+
+            return string.Empty;
         }
     }
 }

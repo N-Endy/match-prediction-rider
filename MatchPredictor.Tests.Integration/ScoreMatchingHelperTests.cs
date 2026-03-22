@@ -12,6 +12,10 @@ public class ScoreMatchingHelperTests
     [InlineData("Sheff Utd", "Sheffield United", true)]
     [InlineData("Inter Bogota W", "Inter Bogota Women", true)]
     [InlineData("Vasalund (Swe)", "Vasalund", true)]
+    [InlineData("Barreto Sanchez D. A.", "Daniel Alejandro Barreto Sanchez", true)]
+    [InlineData("Varillas J. P.", "Juan Pablo Varillas", true)]
+    [InlineData("Negritu Ch.", "Christoph Negritu", true)]
+    [InlineData("Blanch D.", "Darwin Blanch", true)]
     public void TeamsMatch_UsesPrecisionFirstRules(string left, string right, bool expected)
     {
         Assert.Equal(expected, ScoreMatchingHelper.TeamsMatch(left, right));

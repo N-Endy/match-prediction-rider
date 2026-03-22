@@ -273,13 +273,9 @@ if (runtimeMode.RunBackgroundJobs)
 
         if (!hasTodayPredictions)
         {
-            logger.LogInformation("No tennis predictions found for today. Queuing daily analysis followed by initial extraction.");
+            logger.LogInformation("No tennis predictions found for today. Queuing initial tennis extraction and prediction generation.");
             var backgroundJobs = scope.ServiceProvider.GetRequiredService<IBackgroundJobClient>();
-            var analysisJobId = backgroundJobs.Enqueue<IAnalyzerService>(service => service.RunDailyAnalysisAsync());
-            backgroundJobs.ContinueJobWith<IAnalyzerService>(
-                analysisJobId,
-                service => service.ExtractDataAndSyncDatabaseAsync(),
-                JobContinuationOptions.OnlyOnSucceededState);
+            backgroundJobs.Enqueue<IAnalyzerService>(service => service.ExtractDataAndSyncDatabaseAsync());
         }
     }
     catch (Exception ex)
