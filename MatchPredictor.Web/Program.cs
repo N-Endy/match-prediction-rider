@@ -24,7 +24,12 @@ builder.Configuration
     .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
     .AddEnvironmentVariables();
 
-builder.Services.AddRazorPages();
+builder.Services.AddRazorPages(options =>
+{
+    options.Conventions.AddPageRoute("/Health/Health", "/ops/health");
+    options.Conventions.AddPageRoute("/HealthLegacy", "/Health/Health");
+    options.Conventions.AddPageRoute("/HealthLegacy", "/ops");
+});
 builder.Services.AddControllers();
 builder.Services.AddHealthChecks();
 builder.Services.AddHttpClient();

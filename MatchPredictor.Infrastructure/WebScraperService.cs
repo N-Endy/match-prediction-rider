@@ -229,47 +229,68 @@ public partial class WebScraperService : IWebScraperService
             return [];
         }
 
-        PruneExpiredSofaScoreEventUrlCache(DateTime.UtcNow);
+        if (!_browserScrapingEnabled)
+        {
+            _logger.LogWarning("Browser scraping is disabled. Cannot scrape SofaScore.");
+            return [];
+        }
 
         try
         {
-            using var client = CreateSofaScoreHttpClient();
+            _sofaScoreSourceHealthTracker.RecordAttempt("browser-single-page", $"Targeted fixtures: {requestedFixtures.Count}.");
 
-            if (_browserScrapingEnabled)
-            {
-                _sofaScoreSourceHealthTracker.RecordAttempt("browser-discovery", $"Targeted fixtures: {requestedFixtures.Count}.");
+            var baseUrl = (_configuration["ScrapingValues:SofaScoreBaseUrl"] ?? "https://www.sofascore.com").TrimEnd('/');
+            var listingUrl = $"{baseUrl}/tennis";
 
-                var browserAttempt = await ScrapeSofaScoreViaBrowserCrawlerAsync(requestedFixtures);
-                if (browserAttempt.Scores.Count > 0)
+            return await RunWithChromeSessionAsync(
+                async driver =>
                 {
-                    _logger.LogInformation(
-                        "Scraped {Count} SofaScore browser-crawled score rows for {FixtureCount} incomplete fixtures.",
-                        browserAttempt.Scores.Count,
-                        requestedFixtures.Count);
-                    _sofaScoreSourceHealthTracker.RecordSuccess(
-                        browserAttempt.Stage,
-                        browserAttempt.Scores.Count,
-                        browserAttempt.CandidateCount,
-                        browserAttempt.DetailFetchCount,
-                        browserAttempt.Detail);
-                    return browserAttempt.Scores;
-                }
+                    await driver.Navigate().GoToUrlAsync(listingUrl);
+                    WaitForDocumentReady(driver);
+                    DismissCookieBanners(driver);
+                    await Task.Delay(2500);
 
-                _logger.LogInformation("{Detail}", browserAttempt.Detail);
-            }
-            else
-            {
-                var detail = $"Browser scraping is disabled. Skipping SofaScore browser crawler for {requestedFixtures.Count} targeted fixture(s) and using HTML fallback only.";
-                _sofaScoreSourceHealthTracker.RecordAttempt("html-only", detail);
-                _logger.LogInformation("{Detail}", detail);
-            }
+                    var js = (IJavaScriptExecutor)driver;
+                    for (int i = 0; i < 4; i++)
+                    {
+                        js.ExecuteScript("window.scrollTo(0, document.body.scrollHeight);");
+                        await Task.Delay(1000);
+                        TryClickSofaScoreExpanders(driver);
+                    }
 
-            return await ScrapeSofaScoreViaHtmlFallbackAsync(requestedFixtures, client);
+                    var pageSource = driver.PageSource;
+                    var listingEntries = SofaScoreListingPageParser.ParseEntries(pageSource, baseUrl);
+                    var listingScores = ResolveSofaScoreListingScores(requestedFixtures, listingEntries);
+
+                    if (listingScores.Count > 0)
+                    {
+                        _logger.LogInformation("Scraped {Count} match scores from SofaScore headless single-page.", listingScores.Count);
+                        _sofaScoreSourceHealthTracker.RecordSuccess(
+                            "browser-single-page",
+                            listingScores.Count,
+                            listingEntries.Count,
+                            1,
+                            $"SofaScore headless single-page scrape recovered {listingScores.Count} targeted match(es).");
+                    }
+                    else
+                    {
+                        _logger.LogWarning("SofaScore headless single-page scrape found 0 matches for target fixtures.");
+                        _sofaScoreSourceHealthTracker.RecordEmpty(
+                            "browser-single-page",
+                            $"SofaScore browser parsed {listingEntries.Count} rows but none matched the targeted fixtures.",
+                            listingEntries.Count,
+                            1);
+                    }
+
+                    return listingScores;
+                },
+                ConfigureSofaScoreBrowserOptions,
+                "SofaScore single-page headless scraping");
         }
         catch (Exception ex)
         {
-            _sofaScoreSourceHealthTracker.RecordFailure("runtime", ex.Message);
-            _logger.LogWarning(ex, "SofaScore targeted scraping failed.");
+            _sofaScoreSourceHealthTracker.RecordFailure("browser-single-page", ex.Message);
+            _logger.LogWarning(ex, "SofaScore single-page Headless scraping failed.");
             return [];
         }
     }

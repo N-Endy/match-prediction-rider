@@ -80,8 +80,11 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
 
     public async Task<BookingResult> BookGamesAsync(List<BookingSelection> selections)
     {
+        _logger.LogInformation("Starting SportyBet booking process for {SelectionCount} selection(s).", selections.Count);
+        
         if (selections.Count == 0)
         {
+            _logger.LogWarning("SportyBet booking attempted with 0 selections.");
             return new BookingResult { Success = false, Message = "No games selected." };
         }
 
@@ -93,6 +96,8 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         try
         {
             var canonicalSelections = await BuildCanonicalSelectionsAsync(selections, CancellationToken.None);
+            _logger.LogInformation("Resolved {CanonicalCount} canonical matches for booking.", canonicalSelections.Count);
+            
             var matchableSelections = canonicalSelections
                 .Where(selection => !selection.MatchLocalDate.HasValue || selection.MatchLocalDate.Value == todayLocalDate)
                 .ToList();
@@ -103,6 +108,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
 
             if (matchableSelections.Count == 0)
             {
+                _logger.LogWarning("No matchable selections for today's SportyBet games.");
                 return BuildBookingFailureResult(
                     "All selected matches fall outside today's SportyBet tennis card.",
                     bookedCount: 0,
@@ -110,6 +116,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                     warnings);
             }
 
+            _logger.LogInformation("Fetching SportyBet fixtures to resolve {MatchableCount} matchable selections.", matchableSelections.Count);
             var fixtures = await FetchTodayFixturesAsync(
                 baseUrl,
                 tennisSportId,
@@ -120,6 +127,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
 
             if (fixtures.Count == 0)
             {
+                _logger.LogWarning("Could not retrieve SportyBet fixtures to proceed with booking.");
                 return BuildBookingFailureResult(
                     "Could not fetch today's tennis fixtures from SportyBet.",
                     bookedCount: 0,
@@ -142,6 +150,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
 
             if (selectedOutcomes.Count == 0)
             {
+                _logger.LogWarning("Failed to match any selection with available SportyBet odds.");
                 return BuildBookingFailureResult(
                     "None of the selected tennis picks could be booked on SportyBet today.",
                     bookedCount: 0,
@@ -149,10 +158,12 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                     warnings);
             }
 
+            _logger.LogInformation("Found {OutcomeCount} outcomes to book. Generating code.", selectedOutcomes.Count);
             var (bookingCode, bookingUrl) = await CreateBookingCodeAsync(selectedOutcomes, baseUrl);
             var skippedCount = selections.Count - selectedOutcomes.Count;
             if (!string.IsNullOrWhiteSpace(bookingCode))
             {
+                _logger.LogInformation("Successfully generated SportyBet booking code: {BookingCode}.", bookingCode);
                 return new BookingResult
                 {
                     Success = true,
@@ -167,6 +178,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                 };
             }
 
+            _logger.LogWarning("Failed to generate booking code despite having {OutcomeCount} outcomes.", selectedOutcomes.Count);
             return BuildBookingFailureResult(
                 $"Found {selectedOutcomes.Count} tennis selections but could not generate a SportyBet booking code.",
                 bookedCount: selectedOutcomes.Count,
@@ -489,23 +501,28 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         var client = CreateHttpClient(useBookingClient ? BookingClientName : PricingClientName);
         var hydratedFixtures = new List<SportyBetFixture>(fixtures.Count);
 
-        foreach (var fixture in fixtures)
+        foreach (var chunk in fixtures.Chunk(5))
         {
-            if (!NeedsWinnerMarketHydration(fixture))
+            var tasks = chunk.Select(async fixture =>
             {
-                hydratedFixtures.Add(fixture);
-                continue;
-            }
+                if (!NeedsWinnerMarketHydration(fixture))
+                {
+                    return fixture;
+                }
 
-            try
-            {
-                hydratedFixtures.Add(await FetchEventFixtureDetailAsync(client, baseUrl, fixture, ct));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Failed to hydrate SportyBet tennis market data for {EventId}.", fixture.EventId);
-                hydratedFixtures.Add(fixture);
-            }
+                try
+                {
+                    return await FetchEventFixtureDetailAsync(client, baseUrl, fixture, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to hydrate SportyBet tennis market data for {EventId}.", fixture.EventId);
+                    return fixture;
+                }
+            });
+
+            var results = await Task.WhenAll(tasks);
+            hydratedFixtures.AddRange(results);
         }
 
         return hydratedFixtures;
