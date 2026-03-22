@@ -13,6 +13,8 @@ namespace MatchPredictor.Web.Pages.Health;
 
 public class Health : PageModel
 {
+    private const string FlashScoreRuntimeEventName = "source_flashscore";
+    private const string TennisScoresRuntimeEventName = "source_tennisscores";
     private const string AiScoreRuntimeEventName = "source_runtime_aiscore";
     private const string SofaScoreRuntimeEventName = "source_runtime_sofascore";
     private static readonly IReadOnlyList<SignalDefinition> SignalDefinitions =
@@ -77,7 +79,7 @@ public class Health : PageModel
         var today = DateOnly.FromDateTime(nowLocal);
         var eventNames = SignalDefinitions
             .Select(definition => definition.EventName)
-            .Concat([AiScoreRuntimeEventName, SofaScoreRuntimeEventName])
+            .Concat([FlashScoreRuntimeEventName, TennisScoresRuntimeEventName, AiScoreRuntimeEventName, SofaScoreRuntimeEventName])
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -147,6 +149,8 @@ public class Health : PageModel
             LivePredictionsToday = livePredictionsToday,
             PredictionCoverageExpected = predictionCoverageExpected,
             Signals = signals,
+            FlashScoreRuntime = BuildLoggedSourceRuntimeStatus(groupedLogs, FlashScoreRuntimeEventName, "FlashScore"),
+            TennisScoresRuntime = BuildLoggedSourceRuntimeStatus(groupedLogs, TennisScoresRuntimeEventName, "TennisScoresMobi"),
             AiScoreRuntime = BuildAiScoreRuntimeStatus(ResolveAiScoreRuntimeSnapshot(groupedLogs, _aiScoreSourceHealthTracker.GetSnapshot())),
             SofaScoreRuntime = BuildSofaScoreRuntimeStatus(ResolveSofaScoreRuntimeSnapshot(groupedLogs, _sofaScoreSourceHealthTracker.GetSnapshot())),
             SourceQualityProfiles = sourceQualityProfiles
@@ -208,6 +212,55 @@ public class Health : PageModel
                 ? Math.Round((nowLocal - lastSuccessLocalTimestamp.Value).TotalMinutes, 1)
                 : null
         };
+    }
+
+    private static LoggedSourceRuntimeStatus BuildLoggedSourceRuntimeStatus(
+        IReadOnlyDictionary<string, List<ScrapingLog>> groupedLogs,
+        string eventName,
+        string sourceName)
+    {
+        groupedLogs.TryGetValue(eventName, out var logsForSignal);
+        logsForSignal ??= [];
+
+        var latestLog = logsForSignal.FirstOrDefault();
+        var lastSuccess = logsForSignal.FirstOrDefault(log => string.Equals(log.Status, "Success", StringComparison.OrdinalIgnoreCase));
+        var payload = ParseSourcePayload(latestLog?.PayloadJson);
+
+        return new LoggedSourceRuntimeStatus
+        {
+            SourceName = sourceName,
+            Status = latestLog?.Status ?? "Missing",
+            LastStage = latestLog?.Stage,
+            LastDetail = latestLog?.Message,
+            LastAttemptLocal = latestLog is null ? null : DateTimeProvider.ConvertUtcToLocal(latestLog.Timestamp),
+            LastSuccessLocal = lastSuccess is null ? null : DateTimeProvider.ConvertUtcToLocal(lastSuccess.Timestamp),
+            LastRowCount = payload.Rows,
+            LastLiveRowCount = payload.LiveRows
+        };
+    }
+
+    private static SourcePayloadSnapshot ParseSourcePayload(string? payloadJson)
+    {
+        if (string.IsNullOrWhiteSpace(payloadJson))
+        {
+            return new SourcePayloadSnapshot();
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(payloadJson);
+            var root = document.RootElement;
+
+            return new SourcePayloadSnapshot
+            {
+                Rows = root.TryGetProperty("rows", out var rowsElement) && rowsElement.TryGetInt32(out var rows) ? rows : 0,
+                LiveRows = root.TryGetProperty("liveRows", out var liveRowsElement) && liveRowsElement.TryGetInt32(out var liveRows) ? liveRows : 0
+            };
+        }
+        catch (JsonException)
+        {
+            return new SourcePayloadSnapshot();
+        }
     }
 
     private static SourceQualitySummary BuildSourceQualitySummary(SourceQualityProfile profile)
@@ -351,6 +404,8 @@ public sealed class OperationalHealthSnapshot
     public bool PredictionCoverageExpected { get; init; }
     public bool IsHealthy { get; init; }
     public List<HealthSignalStatus> Signals { get; init; } = [];
+    public LoggedSourceRuntimeStatus FlashScoreRuntime { get; init; } = new();
+    public LoggedSourceRuntimeStatus TennisScoresRuntime { get; init; } = new();
     public AiScoreRuntimeStatus AiScoreRuntime { get; init; } = new();
     public SofaScoreRuntimeStatus SofaScoreRuntime { get; init; } = new();
     public List<SourceQualitySummary> SourceQualityProfiles { get; init; } = [];
@@ -377,6 +432,18 @@ public enum HealthLevel
     Stale,
     Failed,
     Missing
+}
+
+public sealed class LoggedSourceRuntimeStatus
+{
+    public string SourceName { get; init; } = string.Empty;
+    public string Status { get; init; } = "Missing";
+    public string? LastStage { get; init; }
+    public string? LastDetail { get; init; }
+    public DateTime? LastAttemptLocal { get; init; }
+    public DateTime? LastSuccessLocal { get; init; }
+    public int LastRowCount { get; init; }
+    public int LastLiveRowCount { get; init; }
 }
 
 public sealed class AiScoreRuntimeStatus
@@ -424,4 +491,10 @@ public sealed class SourceQualitySummary
     public double LiveOnlyRate { get; init; }
     public double ReliabilityScore { get; init; }
     public double AverageKickoffOffsetMinutes { get; init; }
+}
+
+public sealed class SourcePayloadSnapshot
+{
+    public int Rows { get; init; }
+    public int LiveRows { get; init; }
 }

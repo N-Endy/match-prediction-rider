@@ -311,6 +311,10 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
 app.UseRateLimiter();
+if (!app.Environment.IsDevelopment())
+{
+    app.UseMiddleware<MatchPredictor.Web.Middleware.AdminUsageBasicAuthMiddleware>();
+}
 app.UseAuthorization();
 
 app.UseHangfireDashboard("/hangfire", new DashboardOptions

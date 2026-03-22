@@ -118,6 +118,86 @@
 
     <div class="mp-page-header" style="margin-top: 2rem;">
         <div class="mp-page-title">
+            <div class="mp-page-title-icon" style="background: rgba(249, 115, 22, 0.12);">🕸️</div>
+            <h2 style="margin: 0;">Listing Scraper Runtime</h2>
+        </div>
+    </div>
+
+    @{
+        HealthLevel LoggedSourceLevel(string status) => status switch
+        {
+            "Success" => HealthLevel.Healthy,
+            "Empty" => HealthLevel.Stale,
+            "Failed" => HealthLevel.Failed,
+            _ => HealthLevel.Missing
+        };
+
+        var flashScoreLevel = LoggedSourceLevel(Model.Snapshot.FlashScoreRuntime.Status);
+        var tennisScoresLevel = LoggedSourceLevel(Model.Snapshot.TennisScoresRuntime.Status);
+    }
+
+    <div class="mp-predictions-list" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem;">
+        <div class="mp-prediction-card" style="border-left: 3px solid @(flashScoreLevel == HealthLevel.Healthy ? "var(--accent-emerald)" : flashScoreLevel == HealthLevel.Stale ? "#f59e0b" : flashScoreLevel == HealthLevel.Failed ? "var(--accent-rose)" : "var(--border-color)");">
+            <div class="mp-match-info">
+                <div class="mp-match-league">
+                    FlashScore status
+                    @if (!string.IsNullOrWhiteSpace(Model.Snapshot.FlashScoreRuntime.LastStage))
+                    {
+                        <span class="mp-time">Last stage @Model.Snapshot.FlashScoreRuntime.LastStage</span>
+                    }
+                </div>
+                <div style="font-size: 1.2rem; font-weight: 700; margin-top: 0.45rem;">@Model.Snapshot.FlashScoreRuntime.Status</div>
+                <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.35rem;">
+                    Last rows: @Model.Snapshot.FlashScoreRuntime.LastRowCount
+                    • Live rows: @Model.Snapshot.FlashScoreRuntime.LastLiveRowCount
+                </div>
+                <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
+                    Last success: @(Model.Snapshot.FlashScoreRuntime.LastSuccessLocal?.ToString("dd MMM yyyy, hh:mm tt") ?? "Never")
+                </div>
+                @if (!string.IsNullOrWhiteSpace(Model.Snapshot.FlashScoreRuntime.LastDetail))
+                {
+                    <div style="font-size: 0.84rem; color: var(--text-secondary); margin-top: 0.65rem; line-height: 1.5;">
+                        @Model.Snapshot.FlashScoreRuntime.LastDetail
+                    </div>
+                }
+            </div>
+            <span class="mp-prediction-badge" style="@BadgeColors(flashScoreLevel)">
+                @flashScoreLevel
+            </span>
+        </div>
+
+        <div class="mp-prediction-card" style="border-left: 3px solid @(tennisScoresLevel == HealthLevel.Healthy ? "var(--accent-emerald)" : tennisScoresLevel == HealthLevel.Stale ? "#f59e0b" : tennisScoresLevel == HealthLevel.Failed ? "var(--accent-rose)" : "var(--border-color)");">
+            <div class="mp-match-info">
+                <div class="mp-match-league">
+                    tennisscores.mobi status
+                    @if (!string.IsNullOrWhiteSpace(Model.Snapshot.TennisScoresRuntime.LastStage))
+                    {
+                        <span class="mp-time">Last stage @Model.Snapshot.TennisScoresRuntime.LastStage</span>
+                    }
+                </div>
+                <div style="font-size: 1.2rem; font-weight: 700; margin-top: 0.45rem;">@Model.Snapshot.TennisScoresRuntime.Status</div>
+                <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.35rem;">
+                    Last rows: @Model.Snapshot.TennisScoresRuntime.LastRowCount
+                    • Live rows: @Model.Snapshot.TennisScoresRuntime.LastLiveRowCount
+                </div>
+                <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
+                    Last success: @(Model.Snapshot.TennisScoresRuntime.LastSuccessLocal?.ToString("dd MMM yyyy, hh:mm tt") ?? "Never")
+                </div>
+                @if (!string.IsNullOrWhiteSpace(Model.Snapshot.TennisScoresRuntime.LastDetail))
+                {
+                    <div style="font-size: 0.84rem; color: var(--text-secondary); margin-top: 0.65rem; line-height: 1.5;">
+                        @Model.Snapshot.TennisScoresRuntime.LastDetail
+                    </div>
+                }
+            </div>
+            <span class="mp-prediction-badge" style="@BadgeColors(tennisScoresLevel)">
+                @tennisScoresLevel
+            </span>
+        </div>
+    </div>
+
+    <div class="mp-page-header" style="margin-top: 2rem;">
+        <div class="mp-page-title">
             <div class="mp-page-title-icon" style="background: rgba(59, 130, 246, 0.12);">📡</div>
             <h2 style="margin: 0;">AiScore Runtime</h2>
         </div>

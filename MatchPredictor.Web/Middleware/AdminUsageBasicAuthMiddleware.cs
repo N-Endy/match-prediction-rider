@@ -4,6 +4,9 @@ namespace MatchPredictor.Web.Middleware;
 
 public class AdminUsageBasicAuthMiddleware
 {
+    private static readonly PathString AdminUsagePrefix = new("/admin/usage");
+    private static readonly PathString OpsPrefix = new("/ops");
+    private static readonly PathString LegacyHealthPrefix = new("/Health/Health");
     private readonly RequestDelegate _next;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AdminUsageBasicAuthMiddleware> _logger;
@@ -20,22 +23,17 @@ public class AdminUsageBasicAuthMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        if (!context.Request.Path.StartsWithSegments("/admin/usage", StringComparison.OrdinalIgnoreCase))
+        if (!TryResolveProtectedArea(context.Request.Path, out var areaName, out var username, out var password))
         {
             await _next(context);
             return;
         }
 
-        var username = _configuration["UsageDashboard:Username"]
-                       ?? _configuration["Hangfire:Username"];
-        var password = _configuration["UsageDashboard:Password"]
-                       ?? _configuration["Hangfire:Password"];
-
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
         {
-            _logger.LogError("Usage dashboard credentials are not configured. Denying access to {Path}.", context.Request.Path);
+            _logger.LogError("{AreaName} credentials are not configured. Denying access to {Path}.", areaName, context.Request.Path);
             context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-            await context.Response.WriteAsync("Usage dashboard credentials are not configured.");
+            await context.Response.WriteAsync($"{areaName} credentials are not configured.");
             return;
         }
 
@@ -43,11 +41,41 @@ public class AdminUsageBasicAuthMiddleware
         if (!TryValidateBasicAuth(authHeader, username, password))
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            context.Response.Headers.WWWAuthenticate = "Basic realm=\"Usage Dashboard\"";
+            context.Response.Headers.WWWAuthenticate = $"Basic realm=\"{areaName}\"";
             return;
         }
 
         await _next(context);
+    }
+
+    private bool TryResolveProtectedArea(
+        PathString path,
+        out string areaName,
+        out string? username,
+        out string? password)
+    {
+        areaName = string.Empty;
+        username = null;
+        password = null;
+
+        if (path.StartsWithSegments(AdminUsagePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            areaName = "Usage Dashboard";
+            username = _configuration["UsageDashboard:Username"] ?? _configuration["Hangfire:Username"];
+            password = _configuration["UsageDashboard:Password"] ?? _configuration["Hangfire:Password"];
+            return true;
+        }
+
+        if (path.StartsWithSegments(OpsPrefix, StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWithSegments(LegacyHealthPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            areaName = "Operational Health";
+            username = _configuration["HealthDashboard:Username"] ?? _configuration["Hangfire:Username"];
+            password = _configuration["HealthDashboard:Password"] ?? _configuration["Hangfire:Password"];
+            return true;
+        }
+
+        return false;
     }
 
     private static bool TryValidateBasicAuth(string authHeader, string expectedUsername, string expectedPassword)

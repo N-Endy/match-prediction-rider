@@ -127,8 +127,23 @@ public partial class WebScraperService : IWebScraperService
         {
             EnsureBrowserScrapingEnabled("FlashScore tennis score scraping");
             var dayOffset = ParseConfiguredSignedInt("ScrapingValues:ScoresDayOffset", 0);
+            _logger.LogInformation(
+                "Starting FlashScore tennis scrape with day offset {DayOffset}.",
+                dayOffset);
+
             var html = await FetchFlashScoreTennisHtmlViaBrowserAsync(dayOffset);
-            return ParseFlashScoreTennisHtml(html, dayOffset);
+            _logger.LogInformation(
+                "Fetched FlashScore tennis HTML ({HtmlLength} chars). Beginning parse.",
+                html.Length);
+
+            var scores = ParseFlashScoreTennisHtml(html, dayOffset);
+            _logger.LogInformation(
+                "FlashScore tennis parse completed with {RowCount} row(s): {LiveCount} live, {FinishedCount} finished.",
+                scores.Count,
+                scores.Count(score => score.IsLive),
+                scores.Count(score => !score.IsLive));
+
+            return scores;
         }
         catch (Exception e)
         {
@@ -145,36 +160,80 @@ public partial class WebScraperService : IWebScraperService
             var today = DateTimeProvider.GetLocalDate();
             var lookbackDays = Math.Max(ParseConfiguredSignedInt("ScrapingValues:TennisScoresResultsLookbackDays", 2), 0);
             var rows = new List<MatchScore>();
+            var baseUrl = ResolveTennisScoresBaseUrl(_configuration["ScrapingValues:TennisScoresWebsite"]);
+
+            _logger.LogInformation(
+                "Starting tennisscores.mobi scrape using {BaseUrl} with results lookback of {LookbackDays} day(s).",
+                baseUrl,
+                lookbackDays);
 
             var homepageHtml = await FetchTennisScoresHtmlAsync(
                 client,
-                ResolveTennisScoresBaseUrl(_configuration["ScrapingValues:TennisScoresWebsite"]));
+                baseUrl);
             if (!string.IsNullOrWhiteSpace(homepageHtml))
             {
-                rows.AddRange(ParseTennisScoresPageHtml(homepageHtml, today, resultsPage: false));
+                _logger.LogInformation(
+                    "Fetched tennisscores.mobi live homepage HTML ({HtmlLength} chars). Parsing live/finished rows for {TargetDate}.",
+                    homepageHtml.Length,
+                    today);
+                var homepageRows = ParseTennisScoresPageHtml(homepageHtml, today, resultsPage: false);
+                rows.AddRange(homepageRows);
+                _logger.LogInformation(
+                    "Parsed {RowCount} row(s) from the tennisscores.mobi live homepage: {LiveCount} live, {FinishedCount} finished.",
+                    homepageRows.Count,
+                    homepageRows.Count(score => score.IsLive),
+                    homepageRows.Count(score => !score.IsLive));
+            }
+            else
+            {
+                _logger.LogWarning("tennisscores.mobi live homepage returned no HTML.");
             }
 
             for (var dayOffset = 0; dayOffset <= lookbackDays; dayOffset++)
             {
                 var targetDate = today.AddDays(-dayOffset);
+                var resultsUrl = ResolveTennisScoresResultsUrl(_configuration["ScrapingValues:TennisScoresWebsite"], targetDate);
+                _logger.LogInformation(
+                    "Fetching tennisscores.mobi results page for {TargetDate} from {ResultsUrl}.",
+                    targetDate,
+                    resultsUrl);
                 var resultsHtml = await FetchTennisScoresHtmlAsync(
                     client,
-                    ResolveTennisScoresResultsUrl(_configuration["ScrapingValues:TennisScoresWebsite"], targetDate));
+                    resultsUrl);
                 if (string.IsNullOrWhiteSpace(resultsHtml))
                 {
+                    _logger.LogWarning("tennisscores.mobi results page for {TargetDate} returned no HTML.", targetDate);
                     continue;
                 }
 
-                rows.AddRange(ParseTennisScoresPageHtml(resultsHtml, targetDate, resultsPage: true));
+                _logger.LogInformation(
+                    "Fetched tennisscores.mobi results HTML for {TargetDate} ({HtmlLength} chars). Parsing finished rows.",
+                    targetDate,
+                    resultsHtml.Length);
+                var resultRows = ParseTennisScoresPageHtml(resultsHtml, targetDate, resultsPage: true);
+                rows.AddRange(resultRows);
+                _logger.LogInformation(
+                    "Parsed {RowCount} finished row(s) from tennisscores.mobi results for {TargetDate}.",
+                    resultRows.Count,
+                    targetDate);
             }
 
-            return rows
+            var deduped = rows
                 .GroupBy(BuildTennisScoresRowKey, StringComparer.Ordinal)
                 .Select(group => group
                     .OrderByDescending(score => score.IsLive ? 1 : 2)
                     .ThenByDescending(score => score.MatchTime)
                     .First())
                 .ToList();
+
+            _logger.LogInformation(
+                "tennisscores.mobi scrape completed with {RawRowCount} raw row(s) and {DedupedRowCount} deduplicated row(s): {LiveCount} live, {FinishedCount} finished.",
+                rows.Count,
+                deduped.Count,
+                deduped.Count(score => score.IsLive),
+                deduped.Count(score => !score.IsLive));
+
+            return deduped;
         }
         catch (Exception e)
         {

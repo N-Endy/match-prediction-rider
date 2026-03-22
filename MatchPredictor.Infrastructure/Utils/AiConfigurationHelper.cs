@@ -8,17 +8,19 @@ internal static class AiConfigurationHelper
 
     internal static string? GetGroqApiKey(IConfiguration configuration)
     {
-        return FirstNonEmpty(
+        return FirstConfiguredValue(
             configuration["GroqApiKey"],
             configuration["GROQ_API_KEY"],
+            Environment.GetEnvironmentVariable("GroqApiKey"),
             Environment.GetEnvironmentVariable("GROQ_API_KEY"));
     }
 
     internal static string GetGroqModel(IConfiguration configuration)
     {
-        return FirstNonEmpty(
+        return FirstConfiguredValue(
                    configuration["GroqModel"],
                    configuration["GROQ_MODEL"],
+                   Environment.GetEnvironmentVariable("GroqModel"),
                    Environment.GetEnvironmentVariable("GROQ_MODEL"))
                ?? DefaultGroqModel;
     }
@@ -34,13 +36,13 @@ internal static class AiConfigurationHelper
                value.Contains("set via environment variable", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string? FirstNonEmpty(params string?[] values)
+    private static string? FirstConfiguredValue(params string?[] values)
     {
         foreach (var value in values)
         {
-            if (!string.IsNullOrWhiteSpace(value))
+            if (!IsMissingOrPlaceholder(value))
             {
-                return value.Trim();
+                return value!.Trim();
             }
         }
 
