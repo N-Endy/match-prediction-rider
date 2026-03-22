@@ -111,7 +111,7 @@ function renderCartItems() {
         const marketLabel = getMarketLabel(item.market);
         const supportLabel = isSportyBetBookableSelection(item)
             ? 'SportyBet ready'
-            : 'Analysis only on SportyBet';
+            : 'Unsupported on SportyBet';
         const div = document.createElement('div');
         div.className = 'mp-cart-item';
         div.innerHTML = `
@@ -141,7 +141,7 @@ async function bookGames() {
     const bookableSelections = cart.filter(isSportyBetBookableSelection);
     const clientWarnings = cart
         .filter(item => !isSportyBetBookableSelection(item))
-        .map(item => `${item.homeTeam} vs ${item.awayTeam} (${item.prediction}): only tennis match-winner picks can be booked on SportyBet right now.`);
+        .map(item => `${item.homeTeam} vs ${item.awayTeam} (${item.prediction}): this exact tennis market or line is not supported for SportyBet booking.`);
 
     const bookBtn = document.getElementById('bookGamesBtn');
     const resultDiv = document.getElementById('bookingResult');
@@ -155,7 +155,7 @@ async function bookGames() {
             if (resultDiv) {
                 resultDiv.innerHTML = `
                     <div class="mp-booking-error">
-                        <p>❌ Only tennis match-winner picks can be booked on SportyBet right now.</p>
+                        <p>❌ None of the selections in your betslip match a supported SportyBet tennis market or line.</p>
                         ${renderBookingWarnings(clientWarnings)}
                     </div>
                 `;
@@ -295,7 +295,19 @@ function getCartIdentity(match) {
 function isSportyBetBookableSelection(item) {
     const market = String(item?.market || '').trim().toLowerCase();
     const prediction = String(item?.prediction || '').trim().toLowerCase();
-    return market === 'matchwinner' && (prediction === 'home win' || prediction === 'away win');
+    if (market === 'matchwinner') {
+        return prediction === 'home win' || prediction === 'away win';
+    }
+
+    if (market === 'overundersets') {
+        return prediction === 'over 2.5 sets' || prediction === 'under 2.5 sets';
+    }
+
+    if (market === 'sethandicap') {
+        return /^(home|away)\s+[+-]\d+(\.\d+)?\s+sets$/i.test(String(item?.prediction || '').trim());
+    }
+
+    return false;
 }
 
 function getMarketLabel(market) {

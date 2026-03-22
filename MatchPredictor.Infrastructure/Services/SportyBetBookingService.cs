@@ -22,6 +22,9 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
     private const int DefaultPricingMaxPages = 10;
     private const int DefaultBookingMaxPages = 10;
     private const string DefaultTennisUpcomingMarketId = "1";
+    private const string TotalSetsBookingMarket = "OverUnderSets";
+    private const string SetHandicapBookingMarket = "SetHandicap";
+    private const string MatchWinnerBookingMarket = "MatchWinner";
     private const double MinimumDirectionalTeamScore = 0.72;
     private const double MinimumConfidentMatchScore = 1.55;
     private const double AmbiguousScoreGap = 0.12;
@@ -31,6 +34,9 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
     private static readonly TimeSpan FullFixtureCacheTtl = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan BackupFixtureCacheTtl = TimeSpan.FromHours(6);
     private static readonly Regex NonWordRegex = new("[^a-z0-9]+", RegexOptions.Compiled);
+    private static readonly Regex HandicapOutcomeRegex = new(@"^(?<side>.+?)\s*\((?<line>[+-]?\d+(?:\.\d+)?)\)$", RegexOptions.Compiled);
+    private static readonly Regex PredictionHandicapRegex = new(@"^(Home|Away)\s+([+-]?\d+(?:\.\d+)?)\s+Sets?$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex NumericLineRegex = new(@"[+-]?\d+(?:\.\d+)?", RegexOptions.Compiled);
     private static readonly HashSet<string> TeamNoiseWords =
     [
         "fc", "cf", "sc", "afc", "club", "the", "de", "da", "do", "cd", "ud", "ac", "as", "fk", "sk", "nk", "if", "bk"
@@ -137,7 +143,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             if (selectedOutcomes.Count == 0)
             {
                 return BuildBookingFailureResult(
-                    "None of the selected tennis match-winner picks could be booked on SportyBet today.",
+                    "None of the selected tennis picks could be booked on SportyBet today.",
                     bookedCount: 0,
                     totalSelections: selections.Count,
                     warnings);
@@ -389,7 +395,8 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             HomeTeam = homeTeam,
             AwayTeam = awayTeam,
             MatchTimeUtc = kickoffTimeUtc,
-            WinnerMarketId = preferredMarketId
+            WinnerMarketId = preferredMarketId,
+            MarketSelections = []
         };
 
         if (!eventElement.TryGetProperty("markets", out var markets))
@@ -424,6 +431,8 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             awayOutcome ??= outcomes[1];
         }
 
+        var marketSelections = new List<SportyBetFixtureSelection>();
+
         if (homeOutcome is not null)
         {
             fixture = fixture with
@@ -433,6 +442,14 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                 HomeProbability = ResolveProbability(homeOutcome),
                 HomeOdds = homeOutcome.DecimalOdds
             };
+
+            marketSelections.Add(new SportyBetFixtureSelection(
+                MatchWinnerBookingMarket,
+                "Home Win",
+                string.IsNullOrWhiteSpace(marketId) ? fixture.WinnerMarketId : marketId,
+                null,
+                homeOutcome.OutcomeId,
+                homeOutcome.Descriptor));
         }
 
         if (awayOutcome is not null)
@@ -444,9 +461,18 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                 AwayProbability = ResolveProbability(awayOutcome),
                 AwayOdds = awayOutcome.DecimalOdds
             };
+
+            marketSelections.Add(new SportyBetFixtureSelection(
+                MatchWinnerBookingMarket,
+                "Away Win",
+                string.IsNullOrWhiteSpace(marketId) ? fixture.WinnerMarketId : marketId,
+                null,
+                awayOutcome.OutcomeId,
+                awayOutcome.Descriptor));
         }
 
-        return fixture;
+        marketSelections.AddRange(ParseAdditionalSelections(markets, homeTeam, awayTeam));
+        return fixture with { MarketSelections = DeduplicateMarketSelections(marketSelections) };
     }
 
     private async Task<List<SportyBetFixture>> HydrateMissingWinnerMarketsAsync(
@@ -792,7 +818,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             return new BookingSelectionResolution(BookingSelectionMatchStatus.AmbiguousFixture, null, bestCandidate.Fixture);
         }
 
-        return TryCreateOutcome(bestCandidate.Fixture, selection.RequestedOutcome.Value, out var outcome)
+        return TryCreateOutcome(bestCandidate.Fixture, selection.RequestedOutcome, out var outcome)
             ? new BookingSelectionResolution(BookingSelectionMatchStatus.Matched, outcome, bestCandidate.Fixture)
             : new BookingSelectionResolution(BookingSelectionMatchStatus.MarketUnavailable, null, bestCandidate.Fixture);
     }
@@ -825,7 +851,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             BookingSelectionMatchStatus.NoFixtureFound => $"{label}: no SportyBet tennis fixture found for today's card.",
             BookingSelectionMatchStatus.AmbiguousFixture => $"{label}: fixture match was ambiguous, so it was skipped.",
             BookingSelectionMatchStatus.MarketUnavailable => matchedFixture is not null
-                ? $"{label}: SportyBet found {matchedFixture.HomeTeam} vs {matchedFixture.AwayTeam}, but only tennis match-winner outcomes are bookable in v1."
+                ? $"{label}: SportyBet found {matchedFixture.HomeTeam} vs {matchedFixture.AwayTeam}, but that exact tennis market or line is unavailable there."
                 : $"{label}: requested tennis market is unavailable on SportyBet.",
             _ => $"{label}: skipped."
         };
@@ -836,6 +862,25 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         RequestedSportyBetOutcome requestedOutcome,
         out SportyBetOutcome outcome)
     {
+        var matchedSelection = fixture.MarketSelections.FirstOrDefault(selection =>
+            string.Equals(selection.Market, requestedOutcome.Market, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(selection.Prediction, requestedOutcome.Prediction, StringComparison.OrdinalIgnoreCase));
+
+        if (matchedSelection is not null)
+        {
+            outcome = new SportyBetOutcome
+            {
+                EventId = fixture.EventId,
+                HomeTeam = fixture.HomeTeam,
+                AwayTeam = fixture.AwayTeam,
+                MarketId = matchedSelection.MarketId,
+                OutcomeId = matchedSelection.OutcomeId,
+                Specifier = matchedSelection.Specifier
+            };
+
+            return true;
+        }
+
         outcome = new SportyBetOutcome
         {
             EventId = fixture.EventId,
@@ -844,12 +889,12 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             MarketId = fixture.WinnerMarketId
         };
 
-        switch (requestedOutcome)
+        switch (requestedOutcome.LegacyOutcome)
         {
-            case RequestedSportyBetOutcome.HomeWin when !string.IsNullOrWhiteSpace(fixture.HomeOutcomeId):
+            case LegacyRequestedSportyBetOutcome.HomeWin when !string.IsNullOrWhiteSpace(fixture.HomeOutcomeId):
                 outcome = outcome with { OutcomeId = fixture.HomeOutcomeId };
                 return true;
-            case RequestedSportyBetOutcome.AwayWin when !string.IsNullOrWhiteSpace(fixture.AwayOutcomeId):
+            case LegacyRequestedSportyBetOutcome.AwayWin when !string.IsNullOrWhiteSpace(fixture.AwayOutcomeId):
                 outcome = outcome with { OutcomeId = fixture.AwayOutcomeId };
                 return true;
             default:
@@ -859,38 +904,37 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
 
     private static RequestedSportyBetOutcome? ResolveRequestedOutcome(string market, string prediction)
     {
-        var normalizedMarket = market?.Trim().ToLowerInvariant() ?? string.Empty;
-        var normalizedPrediction = prediction?.Trim().ToLowerInvariant() ?? string.Empty;
-
-        if (!(normalizedMarket.Contains("winner", StringComparison.Ordinal) ||
-              normalizedMarket.Contains("matchwinner", StringComparison.Ordinal) ||
-              normalizedMarket.Contains("1x2", StringComparison.Ordinal) ||
-              normalizedMarket.Contains("moneyline", StringComparison.Ordinal)))
+        if (!TryNormalizeMarket(market, out var normalizedMarket))
         {
-            return normalizedPrediction switch
+            return null;
+        }
+
+        if (!TryNormalizePrediction(normalizedMarket, prediction, out var normalizedPrediction))
+        {
+            return null;
+        }
+
+        var legacyOutcome = normalizedMarket == MatchWinnerBookingMarket
+            ? normalizedPrediction switch
             {
-                "home win" => RequestedSportyBetOutcome.HomeWin,
-                "away win" => RequestedSportyBetOutcome.AwayWin,
-                _ => null
-            };
-        }
+                "Home Win" => LegacyRequestedSportyBetOutcome.HomeWin,
+                "Away Win" => LegacyRequestedSportyBetOutcome.AwayWin,
+                _ => (LegacyRequestedSportyBetOutcome?)null
+            }
+            : null;
 
-        if (normalizedPrediction.Contains("away", StringComparison.OrdinalIgnoreCase) || normalizedPrediction == "2")
-        {
-            return RequestedSportyBetOutcome.AwayWin;
-        }
-
-        if (normalizedPrediction.Contains("home", StringComparison.OrdinalIgnoreCase) || normalizedPrediction == "1")
-        {
-            return RequestedSportyBetOutcome.HomeWin;
-        }
-
-        return null;
+        return new RequestedSportyBetOutcome(normalizedMarket, normalizedPrediction, legacyOutcome);
     }
 
     private static string ToCartMarket(Prediction prediction)
     {
-        return prediction.PredictionCategory == "MatchWinner" ? "MatchWinner" : prediction.PredictionCategory;
+        return prediction.PredictionCategory switch
+        {
+            "MatchWinner" => MatchWinnerBookingMarket,
+            "OverUnderSets" => TotalSetsBookingMarket,
+            "SetHandicap" => SetHandicapBookingMarket,
+            _ => prediction.PredictionCategory
+        };
     }
 
     private static bool IsHomeOutcome(ParsedOutcome outcome, string homeTeam, string awayTeam)
@@ -969,12 +1013,317 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             : null;
     }
 
+    private static List<SportyBetFixtureSelection> ParseAdditionalSelections(
+        JsonElement marketsElement,
+        string homeTeam,
+        string awayTeam)
+    {
+        var selections = new List<SportyBetFixtureSelection>();
+
+        foreach (var market in marketsElement.EnumerateArray())
+        {
+            var marketId = market.TryGetProperty("id", out var marketIdElement)
+                ? marketIdElement.GetString() ?? string.Empty
+                : string.Empty;
+            var specifier = market.TryGetProperty("specifier", out var specifierElement)
+                ? specifierElement.GetString()
+                : null;
+            var outcomes = market.TryGetProperty("outcomes", out var outcomesElement)
+                ? outcomesElement.EnumerateArray().Select(ParseOutcome).ToList()
+                : new List<ParsedOutcome>();
+
+            if (outcomes.Count == 0)
+            {
+                continue;
+            }
+
+            if (IsTotalSetsMarket(market))
+            {
+                foreach (var outcome in outcomes)
+                {
+                    if (!TryBuildTotalSetsPrediction(outcome, specifier, out var prediction))
+                    {
+                        continue;
+                    }
+
+                    selections.Add(new SportyBetFixtureSelection(
+                        TotalSetsBookingMarket,
+                        prediction,
+                        marketId,
+                        specifier,
+                        outcome.OutcomeId,
+                        outcome.Descriptor));
+                }
+
+                continue;
+            }
+
+            if (IsSetHandicapMarket(market))
+            {
+                foreach (var outcome in outcomes)
+                {
+                    if (!TryBuildSetHandicapPrediction(outcome, homeTeam, awayTeam, out var prediction))
+                    {
+                        continue;
+                    }
+
+                    selections.Add(new SportyBetFixtureSelection(
+                        SetHandicapBookingMarket,
+                        prediction,
+                        marketId,
+                        specifier,
+                        outcome.OutcomeId,
+                        outcome.Descriptor));
+                }
+            }
+        }
+
+        return selections;
+    }
+
+    private static List<SportyBetFixtureSelection> DeduplicateMarketSelections(IEnumerable<SportyBetFixtureSelection> selections)
+    {
+        return selections
+            .GroupBy(
+                selection => $"{selection.Market}|{selection.Prediction}",
+                StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    private static bool IsTotalSetsMarket(JsonElement market)
+    {
+        var description = GetMarketText(market, "desc");
+        var name = GetMarketText(market, "name");
+        var guide = GetMarketText(market, "marketGuide");
+        var title = GetMarketText(market, "title");
+        var normalized = $"{description} {name} {guide} {title}".Trim();
+
+        return normalized.Contains("total sets", StringComparison.OrdinalIgnoreCase) &&
+               !normalized.Contains("exact sets", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSetHandicapMarket(JsonElement market)
+    {
+        var description = GetMarketText(market, "desc");
+        var name = GetMarketText(market, "name");
+        var guide = GetMarketText(market, "marketGuide");
+        var normalized = $"{description} {name} {guide}".Trim();
+
+        return normalized.Contains("set handicap", StringComparison.OrdinalIgnoreCase) ||
+               guide.Contains("set spread", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryBuildTotalSetsPrediction(ParsedOutcome outcome, string? specifier, out string prediction)
+    {
+        prediction = string.Empty;
+
+        var descriptor = outcome.Descriptor?.Trim() ?? string.Empty;
+        if (!(descriptor.StartsWith("Over", StringComparison.OrdinalIgnoreCase) ||
+              descriptor.StartsWith("Under", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        var line = TryParseNumericLine(descriptor) ?? TryParseNumericLine(specifier);
+        if (!line.HasValue)
+        {
+            return false;
+        }
+
+        var side = descriptor.StartsWith("Over", StringComparison.OrdinalIgnoreCase) ? "Over" : "Under";
+        prediction = $"{side} {line.Value:0.0} Sets";
+        return true;
+    }
+
+    private static bool TryBuildSetHandicapPrediction(
+        ParsedOutcome outcome,
+        string homeTeam,
+        string awayTeam,
+        out string prediction)
+    {
+        prediction = string.Empty;
+        var descriptor = outcome.Descriptor?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(descriptor))
+        {
+            return false;
+        }
+
+        var match = HandicapOutcomeRegex.Match(descriptor);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var rawSide = match.Groups["side"].Value.Trim();
+        var normalizedSide = ResolveHandicapSide(rawSide, homeTeam, awayTeam);
+        if (normalizedSide is null ||
+            !double.TryParse(match.Groups["line"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var line))
+        {
+            return false;
+        }
+
+        prediction = $"{normalizedSide} {line:+0.0;-0.0} Sets";
+        return true;
+    }
+
+    private static string? ResolveHandicapSide(string rawSide, string homeTeam, string awayTeam)
+    {
+        if (rawSide.Contains("home", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Home";
+        }
+
+        if (rawSide.Contains("away", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Away";
+        }
+
+        if (ComputeTeamMatchScore(rawSide, homeTeam) >= 0.85d &&
+            ComputeTeamMatchScore(rawSide, awayTeam) < 0.75d)
+        {
+            return "Home";
+        }
+
+        if (ComputeTeamMatchScore(rawSide, awayTeam) >= 0.85d &&
+            ComputeTeamMatchScore(rawSide, homeTeam) < 0.75d)
+        {
+            return "Away";
+        }
+
+        return null;
+    }
+
+    private static bool TryNormalizeMarket(string market, out string normalizedMarket)
+    {
+        var value = market?.Trim().ToLowerInvariant() ?? string.Empty;
+        normalizedMarket = string.Empty;
+
+        if (value == MatchWinnerBookingMarket.ToLowerInvariant())
+        {
+            normalizedMarket = MatchWinnerBookingMarket;
+        }
+        else if (value == TotalSetsBookingMarket.ToLowerInvariant())
+        {
+            normalizedMarket = TotalSetsBookingMarket;
+        }
+        else if (value == SetHandicapBookingMarket.ToLowerInvariant())
+        {
+            normalizedMarket = SetHandicapBookingMarket;
+        }
+        else if (value.Contains("winner", StringComparison.Ordinal) ||
+                 value.Contains("matchwinner", StringComparison.Ordinal) ||
+                 value.Contains("1x2", StringComparison.Ordinal) ||
+                 value.Contains("moneyline", StringComparison.Ordinal))
+        {
+            normalizedMarket = MatchWinnerBookingMarket;
+        }
+        else if (value.Contains("overunder", StringComparison.Ordinal) ||
+                 value.Contains("totalsets", StringComparison.Ordinal) ||
+                 value.Contains("total sets", StringComparison.Ordinal) ||
+                 value.Contains("sets total", StringComparison.Ordinal))
+        {
+            normalizedMarket = TotalSetsBookingMarket;
+        }
+        else if (value.Contains("sethandicap", StringComparison.Ordinal) ||
+                 value.Contains("set handicap", StringComparison.Ordinal))
+        {
+            normalizedMarket = SetHandicapBookingMarket;
+        }
+
+        return !string.IsNullOrWhiteSpace(normalizedMarket);
+    }
+
+    private static bool TryNormalizePrediction(string market, string prediction, out string normalizedPrediction)
+    {
+        normalizedPrediction = string.Empty;
+        var trimmedPrediction = prediction?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(trimmedPrediction))
+        {
+            return false;
+        }
+
+        switch (market)
+        {
+            case MatchWinnerBookingMarket:
+            {
+                if (trimmedPrediction.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+                    trimmedPrediction.Contains("home", StringComparison.OrdinalIgnoreCase))
+                {
+                    normalizedPrediction = "Home Win";
+                    return true;
+                }
+
+                if (trimmedPrediction.Equals("2", StringComparison.OrdinalIgnoreCase) ||
+                    trimmedPrediction.Contains("away", StringComparison.OrdinalIgnoreCase))
+                {
+                    normalizedPrediction = "Away Win";
+                    return true;
+                }
+
+                return false;
+            }
+
+            case TotalSetsBookingMarket:
+            {
+                var side = trimmedPrediction.StartsWith("Over", StringComparison.OrdinalIgnoreCase)
+                    ? "Over"
+                    : trimmedPrediction.StartsWith("Under", StringComparison.OrdinalIgnoreCase)
+                        ? "Under"
+                        : null;
+                var line = TryParseNumericLine(trimmedPrediction);
+                if (side is null || !line.HasValue)
+                {
+                    return false;
+                }
+
+                normalizedPrediction = $"{side} {line.Value:0.0} Sets";
+                return true;
+            }
+
+            case SetHandicapBookingMarket:
+            {
+                var match = PredictionHandicapRegex.Match(trimmedPrediction);
+                if (!match.Success)
+                {
+                    return false;
+                }
+
+                if (!double.TryParse(match.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var line))
+                {
+                    return false;
+                }
+
+                var side = CultureInfo.InvariantCulture.TextInfo.ToTitleCase(match.Groups[1].Value.ToLowerInvariant());
+                normalizedPrediction = $"{side} {line:+0.0;-0.0} Sets";
+                return true;
+            }
+
+            default:
+                return false;
+        }
+    }
+
+    private static double? TryParseNumericLine(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var match = NumericLineRegex.Match(text);
+        return match.Success && double.TryParse(match.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var line)
+            ? line
+            : null;
+    }
+
     private static bool NeedsWinnerMarketHydration(SportyBetFixture fixture)
     {
         return string.IsNullOrWhiteSpace(fixture.HomeOutcomeId) ||
                string.IsNullOrWhiteSpace(fixture.AwayOutcomeId) ||
                fixture.HomeOdds is null ||
-               fixture.AwayOdds is null;
+               fixture.AwayOdds is null ||
+               fixture.MarketSelections.Count == 0;
     }
 
     private static JsonElement? SelectMatchWinnerMarket(JsonElement marketsElement, string preferredMarketId)
@@ -1200,6 +1549,7 @@ public record SportyBetFixture
     public double? HomeOdds { get; init; }
     public double? AwayProbability { get; init; }
     public double? AwayOdds { get; init; }
+    public List<SportyBetFixtureSelection> MarketSelections { get; init; } = [];
 }
 
 public record SportyBetOutcome
@@ -1211,6 +1561,14 @@ public record SportyBetOutcome
     public string HomeTeam { get; init; } = string.Empty;
     public string AwayTeam { get; init; } = string.Empty;
 }
+
+public sealed record SportyBetFixtureSelection(
+    string Market,
+    string Prediction,
+    string MarketId,
+    string? Specifier,
+    string OutcomeId,
+    string Descriptor);
 
 internal sealed record ResolvedBookingSelection(
     BookingSelection OriginalSelection,
@@ -1256,7 +1614,12 @@ internal enum BookingSelectionMatchStatus
     MarketUnavailable
 }
 
-internal enum RequestedSportyBetOutcome
+internal sealed record RequestedSportyBetOutcome(
+    string Market,
+    string Prediction,
+    LegacyRequestedSportyBetOutcome? LegacyOutcome);
+
+internal enum LegacyRequestedSportyBetOutcome
 {
     HomeWin,
     AwayWin

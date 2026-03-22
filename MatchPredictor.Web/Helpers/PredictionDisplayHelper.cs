@@ -103,9 +103,15 @@ public static partial class PredictionDisplayHelper
 
     public static bool IsSportyBetBookable(Prediction prediction)
     {
-        return string.Equals(prediction.PredictionCategory, "MatchWinner", StringComparison.OrdinalIgnoreCase) &&
-               (string.Equals(prediction.PredictedOutcome, "Home Win", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(prediction.PredictedOutcome, "Away Win", StringComparison.OrdinalIgnoreCase));
+        return prediction.PredictionCategory switch
+        {
+            "MatchWinner" => string.Equals(prediction.PredictedOutcome, "Home Win", StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(prediction.PredictedOutcome, "Away Win", StringComparison.OrdinalIgnoreCase),
+            "OverUnderSets" => string.Equals(prediction.PredictedOutcome, "Over 2.5 Sets", StringComparison.OrdinalIgnoreCase) ||
+                               string.Equals(prediction.PredictedOutcome, "Under 2.5 Sets", StringComparison.OrdinalIgnoreCase),
+            "SetHandicap" => Regex.IsMatch(prediction.PredictedOutcome ?? string.Empty, @"^(Home|Away)\s+[+-]\d+(\.\d+)?\s+Sets$", RegexOptions.IgnoreCase),
+            _ => false
+        };
     }
 
     public static string GetConfidenceChip(Prediction prediction)

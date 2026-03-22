@@ -314,6 +314,104 @@ public class SportyBetBookingServiceTests
         Assert.Contains("evt-tennis", handler.RequestedEventDetails);
     }
 
+    [Fact]
+    public async Task BookGamesAsync_BooksTotalSetsSelection_FromTennisEventDetail()
+    {
+        await using var context = CreateContext();
+        var cache = CreateCache();
+        var todayLocalDate = DateTimeProvider.GetLocalDate();
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(todayLocalDate.ToDateTime(new TimeOnly(13, 10), DateTimeKind.Unspecified));
+        var handler = new SportyBetTestHandler(
+            upcomingPages: new Dictionary<int, string>
+            {
+                [1] = BuildUpcomingResponse(
+                    new SportyFixtureSpec("evt-sets", "Hyeon Chung", "Yusuke Takahashi", "ATP - Busan", kickoffUtc, Include1X2: false))
+            },
+            eventDetails: new Dictionary<string, string>
+            {
+                ["evt-sets"] = BuildTennisEventDetailResponse(
+                    "evt-sets",
+                    "Hyeon Chung",
+                    "Yusuke Takahashi",
+                    "ATP - Busan",
+                    kickoffUtc,
+                    winnerMarketId: "186",
+                    homeOutcomeId: "4",
+                    awayOutcomeId: "5",
+                    includeTotalSets: true)
+            },
+            bookingResponse: BuildBookingShareResponse("SETS314"));
+        var service = CreateService(context, cache, handler);
+
+        var result = await service.BookGamesAsync(
+        [
+            new BookingSelection
+            {
+                HomeTeam = "Hyeon Chung",
+                AwayTeam = "Yusuke Takahashi",
+                League = "ATP - Busan",
+                Market = "OverUnderSets",
+                Prediction = "Under 2.5 Sets",
+                MatchDateTimeUtc = kickoffUtc
+            }
+        ]);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, result.BookedCount);
+        Assert.Contains("314", handler.SharedMarketIds);
+        Assert.Contains("13", handler.SharedOutcomeIds);
+        Assert.Contains("total=2.5", handler.SharedSpecifiers);
+    }
+
+    [Fact]
+    public async Task BookGamesAsync_BooksSetHandicapSelection_FromTennisEventDetail()
+    {
+        await using var context = CreateContext();
+        var cache = CreateCache();
+        var todayLocalDate = DateTimeProvider.GetLocalDate();
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(todayLocalDate.ToDateTime(new TimeOnly(15, 20), DateTimeKind.Unspecified));
+        var handler = new SportyBetTestHandler(
+            upcomingPages: new Dictionary<int, string>
+            {
+                [1] = BuildUpcomingResponse(
+                    new SportyFixtureSpec("evt-hcp", "Jakub Paul", "Laurent Lokoli", "Challenger - Kigali", kickoffUtc, Include1X2: false))
+            },
+            eventDetails: new Dictionary<string, string>
+            {
+                ["evt-hcp"] = BuildTennisEventDetailResponse(
+                    "evt-hcp",
+                    "Jakub Paul",
+                    "Laurent Lokoli",
+                    "Challenger - Kigali",
+                    kickoffUtc,
+                    winnerMarketId: "186",
+                    homeOutcomeId: "4",
+                    awayOutcomeId: "5",
+                    includeSetHandicap: true)
+            },
+            bookingResponse: BuildBookingShareResponse("HAND188"));
+        var service = CreateService(context, cache, handler);
+
+        var result = await service.BookGamesAsync(
+        [
+            new BookingSelection
+            {
+                HomeTeam = "Jakub Paul",
+                AwayTeam = "Laurent Lokoli",
+                League = "Challenger - Kigali",
+                Market = "SetHandicap",
+                Prediction = "Away +1.5 Sets",
+                MatchDateTimeUtc = kickoffUtc
+            }
+        ]);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, result.BookedCount);
+        Assert.Contains("188", handler.SharedMarketIds);
+        Assert.Contains("1715", handler.SharedOutcomeIds);
+        Assert.Contains("hcp=-1.5", handler.SharedSpecifiers);
+    }
+
     private static SportyBetBookingService CreateService(
         ApplicationDbContext context,
         IDistributedCache cache,
@@ -405,9 +503,78 @@ public class SportyBetBookingServiceTests
         DateTime? kickoffUtc,
         string winnerMarketId,
         string homeOutcomeId,
-        string awayOutcomeId)
+        string awayOutcomeId,
+        bool includeTotalSets = false,
+        bool includeSetHandicap = false)
     {
         var (country, tournament) = SplitLeague(league);
+
+        var markets = new List<object>
+        {
+            new
+            {
+                id = winnerMarketId,
+                product = 3,
+                desc = "Winner",
+                name = "Winner",
+                marketGuide = "Who will win the match.",
+                outcomes = new[]
+                {
+                    new { id = homeOutcomeId, desc = "Home", probability = "0.75", odds = "1.25" },
+                    new { id = awayOutcomeId, desc = "Away", probability = "0.25", odds = "4.00" }
+                }
+            }
+        };
+
+        if (includeTotalSets)
+        {
+            markets.Add(new
+            {
+                id = "314",
+                product = 3,
+                specifier = "total=2.5",
+                desc = "Total sets",
+                name = "Total sets",
+                marketGuide = "Predict how many sets will be played in the match.",
+                outcomes = new[]
+                {
+                    new { id = "12", desc = "Over 2.5", probability = "0.41", odds = "2.35" },
+                    new { id = "13", desc = "Under 2.5", probability = "0.59", odds = "1.62" }
+                }
+            });
+        }
+
+        if (includeSetHandicap)
+        {
+            markets.Add(new
+            {
+                id = "188",
+                product = 3,
+                specifier = "hcp=-1.5",
+                desc = "Set handicap -1.5",
+                name = "Set Handicap",
+                marketGuide = "The winner of the match adding or subtracting the indicated set spread to the final result.",
+                outcomes = new[]
+                {
+                    new { id = "1714", desc = "Home (-1.5)", probability = "0.48", odds = "1.95" },
+                    new { id = "1715", desc = "Away (+1.5)", probability = "0.52", odds = "1.82" }
+                }
+            });
+            markets.Add(new
+            {
+                id = "188",
+                product = 3,
+                specifier = "hcp=1.5",
+                desc = "Set handicap 1.5",
+                name = "Set Handicap",
+                marketGuide = "The winner of the match adding or subtracting the indicated set spread to the final result.",
+                outcomes = new[]
+                {
+                    new { id = "1714", desc = "Home (+1.5)", probability = "0.80", odds = "1.18" },
+                    new { id = "1715", desc = "Away (-1.5)", probability = "0.20", odds = "4.80" }
+                }
+            });
+        }
 
         return JsonSerializer.Serialize(new
         {
@@ -434,22 +601,7 @@ public class SportyBetBookingServiceTests
                         }
                     }
                 },
-                markets = new[]
-                {
-                    new
-                    {
-                        id = winnerMarketId,
-                        product = 3,
-                        desc = "Winner",
-                        name = "Winner",
-                        marketGuide = "Who will win the match.",
-                        outcomes = new[]
-                        {
-                            new { id = homeOutcomeId, desc = "Home", probability = "0.75", odds = "1.25" },
-                            new { id = awayOutcomeId, desc = "Away", probability = "0.25", odds = "4.00" }
-                        }
-                    }
-                }
+                markets
             }
         });
     }
@@ -554,6 +706,7 @@ public class SportyBetBookingServiceTests
         public List<string> SharedEventIds { get; } = [];
         public List<string> SharedMarketIds { get; } = [];
         public List<string> SharedOutcomeIds { get; } = [];
+        public List<string?> SharedSpecifiers { get; } = [];
         public List<string> RequestedEventDetails { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -594,6 +747,10 @@ public class SportyBetBookingServiceTests
                     SharedEventIds.Add(selection.GetProperty("eventId").GetString() ?? string.Empty);
                     SharedMarketIds.Add(selection.GetProperty("marketId").GetString() ?? string.Empty);
                     SharedOutcomeIds.Add(selection.GetProperty("outcomeId").GetString() ?? string.Empty);
+                    SharedSpecifiers.Add(
+                        selection.TryGetProperty("specifier", out var specifierElement)
+                            ? specifierElement.GetString()
+                            : null);
                 }
 
                 return CreateJsonResponse(_bookingResponse ?? BuildBookingShareResponse("DEFAULT"));
