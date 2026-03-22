@@ -15,6 +15,7 @@ using MatchPredictor.Web.Filters;
 using MatchPredictor.Web.Services;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -377,15 +378,31 @@ static async Task<bool> HasEfMigrationsHistoryAsync(ApplicationDbContext context
 
     try
     {
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            select case
-                when to_regclass('"__EFMigrationsHistory"') is null then false
-                else exists (select 1 from "__EFMigrationsHistory")
-            end;
+        await using var tableExistsCommand = connection.CreateCommand();
+        tableExistsCommand.CommandText = """
+            select exists (
+                select 1
+                from information_schema.tables
+                where table_schema = current_schema()
+                  and table_name = '__EFMigrationsHistory'
+            );
             """;
-        var result = await command.ExecuteScalarAsync();
-        return result is bool exists && exists;
+
+        var tableExistsResult = await tableExistsCommand.ExecuteScalarAsync();
+        var tableExists = tableExistsResult is bool exists && exists;
+        if (!tableExists)
+        {
+            return false;
+        }
+
+        await using var rowExistsCommand = connection.CreateCommand();
+        rowExistsCommand.CommandText = """select exists (select 1 from "__EFMigrationsHistory");""";
+        var rowExistsResult = await rowExistsCommand.ExecuteScalarAsync();
+        return rowExistsResult is bool rowExists && rowExists;
+    }
+    catch (PostgresException ex) when (string.Equals(ex.SqlState, PostgresErrorCodes.UndefinedTable, StringComparison.Ordinal))
+    {
+        return false;
     }
     finally
     {
