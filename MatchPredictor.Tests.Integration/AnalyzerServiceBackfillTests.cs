@@ -948,6 +948,7 @@ public class AnalyzerServiceBackfillTests
     {
         public Task ScrapeMatchDataAsync() => Task.CompletedTask;
         public Task<List<MatchScore>> ScrapeMatchScoresAsync() => Task.FromResult(new List<MatchScore>());
+        public Task<List<MatchScore>> ScrapeTennisScoresMatchScoresAsync() => Task.FromResult(new List<MatchScore>());
         public Task<List<AiScoreMatchScore>> ScrapeAiScoreMatchScoresAsync() => Task.FromResult(new List<AiScoreMatchScore>());
         public Task<List<SofaScoreMatchScore>> ScrapeSofaScoreMatchScoresAsync(IEnumerable<SofaScoreFixtureRequest> fixtures) => Task.FromResult(new List<SofaScoreMatchScore>());
     }

@@ -135,6 +135,91 @@ namespace MatchPredictor.Tests.Integration
                 });
         }
 
+        [Fact]
+        public void ParseTennisScoresPageHtml_ExtractsFinishedAndLiveRowsWithFullNames()
+        {
+            var scraper = CreateScraper();
+            var parseMethod = typeof(WebScraperService).GetMethod(
+                "ParseTennisScoresPageHtml",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+
+            Assert.NotNull(parseMethod);
+
+            var html = """
+                <div id="matchList">
+                  <div class="user">
+                    <div class="group-title group-title-1">
+                      <span class="leaRow">ATP Challenger Yokkaichi, Japan Men Singles</span>
+                    </div>
+                    <div class="list item_result">
+                      <div class="listBox">
+                        <div class="barItem"><span class="tn-txtstatus">END</span></div>
+                        <span class="matchTime">11:00</span>
+                      </div>
+                      <div class="team">
+                        <div class="elseTeamName">Ethan Quinn</div>
+                        <div class="elseTeamName">Jiri Lehecka</div>
+                      </div>
+                      <div class="teamScore">
+                        <div class="bigScore"><span class="tennis-score">0</span></div>
+                        <div class="bigScore"><span class="tennis-score scoreRed">2</span></div>
+                      </div>
+                    </div>
+                    <div class="list tn-match-live">
+                      <div class="listBox">
+                        <div class="barItem"><span>S2</span></div>
+                        <span class="matchTime">14:30</span>
+                      </div>
+                      <div class="team">
+                        <div class="elseTeamName">Ha Eum Lee</div>
+                        <div class="elseTeamName">Ashleigh Simes</div>
+                      </div>
+                      <div class="teamScore">
+                        <div class="bigScore"><span class="tennis-score">1</span></div>
+                        <div class="bigScore"><span class="tennis-score">0</span></div>
+                      </div>
+                    </div>
+                    <div class="list">
+                      <div class="listBox">
+                        <span class="matchTime">18:00 23/03</span>
+                      </div>
+                      <div class="team">
+                        <div class="elseTeamName">Scheduled Player A</div>
+                        <div class="elseTeamName">Scheduled Player B</div>
+                      </div>
+                      <div class="teamScore">
+                        <div class="bigScore"><span class="tennis-score"></span></div>
+                        <div class="bigScore"><span class="tennis-score"></span></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                """;
+
+            var result = (System.Collections.Generic.List<MatchScore>)parseMethod!.Invoke(
+                scraper,
+                new object[] { html, new DateOnly(2026, 3, 22), false })!;
+
+            Assert.Collection(
+                result,
+                finished =>
+                {
+                    Assert.Equal("ATP Challenger Yokkaichi, Japan Men Singles", finished.League);
+                    Assert.Equal("Ethan Quinn", finished.HomeTeam);
+                    Assert.Equal("Jiri Lehecka", finished.AwayTeam);
+                    Assert.Equal("0:2", finished.Score);
+                    Assert.Equal("0:2", finished.NormalizedScoreline);
+                    Assert.False(finished.IsLive);
+                },
+                live =>
+                {
+                    Assert.Equal("Ha Eum Lee", live.HomeTeam);
+                    Assert.Equal("Ashleigh Simes", live.AwayTeam);
+                    Assert.Equal("1:0", live.Score);
+                    Assert.True(live.IsLive);
+                });
+        }
+
         private static WebScraperService CreateScraper()
         {
             var configBuilder = new ConfigurationBuilder();
@@ -143,6 +228,7 @@ namespace MatchPredictor.Tests.Integration
                 new System.Collections.Generic.KeyValuePair<string, string>("ScrapingValues:AiScoreWebsite", "https://m.aiscore.com/tennis"),
                 new System.Collections.Generic.KeyValuePair<string, string>("ScrapingValues:SofaScoreBaseUrl", "https://www.sofascore.com"),
                 new System.Collections.Generic.KeyValuePair<string, string>("ScrapingValues:ScoresWebsite", "https://www.flashscore.mobi/tennis"),
+                new System.Collections.Generic.KeyValuePair<string, string>("ScrapingValues:TennisScoresWebsite", "https://tennisscores.mobi"),
                 new System.Collections.Generic.KeyValuePair<string, string>("ScrapingValues:BrowserScrapingEnabled", "true")
             });
 

@@ -1355,6 +1355,7 @@ public class ScoreUpdaterMatchingTests
 
         public Task ScrapeMatchDataAsync() => Task.CompletedTask;
         public Task<List<MatchScore>> ScrapeMatchScoresAsync() => Task.FromResult(MatchScores);
+        public Task<List<MatchScore>> ScrapeTennisScoresMatchScoresAsync() => Task.FromResult(new List<MatchScore>());
         public Task<List<AiScoreMatchScore>> ScrapeAiScoreMatchScoresAsync() => Task.FromResult(AiScoreMatchScores);
         public Task<List<SofaScoreMatchScore>> ScrapeSofaScoreMatchScoresAsync(IEnumerable<SofaScoreFixtureRequest> fixtures) => Task.FromResult(SofaScoreMatchScores);
     }

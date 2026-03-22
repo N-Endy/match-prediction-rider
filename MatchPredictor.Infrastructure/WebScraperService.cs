@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -132,6 +133,52 @@ public partial class WebScraperService : IWebScraperService
         catch (Exception e)
         {
             _logger.LogError(e, "❌ An error occurred while scraping match score.");
+            throw;
+        }
+    }
+
+    public async Task<List<MatchScore>> ScrapeTennisScoresMatchScoresAsync()
+    {
+        try
+        {
+            using var client = CreateTennisScoresHttpClient();
+            var today = DateTimeProvider.GetLocalDate();
+            var lookbackDays = Math.Max(ParseConfiguredSignedInt("ScrapingValues:TennisScoresResultsLookbackDays", 2), 0);
+            var rows = new List<MatchScore>();
+
+            var homepageHtml = await FetchTennisScoresHtmlAsync(
+                client,
+                ResolveTennisScoresBaseUrl(_configuration["ScrapingValues:TennisScoresWebsite"]));
+            if (!string.IsNullOrWhiteSpace(homepageHtml))
+            {
+                rows.AddRange(ParseTennisScoresPageHtml(homepageHtml, today, resultsPage: false));
+            }
+
+            for (var dayOffset = 0; dayOffset <= lookbackDays; dayOffset++)
+            {
+                var targetDate = today.AddDays(-dayOffset);
+                var resultsHtml = await FetchTennisScoresHtmlAsync(
+                    client,
+                    ResolveTennisScoresResultsUrl(_configuration["ScrapingValues:TennisScoresWebsite"], targetDate));
+                if (string.IsNullOrWhiteSpace(resultsHtml))
+                {
+                    continue;
+                }
+
+                rows.AddRange(ParseTennisScoresPageHtml(resultsHtml, targetDate, resultsPage: true));
+            }
+
+            return rows
+                .GroupBy(BuildTennisScoresRowKey, StringComparer.Ordinal)
+                .Select(group => group
+                    .OrderByDescending(score => score.IsLive ? 1 : 2)
+                    .ThenByDescending(score => score.MatchTime)
+                    .First())
+                .ToList();
+        }
+        catch (Exception e)
+        {
+            _logger.LogError(e, "❌ An error occurred while scraping tennisscores.mobi tennis scores.");
             throw;
         }
     }
@@ -2248,6 +2295,30 @@ public partial class WebScraperService : IWebScraperService
             "/tennis");
     }
 
+    private static string ResolveTennisScoresBaseUrl(string? configuredUrl)
+    {
+        return ResolveTennisEndpoint(
+            configuredUrl,
+            "https://tennisscores.mobi",
+            "tennisscores.mobi",
+            "/");
+    }
+
+    private static string ResolveTennisScoresResultsUrl(string? configuredUrl, DateOnly targetLocalDate)
+    {
+        var baseUrl = ResolveTennisScoresBaseUrl(configuredUrl);
+        var builder = new UriBuilder(baseUrl)
+        {
+            Path = "/results",
+            Query = BuildQueryString(new Dictionary<string, string>
+            {
+                ["date"] = targetLocalDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            })
+        };
+
+        return builder.Uri.ToString().TrimEnd('/');
+    }
+
     private static string ResolveTennisEndpoint(
         string? configuredUrl,
         string defaultUrl,
@@ -2326,6 +2397,9 @@ public partial class WebScraperService : IWebScraperService
 
     [GeneratedRegex(@"\d{1,2}:\d{2}")]
     private static partial Regex ClockRegex();
+
+    [GeneratedRegex(@"^\d{1,2}:\d{2}\s+\d{2}/\d{2}$")]
+    private static partial Regex ClockWithDayMonthRegex();
     
     private static void SetHeadlessViewport(ChromeOptions options)
     {
@@ -2588,6 +2662,189 @@ public partial class WebScraperService : IWebScraperService
                 return false;
             }
         }
+    }
+
+    private HttpClient CreateTennisScoresHttpClient()
+    {
+        var client = new HttpClient();
+        client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1");
+        client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9");
+        client.Timeout = TimeSpan.FromSeconds(20);
+        return client;
+    }
+
+    private async Task<string?> FetchTennisScoresHtmlAsync(HttpClient client, string url)
+    {
+        try
+        {
+            using var response = await client.GetAsync(url);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("tennisscores.mobi returned {StatusCode} for {Url}.", (int)response.StatusCode, url);
+                return null;
+            }
+
+            return await response.Content.ReadAsStringAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch tennisscores.mobi HTML from {Url}.", url);
+            return null;
+        }
+    }
+
+    private List<MatchScore> ParseTennisScoresPageHtml(string html, DateOnly defaultLocalDate, bool resultsPage)
+    {
+        var doc = new HtmlDocument();
+        doc.LoadHtml(html);
+
+        var root = doc.DocumentNode.SelectSingleNode("//div[@id='matchList']//div[contains(@class,'user')]")
+            ?? doc.DocumentNode.SelectSingleNode("//div[@id='matchList']")
+            ?? throw new InvalidOperationException("tennisscores.mobi HTML did not contain the expected match list container.");
+
+        var rows = new List<MatchScore>();
+        var currentLeague = string.Empty;
+
+        foreach (var node in root.ChildNodes.Where(child => child.NodeType == HtmlNodeType.Element))
+        {
+            var className = node.GetAttributeValue("class", string.Empty);
+            if (className.Contains("group-title", StringComparison.OrdinalIgnoreCase))
+            {
+                currentLeague = NormalizeTennisScoresText(node.SelectSingleNode(".//span[contains(@class,'leaRow')]")?.InnerText);
+                continue;
+            }
+
+            if (!className.Contains("list", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var statusText = NormalizeTennisScoresText(node.SelectSingleNode(".//div[contains(@class,'barItem')]//span[1]")?.InnerText);
+            var timeText = NormalizeTennisScoresText(node.SelectSingleNode(".//span[contains(@class,'matchTime')]")?.InnerText);
+            var teamNodes = node.SelectNodes(".//div[contains(@class,'elseTeamName')]");
+            var scoreNodes = node.SelectNodes(".//div[contains(@class,'teamScore')]//div[contains(@class,'bigScore')]//span[contains(@class,'tennis-score')]");
+
+            if (teamNodes is null || teamNodes.Count < 2 || scoreNodes is null || scoreNodes.Count < 2)
+            {
+                continue;
+            }
+
+            var homeTeam = NormalizeTennisScoresText(teamNodes[0].InnerText);
+            var awayTeam = NormalizeTennisScoresText(teamNodes[1].InnerText);
+            if (string.IsNullOrWhiteSpace(homeTeam) || string.IsNullOrWhiteSpace(awayTeam))
+            {
+                continue;
+            }
+
+            var isFinished = resultsPage ||
+                             className.Contains("tn-match-end", StringComparison.OrdinalIgnoreCase) ||
+                             className.Contains("item_result", StringComparison.OrdinalIgnoreCase) ||
+                             statusText.Equals("END", StringComparison.OrdinalIgnoreCase);
+            var isLive = !isFinished &&
+                         (className.Contains("tn-match-live", StringComparison.OrdinalIgnoreCase) ||
+                          LooksLikeTennisScoresLiveStatus(statusText));
+
+            if (!isFinished && !isLive)
+            {
+                continue;
+            }
+
+            if (!TryParseTennisScoresBigScore(scoreNodes[0].InnerText, out var homeSetsWon) ||
+                !TryParseTennisScoresBigScore(scoreNodes[1].InnerText, out var awaySetsWon))
+            {
+                continue;
+            }
+
+            DateTime matchTime;
+            try
+            {
+                matchTime = ParseTennisScoresMatchTime(timeText, defaultLocalDate, isLive);
+            }
+            catch
+            {
+                matchTime = isLive
+                    ? DateTime.UtcNow
+                    : DateTimeProvider.ConvertLocalToUtc(defaultLocalDate.ToDateTime(TimeOnly.MinValue));
+            }
+
+            rows.Add(new MatchScore
+            {
+                League = currentLeague,
+                HomeTeam = homeTeam,
+                AwayTeam = awayTeam,
+                Score = $"{homeSetsWon}:{awaySetsWon}",
+                NormalizedScoreline = $"{homeSetsWon}:{awaySetsWon}",
+                HomeSetsWon = homeSetsWon,
+                AwaySetsWon = awaySetsWon,
+                MatchTime = matchTime,
+                IsLive = isLive
+            });
+        }
+
+        return rows;
+    }
+
+    private static string NormalizeTennisScoresText(string? value)
+    {
+        var decoded = HtmlEntity.DeEntitize(value ?? string.Empty) ?? string.Empty;
+        return string.Join(
+            " ",
+            decoded
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
+    private static bool LooksLikeTennisScoresLiveStatus(string statusText)
+    {
+        if (string.IsNullOrWhiteSpace(statusText))
+        {
+            return false;
+        }
+
+        return statusText.StartsWith("S", StringComparison.OrdinalIgnoreCase) ||
+               statusText.Contains("LIVE", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryParseTennisScoresBigScore(string? rawValue, out int setsWon)
+    {
+        return int.TryParse(
+            NormalizeTennisScoresText(rawValue),
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out setsWon);
+    }
+
+    private static DateTime ParseTennisScoresMatchTime(string rawTime, DateOnly defaultLocalDate, bool isLive)
+    {
+        if (isLive)
+        {
+            return DateTime.UtcNow;
+        }
+
+        var normalizedTime = NormalizeTennisScoresText(rawTime);
+        if (ClockWithDayMonthRegex().IsMatch(normalizedTime))
+        {
+            var parsedLocal = DateTime.ParseExact(
+                $"{normalizedTime}/{defaultLocalDate.Year}",
+                "HH:mm dd/MM/yyyy",
+                CultureInfo.InvariantCulture);
+
+            return DateTimeProvider.ConvertLocalToUtc(parsedLocal);
+        }
+
+        var extractedTime = ExtractClockTime(normalizedTime);
+        return DateTimeProvider.ConvertLocalToUtc(
+            defaultLocalDate.ToDateTime(TimeOnly.ParseExact(extractedTime, "HH:mm", CultureInfo.InvariantCulture)));
+    }
+
+    private static string BuildTennisScoresRowKey(MatchScore score)
+    {
+        return string.Join(
+            "|",
+            NormalizeTennisScoresText(score.League).ToLowerInvariant(),
+            NormalizeTennisScoresText(score.HomeTeam).ToLowerInvariant(),
+            NormalizeTennisScoresText(score.AwayTeam).ToLowerInvariant(),
+            DateTimeProvider.ConvertUtcToLocalDate(score.MatchTime).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
     }
 
     private sealed record TennisSetScoreSummary(string NormalizedScoreline, int? HomeSetsWon, int? AwaySetsWon);

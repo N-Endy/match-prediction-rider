@@ -411,11 +411,15 @@ public class AnalyzerService : IAnalyzerService
             .ToList();
 
             List<MatchScore> flashScores = [];
+            List<MatchScore> tennisScores = [];
             List<AiScoreMatchScore> aiScores = [];
             List<SofaScoreMatchScore> sofaScores = [];
             string flashStage = "http-html";
             string flashStatus = "Empty";
             string flashMessage = "FlashScore did not return any tennis score rows.";
+            string tennisScoresStage = "http-html-results";
+            string tennisScoresStatus = "Empty";
+            string tennisScoresMessage = "tennisscores.mobi did not return any tennis score rows.";
             string aiStatus = "Empty";
             string aiMessage = "AiScore did not return any tennis score rows.";
             string sofaStatus = "Empty";
@@ -439,6 +443,26 @@ public class AnalyzerService : IAnalyzerService
                 flashStatus = "Failed";
                 flashMessage = $"FlashScore tennis scrape failed: {ex.Message}";
                 _logger.LogWarning(ex, "FlashScore tennis scrape failed.");
+            }
+
+            try
+            {
+                tennisScores = await _webScraperService.ScrapeTennisScoresMatchScoresAsync();
+                if (tennisScores.Count > 0)
+                {
+                    tennisScoresStatus = "Success";
+                    tennisScoresMessage = $"tennisscores.mobi returned {tennisScores.Count} tennis score row(s).";
+                }
+                else
+                {
+                    tennisScoresMessage = "tennisscores.mobi returned 0 tennis score rows for the current updater window.";
+                }
+            }
+            catch (Exception ex)
+            {
+                tennisScoresStatus = "Failed";
+                tennisScoresMessage = $"tennisscores.mobi tennis scrape failed: {ex.Message}";
+                _logger.LogWarning(ex, "tennisscores.mobi tennis scrape failed.");
             }
 
             try
@@ -495,7 +519,11 @@ public class AnalyzerService : IAnalyzerService
                 _logger.LogWarning(ex, "SofaScore tennis scrape failed.");
             }
 
-            await UpsertStoredScoresAsync(flashScores, aiScores, sofaScores);
+            var combinedListingScores = flashScores
+                .Concat(tennisScores)
+                .ToList();
+
+            await UpsertStoredScoresAsync(combinedListingScores, aiScores, sofaScores);
 
             var storedScoreWindowStartUtc = nowUtc.AddDays(-Math.Max(lookbackDays + 2, 3));
             var storedFlashScores = await _dbContext.MatchScores
@@ -569,6 +597,20 @@ public class AnalyzerService : IAnalyzerService
                 });
 
             await LogScrapingStatusAsync(
+                "source_tennisscores",
+                tennisScoresStatus,
+                tennisScoresMessage,
+                sourceName: "TennisScoresMobi",
+                stage: tennisScoresStage,
+                runKind: ScoreUpdateRunKind,
+                runLabel: normalizedRunLabel,
+                payload: new
+                {
+                    rows = tennisScores.Count,
+                    liveRows = tennisScores.Count(score => score.IsLive)
+                });
+
+            await LogScrapingStatusAsync(
                 "source_aiscore",
                 aiStatus,
                 aiMessage,
@@ -614,6 +656,7 @@ public class AnalyzerService : IAnalyzerService
                     predictions = currentPredictions.Count,
                     forecasts = currentForecasts.Count,
                     flashScoreRows = flashScores.Count,
+                    tennisScoresRows = tennisScores.Count,
                     aiScoreRows = aiScores.Count,
                     sofaScoreRows = sofaScores.Count,
                     storedFlashScoreRows = storedFlashScores.Count,
@@ -1421,9 +1464,15 @@ public class AnalyzerService : IAnalyzerService
             if (scheduledUtc.HasValue)
             {
                 var kickoffDelta = (candidate.MatchTimeUtc - scheduledUtc.Value).Duration();
+                var strongTeamMatch = homeMatch.Score >= 0.9d && awayMatch.Score >= 0.9d;
+                var sameLocalDate = DateTimeProvider.ConvertUtcToLocalDate(candidate.MatchTimeUtc) ==
+                                    DateTimeProvider.ConvertUtcToLocalDate(scheduledUtc.Value);
                 if (kickoffDelta > TimeSpan.FromHours(8))
                 {
-                    continue;
+                    if (!(strongTeamMatch && candidate.IsLive == false && sameLocalDate))
+                    {
+                        continue;
+                    }
                 }
 
                 score += kickoffDelta <= TimeSpan.FromMinutes(90)
