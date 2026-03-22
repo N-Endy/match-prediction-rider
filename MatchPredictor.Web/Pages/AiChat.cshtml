@@ -1,13 +1,1042 @@
-@page
+@page "/ai-chat"
 @model MatchPredictor.Web.Pages.AiChatModel
 
 @{
-    ViewData["Title"] = "Unavailable";
+    ViewData["Title"] = "AI Chat";
 }
 
-<div class="mp-container">
-    <div class="mp-empty-state">
-        <div class="mp-empty-state-icon">⛔</div>
-        <p>AI chat is not available in TennisPredictor v1.</p>
+<style>
+    .ai-chat-shell {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 2rem 1rem 3rem;
+    }
+
+    .ai-chat-hero {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+        margin-bottom: 1.5rem;
+    }
+
+    .ai-chat-panel,
+    .ai-chat-sidecard,
+    .ai-chat-login {
+        background: linear-gradient(160deg, rgba(8, 23, 44, 0.95), rgba(15, 49, 82, 0.92));
+        border: 1px solid rgba(120, 181, 255, 0.18);
+        border-radius: 20px;
+        box-shadow: 0 18px 50px rgba(8, 18, 33, 0.22);
+    }
+
+    .ai-chat-panel {
+        padding: 1.4rem;
+    }
+
+    .ai-chat-kicker {
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        font-size: 0.78rem;
+        color: #8ad0ff;
+        margin-bottom: 0.7rem;
+    }
+
+    .ai-chat-title {
+        margin: 0 0 0.6rem;
+        font-size: clamp(1.9rem, 3vw, 2.6rem);
+        line-height: 1.05;
+        color: #f4fbff;
+    }
+
+    .ai-chat-subtitle,
+    .ai-chat-sidecard p,
+    .ai-chat-login p {
+        margin: 0;
+        color: #d4e7f7;
+        line-height: 1.6;
+    }
+
+    .ai-chat-sidecard {
+        padding: 1.25rem;
+        display: grid;
+        gap: 0.85rem;
+    }
+
+    .ai-chat-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+    }
+
+    .ai-chat-chip {
+        border: 1px solid rgba(135, 203, 255, 0.28);
+        background: rgba(255, 255, 255, 0.08);
+        color: #eff8ff;
+        border-radius: 999px;
+        padding: 0.55rem 0.85rem;
+        font-size: 0.9rem;
+    }
+
+    .ai-chat-main {
+        background: linear-gradient(180deg, rgba(246, 251, 255, 0.98), rgba(238, 247, 255, 0.94));
+        border-radius: 26px;
+        border: 1px solid rgba(115, 162, 210, 0.2);
+        overflow: hidden;
+        box-shadow: 0 16px 40px rgba(11, 36, 61, 0.12);
+    }
+
+    .ai-chat-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        padding: 1rem 1.25rem;
+        background: linear-gradient(135deg, #0d2f53, #174d78);
+        color: #f8fcff;
+    }
+
+    .ai-chat-header strong {
+        display: block;
+        font-size: 1rem;
+        margin-bottom: 0.15rem;
+    }
+
+    .ai-chat-header span {
+        font-size: 0.88rem;
+        color: #c9e7ff;
+    }
+
+    .ai-chat-logout {
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff;
+        border-radius: 999px;
+        padding: 0.55rem 0.9rem;
+        cursor: pointer;
+    }
+
+    .ai-chat-feed {
+        display: grid;
+        gap: 1rem;
+        padding: 1.2rem;
+        min-height: 420px;
+        max-height: 68vh;
+        overflow-y: auto;
+        background:
+            radial-gradient(circle at top right, rgba(74, 168, 255, 0.12), transparent 28%),
+            linear-gradient(180deg, rgba(255,255,255,0.96), rgba(242,249,255,0.98));
+    }
+
+    .ai-chat-message {
+        display: grid;
+        gap: 0.75rem;
+        max-width: min(820px, 100%);
+    }
+
+    .ai-chat-message.user {
+        justify-self: end;
+    }
+
+    .ai-chat-message.assistant {
+        justify-self: start;
+    }
+
+    .ai-chat-bubble {
+        border-radius: 18px;
+        padding: 0.95rem 1rem;
+        line-height: 1.6;
+        box-shadow: 0 10px 24px rgba(11, 36, 61, 0.08);
+    }
+
+    .ai-chat-message.user .ai-chat-bubble {
+        background: linear-gradient(135deg, #0f5a95, #1d7bc4);
+        color: #fff;
+        border-top-right-radius: 6px;
+    }
+
+    .ai-chat-message.assistant .ai-chat-bubble {
+        background: #fff;
+        color: #15314d;
+        border: 1px solid rgba(100, 142, 191, 0.18);
+        border-top-left-radius: 6px;
+    }
+
+    .ai-chat-meta {
+        font-size: 0.75rem;
+        color: #6e88a4;
+        padding-inline: 0.25rem;
+    }
+
+    .ai-chat-warnings,
+    .ai-chat-suggestions,
+    .ai-chat-actions,
+    .ai-chat-knowledge {
+        display: grid;
+        gap: 0.75rem;
+    }
+
+    .ai-chat-warning {
+        border-left: 3px solid #de9540;
+        background: #fff8ef;
+        color: #734817;
+        border-radius: 12px;
+        padding: 0.75rem 0.85rem;
+        font-size: 0.92rem;
+    }
+
+    .ai-chat-action-grid {
+        display: grid;
+        gap: 0.8rem;
+    }
+
+    .ai-chat-action-card,
+    .ai-chat-knowledge-card {
+        background: rgba(255, 255, 255, 0.98);
+        border: 1px solid rgba(96, 141, 191, 0.18);
+        border-radius: 16px;
+        padding: 0.95rem;
+    }
+
+    .ai-chat-context-badge,
+    .ai-chat-slip-summary {
+        background: linear-gradient(180deg, rgba(14, 49, 80, 0.08), rgba(42, 111, 171, 0.06));
+        border: 1px solid rgba(80, 132, 181, 0.18);
+        border-radius: 16px;
+        padding: 0.9rem 1rem;
+    }
+
+    .ai-chat-context-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        width: fit-content;
+        font-size: 0.83rem;
+        color: #19486c;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+    }
+
+    .ai-chat-slip-summary {
+        display: grid;
+        gap: 0.8rem;
+    }
+
+    .ai-chat-summary-title {
+        font-weight: 700;
+        color: #173b5d;
+    }
+
+    .ai-chat-summary-grid {
+        display: grid;
+        gap: 0.7rem;
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    }
+
+    .ai-chat-summary-stat {
+        background: rgba(255, 255, 255, 0.88);
+        border: 1px solid rgba(105, 154, 203, 0.16);
+        border-radius: 14px;
+        padding: 0.75rem 0.8rem;
+    }
+
+    .ai-chat-summary-label {
+        display: block;
+        font-size: 0.76rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #6b84a0;
+        margin-bottom: 0.3rem;
+    }
+
+    .ai-chat-summary-value {
+        display: block;
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #163754;
+    }
+
+    .ai-chat-summary-markets {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+    }
+
+    .ai-chat-action-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: start;
+        margin-bottom: 0.45rem;
+    }
+
+    .ai-chat-action-card.match-winner {
+        border-color: rgba(31, 115, 180, 0.22);
+        box-shadow: inset 0 0 0 1px rgba(31, 115, 180, 0.05);
+    }
+
+    .ai-chat-action-card.total-sets {
+        border-color: rgba(44, 154, 129, 0.22);
+        box-shadow: inset 0 0 0 1px rgba(44, 154, 129, 0.05);
+    }
+
+    .ai-chat-action-card.set-handicap {
+        border-color: rgba(198, 126, 40, 0.22);
+        box-shadow: inset 0 0 0 1px rgba(198, 126, 40, 0.05);
+    }
+
+    .ai-chat-action-title {
+        font-weight: 700;
+        color: #13304f;
+        margin-bottom: 0.2rem;
+    }
+
+    .ai-chat-action-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        color: #68839f;
+        font-size: 0.84rem;
+    }
+
+    .ai-chat-pill {
+        border-radius: 999px;
+        background: #eaf4ff;
+        color: #174d78;
+        padding: 0.22rem 0.55rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+    }
+
+    .ai-chat-pill.status-upcoming {
+        background: #e6f4ff;
+        color: #11507c;
+    }
+
+    .ai-chat-pill.status-live {
+        background: #fff0d7;
+        color: #8f4a00;
+    }
+
+    .ai-chat-pill.status-finished {
+        background: #ebf6ee;
+        color: #236246;
+    }
+
+    .ai-chat-pill.bookable {
+        background: #ebf6ee;
+        color: #236246;
+    }
+
+    .ai-chat-pill.track-only {
+        background: #f4f6f8;
+        color: #54667a;
+    }
+
+    .ai-chat-pill.market-match-winner {
+        background: #e8f2ff;
+        color: #144f80;
+    }
+
+    .ai-chat-pill.market-over-under-sets {
+        background: #e9f8f3;
+        color: #1f6d59;
+    }
+
+    .ai-chat-pill.market-set-handicap {
+        background: #fff3e8;
+        color: #9b5812;
+    }
+
+    .ai-chat-action-body {
+        color: #35506b;
+        font-size: 0.95rem;
+        line-height: 1.55;
+        margin-bottom: 0.75rem;
+    }
+
+    .ai-chat-action-body p {
+        margin: 0;
+    }
+
+    .ai-chat-action-body p + p {
+        margin-top: 0.55rem;
+    }
+
+    .ai-chat-action-stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-bottom: 0.8rem;
+    }
+
+    .ai-chat-stat {
+        background: #f3f8fd;
+        border-radius: 12px;
+        padding: 0.5rem 0.7rem;
+        font-size: 0.82rem;
+        color: #274766;
+    }
+
+    .ai-chat-stat.positive-edge {
+        background: #eaf7ee;
+        color: #205b40;
+    }
+
+    .ai-chat-stat.neutral-edge {
+        background: #f7f2e8;
+        color: #87511f;
+    }
+
+    .ai-chat-action-buttons,
+    .ai-chat-suggestion-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.55rem;
+    }
+
+    .ai-chat-button,
+    .ai-chat-suggestion,
+    .ai-chat-submit {
+        border: none;
+        cursor: pointer;
+        border-radius: 999px;
+        transition: transform 0.18s ease, opacity 0.18s ease, background 0.18s ease;
+    }
+
+    .ai-chat-button,
+    .ai-chat-submit {
+        background: linear-gradient(135deg, #0d5d98, #1383cf);
+        color: #fff;
+        padding: 0.62rem 0.95rem;
+        font-weight: 600;
+    }
+
+    .ai-chat-button.secondary {
+        background: #edf5fc;
+        color: #18415f;
+    }
+
+    .ai-chat-suggestion {
+        background: #eff7ff;
+        color: #1b537d;
+        padding: 0.52rem 0.8rem;
+        font-size: 0.88rem;
+        border: 1px solid rgba(111, 164, 214, 0.18);
+    }
+
+    .ai-chat-button:hover,
+    .ai-chat-suggestion:hover,
+    .ai-chat-submit:hover {
+        transform: translateY(-1px);
+    }
+
+    .ai-chat-composer {
+        border-top: 1px solid rgba(106, 154, 198, 0.18);
+        padding: 1rem 1.2rem 1.2rem;
+        background: #f6fbff;
+    }
+
+    .ai-chat-composer-form {
+        display: grid;
+        gap: 0.75rem;
+    }
+
+    .ai-chat-textarea {
+        width: 100%;
+        min-height: 92px;
+        border-radius: 16px;
+        border: 1px solid rgba(111, 164, 214, 0.28);
+        padding: 0.95rem 1rem;
+        resize: vertical;
+        font: inherit;
+        color: #14324e;
+        background: #fff;
+    }
+
+    .ai-chat-composer-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .ai-chat-help {
+        color: #67819c;
+        font-size: 0.88rem;
+    }
+
+    .ai-chat-login {
+        max-width: 520px;
+        margin: 3rem auto 0;
+        padding: 1.35rem;
+        display: grid;
+        gap: 1rem;
+    }
+
+    .ai-chat-login label {
+        display: grid;
+        gap: 0.45rem;
+        color: #f0f8ff;
+        font-weight: 600;
+    }
+
+    .ai-chat-login input {
+        border-radius: 14px;
+        border: 1px solid rgba(120, 181, 255, 0.25);
+        background: rgba(255, 255, 255, 0.95);
+        padding: 0.9rem 1rem;
+        font: inherit;
+    }
+
+    .ai-chat-error {
+        color: #ffd2d2;
+        background: rgba(117, 21, 21, 0.42);
+        border: 1px solid rgba(255, 191, 191, 0.22);
+        border-radius: 14px;
+        padding: 0.85rem 0.95rem;
+    }
+
+    @@media (max-width: 860px) {
+        .ai-chat-hero {
+            grid-template-columns: 1fr;
+        }
+
+        .ai-chat-feed {
+            max-height: none;
+        }
+    }
+</style>
+
+@if (Model.RequiresPassword && !Model.IsAuthenticated)
+{
+    <div class="ai-chat-shell">
+        <div class="ai-chat-login">
+            <div class="ai-chat-kicker">Protected Assistant</div>
+            <h1 class="ai-chat-title">Unlock Tennis AI Chat</h1>
+            <p>Enter the configured password to open @Model.AssistantName and chat about the live tennis card, value bets, settlements, and analytics.</p>
+
+            @if (!string.IsNullOrWhiteSpace(Model.ErrorMessage))
+            {
+                <div class="ai-chat-error">@Model.ErrorMessage</div>
+            }
+
+            <form method="post">
+                <label>
+                    Password
+                    <input asp-for="Password" type="password" autocomplete="current-password" />
+                </label>
+                <button type="submit" class="ai-chat-submit">Open Chat</button>
+            </form>
+        </div>
     </div>
-</div>
+}
+else
+{
+    <div class="ai-chat-shell" data-assistant-name="@Model.AssistantName">
+        <div class="ai-chat-hero">
+            <div class="ai-chat-panel">
+                <div class="ai-chat-kicker">AI Tennis Desk</div>
+                <h1 class="ai-chat-title">@Model.AssistantName, tailored for tennis</h1>
+                <p class="ai-chat-subtitle">
+                    Ask for the strongest match-winner picks, over/under sets, set handicap angles, value-bet explanations, or why a settled pick turned red or green.
+                </p>
+            </div>
+            <div class="ai-chat-sidecard">
+                <p>The assistant stays grounded to the published tennis card and the synced pricing we already have in the app.</p>
+                <div class="ai-chat-chip-row">
+                    <span class="ai-chat-chip">Match Winner</span>
+                    <span class="ai-chat-chip">Over / Under Sets</span>
+                    <span class="ai-chat-chip">Set Handicap</span>
+                    <span class="ai-chat-chip">Value Bets</span>
+                    <span class="ai-chat-chip">Settlements</span>
+                </div>
+            </div>
+        </div>
+
+        <section class="ai-chat-main">
+            <div class="ai-chat-header">
+                <div>
+                    <strong>@Model.AssistantName</strong>
+                    <span>Tennis-only analysis grounded to the current card</span>
+                </div>
+                @if (Model.RequiresPassword)
+                {
+                    <form method="post" asp-page-handler="Logout">
+                        <button type="submit" class="ai-chat-logout">Log Out</button>
+                    </form>
+                }
+            </div>
+
+            <div class="ai-chat-feed" id="aiChatFeed"></div>
+
+            <div class="ai-chat-composer">
+                <form class="ai-chat-composer-form" id="aiChatForm">
+                    <textarea
+                        id="aiChatInput"
+                        class="ai-chat-textarea"
+                        placeholder="Ask for 3 safer match winners, the best under 2.5 sets plays, or why a pick missed..."
+                    ></textarea>
+                    <div class="ai-chat-composer-row">
+                        <div class="ai-chat-help">Use natural language. The assistant can also add recommended picks straight to your betslip.</div>
+                        <button type="submit" class="ai-chat-submit" id="aiChatSubmit">Send</button>
+                    </div>
+                </form>
+            </div>
+        </section>
+    </div>
+}
+
+@section Scripts {
+    <script>
+        (() => {
+            const shell = document.querySelector('.ai-chat-shell[data-assistant-name]');
+            if (!shell) {
+                return;
+            }
+
+            const assistantName = shell.dataset.assistantName || 'Nelson';
+            const feed = document.getElementById('aiChatFeed');
+            const form = document.getElementById('aiChatForm');
+            const input = document.getElementById('aiChatInput');
+            const submitButton = document.getElementById('aiChatSubmit');
+
+            const starterPrompts = [
+                'Give me 3 safer match-winner picks today',
+                'Show me 3 under 2.5 sets picks',
+                'Find 2 strong set-handicap plays today',
+                'Why was this not a value bet?',
+                'Which picks have the highest EV today?',
+                'Explain why this settled red'
+            ];
+
+            addAssistantMessage({
+                message: `${assistantName} is live. Ask for grounded tennis picks, value-bet reasoning, settlement explanations, or a safer version of a slip I recommend.\n\nI can also explain why a market qualified, why it missed value-bet status, and which parts of a multi-pick slip add the most risk.`,
+                suggestedPrompts: starterPrompts
+            });
+
+            form?.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const message = (input?.value || '').trim();
+                if (!message) {
+                    return;
+                }
+
+                addUserMessage(message);
+                input.value = '';
+                await sendMessage(message);
+            });
+
+            feed?.addEventListener('click', (event) => {
+                const promptButton = event.target.closest('[data-ai-prompt]');
+                if (promptButton) {
+                    const prompt = promptButton.getAttribute('data-ai-prompt') || '';
+                    if (prompt) {
+                        sendSuggestedPrompt(prompt);
+                    }
+                    return;
+                }
+
+                const addButton = event.target.closest('[data-ai-add]');
+                if (addButton) {
+                    const payload = JSON.parse(addButton.getAttribute('data-ai-add'));
+                    window.addToCart?.(payload);
+                    return;
+                }
+
+                const addAllButton = event.target.closest('[data-ai-add-all]');
+                if (addAllButton) {
+                    const payload = JSON.parse(addAllButton.getAttribute('data-ai-add-all'));
+                    if (Array.isArray(payload)) {
+                        payload.forEach(item => window.addToCart?.(item));
+                    }
+                }
+            });
+
+            async function sendMessage(message) {
+                setBusy(true);
+
+                try {
+                    const response = await fetch('/api/ai/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ message })
+                    });
+
+                    if (response.status === 401) {
+                        window.location.reload();
+                        return;
+                    }
+
+                    const payload = await response.json();
+                    if (!response.ok) {
+                        addAssistantMessage({
+                            message: payload?.message || 'The tennis assistant could not answer that right now.'
+                        });
+                        return;
+                    }
+
+                    addAssistantMessage(payload);
+                } catch {
+                    addAssistantMessage({
+                        message: 'The tennis assistant hit a network problem. Please try again in a moment.'
+                    });
+                } finally {
+                    setBusy(false);
+                }
+            }
+
+            function setBusy(isBusy) {
+                if (submitButton) {
+                    submitButton.disabled = isBusy;
+                    submitButton.textContent = isBusy ? 'Thinking...' : 'Send';
+                }
+
+                if (input) {
+                    input.disabled = isBusy;
+                }
+            }
+
+            function addUserMessage(message) {
+                const wrapper = document.createElement('article');
+                wrapper.className = 'ai-chat-message user';
+                wrapper.innerHTML = `
+                    <div class="ai-chat-bubble">${escapeHtml(message)}</div>
+                    <div class="ai-chat-meta">You</div>
+                `;
+                feed.appendChild(wrapper);
+                scrollToBottom();
+            }
+
+            function addAssistantMessage(payload) {
+                const response = normalizeResponse(payload);
+                const wrapper = document.createElement('article');
+                wrapper.className = 'ai-chat-message assistant';
+
+                const actions = Array.isArray(response.actions) ? response.actions : [];
+                const warnings = Array.isArray(response.warnings) ? response.warnings : [];
+                const suggestedPrompts = Array.isArray(response.suggestedPrompts) ? response.suggestedPrompts : [];
+                const knowledgeCards = Array.isArray(response.knowledgeCards) ? response.knowledgeCards : [];
+
+                wrapper.innerHTML = `
+                    <div class="ai-chat-bubble">${formatMessageHtml(response.message || 'No response received.')}</div>
+                    <div class="ai-chat-meta">${escapeHtml(assistantName)}</div>
+                `;
+
+                if (response.contextMode) {
+                    const contextBadge = document.createElement('div');
+                    contextBadge.className = 'ai-chat-context-badge';
+                    contextBadge.innerHTML = `<span>${escapeHtml(getContextLabel(response.contextMode))}</span>`;
+                    wrapper.appendChild(contextBadge);
+                }
+
+                if (warnings.length > 0) {
+                    const warningBlock = document.createElement('div');
+                    warningBlock.className = 'ai-chat-warnings';
+                    warningBlock.innerHTML = warnings.map(item => `<div class="ai-chat-warning">${escapeHtml(item)}</div>`).join('');
+                    wrapper.appendChild(warningBlock);
+                }
+
+                if (response.workingSlipSummary) {
+                    wrapper.appendChild(buildWorkingSlipSummary(response.workingSlipSummary, response.contextMode));
+                }
+
+                if (actions.length > 0) {
+                    wrapper.appendChild(renderActions(response));
+                }
+
+                if (knowledgeCards.length > 0) {
+                    wrapper.appendChild(buildKnowledgeCards(knowledgeCards));
+                }
+
+                if (suggestedPrompts.length > 0) {
+                    wrapper.appendChild(buildSuggestedPrompts(response.suggestedPrompts));
+                }
+
+                feed.appendChild(wrapper);
+                scrollToBottom();
+            }
+
+            function normalizeResponse(payload) {
+                return {
+                    message: payload?.message || '',
+                    contextMode: payload?.contextMode || '',
+                    actions: Array.isArray(payload?.actions) ? payload.actions : [],
+                    warnings: Array.isArray(payload?.warnings) ? payload.warnings : [],
+                    suggestedPrompts: Array.isArray(payload?.suggestedPrompts) ? payload.suggestedPrompts : [],
+                    knowledgeCards: Array.isArray(payload?.knowledgeCards) ? payload.knowledgeCards : [],
+                    workingSlipSummary: payload?.workingSlipSummary || null,
+                    showBookAll: Boolean(payload?.showBookAll)
+                };
+            }
+
+            function sendSuggestedPrompt(prompt) {
+                if (!prompt) {
+                    return;
+                }
+
+                input.value = prompt;
+                input.focus();
+            }
+
+            function renderActions(response) {
+                const container = document.createElement('div');
+                container.className = 'ai-chat-actions';
+
+                const addAllPayload = JSON.stringify(response.actions.map(toCartPayload)).replaceAll("'", '&#39;');
+                const addAllButton = response.showBookAll
+                    ? `<button type="button" class="ai-chat-button secondary" data-ai-add-all='${addAllPayload}'>Add all to betslip</button>`
+                    : '';
+
+                container.innerHTML = `
+                    <div class="ai-chat-action-grid">
+                        ${response.actions.map(action => renderActionCard(action)).join('')}
+                    </div>
+                    ${addAllButton ? `<div class="ai-chat-action-buttons">${addAllButton}</div>` : ''}
+                `;
+
+                return container;
+            }
+
+            function renderActionCard(action) {
+                const cartPayload = JSON.stringify(toCartPayload(action)).replaceAll("'", '&#39;');
+                const stats = [];
+                const marketLabel = getMarketLabel(action.market || '');
+                const marketToneClass = getMarketToneClass(action.market || '');
+                const statusLabel = action.status || 'Upcoming';
+                const statusClass = getStatusClass(statusLabel);
+                const bookingLabel = action.canBook ? 'Bookable now' : 'Track only';
+                const bookingClass = action.canBook ? 'bookable' : 'track-only';
+                const timingLabel = [action.matchDateLabel, action.kickoffTime].filter(Boolean).join(' ');
+                const scoreLabel = action.actualScore
+                    ? `<span class="ai-chat-pill">${escapeHtml(action.actualScore)}</span>`
+                    : '';
+
+                if (typeof action.modelProbability === 'number') {
+                    stats.push(`<div class="ai-chat-stat">Model ${(action.modelProbability * 100).toFixed(1)}%</div>`);
+                }
+
+                if (typeof action.marketProbability === 'number') {
+                    stats.push(`<div class="ai-chat-stat">Market ${(action.marketProbability * 100).toFixed(1)}%</div>`);
+                }
+
+                if (typeof action.edgePoints === 'number') {
+                    const sign = action.edgePoints > 0 ? '+' : '';
+                    const edgeClass = action.edgePoints > 0 ? 'positive-edge' : 'neutral-edge';
+                    stats.push(`<div class="ai-chat-stat ${edgeClass}">Edge ${sign}${action.edgePoints.toFixed(1)} pts</div>`);
+                }
+
+                if (typeof action.estimatedOdds === 'number') {
+                    stats.push(`<div class="ai-chat-stat">Est. odds ${action.estimatedOdds.toFixed(2)}</div>`);
+                }
+
+                const addLabel = action.canBook ? 'Add to betslip' : 'Add to tracking slip';
+
+                return `
+                    <div class="ai-chat-action-card ${marketToneClass}">
+                        <div class="ai-chat-action-top">
+                            <div>
+                                <div class="ai-chat-action-title">${escapeHtml(action.homeTeam || '')} vs ${escapeHtml(action.awayTeam || '')}</div>
+                                <div class="ai-chat-action-meta">
+                                    <span>${escapeHtml(action.league || '')}</span>
+                                    ${timingLabel ? `<span>${escapeHtml(timingLabel)}</span>` : ''}
+                                    <span class="ai-chat-pill market-${escapeAttribute(toKebabCase(marketLabel))}">${escapeHtml(marketLabel)}</span>
+                                    <span class="ai-chat-pill">${escapeHtml(action.prediction || '')}</span>
+                                    ${scoreLabel}
+                                </div>
+                            </div>
+                            <span class="ai-chat-pill ${statusClass}">${escapeHtml(statusLabel)}</span>
+                        </div>
+                        <div class="ai-chat-action-body">${formatMessageHtml(action.explanation || '')}</div>
+                        ${stats.length > 0 ? `<div class="ai-chat-action-stats">${stats.join('')}</div>` : ''}
+                        <div class="ai-chat-action-buttons">
+                            <button type="button" class="ai-chat-button" data-ai-add='${cartPayload}'>${addLabel}</button>
+                            <span class="ai-chat-pill ${bookingClass}">${escapeHtml(bookingLabel)}</span>
+                        </div>
+                    </div>
+                `;
+            }
+
+            function buildWorkingSlipSummary(summary, contextMode) {
+                const container = document.createElement('div');
+                container.className = 'ai-chat-slip-summary';
+
+                const markets = Array.isArray(summary.markets) ? summary.markets : [];
+                const combinedOdds = typeof summary.estimatedCombinedOdds === 'number'
+                    ? summary.estimatedCombinedOdds.toFixed(2)
+                    : 'N/A';
+
+                container.innerHTML = `
+                    <div class="ai-chat-summary-title">${escapeHtml(getSummaryTitle(contextMode))}</div>
+                    <div class="ai-chat-summary-grid">
+                        <div class="ai-chat-summary-stat">
+                            <span class="ai-chat-summary-label">Recommended picks</span>
+                            <span class="ai-chat-summary-value">${escapeHtml(summary.count ?? 0)}</span>
+                        </div>
+                        <div class="ai-chat-summary-stat">
+                            <span class="ai-chat-summary-label">Bookable now</span>
+                            <span class="ai-chat-summary-value">${escapeHtml(summary.bookableCount ?? 0)}</span>
+                        </div>
+                        <div class="ai-chat-summary-stat">
+                            <span class="ai-chat-summary-label">Combined odds</span>
+                            <span class="ai-chat-summary-value">${escapeHtml(combinedOdds)}</span>
+                        </div>
+                    </div>
+                    ${markets.length > 0 ? `
+                        <div class="ai-chat-summary-markets">
+                            ${markets.map(market => `<span class="ai-chat-pill market-${escapeAttribute(toKebabCase(getMarketLabel(market)))}">${escapeHtml(getMarketLabel(market))}</span>`).join('')}
+                        </div>
+                    ` : ''}
+                `;
+
+                return container;
+            }
+
+            function buildKnowledgeCards(cards) {
+                const knowledge = document.createElement('div');
+                knowledge.className = 'ai-chat-knowledge';
+                knowledge.innerHTML = cards.map(card => `
+                    <div class="ai-chat-knowledge-card">
+                        <div class="ai-chat-action-title">${escapeHtml(card.title || '')}</div>
+                        <div class="ai-chat-action-body">${formatMessageHtml(card.body || '')}</div>
+                    </div>
+                `).join('');
+                return knowledge;
+            }
+
+            function buildSuggestedPrompts(prompts) {
+                const suggestions = document.createElement('div');
+                suggestions.className = 'ai-chat-suggestions';
+                suggestions.innerHTML = `
+                    <div class="ai-chat-suggestion-buttons">
+                        ${prompts.map(prompt => `<button type="button" class="ai-chat-suggestion" data-ai-prompt="${escapeAttribute(prompt)}">${escapeHtml(prompt)}</button>`).join('')}
+                    </div>
+                `;
+                return suggestions;
+            }
+
+            function toCartPayload(action) {
+                return {
+                    homeTeam: action.homeTeam || '',
+                    awayTeam: action.awayTeam || '',
+                    league: action.league || '',
+                    market: action.market || '',
+                    prediction: action.prediction || '',
+                    predictionId: Number.isFinite(Number(action.predictionId)) ? Number(action.predictionId) : null,
+                    matchDateTimeUtc: action.matchDateTimeUtc || null
+                };
+            }
+
+            function getMarketLabel(market) {
+                switch (String(market || '').trim().toLowerCase()) {
+                    case 'matchwinner':
+                        return 'Match Winner';
+                    case 'overundersets':
+                        return 'Over / Under Sets';
+                    case 'sethandicap':
+                        return 'Set Handicap';
+                    default:
+                        return market || 'Market';
+                }
+            }
+
+            function getMarketToneClass(market) {
+                switch (String(market || '').trim().toLowerCase()) {
+                    case 'matchwinner':
+                        return 'match-winner';
+                    case 'overundersets':
+                        return 'total-sets';
+                    case 'sethandicap':
+                        return 'set-handicap';
+                    default:
+                        return '';
+                }
+            }
+
+            function getStatusClass(status) {
+                switch (String(status || '').trim().toLowerCase()) {
+                    case 'live':
+                        return 'status-live';
+                    case 'finished':
+                        return 'status-finished';
+                    default:
+                        return 'status-upcoming';
+                }
+            }
+
+            function getContextLabel(contextMode) {
+                switch (String(contextMode || '').trim().toLowerCase()) {
+                    case 'mixed_market_recommendation':
+                        return 'Mixed Market View';
+                    case 'working_slip_refinement':
+                        return 'Slip Refinement';
+                    case 'match_discussion':
+                        return 'Match Discussion';
+                    case 'settlement_explanation':
+                        return 'Settlement Breakdown';
+                    case 'app_help':
+                        return 'App Help';
+                    case 'security_refusal':
+                        return 'Scope Guard';
+                    default:
+                        return 'Recommendation View';
+                }
+            }
+
+            function getSummaryTitle(contextMode) {
+                switch (String(contextMode || '').trim().toLowerCase()) {
+                    case 'settlement_explanation':
+                        return 'Settlement view of the discussed picks';
+                    case 'working_slip_refinement':
+                        return 'Refined slip snapshot';
+                    case 'match_discussion':
+                        return 'Discussed match summary';
+                    default:
+                        return 'Recommended slip snapshot';
+                }
+            }
+
+            function formatMessageHtml(value) {
+                const escaped = escapeHtml(value);
+                return escaped
+                    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\n\n/g, '</p><p>')
+                    .replace(/\n/g, '<br>')
+                    .replace(/^/, '<p>')
+                    .replace(/$/, '</p>');
+            }
+
+            function toKebabCase(value) {
+                return String(value || '')
+                    .trim()
+                    .toLowerCase()
+                    .replace(/[^a-z0-9]+/g, '-')
+                    .replace(/^-+|-+$/g, '');
+            }
+
+            if (typeof globalThis !== 'undefined') {
+                globalThis.formatMessageHtml = formatMessageHtml;
+                globalThis.buildWorkingSlipSummary = buildWorkingSlipSummary;
+                globalThis.buildKnowledgeCards = buildKnowledgeCards;
+                globalThis.sendSuggestedPrompt = sendSuggestedPrompt;
+            }
+
+            function scrollToBottom() {
+                feed.scrollTop = feed.scrollHeight;
+            }
+
+            function escapeHtml(value) {
+                return String(value ?? '')
+                    .replaceAll('&', '&amp;')
+                    .replaceAll('<', '&lt;')
+                    .replaceAll('>', '&gt;')
+                    .replaceAll('"', '&quot;')
+                    .replaceAll("'", '&#39;');
+            }
+
+            function escapeAttribute(value) {
+                return escapeHtml(value).replaceAll('\n', ' ');
+            }
+        })();
+    </script>
+}

@@ -246,6 +246,46 @@ public class ForecastEvaluationServiceTests
         Assert.Equal(PredictionMarket.Under25Goals, marketStats.Market);
     }
 
+    [Fact]
+    public void CalculateStats_CountsSettledOverUnderLoss_WhenActualOutcomeExistsButActualScoreIsNotParsable()
+    {
+        var service = new ForecastEvaluationService();
+        var kickoff = DateTime.UtcNow.AddHours(-8);
+        var localDate = DateOnly.FromDateTime(kickoff);
+
+        var predictions = new[]
+        {
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|over-under-home|over-under-away",
+                League = "League",
+                HomeTeam = "Over Under Home",
+                AwayTeam = "Over Under Away",
+                PredictionCategory = "OverUnderSets",
+                PredictedOutcome = "Over 2.5 Sets",
+                ActualScore = "RET",
+                ActualOutcome = "Under 2.5 Sets",
+                IsLive = false,
+                ConfidenceScore = 0.68m,
+                CreatedAt = kickoff.AddHours(-2)
+            }
+        };
+
+        var stats = service.CalculateStats(predictions, Array.Empty<ForecastObservation>());
+        var categoryStats = Assert.Single(stats.CategoryStats.Values);
+
+        Assert.Equal(1, stats.TotalPredictions);
+        Assert.Equal(1, stats.CompletedPredictions);
+        Assert.Equal(0, stats.CorrectPredictions);
+        Assert.Equal("OverUnderSets", categoryStats.Category);
+        Assert.Equal(1, categoryStats.Total);
+        Assert.Equal(0, categoryStats.Correct);
+        Assert.Equal(0.0, categoryStats.Accuracy, 5);
+    }
+
     private static ForecastObservation CreateForecast(
         double rawProbability,
         double calibratedProbability,

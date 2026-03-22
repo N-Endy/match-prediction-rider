@@ -21,7 +21,7 @@ public class AiChatKnowledgeService
                 new AiChatKnowledgeCard
                 {
                     Title = "Public Scope Only",
-                    Body = "Ask me about today's picks, recent settled matches, score colors, value-bet logic, analytics terms, or how the visible parts of MatchPredictor work.",
+                        Body = "Ask me about today's tennis picks, recent settled matches, score colors, value-bet logic, analytics terms, or how the visible parts of TennisPredictor work.",
                     Kind = "security"
                 }
             ]
@@ -214,13 +214,13 @@ public class AiChatKnowledgeService
             knowledgeTopic = "clv";
             response = new AiChatResponse
             {
-                Message = "CLV compares the odds captured when the app published a pick against the closing odds near kickoff. Positive CLV means the earlier captured price was better than the close.",
+                Message = "CLV compares the odds captured when the app published a pick against the closing odds near the scheduled match start. Positive CLV means the earlier captured price was better than the close.",
                 KnowledgeCards =
                 [
                     new AiChatKnowledgeCard
                     {
                         Title = "CLV Formula",
-                        Body = "The tracking layer uses CLV% = (publish odds / closing odds) - 1. Positive CLV means the market moved against that price before kickoff.",
+                        Body = "The tracking layer uses CLV% = (publish odds / closing odds) - 1. Positive CLV means the market moved against that price before the match started.",
                         Kind = "value-bets"
                     },
                     new AiChatKnowledgeCard
@@ -268,20 +268,63 @@ public class AiChatKnowledgeService
             return true;
         }
 
-        if (prompt.Contains("straight wins selected", StringComparison.Ordinal) ||
-            prompt.Contains("straight wins", StringComparison.Ordinal) && prompt.Contains("selected", StringComparison.Ordinal) ||
-            prompt.Contains("how are straight wins selected", StringComparison.Ordinal))
+        if (prompt.Contains("match winners selected", StringComparison.Ordinal) ||
+            prompt.Contains("match winner", StringComparison.Ordinal) && prompt.Contains("selected", StringComparison.Ordinal) ||
+            prompt.Contains("how are match winners selected", StringComparison.Ordinal))
         {
             knowledgeTopic = "selection";
             response = new AiChatResponse
             {
-                Message = "Straight wins come from the model's calibrated 1X2 view. To get published, the pick needs to clear the live threshold, and stronger options tend to have higher confidence, more room above threshold, and cleaner market support when pricing is available.",
+                Message = "Match-winner picks come from the model's calibrated two-way win probabilities. To get published, the pick needs to clear the live threshold, and stronger options tend to have higher confidence, more room above threshold, and cleaner market support when pricing is available.",
                 KnowledgeCards =
                 [
                     new AiChatKnowledgeCard
                     {
-                        Title = "Straight Win Selection",
-                        Body = "The app publishes a straight-win pick only after calibration and threshold gating. Safer requests lean toward higher confidence and lower-volatility price profiles.",
+                        Title = "Match Winner Selection",
+                        Body = "The app publishes a match-winner pick only after calibration and threshold gating. Safer requests lean toward higher confidence and lower-volatility price profiles.",
+                        Kind = "selection"
+                    }
+                ]
+            };
+            return true;
+        }
+
+        if (prompt.Contains("under 2.5 sets selected", StringComparison.Ordinal) ||
+            prompt.Contains("over 2.5 sets selected", StringComparison.Ordinal) ||
+            prompt.Contains("how are over under sets selected", StringComparison.Ordinal) ||
+            prompt.Contains("how are over/under sets selected", StringComparison.Ordinal))
+        {
+            knowledgeTopic = "selection";
+            response = new AiChatResponse
+            {
+                Message = "Over/under sets picks come from the model's calibrated total-sets probabilities. To get published, the total-sets angle still has to clear its threshold, and stronger options normally show more room above the gate and cleaner pricing support when odds are available.",
+                KnowledgeCards =
+                [
+                    new AiChatKnowledgeCard
+                    {
+                        Title = "Total Sets Selection",
+                        Body = "The app publishes over/under sets picks only after calibration and threshold gating. Stronger total-sets plays usually carry both a confidence edge and enough room above the threshold to survive noise.",
+                        Kind = "selection"
+                    }
+                ]
+            };
+            return true;
+        }
+
+        if (prompt.Contains("set handicap selected", StringComparison.Ordinal) ||
+            prompt.Contains("how are handicaps selected", StringComparison.Ordinal) ||
+            prompt.Contains("how are set handicaps selected", StringComparison.Ordinal))
+        {
+            knowledgeTopic = "selection";
+            response = new AiChatResponse
+            {
+                Message = "Set-handicap picks come from the calibrated handicap probabilities for the configured line. They are naturally a bit higher variance than plain match winners, so safer requests usually tilt away from them unless the confidence and margin above threshold are still strong.",
+                KnowledgeCards =
+                [
+                    new AiChatKnowledgeCard
+                    {
+                        Title = "Set Handicap Selection",
+                        Body = "A set-handicap pick still needs to clear threshold and calibration checks, but it also has to justify the extra line risk. That's why handicap plays are often treated as the sharper, less conservative side of the card.",
                         Kind = "selection"
                     }
                 ]
@@ -356,19 +399,25 @@ public class AiChatKnowledgeService
 
         var landed = candidate.PredictedOutcome.Equals(candidate.ActualOutcome, StringComparison.OrdinalIgnoreCase);
         var color = landed ? "green" : "red";
-        var outcomeSummary = candidate.ActualOutcome.Equals("Draw", StringComparison.OrdinalIgnoreCase)
-            ? "the game finished as a draw"
-            : $"the final outcome was {candidate.ActualOutcome}";
+        var outcomeSummary = $"the final outcome was {candidate.ActualOutcome}";
+
+        var settlementMessage = candidate.PredictionCategory switch
+        {
+            "MatchWinner" => $"{candidate.HomeTeam} vs {candidate.AwayTeam} settled {color} because the published match-winner pick was {candidate.PredictedOutcome}, the final score was {candidate.ActualScore}, and {outcomeSummary}.",
+            "OverUnderSets" => $"{candidate.HomeTeam} vs {candidate.AwayTeam} settled {color} because the published total-sets pick was {candidate.PredictedOutcome}, the final score was {candidate.ActualScore}, and {outcomeSummary}.",
+            "SetHandicap" => $"{candidate.HomeTeam} vs {candidate.AwayTeam} settled {color} because the published set-handicap pick was {candidate.PredictedOutcome}, the final score was {candidate.ActualScore}, and {outcomeSummary}.",
+            _ => $"{candidate.HomeTeam} vs {candidate.AwayTeam} settled {color} because the pick was {candidate.PredictedOutcome}, the final score was {candidate.ActualScore}, and {outcomeSummary}."
+        };
 
         return new AiChatResponse
         {
-            Message = $"{candidate.HomeTeam} vs {candidate.AwayTeam} settled {color} because the pick was {candidate.PredictedOutcome}, the final score was {candidate.ActualScore}, and {outcomeSummary}.",
+            Message = settlementMessage,
             KnowledgeCards =
             [
                 new AiChatKnowledgeCard
                 {
                     Title = "Settlement Check",
-                    Body = "The app compares the published outcome against the final actual outcome after the score sync settles the fixture.",
+                    Body = "The app compares the published tennis market outcome against the final actual outcome after the score sync settles the fixture.",
                     Kind = "settlement"
                 }
             ]
@@ -434,7 +483,7 @@ public class AiChatKnowledgeService
         {
             return new AiChatResponse
             {
-                Message = $"{candidate.HomeTeam} vs {candidate.AwayTeam} does not show a positive model edge in the current chat context. The model is at {(modelProbability * 100d):0.0}% and the synced market sits at {(candidate.MarketProbability.Value * 100d):0.0}%, so there is no real pricing gap to call value.",
+                Message = $"{candidate.HomeTeam} vs {candidate.AwayTeam} does not show a positive model edge on this {DescribeMarket(candidate.PredictionCategory)} angle in the current chat context. The model is at {(modelProbability * 100d):0.0}% and the synced market sits at {(candidate.MarketProbability.Value * 100d):0.0}%, so there is no real pricing gap to call value.",
                 KnowledgeCards =
                 [
                     new AiChatKnowledgeCard
@@ -449,7 +498,7 @@ public class AiChatKnowledgeService
 
         return new AiChatResponse
         {
-            Message = $"{candidate.HomeTeam} vs {candidate.AwayTeam} actually looks value-positive in the current chat context: model {(modelProbability * 100d):0.0}% versus market {(candidate.MarketProbability.Value * 100d):0.0}% for a +{candidate.EdgePoints.GetValueOrDefault():0.0} point edge. If it is missing on the value-bets page, the most likely reason is that the report was built from a different pricing snapshot or the page has not refreshed yet.",
+            Message = $"{candidate.HomeTeam} vs {candidate.AwayTeam} actually looks value-positive on this {DescribeMarket(candidate.PredictionCategory)} angle in the current chat context: model {(modelProbability * 100d):0.0}% versus market {(candidate.MarketProbability.Value * 100d):0.0}% for a +{candidate.EdgePoints.GetValueOrDefault():0.0} point edge. If it is missing on the value-bets page, the most likely reason is that the report was built from a different pricing snapshot or the page has not refreshed yet.",
             KnowledgeCards =
             [
                 new AiChatKnowledgeCard
@@ -477,5 +526,16 @@ public class AiChatKnowledgeService
                prompt.Contains("usage dashboard", StringComparison.Ordinal) ||
                prompt.Contains("secret", StringComparison.Ordinal) ||
                prompt.Contains("token", StringComparison.Ordinal);
+    }
+
+    private static string DescribeMarket(string predictionCategory)
+    {
+        return predictionCategory switch
+        {
+            "MatchWinner" => "match-winner",
+            "OverUnderSets" => "total-sets",
+            "SetHandicap" => "set-handicap",
+            _ => "market"
+        };
     }
 }

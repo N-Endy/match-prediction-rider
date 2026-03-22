@@ -124,7 +124,7 @@ public partial class AiChatRequestParser
                 .Sum(market => market.Count!.Value);
         }
 
-        var requestedFilters = BuildRequestedFilters(scope, bookableOnly, safetyBias, valueBias, wantsBooking);
+        var requestedFilters = BuildRequestedFilters(promptLower, scope, bookableOnly, safetyBias, valueBias, wantsBooking);
         var interpretationNotes = BuildInterpretationNotes(promptLower, requestedMarkets, requestedTotalCount, targetCombinedOdds, scope, randomSelection);
         var entityTerms = ExtractEntityTerms(prompt, requestedMarkets, intent);
         var flexibleMix = DetectFlexibleMix(promptLower, requestedMarkets);
@@ -458,9 +458,9 @@ public partial class AiChatRequestParser
 
     private static string DetectActionDirective(string promptLower, bool wantsBooking, bool isRolloverIntent, double? targetCombinedOdds)
     {
-        if (promptLower.Contains("swap", StringComparison.Ordinal) && promptLower.Contains("draw", StringComparison.Ordinal))
+        if (promptLower.Contains("swap", StringComparison.Ordinal) && promptLower.Contains("handicap", StringComparison.Ordinal))
         {
-            return "swap_draw_out";
+            return "swap_handicap_out";
         }
 
         if (promptLower.Contains("remove", StringComparison.Ordinal) || promptLower.Contains("weakest", StringComparison.Ordinal))
@@ -492,6 +492,7 @@ public partial class AiChatRequestParser
     }
 
     private static List<AiChatRequestedFilter> BuildRequestedFilters(
+        string promptLower,
         string scope,
         bool bookableOnly,
         string safetyBias,
@@ -521,6 +522,48 @@ public partial class AiChatRequestParser
         if (wantsBooking)
         {
             filters.Add(new AiChatRequestedFilter { Name = "wantsBooking", Value = "true" });
+        }
+
+        filters.AddRange(BuildOutcomeFilters(promptLower));
+
+        return filters;
+    }
+
+    private static IEnumerable<AiChatRequestedFilter> BuildOutcomeFilters(string promptLower)
+    {
+        var filters = new List<AiChatRequestedFilter>();
+
+        if (promptLower.Contains("under 2.5 sets", StringComparison.Ordinal) ||
+            promptLower.Contains("under2.5sets", StringComparison.Ordinal))
+        {
+            filters.Add(new AiChatRequestedFilter { Name = "predictedOutcome", Value = "Under 2.5 Sets" });
+        }
+        else if (promptLower.Contains("over 2.5 sets", StringComparison.Ordinal) ||
+                 promptLower.Contains("over2.5sets", StringComparison.Ordinal))
+        {
+            filters.Add(new AiChatRequestedFilter { Name = "predictedOutcome", Value = "Over 2.5 Sets" });
+        }
+
+        if (promptLower.Contains("home win", StringComparison.Ordinal) ||
+            promptLower.Contains("home to win", StringComparison.Ordinal))
+        {
+            filters.Add(new AiChatRequestedFilter { Name = "predictedOutcome", Value = "Home Win" });
+        }
+        else if (promptLower.Contains("away win", StringComparison.Ordinal) ||
+                 promptLower.Contains("away to win", StringComparison.Ordinal))
+        {
+            filters.Add(new AiChatRequestedFilter { Name = "predictedOutcome", Value = "Away Win" });
+        }
+
+        if (promptLower.Contains("home handicap", StringComparison.Ordinal) ||
+            Regex.IsMatch(promptLower, @"\bhome\s*[+-]\d+(?:[.,]\d+)?\s*sets?\b", RegexOptions.IgnoreCase))
+        {
+            filters.Add(new AiChatRequestedFilter { Name = "predictedOutcomePrefix", Value = "Home " });
+        }
+        else if (promptLower.Contains("away handicap", StringComparison.Ordinal) ||
+                 Regex.IsMatch(promptLower, @"\baway\s*[+-]\d+(?:[.,]\d+)?\s*sets?\b", RegexOptions.IgnoreCase))
+        {
+            filters.Add(new AiChatRequestedFilter { Name = "predictedOutcomePrefix", Value = "Away " });
         }
 
         return filters;
@@ -773,7 +816,7 @@ public partial class AiChatRequestParser
         var normalized = (actionDirective ?? string.Empty).Trim().ToLowerInvariant();
         return normalized switch
         {
-            "swap_draw_out" => normalized,
+            "swap_handicap_out" => normalized,
             "remove_weakest" => normalized,
             "show_riskiest" => normalized,
             "make_safer" => normalized,
@@ -787,41 +830,38 @@ public partial class AiChatRequestParser
     {
         var normalized = (rawMarket ?? string.Empty).Trim().ToLowerInvariant().Replace(" ", string.Empty);
 
-        if (normalized.Contains("btts") ||
-            normalized.Contains("bothteamstoscore") ||
-            normalized.Contains("bothteamsscore") ||
-            normalized.Contains("goalgoal") ||
-            normalized == "bts" ||
-            normalized == "gg")
+        if (normalized.Contains("sethandicap") ||
+            normalized.Contains("handicap") ||
+            Regex.IsMatch(rawMarket ?? string.Empty, @"\b(?:home|away)\s*[+-]\d+(?:[.,]\d+)?\s*sets?\b", RegexOptions.IgnoreCase))
         {
-            return "BothTeamsScore";
+            return "SetHandicap";
         }
 
-        if (normalized.Contains("over2.5") || normalized == "overs" || normalized == "over")
+        if (normalized.Contains("over2.5") ||
+            normalized.Contains("under2.5") ||
+            normalized == "overs" ||
+            normalized == "over" ||
+            normalized == "unders" ||
+            normalized == "under" ||
+            normalized.Contains("settotals") ||
+            normalized.Contains("totalsets"))
         {
-            return "Over2.5Goals";
+            return "OverUnderSets";
         }
 
-        if (normalized.Contains("under2.5") || normalized == "unders" || normalized == "under")
-        {
-            return "Under2.5Goals";
-        }
-
-        if (normalized.Contains("draw"))
-        {
-            return "Draw";
-        }
-
-        if (normalized.Contains("straightwin") ||
+        if (normalized.Contains("matchwinner") ||
+            normalized.Contains("matchwinners") ||
+            normalized.Contains("winner") ||
+            normalized.Contains("winners") ||
+            normalized.Contains("straightwin") ||
             normalized.Contains("straightwins") ||
-            normalized.Contains("1x2") ||
             normalized.Contains("homewin") ||
             normalized.Contains("awaywin") ||
             normalized == "win" ||
             normalized == "wins" ||
             normalized == "straights")
         {
-            return "StraightWin";
+            return "MatchWinner";
         }
 
         return null;
@@ -866,7 +906,7 @@ public partial class AiChatRequestParser
     }
 
     [GeneratedRegex(
-        @"(?:(?:\b(?:a\s+)?(?<count>\d{1,3}|couple|few|several|handful)\b)\s*(?:of\s+)?(?:(?:random(?:ly)?|strong|safe|safer|best|top)\s+)*(?<market>\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|home wins?|away wins?|wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b))|(?:(?<marketAfter>\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|home wins?|away wins?|wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b)\s*(?:(?:random(?:ly)?|strong|safe|safer|best|top)\s+)*(?<countAfter>\d{1,3}|couple|few|several|handful)\b)",
+        @"(?:(?:\b(?:a\s+)?(?<count>\d{1,3}|couple|few|several|handful)\b)\s*(?:of\s+)?(?:(?:random(?:ly)?|strong|safe|safer|best|top)\s+)*(?<market>\b(?:match winners?|winner|winners|straight wins?|over\s*2(?:\.|,)?5\s*sets?|over2(?:\.|,)?5\s*sets?|under\s*2(?:\.|,)?5\s*sets?|under2(?:\.|,)?5\s*sets?|set totals?|total sets?|set handicaps?|handicaps?)\b))|(?:(?<marketAfter>\b(?:match winners?|winner|winners|straight wins?|over\s*2(?:\.|,)?5\s*sets?|over2(?:\.|,)?5\s*sets?|under\s*2(?:\.|,)?5\s*sets?|under2(?:\.|,)?5\s*sets?|set totals?|total sets?|set handicaps?|handicaps?)\b)\s*(?:(?:random(?:ly)?|strong|safe|safer|best|top)\s+)*(?<countAfter>\d{1,3}|couple|few|several|handful)\b)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex ExplicitMarketCountRegex();
 
@@ -876,6 +916,6 @@ public partial class AiChatRequestParser
     [GeneratedRegex(@"\b(?<count>\d{1,3}|couple|few|several|handful)\s*(?:random(?:ly)?|strong|safe|safer|best|top)?\s*(?:pick|picks|prediction|predictions|tip|tips|game|games|match|matches|leg|legs)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex GenericPickCountRegex();
 
-    [GeneratedRegex(@"\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|draws?|draw|straight wins?|straightwins?|straightwin|straights|1x2|wins?|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    [GeneratedRegex(@"\b(?:match winners?|winner|winners|straight wins?|over\s*2(?:\.|,)?5\s*sets?|over2(?:\.|,)?5\s*sets?|under\s*2(?:\.|,)?5\s*sets?|under2(?:\.|,)?5\s*sets?|set totals?|total sets?|set handicaps?|handicaps?)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex MarketMentionRegex();
 }

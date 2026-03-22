@@ -103,14 +103,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
             return false;
         }
 
-        return prediction.PredictionCategory switch
-        {
-            "MatchWinner" => TryParseSetsScore(prediction.ActualScore, out _, out _),
-            "OverUnderSets" => TryParseSetsScore(prediction.ActualScore, out _, out _),
-            "SetHandicap" => TryParseSetsScore(prediction.ActualScore, out _, out _) &&
-                             TryParseHandicapPrediction(prediction.PredictedOutcome, out _, out _),
-            _ => ResolvePredictionActualOutcome(prediction) is not null
-        };
+        return ResolvePredictionActualOutcome(prediction) is not null;
     }
 
     private static bool IsPredictionCorrectForAnalytics(Prediction prediction)

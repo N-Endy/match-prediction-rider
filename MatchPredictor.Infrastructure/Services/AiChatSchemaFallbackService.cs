@@ -53,10 +53,10 @@ public class AiChatSchemaFallbackService : IAiChatSchemaFallbackService
                 {
                     role = "system",
                     content = """
-                        You convert MatchPredictor chat prompts into a strict request schema.
+                        You convert TennisPredictor chat prompts into a strict request schema.
                         Only map requests the app can actually support.
                         Supported intents: RecommendPicks, MixedMarketRecommendation, WorkingSlipRefinement, MatchDiscussion, SettlementExplanation, AppHelp, ValueBetRequest.
-                        Supported markets: BothTeamsScore, Over2.5Goals, Under2.5Goals, StraightWin.
+                        Supported markets: MatchWinner, OverUnderSets, SetHandicap.
                         Return exactly one JSON object with keys:
                         intent, requestedMarkets, requestedTotalCount, scope, bookableOnly, wantsBooking, targetCombinedOdds, safetyBias, valueBias, referencedContextMode, actionDirective, entityTerms, interpretationNotes, needsSemanticFallback, flexibleMix, randomSelection.
                         requestedMarkets must be an array of objects with predictionCategory, count, explicitCount.

@@ -14,13 +14,13 @@ public static partial class AiChatContextBuilder
     private static readonly HashSet<string> GenericPromptTokens = new(StringComparer.OrdinalIgnoreCase)
     {
         "a", "about", "acca", "accumulator", "add", "all", "analysis", "analyse", "analyze", "any", "another", "are",
-        "and", "away", "banker", "bankers", "best", "bet", "bets", "book", "booking", "both", "btts", "can", "chat",
-        "combo", "combination", "day", "days", "doing", "draw", "for", "game", "games", "give", "goals", "good", "help", "home", "i", "in", "into", "is",
+        "and", "away", "banker", "bankers", "best", "bet", "bets", "book", "booking", "can", "chat",
+        "combo", "combination", "day", "days", "doing", "for", "game", "games", "give", "good", "handicap", "handicaps", "help", "home", "i", "in", "into", "is",
         "it", "leg", "legs", "list", "match", "matches", "me", "need", "odd", "odds", "of", "on", "open", "over", "pick", "picks",
-        "prediction", "predictions", "recent", "recommend", "recommended", "recommending", "recommendation", "recommendations", "result", "results", "safe", "safer", "score", "settle", "settled", "show", "slip", "some", "straight", "strong",
-        "straightwin", "straightwins", "stronger", "rollover", "teams", "the", "them", "these", "this", "those", "ticket", "to",
+        "prediction", "predictions", "recent", "recommend", "recommended", "recommending", "recommendation", "recommendations", "result", "results", "safe", "safer", "score", "set", "sets", "settle", "settled", "show", "slip", "some", "strong",
+        "stronger", "rollover", "surface", "the", "them", "these", "this", "those", "ticket", "to",
         "today", "top", "total", "totals", "altogether", "value", "why", "won", "yesterday",
-        "want", "what", "which", "win", "wins", "with", "would", "you", "your", "red", "green", "finished", "lost", "landed", "did", "mix", "mixture", "suggest", "suggested", "random", "randomly",
+        "want", "what", "which", "win", "winner", "winners", "wins", "with", "would", "you", "your", "red", "green", "finished", "lost", "landed", "did", "mix", "mixture", "suggest", "suggested", "random", "randomly",
         "explain", "explained", "discuss", "discussion", "talk", "riskiest", "weakest", "remove", "swap", "replace", "fits"
     };
 
@@ -79,11 +79,22 @@ public static partial class AiChatContextBuilder
             .Select(market => market.PredictionCategory)
             .Where(category => !string.IsNullOrWhiteSpace(category))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var exactOutcomeFilters = request.RequestedFilters
+            .Where(filter => string.Equals(filter.Name, "predictedOutcome", StringComparison.OrdinalIgnoreCase))
+            .Select(filter => filter.Value)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var outcomePrefixFilters = request.RequestedFilters
+            .Where(filter => string.Equals(filter.Name, "predictedOutcomePrefix", StringComparison.OrdinalIgnoreCase))
+            .Select(filter => filter.Value)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToList();
         var entityTerms = request.EntityTerms.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var requestedCandidateCount = ResolveRequestedCandidateCount(request);
 
         var ranked = candidates
             .Where(candidate => MatchesSelectionIntent(candidate, selectionIntent, todayLocalDate, request.BookableOnly))
+            .Where(candidate => MatchesRequestedOutcomeFilters(candidate, exactOutcomeFilters, outcomePrefixFilters))
             .Select(candidate => CreateRankedCandidate(candidate, request, marketFilters, entityTerms, selectionIntent, todayLocalDate))
             .ToList();
 
@@ -255,10 +266,10 @@ public static partial class AiChatContextBuilder
     {
         return prediction.PredictionCategory switch
         {
-            "BothTeamsScore" => "BTTS",
-            "Over2.5Goals" => "Over2.5",
-            "Under2.5Goals" => "Under2.5",
-            _ => "1X2"
+            "MatchWinner" => "MatchWinner",
+            "OverUnderSets" => "OverUnderSets",
+            "SetHandicap" => "SetHandicap",
+            _ => prediction.PredictionCategory
         };
     }
 
@@ -379,8 +390,9 @@ public static partial class AiChatContextBuilder
 
         if (string.Equals(request.SafetyBias, "safer", StringComparison.OrdinalIgnoreCase))
         {
-            score += candidate.PredictionCategory == "StraightWin" ? 20d : 0d;
-            score -= candidate.PredictionCategory == "Draw" ? 10d : 0d;
+            score += candidate.PredictionCategory == "MatchWinner" ? 20d : 0d;
+            score += candidate.PredictionCategory == "OverUnderSets" ? 6d : 0d;
+            score -= candidate.PredictionCategory == "SetHandicap" ? 10d : 0d;
 
             if (candidate.EstimatedOdds is > 0)
             {
@@ -414,6 +426,25 @@ public static partial class AiChatContextBuilder
             3 => 2d,
             _ => Math.Max(0d, 1d - ((daysBack - 3) * 0.25d))
         };
+    }
+
+    private static bool MatchesRequestedOutcomeFilters(
+        AiChatContextCandidate candidate,
+        HashSet<string> exactOutcomeFilters,
+        IReadOnlyList<string> outcomePrefixFilters)
+    {
+        if (exactOutcomeFilters.Count == 0 && outcomePrefixFilters.Count == 0)
+        {
+            return true;
+        }
+
+        if (exactOutcomeFilters.Contains(candidate.PredictedOutcome))
+        {
+            return true;
+        }
+
+        return outcomePrefixFilters.Any(prefix =>
+            candidate.PredictedOutcome.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
     }
 
     private static SelectionIntent DetectSelectionIntent(AiChatNormalizedRequest request)
@@ -496,40 +527,31 @@ public static partial class AiChatContextBuilder
     {
         var filters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        if (promptTokens.Contains("btts") ||
-            promptTokens.Contains("goalgoal") ||
-            (promptTokens.Contains("both") && promptTokens.Contains("score")))
+        if (promptTokens.Contains("winner") ||
+            promptTokens.Contains("winners") ||
+            promptTokens.Contains("win") ||
+            promptTokens.Contains("wins") ||
+            promptTokens.Contains("matchwinner") ||
+            promptTokens.Contains("straight"))
         {
-            filters.Add("BothTeamsScore");
+            filters.Add("MatchWinner");
         }
 
         if (promptTokens.Contains("over") ||
-            promptTokens.Contains("goals") ||
+            promptTokens.Contains("under") ||
+            promptTokens.Contains("set") ||
+            promptTokens.Contains("sets") ||
+            promptTokens.Contains("total") ||
+            promptTokens.Contains("totals") ||
             promptTokens.Any(token => token.StartsWith("over", StringComparison.OrdinalIgnoreCase)))
         {
-            filters.Add("Over2.5Goals");
+            filters.Add("OverUnderSets");
         }
 
-        if (promptTokens.Contains("under") ||
-            promptTokens.Any(token => token.StartsWith("under", StringComparison.OrdinalIgnoreCase)))
+        if (promptTokens.Contains("handicap") ||
+            promptTokens.Contains("handicaps"))
         {
-            filters.Add("Under2.5Goals");
-        }
-
-        if (promptTokens.Contains("draw") || promptTokens.Contains("draws"))
-        {
-            filters.Add("Draw");
-        }
-
-        if (promptTokens.Contains("straight") ||
-            promptTokens.Contains("straightwin") ||
-            promptTokens.Contains("straightwins") ||
-            promptTokens.Contains("win") ||
-            promptTokens.Contains("home") ||
-            promptTokens.Contains("away") ||
-            promptTokens.Contains("1x2"))
-        {
-            filters.Add("StraightWin");
+            filters.Add("SetHandicap");
         }
 
         return filters;
@@ -677,19 +699,20 @@ public static partial class AiChatContextBuilder
     private static IEnumerable<string> GetOrderedMentionedMarkets(string userPrompt)
     {
         var matches = new List<(string Market, int Index)>();
-        AddMarketMention(matches, userPrompt, "btts", "BothTeamsScore");
-        AddMarketMention(matches, userPrompt, "gg", "BothTeamsScore");
-        AddMarketMention(matches, userPrompt, "goalgoal", "BothTeamsScore");
-        AddMarketMention(matches, userPrompt, "goal goal", "BothTeamsScore");
-        AddMarketMention(matches, userPrompt, "both teams to score", "BothTeamsScore");
-        AddMarketMention(matches, userPrompt, "over 2.5", "Over2.5Goals");
-        AddMarketMention(matches, userPrompt, "over2.5", "Over2.5Goals");
-        AddMarketMention(matches, userPrompt, "under 2.5", "Under2.5Goals");
-        AddMarketMention(matches, userPrompt, "under2.5", "Under2.5Goals");
-        AddMarketMention(matches, userPrompt, "draw", "Draw");
-        AddMarketMention(matches, userPrompt, "straight win", "StraightWin");
-        AddMarketMention(matches, userPrompt, "straightwin", "StraightWin");
-        AddMarketMention(matches, userPrompt, "1x2", "StraightWin");
+        AddMarketMention(matches, userPrompt, "match winner", "MatchWinner");
+        AddMarketMention(matches, userPrompt, "match winners", "MatchWinner");
+        AddMarketMention(matches, userPrompt, "winner", "MatchWinner");
+        AddMarketMention(matches, userPrompt, "straight win", "MatchWinner");
+        AddMarketMention(matches, userPrompt, "home win", "MatchWinner");
+        AddMarketMention(matches, userPrompt, "away win", "MatchWinner");
+        AddMarketMention(matches, userPrompt, "over 2.5 sets", "OverUnderSets");
+        AddMarketMention(matches, userPrompt, "over2.5sets", "OverUnderSets");
+        AddMarketMention(matches, userPrompt, "under 2.5 sets", "OverUnderSets");
+        AddMarketMention(matches, userPrompt, "under2.5sets", "OverUnderSets");
+        AddMarketMention(matches, userPrompt, "set totals", "OverUnderSets");
+        AddMarketMention(matches, userPrompt, "total sets", "OverUnderSets");
+        AddMarketMention(matches, userPrompt, "set handicap", "SetHandicap");
+        AddMarketMention(matches, userPrompt, "handicap", "SetHandicap");
 
         return matches
             .OrderBy(match => match.Index)
@@ -788,38 +811,33 @@ public static partial class AiChatContextBuilder
     {
         var normalized = rawMarket.Trim().ToLowerInvariant().Replace(" ", string.Empty);
 
-        if (normalized.Contains("btts") ||
-            normalized.Contains("bothteams") ||
-            normalized.Contains("goalgoal") ||
-            normalized == "gg")
+        if (normalized.Contains("sethandicap") ||
+            normalized.Contains("handicap") ||
+            Regex.IsMatch(rawMarket, @"\b(?:home|away)\s*[+-]\d+(?:[.,]\d+)?\s*sets?\b", RegexOptions.IgnoreCase))
         {
-            return "BothTeamsScore";
+            return "SetHandicap";
         }
 
-        if (normalized.Contains("over"))
+        if (normalized.Contains("over") ||
+            normalized.Contains("under") ||
+            normalized.Contains("settotals") ||
+            normalized.Contains("totalsets"))
         {
-            return "Over2.5Goals";
+            return "OverUnderSets";
         }
 
-        if (normalized.Contains("under"))
-        {
-            return "Under2.5Goals";
-        }
-
-        if (normalized.Contains("draw"))
-        {
-            return "Draw";
-        }
-
-        if (normalized.Contains("straightwin") ||
+        if (normalized.Contains("matchwinner") ||
+            normalized.Contains("matchwinners") ||
+            normalized.Contains("winner") ||
+            normalized.Contains("winners") ||
+            normalized.Contains("straightwin") ||
             normalized.Contains("straightwins") ||
-            normalized.Contains("1x2") ||
             normalized.Contains("homewin") ||
             normalized.Contains("awaywin") ||
             normalized == "win" ||
             normalized == "wins")
         {
-            return "StraightWin";
+            return "MatchWinner";
         }
 
         return null;
@@ -1060,7 +1078,7 @@ public static partial class AiChatContextBuilder
     private static partial Regex TokenRegex();
 
     [GeneratedRegex(
-        "(?<count>\\d{1,3})\\s*(?<market>btts|gg|goal\\s*goal|goalgoal|both teams to score|both teams score|over\\s*2(?:\\.|,)?5|over2(?:\\.|,)?5|under\\s*2(?:\\.|,)?5|under2(?:\\.|,)?5|over|under|straight\\s*wins?|straightwins?|straightwin|wins?|1x2|home\\s*wins?|away\\s*wins?|draws?|draw)",
+        "(?<count>\\d{1,3})\\s*(?<market>match\\s*winners?|winner|winners|straight\\s*wins?|over\\s*2(?:\\.|,)?5\\s*sets?|over2(?:\\.|,)?5\\s*sets?|under\\s*2(?:\\.|,)?5\\s*sets?|under2(?:\\.|,)?5\\s*sets?|set\\s*totals?|total\\s*sets?|set\\s*handicaps?|handicaps?)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex RequestedMarketSliceRegex();
 
@@ -1139,11 +1157,9 @@ public static partial class AiChatContextBuilder
     {
         public string DisplayName => PredictionCategory switch
         {
-            "BothTeamsScore" => "BTTS",
-            "Over2.5Goals" => "Over 2.5",
-            "Under2.5Goals" => "Under 2.5",
-            "Draw" => "Draw",
-            "StraightWin" => "Straight Win",
+            "MatchWinner" => "Match Winner",
+            "OverUnderSets" => "Over / Under Sets",
+            "SetHandicap" => "Set Handicap",
             _ => PredictionCategory
         };
     }
