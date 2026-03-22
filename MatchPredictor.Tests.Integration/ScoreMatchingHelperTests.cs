@@ -16,6 +16,8 @@ public class ScoreMatchingHelperTests
     [InlineData("Varillas J. P.", "Juan Pablo Varillas", true)]
     [InlineData("Negritu Ch.", "Christoph Negritu", true)]
     [InlineData("Blanch D.", "Darwin Blanch", true)]
+    [InlineData("Quinn E. (Usa)", "Ethan Quinn", true)]
+    [InlineData("Lehecka J. (Cze)", "Jiri Lehecka", true)]
     public void TeamsMatch_UsesPrecisionFirstRules(string left, string right, bool expected)
     {
         Assert.Equal(expected, ScoreMatchingHelper.TeamsMatch(left, right));

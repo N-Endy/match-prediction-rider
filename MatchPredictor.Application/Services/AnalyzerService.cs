@@ -945,14 +945,16 @@ public class AnalyzerService : IAnalyzerService
             var existingFlashScores = await _dbContext.MatchScores
                 .Where(score => score.MatchTime >= DateTime.UtcNow.AddDays(-7))
                 .ToListAsync();
-            var flashLookup = existingFlashScores.ToDictionary(
-                score => BuildScoreStorageKey(score.HomeTeam, score.AwayTeam, score.MatchTime),
-                score => score,
-                StringComparer.Ordinal);
+            var flashLookup = existingFlashScores
+                .GroupBy(score => BuildScoreStorageKey(score.HomeTeam, score.AwayTeam, score.League, score.MatchTime), StringComparer.Ordinal)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.OrderByDescending(GetStoredScorePriority).First(),
+                    StringComparer.Ordinal);
 
             foreach (var score in flashScores)
             {
-                var storageKey = BuildScoreStorageKey(score.HomeTeam, score.AwayTeam, score.MatchTime);
+                var storageKey = BuildScoreStorageKey(score.HomeTeam, score.AwayTeam, score.League, score.MatchTime);
                 if (flashLookup.TryGetValue(storageKey, out var existing))
                 {
                     CopyMatchScore(existing, score);
@@ -969,14 +971,16 @@ public class AnalyzerService : IAnalyzerService
             var existingAiScores = await _dbContext.AiScoreMatchScores
                 .Where(score => score.MatchTime >= DateTime.UtcNow.AddDays(-7))
                 .ToListAsync();
-            var aiLookup = existingAiScores.ToDictionary(
-                score => BuildScoreStorageKey(score.HomeTeam, score.AwayTeam, score.MatchTime),
-                score => score,
-                StringComparer.Ordinal);
+            var aiLookup = existingAiScores
+                .GroupBy(score => BuildScoreStorageKey(score.HomeTeam, score.AwayTeam, score.League, score.MatchTime), StringComparer.Ordinal)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.OrderByDescending(GetStoredScorePriority).First(),
+                    StringComparer.Ordinal);
 
             foreach (var score in aiScores)
             {
-                var storageKey = BuildScoreStorageKey(score.HomeTeam, score.AwayTeam, score.MatchTime);
+                var storageKey = BuildScoreStorageKey(score.HomeTeam, score.AwayTeam, score.League, score.MatchTime);
                 if (aiLookup.TryGetValue(storageKey, out var existing))
                 {
                     CopyAiScore(existing, score);
@@ -993,14 +997,16 @@ public class AnalyzerService : IAnalyzerService
             var existingSofaScores = await _dbContext.SofaScoreMatchScores
                 .Where(score => score.MatchTime >= DateTime.UtcNow.AddDays(-7))
                 .ToListAsync();
-            var sofaLookup = existingSofaScores.ToDictionary(
-                score => BuildScoreStorageKey(score.HomeTeam, score.AwayTeam, score.MatchTime),
-                score => score,
-                StringComparer.Ordinal);
+            var sofaLookup = existingSofaScores
+                .GroupBy(score => BuildScoreStorageKey(score.HomeTeam, score.AwayTeam, score.League, score.MatchTime), StringComparer.Ordinal)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.OrderByDescending(GetStoredScorePriority).First(),
+                    StringComparer.Ordinal);
 
             foreach (var score in sofaScores)
             {
-                var storageKey = BuildScoreStorageKey(score.HomeTeam, score.AwayTeam, score.MatchTime);
+                var storageKey = BuildScoreStorageKey(score.HomeTeam, score.AwayTeam, score.League, score.MatchTime);
                 if (sofaLookup.TryGetValue(storageKey, out var existing))
                 {
                     CopySofaScore(existing, score);
@@ -1333,7 +1339,15 @@ public class AnalyzerService : IAnalyzerService
         candidates.AddRange(flashScores.Select(score => CreateResolvedScore("FlashScore", score.League, score.HomeTeam, score.AwayTeam, score.MatchTime, score.Score, score.NormalizedScoreline, score.HomeSetsWon, score.AwaySetsWon, score.IsLive)));
         candidates.AddRange(aiScores.Select(score => CreateResolvedScore("AiScore", score.League, score.HomeTeam, score.AwayTeam, score.MatchTime, score.Score, score.NormalizedScoreline, score.HomeSetsWon, score.AwaySetsWon, score.IsLive)));
         candidates.AddRange(sofaScores.Select(score => CreateResolvedScore("SofaScore", score.League, score.HomeTeam, score.AwayTeam, score.MatchTime, score.Score, score.NormalizedScoreline, score.HomeSetsWon, score.AwaySetsWon, score.IsLive)));
-        return candidates.Where(candidate => candidate.HomeSetsWon.HasValue && candidate.AwaySetsWon.HasValue).ToList();
+
+        return candidates
+            .Where(candidate => candidate.HomeSetsWon.HasValue && candidate.AwaySetsWon.HasValue)
+            .GroupBy(BuildResolvedScoreCandidateKey, StringComparer.Ordinal)
+            .Select(group => group
+                .OrderByDescending(GetResolvedScorePriority)
+                .ThenByDescending(candidate => candidate.MatchTimeUtc)
+                .First())
+            .ToList();
     }
 
     private static ResolvedTennisScore CreateResolvedScore(
@@ -1418,6 +1432,9 @@ public class AnalyzerService : IAnalyzerService
                         ? 0.1d
                         : 0d;
             }
+
+            score += candidate.IsLive ? 0d : 0.35d;
+            score += Math.Min(((candidate.HomeSetsWon ?? 0) + (candidate.AwaySetsWon ?? 0)) * 0.03d, 0.18d);
 
             var sourcePriority = GetScoreSourcePriority(candidate.SourceName);
             if (score > bestScore ||
@@ -1590,13 +1607,55 @@ public class AnalyzerService : IAnalyzerService
                int.TryParse(match.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out awaySetsWon);
     }
 
-    private static string BuildScoreStorageKey(string homeTeam, string awayTeam, DateTime matchTime)
+    private static string BuildScoreStorageKey(string homeTeam, string awayTeam, string? league, DateTime matchTime)
     {
+        var localDate = DateTimeProvider.ConvertUtcToLocalDate(matchTime);
         return string.Join(
             "|",
-            homeTeam.Trim().ToLowerInvariant(),
-            awayTeam.Trim().ToLowerInvariant(),
-            matchTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+            ScoreMatchingHelper.CreateTeamLookupKey(homeTeam, league),
+            ScoreMatchingHelper.CreateTeamLookupKey(awayTeam, league),
+            ScoreMatchingHelper.CreateLeagueLookupKey(league),
+            localDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+    }
+
+    private static string BuildResolvedScoreCandidateKey(ResolvedTennisScore candidate)
+    {
+        var localDate = DateTimeProvider.ConvertUtcToLocalDate(candidate.MatchTimeUtc);
+        return string.Join(
+            "|",
+            candidate.SourceName,
+            ScoreMatchingHelper.CreateTeamLookupKey(candidate.HomeTeam, candidate.League),
+            ScoreMatchingHelper.CreateTeamLookupKey(candidate.AwayTeam, candidate.League),
+            ScoreMatchingHelper.CreateLeagueLookupKey(candidate.League),
+            localDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+    }
+
+    private static int GetResolvedScorePriority(ResolvedTennisScore candidate)
+    {
+        var completedSets = (candidate.HomeSetsWon ?? 0) + (candidate.AwaySetsWon ?? 0);
+        var scorelineWeight = string.IsNullOrWhiteSpace(candidate.NormalizedScoreline) ? 0 : 1;
+        return (candidate.IsLive ? 0 : 100) + (completedSets * 10) + scorelineWeight;
+    }
+
+    private static int GetStoredScorePriority(MatchScore score)
+    {
+        var completedSets = (score.HomeSetsWon ?? 0) + (score.AwaySetsWon ?? 0);
+        var scorelineWeight = string.IsNullOrWhiteSpace(score.NormalizedScoreline) ? 0 : 1;
+        return (score.IsLive ? 0 : 100) + (completedSets * 10) + scorelineWeight;
+    }
+
+    private static int GetStoredScorePriority(AiScoreMatchScore score)
+    {
+        var completedSets = (score.HomeSetsWon ?? 0) + (score.AwaySetsWon ?? 0);
+        var scorelineWeight = string.IsNullOrWhiteSpace(score.NormalizedScoreline) ? 0 : 1;
+        return (score.IsLive ? 0 : 100) + (completedSets * 10) + scorelineWeight;
+    }
+
+    private static int GetStoredScorePriority(SofaScoreMatchScore score)
+    {
+        var completedSets = (score.HomeSetsWon ?? 0) + (score.AwaySetsWon ?? 0);
+        var scorelineWeight = string.IsNullOrWhiteSpace(score.NormalizedScoreline) ? 0 : 1;
+        return (score.IsLive ? 0 : 100) + (completedSets * 10) + scorelineWeight;
     }
 
     private static void CopyMatchScore(MatchScore target, MatchScore source)
