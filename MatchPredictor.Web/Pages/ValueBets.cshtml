@@ -7,7 +7,7 @@
 <div class="mp-container">
     <div class="mp-header-area">
         <h1 class="mp-page-title">🎯 Tennis Value Bets</h1>
-        <h3 class="mp-page-subtitle">Model-vs-market edges for bookable tennis match-winner selections.</h3>
+        <h3 class="mp-page-subtitle">Model-vs-market edges for bookable tennis selections with matched live pricing.</h3>
     </div>
 
     <!-- AI Loading State -->
@@ -15,14 +15,14 @@
         <div style="display: flex; justify-content: center; margin-bottom: 1.5rem;">
             <div class="mp-spinner"></div>
         </div>
-        <h3>Comparing calibrated winner probabilities against market pricing...</h3>
-        <p style="color: var(--text-muted); font-size: 0.95rem;">Tennis v1 only returns markets with real bookable pricing.</p>
+        <h3>Comparing calibrated tennis probabilities against live market pricing...</h3>
+        <p style="color: var(--text-muted); font-size: 0.95rem;">Only markets with a matched SportyBet price make it into the report.</p>
     </div>
 
     <!-- No Bets State -->
     <div id="noBetsState" style="display: none; text-align: center; padding: 4rem 1rem; background: var(--card-bg); border-radius: 12px; border: 1px solid var(--border-color);">
         <h3 style="margin-bottom: 0.5rem;">No Value Bets Right Now</h3>
-        <p style="color: var(--text-muted);">We only show tennis match-winner markets where the calibrated model clears its threshold and still beats the source market by a real edge.</p>
+        <p style="color: var(--text-muted);">We only show tennis selections where the calibrated model clears its threshold and still beats the matched live market by a real edge.</p>
     </div>
 
     <div id="valueBetsSummary" style="display: none; margin-bottom: 1.5rem;"></div>
@@ -92,12 +92,9 @@
                     const edgeString = '+' + (bet.edge * 100).toFixed(1) + ' pts';
                     const thresholdString = (bet.thresholdUsed * 100).toFixed(1) + '%';
                     const thresholdSource = (bet.thresholdSource || 'Configured').toLowerCase();
-                    const marketKey = 'MatchWinner';
-
-                    let badgeClass = 'mp-badge-win-home';
-                    if (bet.predictedOutcome === 'Away Win') badgeClass = 'mp-badge-win-away';
-
-                    const badgeLabel = 'Match Winner';
+                    const marketKey = bet.predictionCategory || 'MatchWinner';
+                    const badgeClass = getBadgeClass(bet.predictionCategory, bet.predictedOutcome);
+                    const badgeLabel = getBadgeLabel(bet.predictionCategory);
 
                     const insightChips = [
                         bet.pricingSource ? `<span class="mp-insight-chip">${escapeHtml(bet.pricingSource)}</span>` : '',
@@ -220,6 +217,31 @@
                 .replaceAll("'", '&#39;');
         }
 
+        function getBadgeLabel(predictionCategory) {
+            switch (predictionCategory) {
+                case 'MatchWinner':
+                    return 'Match Winner';
+                case 'OverUnderSets':
+                    return 'Over / Under Sets';
+                case 'SetHandicap':
+                    return 'Set Handicap';
+                default:
+                    return predictionCategory || 'Selection';
+            }
+        }
+
+        function getBadgeClass(predictionCategory, predictedOutcome) {
+            if (predictionCategory === 'MatchWinner') {
+                return predictedOutcome === 'Away Win' ? 'mp-badge-win-away' : 'mp-badge-win-home';
+            }
+
+            if (predictionCategory === 'OverUnderSets') {
+                return predictedOutcome === 'Under 2.5 Sets' ? 'mp-badge-under' : 'mp-badge-over';
+            }
+
+            return 'mp-badge-combined';
+        }
+
         function renderSummary(report) {
             const summary = document.getElementById('valueBetsSummary');
             if (!summary || !report) {
@@ -255,7 +277,7 @@
                     </div>
                 </div>
                 <div class="mp-analytics-note" style="margin-bottom: 1rem;">
-                    We only surface tennis selections that clear the publish threshold and still beat the source market by a real edge. In v1 this is winner-only, so totals and handicap picks are intentionally excluded until external pricing is available.
+                    We only surface tennis selections that clear the publish threshold and still beat the matched live market by a real edge. Markets only appear when the exact SportyBet fixture and line can be priced.
                 </div>
                 ${exclusionCards ? `<div class="mp-stat-grid">${exclusionCards}</div>` : ''}
             `;

@@ -303,14 +303,17 @@ public class Health : PageModel
 
         foreach (var log in logsForSignal)
         {
-            if (string.IsNullOrWhiteSpace(log.Message))
+            var serializedPayload = string.IsNullOrWhiteSpace(log.PayloadJson)
+                ? log.Message
+                : log.PayloadJson;
+            if (string.IsNullOrWhiteSpace(serializedPayload))
             {
                 continue;
             }
 
             try
             {
-                var snapshot = JsonSerializer.Deserialize<TSnapshot>(log.Message);
+                var snapshot = JsonSerializer.Deserialize<TSnapshot>(serializedPayload);
                 if (snapshot is not null)
                 {
                     return snapshot;

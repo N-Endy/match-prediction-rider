@@ -215,7 +215,20 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             HomeWinProbability = fixture.HomeProbability,
             HomeWinOdds = fixture.HomeOdds,
             AwayWinProbability = fixture.AwayProbability,
-            AwayWinOdds = fixture.AwayOdds
+            AwayWinOdds = fixture.AwayOdds,
+            MarketSelections = fixture.MarketSelections
+                .Select(selection => new SourceMarketSelection
+                {
+                    Market = selection.Market,
+                    Prediction = selection.Prediction,
+                    MarketId = selection.MarketId,
+                    Specifier = selection.Specifier,
+                    OutcomeId = selection.OutcomeId,
+                    Descriptor = selection.Descriptor,
+                    Probability = selection.Probability,
+                    DecimalOdds = selection.DecimalOdds
+                })
+                .ToList()
         }).ToList();
     }
 
@@ -461,7 +474,9 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                 string.IsNullOrWhiteSpace(marketId) ? fixture.WinnerMarketId : marketId,
                 null,
                 homeOutcome.OutcomeId,
-                homeOutcome.Descriptor));
+                homeOutcome.Descriptor,
+                ResolveProbability(homeOutcome),
+                homeOutcome.DecimalOdds));
         }
 
         if (awayOutcome is not null)
@@ -480,7 +495,9 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                 string.IsNullOrWhiteSpace(marketId) ? fixture.WinnerMarketId : marketId,
                 null,
                 awayOutcome.OutcomeId,
-                awayOutcome.Descriptor));
+                awayOutcome.Descriptor,
+                ResolveProbability(awayOutcome),
+                awayOutcome.DecimalOdds));
         }
 
         marketSelections.AddRange(ParseAdditionalSelections(markets, homeTeam, awayTeam));
@@ -1069,7 +1086,9 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                         marketId,
                         specifier,
                         outcome.OutcomeId,
-                        outcome.Descriptor));
+                        outcome.Descriptor,
+                        ResolveProbability(outcome),
+                        outcome.DecimalOdds));
                 }
 
                 continue;
@@ -1090,7 +1109,9 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                         marketId,
                         specifier,
                         outcome.OutcomeId,
-                        outcome.Descriptor));
+                        outcome.Descriptor,
+                        ResolveProbability(outcome),
+                        outcome.DecimalOdds));
                 }
             }
         }
@@ -1585,7 +1606,9 @@ public sealed record SportyBetFixtureSelection(
     string MarketId,
     string? Specifier,
     string OutcomeId,
-    string Descriptor);
+    string Descriptor,
+    double? Probability,
+    double? DecimalOdds);
 
 internal sealed record ResolvedBookingSelection(
     BookingSelection OriginalSelection,

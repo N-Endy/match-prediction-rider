@@ -24,18 +24,55 @@
         <div class="mp-predictions-list">
             @foreach (var status in Model.Logs)
             {
-                var isSuccess = status.Status.ToLower() == "success";
-                <div class="mp-prediction-card" style="border-left: 3px solid @(isSuccess ? "var(--accent-emerald)" : "var(--accent-rose)");">
+                var normalizedStatus = status.Status?.Trim().ToLowerInvariant() ?? "unknown";
+                var badgeStyle = normalizedStatus switch
+                {
+                    "success" or "healthy" => "background: rgba(16,185,129,0.12); color: var(--accent-emerald); border: 1px solid rgba(16,185,129,0.2);",
+                    "empty" or "idle" => "background: rgba(245,158,11,0.12); color: #f59e0b; border: 1px solid rgba(245,158,11,0.2);",
+                    "blocked" or "failed" => "background: rgba(244,63,94,0.12); color: var(--accent-rose); border: 1px solid rgba(244,63,94,0.2);",
+                    _ => "background: rgba(59,130,246,0.12); color: var(--accent-blue); border: 1px solid rgba(59,130,246,0.2);"
+                };
+                var borderColor = normalizedStatus switch
+                {
+                    "success" or "healthy" => "var(--accent-emerald)",
+                    "empty" or "idle" => "#f59e0b",
+                    "blocked" or "failed" => "var(--accent-rose)",
+                    _ => "var(--accent-blue)"
+                };
+
+                <div class="mp-prediction-card" style="border-left: 3px solid @borderColor;">
                     <div class="mp-match-info">
                         <div class="mp-match-league">
-                            Scrape Attempt
+                            @status.EventName
                             <span class="mp-time">@status.Timestamp.ToLocalTime().ToString("dd MMM yyyy, hh:mm tt", CultureInfo.InvariantCulture)</span>
+                        </div>
+                        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem;">
+                            @if (!string.IsNullOrWhiteSpace(status.SourceName))
+                            {
+                                <span class="mp-insight-chip">@status.SourceName</span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(status.Stage))
+                            {
+                                <span class="mp-insight-chip">Stage: @status.Stage</span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(status.RunKind))
+                            {
+                                <span class="mp-insight-chip">Run: @status.RunKind</span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(status.RunLabel))
+                            {
+                                <span class="mp-insight-chip">Label: @status.RunLabel</span>
+                            }
                         </div>
                         <div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 4px;">
                             @status.Message
                         </div>
+                        @if (!string.IsNullOrWhiteSpace(status.PayloadJson))
+                        {
+                            <pre style="margin-top: 0.75rem; padding: 0.85rem; background: rgba(15,23,42,0.35); border: 1px solid rgba(148,163,184,0.14); border-radius: 10px; white-space: pre-wrap; word-break: break-word; font-size: 0.76rem; color: var(--text-muted);">@status.PayloadJson</pre>
+                        }
                     </div>
-                    <span class="mp-prediction-badge" style="background: @(isSuccess ? "rgba(16,185,129,0.12)" : "rgba(244,63,94,0.12)"); color: @(isSuccess ? "var(--accent-emerald)" : "var(--accent-rose)"); border: 1px solid @(isSuccess ? "rgba(16,185,129,0.2)" : "rgba(244,63,94,0.2)");">
+                    <span class="mp-prediction-badge" style="@badgeStyle">
                         @status.Status
                     </span>
                 </div>

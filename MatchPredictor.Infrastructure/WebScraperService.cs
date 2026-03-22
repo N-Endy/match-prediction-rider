@@ -34,7 +34,7 @@ public partial class WebScraperService : IWebScraperService
     private const int AiScoreJintMaxStatements = 25_000;
     private const int DefaultSofaScoreMaxSitemapsPerRun = 48;
     private const int DefaultSofaScoreMaxCandidateUrlsPerFixture = 3;
-    private const int DefaultSofaScoreMaxEventPagesPerRun = 24;
+    private const int DefaultSofaScoreMaxEventPagesPerRun = 72;
     private const int DefaultSofaScoreBrowserScrollRounds = 6;
     private const int DefaultSofaScoreBrowserListingPagesPerRun = 2;
     private static readonly ConcurrentDictionary<string, SofaScoreDiscoveryCacheEntry> SofaScoreEventUrlCache = new(StringComparer.OrdinalIgnoreCase);
@@ -229,70 +229,73 @@ public partial class WebScraperService : IWebScraperService
             return [];
         }
 
-        if (!_browserScrapingEnabled)
+        SofaScoreApiAttemptResult? browserAttempt = null;
+
+        if (_browserScrapingEnabled)
         {
-            _logger.LogWarning("Browser scraping is disabled. Cannot scrape SofaScore.");
-            return [];
+            try
+            {
+                _sofaScoreSourceHealthTracker.RecordAttempt("browser-crawl", $"Targeted fixtures: {requestedFixtures.Count}.");
+                browserAttempt = await ScrapeSofaScoreViaBrowserCrawlerAsync(requestedFixtures);
+                RecordSofaScoreAttemptResult(browserAttempt);
+
+                if (browserAttempt.Scores.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "Scraped {Count} targeted tennis match score(s) from SofaScore via browser crawl.",
+                        browserAttempt.Scores.Count);
+                    return browserAttempt.Scores;
+                }
+            }
+            catch (Exception ex)
+            {
+                _sofaScoreSourceHealthTracker.RecordFailure("browser-crawl", ex.Message);
+                _logger.LogWarning(ex, "SofaScore browser crawl failed.");
+            }
+        }
+        else
+        {
+            _logger.LogInformation("Browser scraping is disabled for SofaScore. Falling back to HTML discovery only.");
         }
 
         try
         {
-            _sofaScoreSourceHealthTracker.RecordAttempt("browser-single-page", $"Targeted fixtures: {requestedFixtures.Count}.");
-
-            var baseUrl = (_configuration["ScrapingValues:SofaScoreBaseUrl"] ?? "https://www.sofascore.com").TrimEnd('/');
-            var listingUrl = $"{baseUrl}/tennis";
-
-            return await RunWithChromeSessionAsync(
-                async driver =>
-                {
-                    await driver.Navigate().GoToUrlAsync(listingUrl);
-                    WaitForDocumentReady(driver);
-                    DismissCookieBanners(driver);
-                    await Task.Delay(2500);
-
-                    var js = (IJavaScriptExecutor)driver;
-                    for (int i = 0; i < 4; i++)
-                    {
-                        js.ExecuteScript("window.scrollTo(0, document.body.scrollHeight);");
-                        await Task.Delay(1000);
-                        TryClickSofaScoreExpanders(driver);
-                    }
-
-                    var pageSource = driver.PageSource;
-                    var listingEntries = SofaScoreListingPageParser.ParseEntries(pageSource, baseUrl);
-                    var listingScores = ResolveSofaScoreListingScores(requestedFixtures, listingEntries);
-
-                    if (listingScores.Count > 0)
-                    {
-                        _logger.LogInformation("Scraped {Count} match scores from SofaScore headless single-page.", listingScores.Count);
-                        _sofaScoreSourceHealthTracker.RecordSuccess(
-                            "browser-single-page",
-                            listingScores.Count,
-                            listingEntries.Count,
-                            1,
-                            $"SofaScore headless single-page scrape recovered {listingScores.Count} targeted match(es).");
-                    }
-                    else
-                    {
-                        _logger.LogWarning("SofaScore headless single-page scrape found 0 matches for target fixtures.");
-                        _sofaScoreSourceHealthTracker.RecordEmpty(
-                            "browser-single-page",
-                            $"SofaScore browser parsed {listingEntries.Count} rows but none matched the targeted fixtures.",
-                            listingEntries.Count,
-                            1);
-                    }
-
-                    return listingScores;
-                },
-                ConfigureSofaScoreBrowserOptions,
-                "SofaScore single-page headless scraping");
+            using var client = CreateSofaScoreHttpClient();
+            return await ScrapeSofaScoreViaHtmlFallbackAsync(requestedFixtures, client);
         }
         catch (Exception ex)
         {
-            _sofaScoreSourceHealthTracker.RecordFailure("browser-single-page", ex.Message);
-            _logger.LogWarning(ex, "SofaScore single-page Headless scraping failed.");
+            _sofaScoreSourceHealthTracker.RecordFailure("event-page-fallback", ex.Message);
+            _logger.LogWarning(ex, "SofaScore HTML fallback failed.");
             return [];
         }
+    }
+
+    private void RecordSofaScoreAttemptResult(SofaScoreApiAttemptResult attempt)
+    {
+        if (attempt.Scores.Count > 0)
+        {
+            _sofaScoreSourceHealthTracker.RecordSuccess(
+                attempt.Stage,
+                attempt.Scores.Count,
+                attempt.CandidateCount,
+                attempt.DetailFetchCount,
+                attempt.Detail);
+            return;
+        }
+
+        if (attempt.Detail.Contains("challenge page", StringComparison.OrdinalIgnoreCase) ||
+            attempt.Detail.Contains("blocked", StringComparison.OrdinalIgnoreCase))
+        {
+            _sofaScoreSourceHealthTracker.RecordBlocked(attempt.Stage, attempt.Detail);
+            return;
+        }
+
+        _sofaScoreSourceHealthTracker.RecordEmpty(
+            attempt.Stage,
+            attempt.Detail,
+            attempt.CandidateCount,
+            attempt.DetailFetchCount);
     }
 
     /// <summary>

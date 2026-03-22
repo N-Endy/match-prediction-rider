@@ -96,15 +96,25 @@ public class ValueBetsService : IValueBetsService
             {
                 report.ConsideredCandidateCount++;
 
-                if (forecastCandidate.Market is not PredictionMarket.HomeWin and not PredictionMarket.AwayWin)
+                if (!IsSupportedMarket(forecastCandidate.Market))
                 {
                     IncrementExclusion(exclusionCounts, "unsupported_market");
                     continue;
                 }
 
+                if (sourceFixture is null)
+                {
+                    IncrementExclusion(exclusionCounts, "no_source_fixture");
+                    continue;
+                }
+
                 if (!MarketQuoteResolver.TryResolve(match, sourceFixture, forecastCandidate.Market, out var marketQuote))
                 {
-                    IncrementExclusion(exclusionCounts, "no_source_price");
+                    IncrementExclusion(
+                        exclusionCounts,
+                        HasExactSourceSelection(sourceFixture, forecastCandidate.PredictionCategory, forecastCandidate.PredictedOutcome)
+                            ? "no_source_price"
+                            : "no_exact_line");
                     continue;
                 }
 
@@ -137,6 +147,7 @@ public class ValueBetsService : IValueBetsService
                         forecastCandidate.AwayTeam,
                         forecastCandidate.PredictionCategory,
                         forecastCandidate.PredictedOutcome),
+                    FixtureKey = matchFixtureKey,
                     PredictionId = linkedPrediction?.Id,
                     MatchDateTimeUtc = match.MatchDateTime,
                     League = forecastCandidate.League,
@@ -164,7 +175,7 @@ public class ValueBetsService : IValueBetsService
         }
 
         var topCandidates = candidateBets
-            .GroupBy(candidate => BuildMatchKey(candidate.League, candidate.HomeTeam, candidate.AwayTeam, candidate.KickoffTime))
+            .GroupBy(candidate => BuildMarketKey(candidate.FixtureKey, candidate.PredictionCategory, candidate.PredictedOutcome))
             .Select(group => group
                 .OrderByDescending(candidate => candidate.ExpectedValuePercent)
                 .ThenByDescending(candidate => candidate.Edge)
@@ -181,7 +192,7 @@ public class ValueBetsService : IValueBetsService
         report.Bets = topCandidates.Select(candidate => candidate.ToDto()).ToList();
         if (topCandidates.Count == 0)
         {
-            AddWarning(report, "Only tennis match-winner markets are priced in v1. Totals and handicaps stay in analysis pages but are excluded from value bets until a real odds feed is wired in.");
+            AddWarning(report, "No tennis selections currently clear both the publish threshold and the live market edge floor across the SportyBet markets we could price today.");
         }
 
         return report;
@@ -228,6 +239,8 @@ public class ValueBetsService : IValueBetsService
         return new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         {
             ["unsupported_market"] = 0,
+            ["no_source_fixture"] = 0,
+            ["no_exact_line"] = 0,
             ["no_source_price"] = 0,
             ["below_threshold"] = 0,
             ["insufficient_edge"] = 0
@@ -243,8 +256,10 @@ public class ValueBetsService : IValueBetsService
     {
         return
         [
-            CreateExclusionStat(counts, "unsupported_market", "Winner-only pricing", "Totals and handicap picks are intentionally excluded because v1 only prices match winner markets."),
-            CreateExclusionStat(counts, "no_source_price", "No source price", "No usable live tennis winner price was available for the pick."),
+            CreateExclusionStat(counts, "unsupported_market", "Unsupported market", "The forecast market is not part of the current tennis pricing scope."),
+            CreateExclusionStat(counts, "no_source_fixture", "No source fixture", "No matching SportyBet tennis fixture could be aligned to the model fixture."),
+            CreateExclusionStat(counts, "no_exact_line", "Exact line unavailable", "The SportyBet fixture existed, but this exact total-sets or set-handicap line was not priced today."),
+            CreateExclusionStat(counts, "no_source_price", "No source price", "A matching source selection existed, but it did not expose a usable live probability or decimal odds."),
             CreateExclusionStat(counts, "below_threshold", "Below threshold", "The calibrated probability did not clear the publish threshold for that market."),
             CreateExclusionStat(counts, "insufficient_edge", "Below edge floor", "The model leaned the right way, but not enough above the market to count as value.")
         ];
@@ -279,9 +294,27 @@ public class ValueBetsService : IValueBetsService
             NormalizeKeyPart(predictedOutcome));
     }
 
-    private static string BuildMatchKey(string league, string homeTeam, string awayTeam, string kickoffTime)
+    private static bool IsSupportedMarket(PredictionMarket market)
     {
-        return string.Join("|", NormalizeKeyPart(league), NormalizeKeyPart(homeTeam), NormalizeKeyPart(awayTeam), NormalizeKeyPart(kickoffTime));
+        return market is
+            PredictionMarket.HomeWin or
+            PredictionMarket.AwayWin or
+            PredictionMarket.Over25Sets or
+            PredictionMarket.Under25Sets or
+            PredictionMarket.HomeSetHandicap or
+            PredictionMarket.AwaySetHandicap;
+    }
+
+    private static bool HasExactSourceSelection(SourceMarketFixture fixture, string predictionCategory, string predictedOutcome)
+    {
+        return fixture.MarketSelections.Any(selection =>
+            string.Equals(NormalizeKeyPart(selection.Market), NormalizeKeyPart(predictionCategory), StringComparison.Ordinal) &&
+            string.Equals(NormalizeKeyPart(selection.Prediction), NormalizeKeyPart(predictedOutcome), StringComparison.Ordinal));
+    }
+
+    private static string BuildMarketKey(string fixtureKey, string predictionCategory, string predictedOutcome)
+    {
+        return string.Join("|", NormalizeKeyPart(fixtureKey), NormalizeKeyPart(predictionCategory), NormalizeKeyPart(predictedOutcome));
     }
 
     private static string NormalizeKeyPart(string? value)
@@ -317,6 +350,7 @@ public class ValueBetsService : IValueBetsService
     private sealed class ValueBetCandidate
     {
         public string CandidateKey { get; init; } = string.Empty;
+        public string FixtureKey { get; init; } = string.Empty;
         public int? PredictionId { get; init; }
         public DateTime? MatchDateTimeUtc { get; init; }
         public string League { get; init; } = string.Empty;

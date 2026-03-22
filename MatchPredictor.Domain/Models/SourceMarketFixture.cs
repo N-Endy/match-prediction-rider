@@ -11,4 +11,5 @@ public class SourceMarketFixture
     public double? HomeWinOdds { get; set; }
     public double? AwayWinProbability { get; set; }
     public double? AwayWinOdds { get; set; }
+    public List<SourceMarketSelection> MarketSelections { get; set; } = [];
 }

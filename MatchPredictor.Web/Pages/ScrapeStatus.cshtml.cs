@@ -22,7 +22,7 @@ public class ScrapeStatus : PageModel
     {
         Logs = await _dbContext.ScrapingLogs
             .OrderByDescending(x => x.Timestamp)
-            .Take(20)
+            .Take(40)
             .ToListAsync();
     }
 }

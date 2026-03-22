@@ -17,6 +17,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<ScrapingLog> ScrapingLogs => Set<ScrapingLog>();
     public DbSet<MatchScore> MatchScores => Set<MatchScore>();
     public DbSet<AiScoreMatchScore> AiScoreMatchScores => Set<AiScoreMatchScore>();
+    public DbSet<SofaScoreMatchScore> SofaScoreMatchScores => Set<SofaScoreMatchScore>();
     public DbSet<ModelAccuracy> ModelAccuracies => Set<ModelAccuracy>();
     public DbSet<MarketCalibrationProfile> MarketCalibrationProfiles => Set<MarketCalibrationProfile>();
     public DbSet<BetaCalibrationProfile> BetaCalibrationProfiles => Set<BetaCalibrationProfile>();
@@ -90,6 +91,13 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.HasIndex(e => new { e.MatchTime, e.IsLive });
         });
 
+        modelBuilder.Entity<SofaScoreMatchScore>(entity =>
+        {
+            entity.HasIndex(e => new { e.MatchTime, e.HomeTeam, e.AwayTeam });
+            entity.HasIndex(e => new { e.MatchTime, e.IsLive });
+            entity.HasIndex(e => e.EventUrl);
+        });
+
         modelBuilder.Entity<ForecastObservation>(entity =>
         {
             entity.HasIndex(e => new { e.MatchLocalDate, e.IsCurrentRevision, e.Market, e.MatchLocalTime });
@@ -151,7 +159,18 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.Property(e => e.EventName)
                 .HasMaxLength(64)
                 .HasDefaultValue("general");
+            entity.Property(e => e.SourceName)
+                .HasMaxLength(64);
+            entity.Property(e => e.Stage)
+                .HasMaxLength(64);
+            entity.Property(e => e.RunKind)
+                .HasMaxLength(64);
+            entity.Property(e => e.RunLabel)
+                .HasMaxLength(128);
             entity.HasIndex(e => new { e.EventName, e.Timestamp });
+            entity.HasIndex(e => new { e.SourceName, e.Stage, e.Timestamp });
+            entity.HasIndex(e => new { e.RunKind, e.RunLabel, e.Timestamp });
+            entity.HasIndex(e => e.PredictionRunId);
             entity.HasIndex(e => e.Timestamp);
         });
     }

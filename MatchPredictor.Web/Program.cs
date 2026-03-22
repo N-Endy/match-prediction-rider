@@ -378,7 +378,12 @@ static async Task<bool> HasEfMigrationsHistoryAsync(ApplicationDbContext context
     try
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = "select to_regclass('__EFMigrationsHistory') is not null;";
+        command.CommandText = """
+            select case
+                when to_regclass('"__EFMigrationsHistory"') is null then false
+                else exists (select 1 from "__EFMigrationsHistory")
+            end;
+            """;
         var result = await command.ExecuteScalarAsync();
         return result is bool exists && exists;
     }

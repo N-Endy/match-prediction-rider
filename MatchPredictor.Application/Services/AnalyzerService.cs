@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Hangfire;
 using MatchPredictor.Application.Helpers;
@@ -17,6 +18,11 @@ public class AnalyzerService : IAnalyzerService
 {
     private const int DataRetentionDays = 90;
     private const int ScrapingLogRetentionDays = 2;
+    private const string ScoreUpdateRunKind = "score_update";
+    private const string ScoreUpdateRecentEventName = "score_update_recent";
+    private const string ScoreUpdateBackfillEventName = "score_update_backfill";
+    private const string AiScoreRuntimeEventName = "source_runtime_aiscore";
+    private const string SofaScoreRuntimeEventName = "source_runtime_sofascore";
     private static readonly TimeSpan FutureFixtureSettlementTolerance = TimeSpan.Zero;
     private static readonly Regex ScoreRegex = new("(\\d+)\\D+(\\d+)", RegexOptions.Compiled);
     private static readonly Regex HandicapRegex = new(
@@ -174,7 +180,15 @@ public class AnalyzerService : IAnalyzerService
                 .Select(group => group.OrderBy(match => match.MatchDateTime).First())
                 .ToList();
 
-            var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates(generationMatches).ToList();
+            var rawForecastCandidates = _dataAnalyzerService.BuildForecastCandidates(generationMatches).ToList();
+            var forecastCandidates = DeduplicateForecastCandidates(rawForecastCandidates);
+            if (forecastCandidates.Count != rawForecastCandidates.Count)
+            {
+                _logger.LogWarning(
+                    "Collapsed {DuplicateCount} duplicate tennis forecast candidates for {TargetDate} before persistence to match the canonical fixture/market uniqueness rules.",
+                    rawForecastCandidates.Count - forecastCandidates.Count,
+                    targetDateString);
+            }
             var publishedCandidates = _dataAnalyzerService.SelectPublishedPredictions(forecastCandidates).ToList();
             var publishedLookup = publishedCandidates.ToDictionary(
                 candidate => BuildCandidateKey(candidate),
@@ -194,7 +208,7 @@ public class AnalyzerService : IAnalyzerService
                 .GroupBy(prediction => BuildPredictionRevisionKey(prediction.FixtureKey, prediction.PredictionCategory, prediction.PredictedOutcome))
                 .ToDictionary(group => group.Key, group => group.Max(prediction => prediction.RevisionNumber), StringComparer.Ordinal);
             var forecastRevisionLookup = existingCurrentForecasts
-                .GroupBy(forecast => BuildForecastRevisionKey(forecast.FixtureKey, forecast.Market, forecast.PredictedOutcome))
+                .GroupBy(forecast => BuildForecastRevisionKey(forecast.FixtureKey, forecast.Market))
                 .ToDictionary(group => group.Key, group => group.Max(forecast => forecast.RevisionNumber), StringComparer.Ordinal);
 
             foreach (var prediction in existingCurrentPredictions)
@@ -222,7 +236,7 @@ public class AnalyzerService : IAnalyzerService
                     candidate.MatchLocalTime,
                     candidate.MatchDateTime);
                 var candidateKey = BuildPredictionRevisionKey(fixtureIdentity.FixtureKey, candidate.PredictionCategory, candidate.PredictedOutcome);
-                var forecastKey = BuildForecastRevisionKey(fixtureIdentity.FixtureKey, candidate.Market, candidate.PredictedOutcome);
+                var forecastKey = BuildForecastRevisionKey(fixtureIdentity.FixtureKey, candidate.Market);
                 var nextPredictionRevision = predictionRevisionLookup.TryGetValue(candidateKey, out var predictionRevision)
                     ? predictionRevision + 1
                     : 1;
@@ -319,9 +333,7 @@ public class AnalyzerService : IAnalyzerService
         }
         catch (Exception ex)
         {
-            run.Succeeded = false;
-            run.CompletedAtUtc = DateTime.UtcNow;
-            await _dbContext.SaveChangesAsync();
+            await TryMarkPredictionRunFailedAsync(run, DateTime.UtcNow);
             _logger.LogError(ex, "Tennis prediction generation failed for {TargetDate}.", targetDateString);
             await LogScrapingStatusAsync("prediction_generation", "Failed", $"Prediction generation failed for {targetDateString}: {ex.Message}");
             throw;
@@ -335,24 +347,47 @@ public class AnalyzerService : IAnalyzerService
         var today = DateTimeProvider.GetLocalDate();
         var cutoffLocalDate = today.AddDays(-Math.Max(lookbackDays, 0));
         var nowUtc = DateTime.UtcNow;
+        var normalizedRunLabel = string.IsNullOrWhiteSpace(runLabel) ? "recent" : runLabel.Trim();
+        var updateEventName = BuildScoreUpdateEventName(normalizedRunLabel);
 
-        _logger.LogInformation("Starting tennis score updater ({RunLabel}) for fixtures since {CutoffDate}.", runLabel, cutoffLocalDate);
+        _logger.LogInformation("Starting tennis score updater ({RunLabel}) for fixtures since {CutoffDate}.", normalizedRunLabel, cutoffLocalDate);
 
-        var currentPredictions = await _dbContext.Predictions
-            .Where(prediction => prediction.IsCurrentRevision)
-            .Where(prediction => prediction.MatchLocalDate >= cutoffLocalDate)
-            .ToListAsync();
-        var currentForecasts = await _dbContext.ForecastObservations
-            .Where(forecast => forecast.IsCurrentRevision)
-            .Where(forecast => forecast.MatchLocalDate >= cutoffLocalDate)
-            .ToListAsync();
-
-        if (currentPredictions.Count == 0 && currentForecasts.Count == 0)
+        try
         {
-            return;
-        }
+            var currentPredictions = await _dbContext.Predictions
+                .Where(prediction => prediction.IsCurrentRevision)
+                .Where(prediction => prediction.MatchLocalDate >= cutoffLocalDate)
+                .ToListAsync();
+            var currentForecasts = await _dbContext.ForecastObservations
+                .Where(forecast => forecast.IsCurrentRevision)
+                .Where(forecast => forecast.MatchLocalDate >= cutoffLocalDate)
+                .ToListAsync();
 
-        var fixtureRequests = currentForecasts
+            if (currentPredictions.Count == 0 && currentForecasts.Count == 0)
+            {
+                await LogScrapingStatusAsync(
+                    updateEventName,
+                    "Success",
+                    $"No current tennis predictions or forecasts required a {normalizedRunLabel} score update.",
+                    runKind: ScoreUpdateRunKind,
+                    runLabel: normalizedRunLabel,
+                    payload: new
+                    {
+                        runLabel = normalizedRunLabel,
+                        lookbackDays,
+                        predictions = 0,
+                        forecasts = 0,
+                        flashScoreRows = 0,
+                        aiScoreRows = 0,
+                        sofaScoreRows = 0,
+                        updatedPredictions = 0,
+                        updatedForecasts = 0
+                    });
+                await PersistSourceRuntimeSnapshotsAsync(normalizedRunLabel);
+                return;
+            }
+
+            var fixtureRequests = currentForecasts
             .Select(forecast => new SofaScoreFixtureRequest
             {
                 League = forecast.League,
@@ -375,103 +410,227 @@ public class AnalyzerService : IAnalyzerService
             .Select(group => group.First())
             .ToList();
 
-        List<MatchScore> flashScores = [];
-        List<AiScoreMatchScore> aiScores = [];
-        List<SofaScoreMatchScore> sofaScores = [];
+            List<MatchScore> flashScores = [];
+            List<AiScoreMatchScore> aiScores = [];
+            List<SofaScoreMatchScore> sofaScores = [];
+            string flashStage = "http-html";
+            string flashStatus = "Empty";
+            string flashMessage = "FlashScore did not return any tennis score rows.";
+            string aiStatus = "Empty";
+            string aiMessage = "AiScore did not return any tennis score rows.";
+            string sofaStatus = "Empty";
+            string sofaMessage = "SofaScore did not return any tennis score rows.";
 
-        try
-        {
-            flashScores = await _webScraperService.ScrapeMatchScoresAsync();
+            try
+            {
+                flashScores = await _webScraperService.ScrapeMatchScoresAsync();
+                if (flashScores.Count > 0)
+                {
+                    flashStatus = "Success";
+                    flashMessage = $"FlashScore returned {flashScores.Count} tennis score row(s).";
+                }
+                else
+                {
+                    flashMessage = "FlashScore returned 0 tennis score rows for the current updater window.";
+                }
+            }
+            catch (Exception ex)
+            {
+                flashStatus = "Failed";
+                flashMessage = $"FlashScore tennis scrape failed: {ex.Message}";
+                _logger.LogWarning(ex, "FlashScore tennis scrape failed.");
+            }
+
+            try
+            {
+                _aiScoreSourceHealthTracker.RecordAttempt("tennis-score-update", "Fetching tennis results from AiScore.");
+                aiScores = await _webScraperService.ScrapeAiScoreMatchScoresAsync();
+                var aiSnapshot = _aiScoreSourceHealthTracker.GetSnapshot();
+                if (aiScores.Count > 0)
+                {
+                    _aiScoreSourceHealthTracker.RecordSuccess("tennis-score-update", aiScores.Count, "Fetched tennis results from AiScore.");
+                    aiStatus = "Success";
+                    aiMessage = $"AiScore returned {aiScores.Count} tennis score row(s).";
+                }
+                else
+                {
+                    aiStatus = string.IsNullOrWhiteSpace(aiSnapshot.Status) ? "Empty" : aiSnapshot.Status;
+                    aiMessage = string.IsNullOrWhiteSpace(aiSnapshot.LastDetail)
+                        ? "AiScore returned 0 tennis score rows for this updater run."
+                        : $"AiScore returned 0 tennis score rows. {aiSnapshot.LastDetail}";
+                }
+            }
+            catch (Exception ex)
+            {
+                _aiScoreSourceHealthTracker.RecordFailure("tennis-score-update", ex.Message);
+                aiStatus = "Failed";
+                aiMessage = $"AiScore tennis scrape failed: {ex.Message}";
+                _logger.LogWarning(ex, "AiScore tennis scrape failed.");
+            }
+
+            try
+            {
+                _sofaScoreSourceHealthTracker.RecordAttempt("tennis-score-update", "Fetching tennis results from SofaScore.");
+                sofaScores = await _webScraperService.ScrapeSofaScoreMatchScoresAsync(fixtureRequests);
+                var sofaSnapshot = _sofaScoreSourceHealthTracker.GetSnapshot();
+                if (sofaScores.Count > 0)
+                {
+                    _sofaScoreSourceHealthTracker.RecordSuccess("tennis-score-update", sofaScores.Count, fixtureRequests.Count, sofaScores.Count, "Fetched tennis results from SofaScore.");
+                    sofaStatus = "Success";
+                    sofaMessage = $"SofaScore returned {sofaScores.Count} targeted tennis score row(s) across {fixtureRequests.Count} fixture request(s).";
+                }
+                else
+                {
+                    sofaStatus = string.IsNullOrWhiteSpace(sofaSnapshot.Status) ? "Empty" : sofaSnapshot.Status;
+                    sofaMessage = string.IsNullOrWhiteSpace(sofaSnapshot.LastDetail)
+                        ? $"SofaScore returned 0 targeted tennis score rows across {fixtureRequests.Count} fixture request(s)."
+                        : $"SofaScore returned 0 targeted tennis score rows across {fixtureRequests.Count} fixture request(s). {sofaSnapshot.LastDetail}";
+                }
+            }
+            catch (Exception ex)
+            {
+                _sofaScoreSourceHealthTracker.RecordFailure("tennis-score-update", ex.Message);
+                sofaStatus = "Failed";
+                sofaMessage = $"SofaScore tennis scrape failed: {ex.Message}";
+                _logger.LogWarning(ex, "SofaScore tennis scrape failed.");
+            }
+
+            await UpsertStoredScoresAsync(flashScores, aiScores, sofaScores);
+
+            var scoreCandidates = BuildScoreCandidates(flashScores, aiScores, sofaScores);
+            var updatedPredictions = 0;
+            foreach (var prediction in currentPredictions)
+            {
+                if (prediction.MatchDateTime.HasValue && prediction.MatchDateTime.Value > nowUtc.Add(FutureFixtureSettlementTolerance))
+                {
+                    continue;
+                }
+
+                var matchedScore = FindBestScore(scoreCandidates, prediction.HomeTeam, prediction.AwayTeam, prediction.League, prediction.MatchDateTime);
+                if (matchedScore is null)
+                {
+                    continue;
+                }
+
+                ApplyScoreToPrediction(prediction, matchedScore);
+                updatedPredictions++;
+            }
+
+            var updatedForecasts = 0;
+            foreach (var forecast in currentForecasts)
+            {
+                if (forecast.MatchDateTime.HasValue && forecast.MatchDateTime.Value > nowUtc.Add(FutureFixtureSettlementTolerance))
+                {
+                    continue;
+                }
+
+                var matchedScore = FindBestScore(scoreCandidates, forecast.HomeTeam, forecast.AwayTeam, forecast.League, forecast.MatchDateTime);
+                if (matchedScore is null)
+                {
+                    continue;
+                }
+
+                ApplyScoreToForecast(forecast, matchedScore);
+                updatedForecasts++;
+            }
+
+            if (updatedPredictions > 0 || updatedForecasts > 0)
+            {
+                await _dbContext.SaveChangesAsync();
+                _logger.LogInformation(
+                    "Updated {PredictionCount} tennis predictions and {ForecastCount} forecasts from score scrapers.",
+                    updatedPredictions,
+                    updatedForecasts);
+            }
+
+            await LogScrapingStatusAsync(
+                "source_flashscore",
+                flashStatus,
+                flashMessage,
+                sourceName: "FlashScore",
+                stage: flashStage,
+                runKind: ScoreUpdateRunKind,
+                runLabel: normalizedRunLabel,
+                payload: new
+                {
+                    rows = flashScores.Count,
+                    liveRows = flashScores.Count(score => score.IsLive)
+                });
+
+            await LogScrapingStatusAsync(
+                "source_aiscore",
+                aiStatus,
+                aiMessage,
+                sourceName: "AiScore",
+                stage: _aiScoreSourceHealthTracker.GetSnapshot().LastStage,
+                runKind: ScoreUpdateRunKind,
+                runLabel: normalizedRunLabel,
+                payload: new
+                {
+                    rows = aiScores.Count,
+                    liveRows = aiScores.Count(score => score.IsLive),
+                    detail = _aiScoreSourceHealthTracker.GetSnapshot().LastDetail
+                });
+
+            await LogScrapingStatusAsync(
+                "source_sofascore",
+                sofaStatus,
+                sofaMessage,
+                sourceName: "SofaScore",
+                stage: _sofaScoreSourceHealthTracker.GetSnapshot().LastStage,
+                runKind: ScoreUpdateRunKind,
+                runLabel: normalizedRunLabel,
+                payload: new
+                {
+                    rows = sofaScores.Count,
+                    liveRows = sofaScores.Count(score => score.IsLive),
+                    fixtureRequests = fixtureRequests.Count,
+                    candidateUrls = _sofaScoreSourceHealthTracker.GetSnapshot().LastCandidateUrlCount,
+                    pagesFetched = _sofaScoreSourceHealthTracker.GetSnapshot().LastPageFetchCount,
+                    detail = _sofaScoreSourceHealthTracker.GetSnapshot().LastDetail
+                });
+
+            await LogScrapingStatusAsync(
+                updateEventName,
+                "Success",
+                $"Tennis {normalizedRunLabel} score update processed {scoreCandidates.Count} source candidate(s) and updated {updatedPredictions} prediction(s) plus {updatedForecasts} forecast row(s).",
+                runKind: ScoreUpdateRunKind,
+                runLabel: normalizedRunLabel,
+                payload: new
+                {
+                    runLabel = normalizedRunLabel,
+                    lookbackDays,
+                    predictions = currentPredictions.Count,
+                    forecasts = currentForecasts.Count,
+                    flashScoreRows = flashScores.Count,
+                    aiScoreRows = aiScores.Count,
+                    sofaScoreRows = sofaScores.Count,
+                    resolvedCandidates = scoreCandidates.Count,
+                    updatedPredictions,
+                    updatedForecasts
+                });
+
+            await PersistSourceRuntimeSnapshotsAsync(normalizedRunLabel);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "FlashScore tennis scrape failed.");
-        }
-
-        try
-        {
-            _aiScoreSourceHealthTracker.RecordAttempt("tennis-score-update", "Fetching tennis results from AiScore.");
-            aiScores = await _webScraperService.ScrapeAiScoreMatchScoresAsync();
-            if (aiScores.Count > 0)
-            {
-                _aiScoreSourceHealthTracker.RecordSuccess("tennis-score-update", aiScores.Count, "Fetched tennis results from AiScore.");
-            }
-            else
-            {
-                _aiScoreSourceHealthTracker.RecordEmpty("tennis-score-update", "AiScore returned no tennis score rows.");
-            }
-        }
-        catch (Exception ex)
-        {
-            _aiScoreSourceHealthTracker.RecordFailure("tennis-score-update", ex.Message);
-            _logger.LogWarning(ex, "AiScore tennis scrape failed.");
-        }
-
-        try
-        {
-            _sofaScoreSourceHealthTracker.RecordAttempt("tennis-score-update", "Fetching tennis results from SofaScore.");
-            sofaScores = await _webScraperService.ScrapeSofaScoreMatchScoresAsync(fixtureRequests);
-            if (sofaScores.Count > 0)
-            {
-                _sofaScoreSourceHealthTracker.RecordSuccess("tennis-score-update", sofaScores.Count, fixtureRequests.Count, sofaScores.Count, "Fetched tennis results from SofaScore.");
-            }
-            else
-            {
-                _sofaScoreSourceHealthTracker.RecordEmpty("tennis-score-update", "SofaScore returned no tennis score rows.", fixtureRequests.Count, 0);
-            }
-        }
-        catch (Exception ex)
-        {
-            _sofaScoreSourceHealthTracker.RecordFailure("tennis-score-update", ex.Message);
-            _logger.LogWarning(ex, "SofaScore tennis scrape failed.");
-        }
-
-        await UpsertStoredScoresAsync(flashScores, aiScores);
-
-        var scoreCandidates = BuildScoreCandidates(flashScores, aiScores, sofaScores);
-        var updatedPredictions = 0;
-        foreach (var prediction in currentPredictions)
-        {
-            if (prediction.MatchDateTime.HasValue && prediction.MatchDateTime.Value > nowUtc.Add(FutureFixtureSettlementTolerance))
-            {
-                continue;
-            }
-
-            var matchedScore = FindBestScore(scoreCandidates, prediction.HomeTeam, prediction.AwayTeam, prediction.League, prediction.MatchDateTime);
-            if (matchedScore is null)
-            {
-                continue;
-            }
-
-            ApplyScoreToPrediction(prediction, matchedScore);
-            updatedPredictions++;
-        }
-
-        var updatedForecasts = 0;
-        foreach (var forecast in currentForecasts)
-        {
-            if (forecast.MatchDateTime.HasValue && forecast.MatchDateTime.Value > nowUtc.Add(FutureFixtureSettlementTolerance))
-            {
-                continue;
-            }
-
-            var matchedScore = FindBestScore(scoreCandidates, forecast.HomeTeam, forecast.AwayTeam, forecast.League, forecast.MatchDateTime);
-            if (matchedScore is null)
-            {
-                continue;
-            }
-
-            ApplyScoreToForecast(forecast, matchedScore);
-            updatedForecasts++;
-        }
-
-        if (updatedPredictions > 0 || updatedForecasts > 0)
-        {
-            await _dbContext.SaveChangesAsync();
-            _logger.LogInformation(
-                "Updated {PredictionCount} tennis predictions and {ForecastCount} forecasts from score scrapers.",
-                updatedPredictions,
-                updatedForecasts);
+            _dbContext.ChangeTracker.Clear();
+            _logger.LogError(ex, "Tennis score updater ({RunLabel}) failed.", normalizedRunLabel);
+            await LogScrapingStatusAsync(
+                updateEventName,
+                "Failed",
+                $"Tennis {normalizedRunLabel} score update failed: {ex.Message}",
+                runKind: ScoreUpdateRunKind,
+                runLabel: normalizedRunLabel,
+                payload: new
+                {
+                    runLabel = normalizedRunLabel,
+                    lookbackDays,
+                    cutoffLocalDate,
+                    error = ex.Message
+                });
+            await PersistSourceRuntimeSnapshotsAsync(normalizedRunLabel);
+            throw;
         }
     }
 
@@ -539,11 +698,13 @@ public class AnalyzerService : IAnalyzerService
             await _calibrationService.RebuildProfilesAsync();
             await _thresholdTuningService.RebuildProfilesAsync();
             await RebuildSourceQualityProfilesAsync();
+            await LogScrapingStatusAsync("source_quality", "Success", "Rebuilt tennis source-quality profiles from persisted scraper score rows.");
             await LogScrapingStatusAsync("daily_analysis", "Success", "Tennis calibration, threshold, and source-quality analysis completed successfully.");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Daily tennis analysis failed.");
+            await LogScrapingStatusAsync("source_quality", "Failed", $"Source-quality rebuild failed: {ex.Message}");
             await LogScrapingStatusAsync("daily_analysis", "Failed", $"Daily tennis analysis failed: {ex.Message}");
             throw;
         }
@@ -577,6 +738,10 @@ public class AnalyzerService : IAnalyzerService
             .ExecuteDeleteAsync();
 
         await _dbContext.MatchScores
+            .Where(score => score.MatchTime < cutoffUtc)
+            .ExecuteDeleteAsync();
+
+        await _dbContext.SofaScoreMatchScores
             .Where(score => score.MatchTime < cutoffUtc)
             .ExecuteDeleteAsync();
 
@@ -758,7 +923,8 @@ public class AnalyzerService : IAnalyzerService
 
     private async Task UpsertStoredScoresAsync(
         IReadOnlyCollection<MatchScore> flashScores,
-        IReadOnlyCollection<AiScoreMatchScore> aiScores)
+        IReadOnlyCollection<AiScoreMatchScore> aiScores,
+        IReadOnlyCollection<SofaScoreMatchScore> sofaScores)
     {
         if (flashScores.Count > 0)
         {
@@ -808,7 +974,31 @@ public class AnalyzerService : IAnalyzerService
             }
         }
 
-        if (flashScores.Count > 0 || aiScores.Count > 0)
+        if (sofaScores.Count > 0)
+        {
+            var existingSofaScores = await _dbContext.SofaScoreMatchScores
+                .Where(score => score.MatchTime >= DateTime.UtcNow.AddDays(-7))
+                .ToListAsync();
+            var sofaLookup = existingSofaScores.ToDictionary(
+                score => BuildScoreStorageKey(score.HomeTeam, score.AwayTeam, score.MatchTime),
+                score => score,
+                StringComparer.Ordinal);
+
+            foreach (var score in sofaScores)
+            {
+                var storageKey = BuildScoreStorageKey(score.HomeTeam, score.AwayTeam, score.MatchTime);
+                if (sofaLookup.TryGetValue(storageKey, out var existing))
+                {
+                    CopySofaScore(existing, score);
+                    continue;
+                }
+
+                await _dbContext.SofaScoreMatchScores.AddAsync(score);
+                sofaLookup[storageKey] = score;
+            }
+        }
+
+        if (flashScores.Count > 0 || aiScores.Count > 0 || sofaScores.Count > 0)
         {
             await _dbContext.SaveChangesAsync();
         }
@@ -825,6 +1015,10 @@ public class AnalyzerService : IAnalyzerService
             .AsNoTracking()
             .Where(score => score.MatchTime >= recentCutoff)
             .ToListAsync();
+        var sofaScores = await _dbContext.SofaScoreMatchScores
+            .AsNoTracking()
+            .Where(score => score.MatchTime >= recentCutoff)
+            .ToListAsync();
 
         await _dbContext.SourceQualityProfiles.ExecuteDeleteAsync();
 
@@ -832,7 +1026,7 @@ public class AnalyzerService : IAnalyzerService
         {
             BuildSourceQualityProfile("FlashScore", flashScores.Select(score => new SourceQualitySeed(score.League, score.MatchTime, score.IsLive, score.NormalizedScoreline))),
             BuildSourceQualityProfile("AiScore", aiScores.Select(score => new SourceQualitySeed(score.League, score.MatchTime, score.IsLive, score.NormalizedScoreline))),
-            BuildTrackerQualityProfile("SofaScore", _sofaScoreSourceHealthTracker.GetSnapshot())
+            BuildSourceQualityProfile("SofaScore", sofaScores.Select(score => new SourceQualitySeed(score.League, score.MatchTime, score.IsLive, score.NormalizedScoreline)))
         };
 
         profiles = profiles.Where(profile => profile.SampleCount > 0).ToList();
@@ -843,16 +1037,105 @@ public class AnalyzerService : IAnalyzerService
         }
     }
 
-    private async Task LogScrapingStatusAsync(string eventName, string status, string message)
+    private async Task LogScrapingStatusAsync(
+        string eventName,
+        string status,
+        string message,
+        string? sourceName = null,
+        string? stage = null,
+        string? runKind = null,
+        string? runLabel = null,
+        Guid? predictionRunId = null,
+        object? payload = null)
     {
         await _dbContext.ScrapingLogs.AddAsync(new ScrapingLog
         {
             EventName = eventName,
+            SourceName = sourceName,
+            Stage = stage,
+            RunKind = runKind,
+            RunLabel = runLabel,
+            PredictionRunId = predictionRunId,
             Status = status,
             Message = message,
+            PayloadJson = payload is null ? null : JsonSerializer.Serialize(payload),
             Timestamp = DateTime.UtcNow
         });
         await _dbContext.SaveChangesAsync();
+    }
+
+    private async Task PersistSourceRuntimeSnapshotsAsync(string runLabel)
+    {
+        var aiSnapshot = _aiScoreSourceHealthTracker.GetSnapshot();
+        await LogScrapingStatusAsync(
+            AiScoreRuntimeEventName,
+            aiSnapshot.Status,
+            BuildAiScoreRuntimeMessage(aiSnapshot),
+            sourceName: "AiScore",
+            stage: aiSnapshot.LastStage,
+            runKind: ScoreUpdateRunKind,
+            runLabel: runLabel,
+            payload: aiSnapshot);
+
+        var sofaSnapshot = _sofaScoreSourceHealthTracker.GetSnapshot();
+        await LogScrapingStatusAsync(
+            SofaScoreRuntimeEventName,
+            sofaSnapshot.Status,
+            BuildSofaScoreRuntimeMessage(sofaSnapshot),
+            sourceName: "SofaScore",
+            stage: sofaSnapshot.LastStage,
+            runKind: ScoreUpdateRunKind,
+            runLabel: runLabel,
+            payload: sofaSnapshot);
+    }
+
+    private static string BuildScoreUpdateEventName(string runLabel)
+    {
+        return string.Equals(runLabel, "backfill", StringComparison.OrdinalIgnoreCase)
+            ? ScoreUpdateBackfillEventName
+            : ScoreUpdateRecentEventName;
+    }
+
+    private static string BuildAiScoreRuntimeMessage(AiScoreSourceHealthSnapshot snapshot)
+    {
+        return snapshot.Status switch
+        {
+            "Healthy" => $"AiScore healthy: {snapshot.LastMatchCount} tennis row(s) returned at stage '{snapshot.LastStage}'.",
+            "Empty" => $"AiScore returned no tennis rows at stage '{snapshot.LastStage}'.",
+            "Blocked" or "HttpBlocked" => $"AiScore is blocked at stage '{snapshot.LastStage}': {snapshot.LastDetail}",
+            "Failed" => $"AiScore failed at stage '{snapshot.LastStage}': {snapshot.LastDetail}",
+            _ => snapshot.LastDetail ?? "AiScore runtime snapshot recorded."
+        };
+    }
+
+    private static string BuildSofaScoreRuntimeMessage(SofaScoreSourceHealthSnapshot snapshot)
+    {
+        return snapshot.Status switch
+        {
+            "Healthy" => $"SofaScore healthy: {snapshot.LastMatchCount} row(s), {snapshot.LastCandidateUrlCount} candidate URL(s), {snapshot.LastPageFetchCount} page fetch(es).",
+            "Empty" => $"SofaScore returned no targeted rows at stage '{snapshot.LastStage}'.",
+            "Blocked" => $"SofaScore was blocked at stage '{snapshot.LastStage}': {snapshot.LastDetail}",
+            "Failed" => $"SofaScore failed at stage '{snapshot.LastStage}': {snapshot.LastDetail}",
+            _ => snapshot.LastDetail ?? "SofaScore runtime snapshot recorded."
+        };
+    }
+
+    private async Task TryMarkPredictionRunFailedAsync(PredictionRun run, DateTime completedAtUtc)
+    {
+        try
+        {
+            _dbContext.ChangeTracker.Clear();
+            run.Succeeded = false;
+            run.CompletedAtUtc = completedAtUtc;
+            _dbContext.PredictionRuns.Attach(run);
+            _dbContext.Entry(run).Property(predictionRun => predictionRun.Succeeded).IsModified = true;
+            _dbContext.Entry(run).Property(predictionRun => predictionRun.CompletedAtUtc).IsModified = true;
+            await _dbContext.SaveChangesAsync();
+        }
+        catch (Exception statusEx)
+        {
+            _logger.LogWarning(statusEx, "Failed to persist the failed state for prediction run {PredictionRunId}.", run.Id);
+        }
     }
 
     private static string ResolveTargetDateString(string? targetDate)
@@ -936,9 +1219,40 @@ public class AnalyzerService : IAnalyzerService
         return $"{fixtureKey}|{category}|{predictedOutcome}";
     }
 
-    private static string BuildForecastRevisionKey(string fixtureKey, PredictionMarket market, string predictedOutcome)
+    private static string BuildForecastRevisionKey(string fixtureKey, PredictionMarket market)
     {
-        return $"{fixtureKey}|{market}|{predictedOutcome}";
+        return $"{fixtureKey}|{market}";
+    }
+
+    private static List<PredictionCandidate> DeduplicateForecastCandidates(IEnumerable<PredictionCandidate> candidates)
+    {
+        return candidates
+            .Select(candidate =>
+            {
+                var fixtureIdentity = FixtureIdentityFactory.Build(
+                    candidate.HomeTeam,
+                    candidate.AwayTeam,
+                    candidate.League,
+                    candidate.MatchLocalDate,
+                    candidate.MatchLocalTime,
+                    candidate.MatchDateTime);
+
+                candidate.FixtureKey = fixtureIdentity.FixtureKey;
+                return new
+                {
+                    Candidate = candidate,
+                    ForecastKey = BuildForecastRevisionKey(fixtureIdentity.FixtureKey, candidate.Market)
+                };
+            })
+            .GroupBy(item => item.ForecastKey, StringComparer.Ordinal)
+            .Select(group => group
+                .OrderByDescending(item => item.Candidate.MatchDateTime ?? DateTime.MinValue)
+                .ThenByDescending(item => item.Candidate.MatchLocalTime.HasValue)
+                .ThenByDescending(item => item.Candidate.CalibratedProbability)
+                .ThenByDescending(item => item.Candidate.RawProbability)
+                .Select(item => item.Candidate)
+                .First())
+            .ToList();
     }
 
     private static string BuildSnapshotKey(int predictionId, string sourceName, PredictionOddsSnapshotKind snapshotKind)
@@ -1054,6 +1368,7 @@ public class AnalyzerService : IAnalyzerService
     {
         ResolvedTennisScore? best = null;
         var bestScore = 0d;
+        var bestPriority = int.MinValue;
 
         foreach (var candidate in candidates)
         {
@@ -1090,10 +1405,13 @@ public class AnalyzerService : IAnalyzerService
                         : 0d;
             }
 
-            if (score > bestScore)
+            var sourcePriority = GetScoreSourcePriority(candidate.SourceName);
+            if (score > bestScore ||
+                (Math.Abs(score - bestScore) < 0.0001d && sourcePriority > bestPriority))
             {
                 bestScore = score;
                 best = candidate;
+                bestPriority = sourcePriority;
             }
         }
 
@@ -1289,45 +1607,54 @@ public class AnalyzerService : IAnalyzerService
         target.IsLive = source.IsLive;
     }
 
+    private static void CopySofaScore(SofaScoreMatchScore target, SofaScoreMatchScore source)
+    {
+        target.League = source.League;
+        target.Score = source.Score;
+        target.NormalizedScoreline = source.NormalizedScoreline;
+        target.HomeSetsWon = source.HomeSetsWon;
+        target.AwaySetsWon = source.AwaySetsWon;
+        target.DisplayedScore = source.DisplayedScore;
+        target.RegularTimeScore = source.RegularTimeScore;
+        target.HalfTimeScore = source.HalfTimeScore;
+        target.ExtraTimeScore = source.ExtraTimeScore;
+        target.StatusText = source.StatusText;
+        target.EventUrl = source.EventUrl;
+        target.MatchTime = source.MatchTime;
+        target.IsLive = source.IsLive;
+    }
+
+    private static int GetScoreSourcePriority(string sourceName)
+    {
+        return sourceName switch
+        {
+            "SofaScore" => 3,
+            "AiScore" => 2,
+            "FlashScore" => 1,
+            _ => 0
+        };
+    }
+
     private static SourceQualityProfile BuildSourceQualityProfile(string sourceName, IEnumerable<SourceQualitySeed> seeds)
     {
         var seedList = seeds.ToList();
         var sampleCount = seedList.Count;
         var finishedCount = seedList.Count(seed => seed.IsLive == false);
-        var exactCount = seedList.Count(seed => string.IsNullOrWhiteSpace(seed.NormalizedScoreline) == false);
+        var exactCount = seedList.Count(seed => seed.IsLive == false && string.IsNullOrWhiteSpace(seed.NormalizedScoreline) == false);
         var liveCount = seedList.Count(seed => seed.IsLive);
         return new SourceQualityProfile
         {
             SourceName = sourceName,
             LeagueKey = "all",
             LeagueLabel = "All Tournaments",
-            TimeBucketKey = "recent",
-            TimeBucketLabel = "Recent",
+            TimeBucketKey = "all",
+            TimeBucketLabel = "All Windows",
             SampleCount = sampleCount,
             FinishedCoverageCount = finishedCount,
             ExactScoreMatchCount = exactCount,
             LiveOnlyCount = liveCount,
             AverageKickoffOffsetMinutes = 0,
             ReliabilityScore = sampleCount > 0 ? finishedCount / (double)sampleCount : 0,
-            LastUpdated = DateTime.UtcNow
-        };
-    }
-
-    private static SourceQualityProfile BuildTrackerQualityProfile(string sourceName, SofaScoreSourceHealthSnapshot snapshot)
-    {
-        return new SourceQualityProfile
-        {
-            SourceName = sourceName,
-            LeagueKey = "all",
-            LeagueLabel = "All Tournaments",
-            TimeBucketKey = "recent",
-            TimeBucketLabel = "Recent",
-            SampleCount = snapshot.LastMatchCount,
-            FinishedCoverageCount = snapshot.LastMatchCount,
-            ExactScoreMatchCount = snapshot.LastMatchCount,
-            LiveOnlyCount = 0,
-            AverageKickoffOffsetMinutes = 0,
-            ReliabilityScore = snapshot.LastMatchCount > 0 ? 1 : 0,
             LastUpdated = DateTime.UtcNow
         };
     }
