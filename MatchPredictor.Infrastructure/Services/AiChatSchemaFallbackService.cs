@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -29,15 +30,13 @@ public class AiChatSchemaFallbackService : IAiChatSchemaFallbackService
         AiChatNormalizedRequest deterministicRequest,
         CancellationToken ct = default)
     {
-        var apiKey = _configuration["GroqApiKey"];
-        if (string.IsNullOrWhiteSpace(apiKey) ||
-            apiKey.Contains("stored in user-secrets", StringComparison.OrdinalIgnoreCase) ||
-            apiKey.Contains("set via environment variable", StringComparison.OrdinalIgnoreCase))
+        var apiKey = AiConfigurationHelper.GetGroqApiKey(_configuration);
+        if (AiConfigurationHelper.IsMissingOrPlaceholder(apiKey))
         {
             return null;
         }
 
-        var model = _configuration["GroqModel"] ?? "llama-3.3-70b-versatile";
+        var model = AiConfigurationHelper.GetGroqModel(_configuration);
         using var client = _httpClientFactory.CreateClient(nameof(AiChatSchemaFallbackService));
         client.Timeout = TimeSpan.FromSeconds(20);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);

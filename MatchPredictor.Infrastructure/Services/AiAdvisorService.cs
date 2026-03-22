@@ -270,8 +270,8 @@ public class AiAdvisorService : IAiAdvisorService
             return rolloverResponse;
         }
 
-        var apiKey = _configuration["GroqApiKey"];
-        if (string.IsNullOrEmpty(apiKey) || apiKey.Contains("stored in user-secrets") || apiKey.Contains("set via environment variable"))
+        var apiKey = AiConfigurationHelper.GetGroqApiKey(_configuration);
+        if (AiConfigurationHelper.IsMissingOrPlaceholder(apiKey))
         {
             var fallbackActions = BuildDeterministicFallbackActions(selection);
             var missingKey = new AiChatResponse
@@ -289,10 +289,11 @@ public class AiAdvisorService : IAiAdvisorService
             return missingKey;
         }
 
+        var resolvedApiKey = apiKey!;
         var systemPrompt = BuildChatSystemPrompt();
         var userPayload = BuildChatPayload(normalizedPrompt, selection, normalizedRequest);
         var rawResponse = await CallGroqAsync(
-            apiKey,
+            resolvedApiKey,
             systemPrompt,
             userPayload,
             sessionState.History,
@@ -318,13 +319,14 @@ public class AiAdvisorService : IAiAdvisorService
 
     public async Task<string> AnalyzeValueBetsAsync(string payload, CancellationToken ct = default)
     {
-        var apiKey = _configuration["GroqApiKey"];
-        if (string.IsNullOrEmpty(apiKey) || apiKey.Contains("stored in user-secrets") || apiKey.Contains("set via environment variable"))
+        var apiKey = AiConfigurationHelper.GetGroqApiKey(_configuration);
+        if (AiConfigurationHelper.IsMissingOrPlaceholder(apiKey))
             throw new InvalidOperationException("Groq API key is not configured or is using a placeholder dummy value.");
 
+        var resolvedApiKey = apiKey!;
         var systemPrompt = BuildValueBetsSystemPrompt();
 
-        return await CallGroqAsync(apiKey, systemPrompt, payload, null, ct, jsonMode: true);
+        return await CallGroqAsync(resolvedApiKey, systemPrompt, payload, null, ct, jsonMode: true);
     }
 
     private async Task<List<Prediction>> LoadPublishedPredictionsForChatAsync(CancellationToken ct)
@@ -1976,7 +1978,7 @@ public class AiAdvisorService : IAiAdvisorService
         double temperature = 0.5,
         int maxTokens = 4096)
     {
-        var model = _configuration["GroqModel"] ?? "llama-3.3-70b-versatile";
+        var model = AiConfigurationHelper.GetGroqModel(_configuration);
         _logger.LogInformation("Calling Groq model: {Model}", model);
 
         try
