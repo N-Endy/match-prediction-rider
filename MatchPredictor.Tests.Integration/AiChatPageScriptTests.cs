@@ -75,6 +75,8 @@ public class AiChatPageScriptTests
         Assert.Contains("buildWorkingSlipSummary", script);
         Assert.Contains("response.suggestedPrompts", script);
         Assert.Contains("sendSuggestedPrompt", script);
+        Assert.Contains("Book All", script);
+        Assert.Contains("addManyToCart", script);
     }
 
     [Fact]

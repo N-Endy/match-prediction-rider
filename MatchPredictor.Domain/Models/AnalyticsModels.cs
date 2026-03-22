@@ -14,6 +14,12 @@ public class AnalyticsStats
     public List<PromotionTimelineItem> PromotionTimeline { get; set; } = [];
 }
 
+public class PublishedPicksAnalyticsViewModel
+{
+    public AnalyticsStats BacktestStats { get; set; } = new();
+    public AnalyticsStats CurrentRevisionStats { get; set; } = new();
+}
+
 public class AnalyticsLiveConfigSnapshot
 {
     public DateTime GeneratedAtLocal { get; set; }

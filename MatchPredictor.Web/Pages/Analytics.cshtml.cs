@@ -20,6 +20,10 @@ public class AnalyticsModel : PageModel
     public AnalyticsStats YesterdayStats { get; set; } = new();
     public AnalyticsStats Last3DaysStats { get; set; } = new();
     public AnalyticsStats Last7DaysStats { get; set; } = new();
+    public PublishedPicksAnalyticsViewModel TodayPublishedView { get; private set; } = new();
+    public PublishedPicksAnalyticsViewModel YesterdayPublishedView { get; private set; } = new();
+    public PublishedPicksAnalyticsViewModel Last3DaysPublishedView { get; private set; } = new();
+    public PublishedPicksAnalyticsViewModel Last7DaysPublishedView { get; private set; } = new();
     public AnalyticsLiveConfigSnapshot CurrentLiveConfig { get; set; } = new();
 
     public AnalyticsModel(
@@ -79,27 +83,59 @@ public class AnalyticsModel : PageModel
             .OrderByDescending(history => history.EffectiveAt)
             .ToListAsync();
 
-        TodayStats = _forecastEvaluationService.CalculateStats(
-            last7Predictions.Where(prediction => dateSetToday.Contains(prediction.MatchLocalDate)),
-            last7Forecasts.Where(forecast => dateSetToday.Contains(forecast.MatchLocalDate)));
+        var todayPredictions = last7Predictions
+            .Where(prediction => dateSetToday.Contains(prediction.MatchLocalDate))
+            .ToList();
+        var todayForecasts = last7Forecasts
+            .Where(forecast => dateSetToday.Contains(forecast.MatchLocalDate))
+            .ToList();
+        TodayStats = _forecastEvaluationService.CalculateStats(todayPredictions, todayForecasts);
         EnrichForecastStats(TodayStats, thresholdProfiles, betaProfiles);
         TodayStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetToday);
+        TodayPublishedView = new PublishedPicksAnalyticsViewModel
+        {
+            BacktestStats = TodayStats,
+            CurrentRevisionStats = _forecastEvaluationService.CalculateCurrentRevisionStats(todayPredictions)
+        };
 
-        YesterdayStats = _forecastEvaluationService.CalculateStats(
-            last7Predictions.Where(prediction => dateSetYesterday.Contains(prediction.MatchLocalDate)),
-            last7Forecasts.Where(forecast => dateSetYesterday.Contains(forecast.MatchLocalDate)));
+        var yesterdayPredictions = last7Predictions
+            .Where(prediction => dateSetYesterday.Contains(prediction.MatchLocalDate))
+            .ToList();
+        var yesterdayForecasts = last7Forecasts
+            .Where(forecast => dateSetYesterday.Contains(forecast.MatchLocalDate))
+            .ToList();
+        YesterdayStats = _forecastEvaluationService.CalculateStats(yesterdayPredictions, yesterdayForecasts);
         EnrichForecastStats(YesterdayStats, thresholdProfiles, betaProfiles);
         YesterdayStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetYesterday);
+        YesterdayPublishedView = new PublishedPicksAnalyticsViewModel
+        {
+            BacktestStats = YesterdayStats,
+            CurrentRevisionStats = _forecastEvaluationService.CalculateCurrentRevisionStats(yesterdayPredictions)
+        };
 
-        Last3DaysStats = _forecastEvaluationService.CalculateStats(
-            last7Predictions.Where(prediction => dateSetLast3.Contains(prediction.MatchLocalDate)),
-            last7Forecasts.Where(forecast => dateSetLast3.Contains(forecast.MatchLocalDate)));
+        var last3Predictions = last7Predictions
+            .Where(prediction => dateSetLast3.Contains(prediction.MatchLocalDate))
+            .ToList();
+        var last3Forecasts = last7Forecasts
+            .Where(forecast => dateSetLast3.Contains(forecast.MatchLocalDate))
+            .ToList();
+        Last3DaysStats = _forecastEvaluationService.CalculateStats(last3Predictions, last3Forecasts);
         EnrichForecastStats(Last3DaysStats, thresholdProfiles, betaProfiles);
         Last3DaysStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetLast3);
+        Last3DaysPublishedView = new PublishedPicksAnalyticsViewModel
+        {
+            BacktestStats = Last3DaysStats,
+            CurrentRevisionStats = _forecastEvaluationService.CalculateCurrentRevisionStats(last3Predictions)
+        };
 
         Last7DaysStats = _forecastEvaluationService.CalculateStats(last7Predictions, last7Forecasts);
         EnrichForecastStats(Last7DaysStats, thresholdProfiles, betaProfiles);
         Last7DaysStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetLast7);
+        Last7DaysPublishedView = new PublishedPicksAnalyticsViewModel
+        {
+            BacktestStats = Last7DaysStats,
+            CurrentRevisionStats = _forecastEvaluationService.CalculateCurrentRevisionStats(last7Predictions)
+        };
 
         CurrentLiveConfig = BuildLiveConfigSnapshot(
             thresholdProfiles,

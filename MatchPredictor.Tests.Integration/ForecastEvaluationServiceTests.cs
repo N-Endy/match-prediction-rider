@@ -286,6 +286,64 @@ public class ForecastEvaluationServiceTests
         Assert.Equal(0.0, categoryStats.Accuracy, 5);
     }
 
+    [Fact]
+    public void CalculateCurrentRevisionStats_UsesLatestVisibleRevisionInsteadOfPointInTimeBacktestSnapshot()
+    {
+        var service = new ForecastEvaluationService();
+        var kickoff = DateTime.UtcNow.AddHours(-8);
+        var localDate = DateOnly.FromDateTime(kickoff);
+
+        var predictions = new[]
+        {
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|fixture|one",
+                League = "League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                PredictionCategory = "OverUnderSets",
+                PredictedOutcome = "Under 2.5 Sets",
+                ActualScore = "2:1",
+                ActualOutcome = "Over 2.5 Sets",
+                IsLive = false,
+                IsCurrentRevision = false,
+                RevisionNumber = 1,
+                ConfidenceScore = 0.61m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|fixture|one",
+                League = "League",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                PredictionCategory = "OverUnderSets",
+                PredictedOutcome = "Over 2.5 Sets",
+                ActualScore = "2:1",
+                ActualOutcome = "Over 2.5 Sets",
+                IsLive = false,
+                IsCurrentRevision = true,
+                RevisionNumber = 2,
+                ConfidenceScore = 0.67m,
+                CreatedAt = kickoff.AddHours(1)
+            }
+        };
+
+        var backtestStats = service.CalculateStats(predictions, Array.Empty<ForecastObservation>());
+        var currentRevisionStats = service.CalculateCurrentRevisionStats(predictions);
+
+        Assert.Equal(1, backtestStats.CompletedPredictions);
+        Assert.Equal(0, backtestStats.CorrectPredictions);
+        Assert.Equal(1, currentRevisionStats.CompletedPredictions);
+        Assert.Equal(1, currentRevisionStats.CorrectPredictions);
+    }
+
     private static ForecastObservation CreateForecast(
         double rawProbability,
         double calibratedProbability,

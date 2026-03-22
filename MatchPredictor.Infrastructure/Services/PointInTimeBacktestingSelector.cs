@@ -49,6 +49,38 @@ internal static class PointInTimeBacktestingSelector
             prediction => prediction.RevisionNumber);
     }
 
+    public static IReadOnlyList<Prediction> SelectCurrentPredictions(IEnumerable<Prediction> predictions)
+    {
+        return predictions
+            .GroupBy(prediction => (
+                FixtureKey: BuildFixtureKey(
+                    prediction.FixtureKey,
+                    prediction.MatchLocalDate,
+                    prediction.League,
+                    prediction.HomeTeam,
+                    prediction.AwayTeam),
+                Market: prediction.PredictionCategory))
+            .Select(group =>
+            {
+                var current = group
+                    .Where(prediction => prediction.IsCurrentRevision)
+                    .OrderByDescending(prediction => prediction.CreatedAt)
+                    .ThenByDescending(prediction => prediction.RevisionNumber)
+                    .FirstOrDefault();
+
+                if (current is not null)
+                {
+                    return current;
+                }
+
+                return group
+                    .OrderByDescending(prediction => prediction.CreatedAt)
+                    .ThenByDescending(prediction => prediction.RevisionNumber)
+                    .First();
+            })
+            .ToList();
+    }
+
     private static IReadOnlyList<T> SelectSnapshots<T, TMarket>(
         IEnumerable<T> items,
         Func<T, string> fixtureKeySelector,

@@ -648,7 +648,12 @@ else
                 if (addAllButton) {
                     const payload = JSON.parse(addAllButton.getAttribute('data-ai-add-all'));
                     if (Array.isArray(payload)) {
-                        payload.forEach(item => window.addToCart?.(item));
+                        if (typeof addManyToCart === 'function') {
+                            addManyToCart(payload, { openCart: true, source: 'ai_chat' });
+                        } else {
+                            payload.forEach(item => window.addToCart?.(item));
+                            window.openCartModal?.();
+                        }
                     }
                 }
             });
@@ -784,8 +789,9 @@ else
                 container.className = 'ai-chat-actions';
 
                 const addAllPayload = JSON.stringify(response.actions.map(toCartPayload)).replaceAll("'", '&#39;');
-                const addAllButton = response.showBookAll
-                    ? `<button type="button" class="ai-chat-button secondary" data-ai-add-all='${addAllPayload}'>Add all to betslip</button>`
+                const shouldShowBookAll = response.actions.length > 1 || response.showBookAll;
+                const addAllButton = shouldShowBookAll
+                    ? `<button type="button" class="ai-chat-button secondary" data-ai-add-all='${addAllPayload}'>Book All</button>`
                     : '';
 
                 container.innerHTML = `

@@ -31,6 +31,48 @@ function addToCart(match) {
     showToast('Added to betslip');
 }
 
+function addManyToCart(matches, options) {
+    const items = Array.isArray(matches) ? matches.filter(Boolean) : [];
+    if (items.length === 0) {
+        showToast('No picks to add');
+        return 0;
+    }
+
+    const settings = options || {};
+    const cart = getCart();
+    let addedCount = 0;
+
+    items.forEach(match => {
+        const exists = cart.some(existing => getCartIdentity(existing) === getCartIdentity(match));
+        if (exists) {
+            return;
+        }
+
+        cart.push(match);
+        addedCount++;
+    });
+
+    if (addedCount > 0) {
+        saveCart(cart);
+        window.matchPredictorTracking?.track('add_many_to_cart', {
+            count: String(addedCount),
+            source: settings.source || ''
+        });
+    }
+
+    if (settings.openCart) {
+        openCartModal();
+    }
+
+    if (addedCount === 0) {
+        showToast('All picks are already in the betslip');
+        return 0;
+    }
+
+    showToast(addedCount === 1 ? '1 pick added to betslip' : `${addedCount} picks added to betslip`);
+    return addedCount;
+}
+
 function removeFromCart(index) {
     const cart = getCart();
     cart.splice(index, 1);

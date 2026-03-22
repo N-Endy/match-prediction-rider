@@ -16,7 +16,45 @@ public class ForecastEvaluationService : IForecastEvaluationService
 
     public AnalyticsStats CalculateStats(IEnumerable<Prediction> predictions, IEnumerable<ForecastObservation> forecasts)
     {
-        var predictionList = PointInTimeBacktestingSelector.SelectPredictions(predictions)
+        var stats = BuildPredictionStats(PointInTimeBacktestingSelector.SelectPredictions(predictions));
+
+        var settledForecasts = PointInTimeBacktestingSelector.SelectForecasts(forecasts)
+            .Where(IsActiveAnalyticsForecast)
+            .Where(forecast => forecast.IsSettled && forecast.OutcomeOccurred.HasValue)
+            .ToList();
+
+        stats.SettledForecasts = settledForecasts.Count;
+
+        if (settledForecasts.Count > 0)
+        {
+            stats.RawBrierScore = settledForecasts
+                .Average(forecast => SquaredError(forecast.RawProbability, forecast.OutcomeOccurred!.Value));
+            stats.BrierScore = settledForecasts
+                .Average(forecast => SquaredError(forecast.CalibratedProbability, forecast.OutcomeOccurred!.Value));
+
+            stats.ForecastMarketStats = settledForecasts
+                .GroupBy(forecast => forecast.Market)
+                .OrderBy(group => group.Key)
+                .Select(BuildMarketStat)
+                .ToList();
+        }
+
+        return stats;
+    }
+
+    public AnalyticsStats CalculateCurrentRevisionStats(IEnumerable<Prediction> predictions)
+    {
+        return BuildPredictionStats(PointInTimeBacktestingSelector.SelectCurrentPredictions(predictions));
+    }
+
+    private static bool IsActiveAnalyticsPrediction(Prediction prediction)
+    {
+        return prediction.PredictionCategory is "MatchWinner" or "OverUnderSets" or "SetHandicap";
+    }
+
+    private static AnalyticsStats BuildPredictionStats(IEnumerable<Prediction> predictions)
+    {
+        var predictionList = predictions
             .Where(IsActiveAnalyticsPrediction)
             .ToList();
         var completedPredictions = predictionList
@@ -56,33 +94,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
             };
         }
 
-        var settledForecasts = PointInTimeBacktestingSelector.SelectForecasts(forecasts)
-            .Where(IsActiveAnalyticsForecast)
-            .Where(forecast => forecast.IsSettled && forecast.OutcomeOccurred.HasValue)
-            .ToList();
-
-        stats.SettledForecasts = settledForecasts.Count;
-
-        if (settledForecasts.Count > 0)
-        {
-            stats.RawBrierScore = settledForecasts
-                .Average(forecast => SquaredError(forecast.RawProbability, forecast.OutcomeOccurred!.Value));
-            stats.BrierScore = settledForecasts
-                .Average(forecast => SquaredError(forecast.CalibratedProbability, forecast.OutcomeOccurred!.Value));
-
-            stats.ForecastMarketStats = settledForecasts
-                .GroupBy(forecast => forecast.Market)
-                .OrderBy(group => group.Key)
-                .Select(BuildMarketStat)
-                .ToList();
-        }
-
         return stats;
-    }
-
-    private static bool IsActiveAnalyticsPrediction(Prediction prediction)
-    {
-        return prediction.PredictionCategory is "MatchWinner" or "OverUnderSets" or "SetHandicap";
     }
 
     private static bool IsActiveAnalyticsForecast(ForecastObservation forecast)

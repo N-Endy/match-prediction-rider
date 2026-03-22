@@ -143,8 +143,61 @@ public class CartJsTests
             "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/wwwroot/js/cart.js");
 
         Assert.Contains("matchPredictorTracking?.track('add_to_cart'", script);
+        Assert.Contains("matchPredictorTracking?.track('add_many_to_cart'", script);
         Assert.Contains("matchPredictorTracking?.track('clear_cart'", script);
         Assert.Contains("matchPredictorTracking?.track('open_betslip'", script);
         Assert.Contains("matchPredictorTracking?.track('copy_booking_code'", script);
+    }
+
+    [Fact]
+    public void AddManyToCart_AddsUniqueItemsAndCanOpenCart()
+    {
+        var script = File.ReadAllText(
+            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/wwwroot/js/cart.js");
+
+        var engine = new Engine();
+        engine.Execute("""
+            var __storage = {};
+            var __opened = 0;
+            var window = { matchPredictorTracking: { track: function() {} } };
+            var localStorage = {
+                getItem: function(key) { return Object.prototype.hasOwnProperty.call(__storage, key) ? __storage[key] : null; },
+                setItem: function(key, value) { __storage[key] = String(value); },
+                removeItem: function(key) { delete __storage[key]; }
+            };
+            var document = {
+                body: { appendChild: function() {} },
+                getElementById: function() { return null; },
+                createElement: function() {
+                    return {
+                        id: '',
+                        className: '',
+                        textContent: '',
+                        style: {},
+                        classList: { add: function() {}, remove: function() {} },
+                        appendChild: function() {}
+                    };
+                },
+                addEventListener: function() {}
+            };
+            var setTimeout = function(fn) { return 0; };
+            var openCartModal = function() { __opened += 1; };
+            """);
+        engine.Execute(script);
+
+        engine.Execute("""
+            addManyToCart([
+                { homeTeam: 'Ben Shelton', awayTeam: 'Alexander Shevchenko', league: 'ATP Miami Open - R2', market: 'MatchWinner', prediction: 'Home Win', predictionId: 1 },
+                { homeTeam: 'Ben Shelton', awayTeam: 'Alexander Shevchenko', league: 'ATP Miami Open - R2', market: 'MatchWinner', prediction: 'Home Win', predictionId: 1 },
+                { homeTeam: 'Jie Cui', awayTeam: 'Yuki Mochizuki', league: 'ATP Challenger Yokkaichi - Qualifiers', market: 'OverUnderSets', prediction: 'Under 2.5 Sets', predictionId: 2 }
+            ], { openCart: true, source: 'ai_chat' });
+            """);
+
+        var cartJson = engine.Evaluate("JSON.stringify(getCart())").AsString();
+        using var document = JsonDocument.Parse(cartJson);
+        var items = document.RootElement.EnumerateArray().ToList();
+
+        Assert.Equal(2, items.Count);
+        Assert.Equal(1, engine.Evaluate("__opened").AsNumber());
     }
 }

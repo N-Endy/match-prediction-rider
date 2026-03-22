@@ -5,4 +5,5 @@ namespace MatchPredictor.Domain.Interfaces;
 public interface IForecastEvaluationService
 {
     AnalyticsStats CalculateStats(IEnumerable<Prediction> predictions, IEnumerable<ForecastObservation> forecasts);
+    AnalyticsStats CalculateCurrentRevisionStats(IEnumerable<Prediction> predictions);
 }

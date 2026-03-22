@@ -497,7 +497,18 @@ public class AnalyzerService : IAnalyzerService
 
             await UpsertStoredScoresAsync(flashScores, aiScores, sofaScores);
 
-            var scoreCandidates = BuildScoreCandidates(flashScores, aiScores, sofaScores);
+            var storedScoreWindowStartUtc = nowUtc.AddDays(-Math.Max(lookbackDays + 2, 3));
+            var storedFlashScores = await _dbContext.MatchScores
+                .Where(score => score.MatchTime >= storedScoreWindowStartUtc)
+                .ToListAsync();
+            var storedAiScores = await _dbContext.AiScoreMatchScores
+                .Where(score => score.MatchTime >= storedScoreWindowStartUtc)
+                .ToListAsync();
+            var storedSofaScores = await _dbContext.SofaScoreMatchScores
+                .Where(score => score.MatchTime >= storedScoreWindowStartUtc)
+                .ToListAsync();
+
+            var scoreCandidates = BuildScoreCandidates(storedFlashScores, storedAiScores, storedSofaScores);
             var updatedPredictions = 0;
             foreach (var prediction in currentPredictions)
             {
@@ -605,6 +616,9 @@ public class AnalyzerService : IAnalyzerService
                     flashScoreRows = flashScores.Count,
                     aiScoreRows = aiScores.Count,
                     sofaScoreRows = sofaScores.Count,
+                    storedFlashScoreRows = storedFlashScores.Count,
+                    storedAiScoreRows = storedAiScores.Count,
+                    storedSofaScoreRows = storedSofaScores.Count,
                     resolvedCandidates = scoreCandidates.Count,
                     updatedPredictions,
                     updatedForecasts

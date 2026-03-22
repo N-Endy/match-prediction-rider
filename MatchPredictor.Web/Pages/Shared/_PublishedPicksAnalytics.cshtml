@@ -1,42 +1,117 @@
-@model MatchPredictor.Domain.Models.AnalyticsStats
+@model MatchPredictor.Domain.Models.PublishedPicksAnalyticsViewModel
 
 @{
-    var accClass = Model.OverallAccuracy >= 0.70 ? "acc-high" :
-                   Model.OverallAccuracy >= 0.50 ? "acc-med" : "acc-low";
+    var backtest = Model.BacktestStats;
+    var current = Model.CurrentRevisionStats;
+
+    var backtestAccClass = backtest.OverallAccuracy >= 0.70 ? "acc-high" :
+                           backtest.OverallAccuracy >= 0.50 ? "acc-med" : "acc-low";
+    var currentAccClass = current.OverallAccuracy >= 0.70 ? "acc-high" :
+                          current.OverallAccuracy >= 0.50 ? "acc-med" : "acc-low";
+
+    static string FormatCategoryName(string category) => category switch
+    {
+        "MatchWinner" => "Match Winner",
+        "OverUnderSets" => "Over / Under Sets",
+        "SetHandicap" => "Set Handicap",
+        _ => category
+    };
+
+    var comparisonCategories = backtest.CategoryStats.Keys
+        .Union(current.CategoryStats.Keys)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(category => category)
+        .ToList();
 }
 
 <div class="mp-stat-grid">
     <div class="mp-stat-card">
         <div class="mp-stat-label">Published Picks</div>
-        <div class="mp-stat-value mp-stat-figure">@Model.TotalPredictions</div>
+        <div class="mp-stat-value mp-stat-figure">@backtest.TotalPredictions</div>
     </div>
     <div class="mp-stat-card">
         <div class="mp-stat-label">Settled Picks</div>
-        <div class="mp-stat-value mp-stat-figure">@Model.CompletedPredictions</div>
+        <div class="mp-stat-value mp-stat-figure">@backtest.CompletedPredictions</div>
     </div>
     <div class="mp-stat-card">
         <div class="mp-stat-label">Correct Picks</div>
-        <div class="mp-stat-value mp-stat-figure">@Model.CorrectPredictions</div>
+        <div class="mp-stat-value mp-stat-figure">@backtest.CorrectPredictions</div>
     </div>
     <div class="mp-stat-card">
         <div class="mp-stat-label">Win Rate</div>
-        <div class="mp-stat-value mp-stat-figure @accClass">
-            @(Model.CompletedPredictions > 0 ? (Model.OverallAccuracy * 100).ToString("F1") + "%" : "0.0%")
+        <div class="mp-stat-value mp-stat-figure @backtestAccClass">
+            @(backtest.CompletedPredictions > 0 ? (backtest.OverallAccuracy * 100).ToString("F1") + "%" : "0.0%")
         </div>
     </div>
 </div>
 
 <div class="mp-analytics-note">
-    This section is about published picks only: how many went out, how many settled, and how often the pick itself was right.
-    Analytics uses the last pre-kickoff published revision for each fixture and market, so later in-play refreshes do not change the backtest.
+    <strong>Published backtest:</strong> this measures the last pre-kickoff published revision for each fixture and market.
+    It stays honest even if a pick gets refreshed later during live trading or after settlement data comes in.
 </div>
 
-@if (Model.CategoryStats.Any())
+@if (current.TotalPredictions > 0)
+{
+    <div class="mp-comparison-shell">
+        <div class="mp-comparison-header">
+            <h3>Current Visible Revisions</h3>
+            <p>This snapshot mirrors the latest revision currently shown on the prediction pages, so it can differ from the historical backtest above.</p>
+        </div>
+
+        <div class="mp-stat-grid">
+            <div class="mp-stat-card">
+                <div class="mp-stat-label">Current Picks</div>
+                <div class="mp-stat-value mp-stat-figure">@current.TotalPredictions</div>
+            </div>
+            <div class="mp-stat-card">
+                <div class="mp-stat-label">Settled Picks</div>
+                <div class="mp-stat-value mp-stat-figure">@current.CompletedPredictions</div>
+            </div>
+            <div class="mp-stat-card">
+                <div class="mp-stat-label">Correct Picks</div>
+                <div class="mp-stat-value mp-stat-figure">@current.CorrectPredictions</div>
+            </div>
+            <div class="mp-stat-card">
+                <div class="mp-stat-label">Win Rate</div>
+                <div class="mp-stat-value mp-stat-figure @currentAccClass">
+                    @(current.CompletedPredictions > 0 ? (current.OverallAccuracy * 100).ToString("F1") + "%" : "0.0%")
+                </div>
+            </div>
+        </div>
+
+        @if (comparisonCategories.Count > 0)
+        {
+            <div class="mp-comparison-grid">
+                @foreach (var category in comparisonCategories)
+                {
+                    backtest.CategoryStats.TryGetValue(category, out var backtestCategory);
+                    current.CategoryStats.TryGetValue(category, out var currentCategory);
+
+                    <div class="mp-comparison-card">
+                        <div class="mp-comparison-card-title">@FormatCategoryName(category)</div>
+                        <div class="mp-comparison-metrics">
+                            <div class="mp-comparison-metric">
+                                <span class="mp-comparison-label">Backtest</span>
+                                <strong>@((backtestCategory?.Correct ?? 0)) / @((backtestCategory?.Total ?? 0))</strong>
+                            </div>
+                            <div class="mp-comparison-metric">
+                                <span class="mp-comparison-label">Current</span>
+                                <strong>@((currentCategory?.Correct ?? 0)) / @((currentCategory?.Total ?? 0))</strong>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+@if (backtest.CategoryStats.Any())
 {
     <div class="mp-category-stats">
-        <h3 style="margin-bottom: 1.5rem; font-size: 1.1rem; color: white;">Published Picks by Concept</h3>
+        <h3 style="margin-bottom: 1.5rem; font-size: 1.1rem; color: white;">Published Backtest by Concept</h3>
 
-        @foreach (var cat in Model.CategoryStats.Values.OrderByDescending(c => c.Total))
+        @foreach (var cat in backtest.CategoryStats.Values.OrderByDescending(c => c.Total))
         {
             var catAccClass = cat.Accuracy >= 0.70 ? "acc-high" :
                               cat.Accuracy >= 0.50 ? "acc-med" : "acc-low";
@@ -44,7 +119,7 @@
 
             <div class="mp-category-row">
                 <div class="mp-cat-header">
-                    <span class="mp-cat-name">@cat.Category</span>
+                    <span class="mp-cat-name">@FormatCategoryName(cat.Category)</span>
                     <span class="mp-cat-details @catAccClass">
                         <span class="mp-cat-metric"><strong>@fillWidth</strong></span>
                         <span class="mp-cat-metric">(@cat.Correct / @cat.Total)</span>
