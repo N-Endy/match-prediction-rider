@@ -22,6 +22,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<MarketCalibrationProfile> MarketCalibrationProfiles => Set<MarketCalibrationProfile>();
     public DbSet<BetaCalibrationProfile> BetaCalibrationProfiles => Set<BetaCalibrationProfile>();
     public DbSet<ThresholdProfile> ThresholdProfiles => Set<ThresholdProfile>();
+    public DbSet<MetaModelProfile> MetaModelProfiles => Set<MetaModelProfile>();
     public DbSet<PromotionHistory> PromotionHistories => Set<PromotionHistory>();
     public DbSet<SourceQualityProfile> SourceQualityProfiles => Set<SourceQualityProfile>();
     public DbSet<PredictionOddsSnapshot> PredictionOddsSnapshots => Set<PredictionOddsSnapshot>();
@@ -120,6 +121,11 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
         });
 
         modelBuilder.Entity<ThresholdProfile>(entity =>
+        {
+            entity.HasIndex(e => e.Market).IsUnique();
+        });
+
+        modelBuilder.Entity<MetaModelProfile>(entity =>
         {
             entity.HasIndex(e => e.Market).IsUnique();
         });

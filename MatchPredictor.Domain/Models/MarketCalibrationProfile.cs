@@ -8,6 +8,8 @@ public class MarketCalibrationProfile
     public double BucketEnd { get; set; }
     public int ObservationCount { get; set; }
     public int SuccessCount { get; set; }
+    public double ObservationWeight { get; set; }
+    public double SuccessWeight { get; set; }
     public double CalibratedProbability { get; set; }
     public DateTime LastUpdated { get; set; }
 }

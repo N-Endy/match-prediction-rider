@@ -53,6 +53,7 @@ builder.Services.AddScoped<IWebScraperService, WebScraperService>();
 builder.Services.AddScoped<IExtractFromExcel, ExtractFromExcel>();
 builder.Services.AddScoped<IProbabilityCalculator, ProbabilityCalculator>();
 builder.Services.AddScoped<ICalibrationService, CalibrationService>();
+builder.Services.AddScoped<IProbabilityCorrectionService, ProbabilityCorrectionService>();
 builder.Services.AddScoped<IThresholdTuningService, ThresholdTuningService>();
 builder.Services.AddScoped<IForecastEvaluationService, ForecastEvaluationService>();
 builder.Services.AddScoped<IAnalyzerService, AnalyzerService>();

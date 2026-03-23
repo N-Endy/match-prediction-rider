@@ -57,6 +57,7 @@ public class ValueBetsService : IValueBetsService
         {
             GeneratedAtLocal = now
         };
+        report.PerformanceSummary = await BuildPerformanceSummaryAsync(ct);
 
         var upcomingMatches = await _dbContext.MatchDatas
             .AsNoTracking()
@@ -223,6 +224,8 @@ public class ValueBetsService : IValueBetsService
         {
             candidate.AiJustification = BuildFallbackJustification(candidate);
         }
+
+        await PopulateSettledOutcomeSignalsAsync(topCandidates, ct);
 
         var candidatesForAi = topCandidates.Take(MaxAiExplanationCount).ToList();
         if (candidatesForAi.Count > 0)
@@ -489,6 +492,193 @@ public class ValueBetsService : IValueBetsService
         return justifications;
     }
 
+    private async Task<ValueBetPerformanceSummary> BuildPerformanceSummaryAsync(CancellationToken ct)
+    {
+        var summary = new ValueBetPerformanceSummary();
+        var cutoff = DateTime.UtcNow.AddDays(-60);
+
+        var settled = await _dbContext.Predictions
+            .AsNoTracking()
+            .Where(prediction => prediction.WasPublished)
+            .Where(prediction => prediction.IsCurrentRevision)
+            .Where(prediction => prediction.MatchDateTime.HasValue && prediction.MatchDateTime.Value >= cutoff)
+            .Where(prediction => !prediction.IsLive)
+            .Where(prediction => prediction.ActualScore != null || prediction.ActualOutcome != null)
+            .ToListAsync(ct);
+
+        if (settled.Count == 0)
+        {
+            return summary;
+        }
+
+        var predictionIds = settled.Select(prediction => prediction.Id).ToList();
+        var snapshots = await _dbContext.PredictionOddsSnapshots
+            .AsNoTracking()
+            .Where(snapshot => predictionIds.Contains(snapshot.PredictionId))
+            .Where(snapshot => snapshot.SnapshotKind == PredictionOddsSnapshotKind.Publish || snapshot.SnapshotKind == PredictionOddsSnapshotKind.Close)
+            .ToListAsync(ct);
+
+        var returns = settled
+            .Select(prediction =>
+            {
+                var won = IsPredictionWin(prediction);
+                var odds = ResolvePublishOdds(prediction.Id, snapshots, prediction);
+                return won ? odds - 1.0 : -1.0;
+            })
+            .ToList();
+
+        summary.SettledBetCount = returns.Count;
+        summary.WinningBetCount = settled.Count(IsPredictionWin);
+        summary.WinRate = summary.SettledBetCount > 0 ? summary.WinningBetCount / (double)summary.SettledBetCount : 0.0;
+        summary.TotalStakedUnits = summary.SettledBetCount;
+        summary.NetProfitUnits = returns.Sum();
+        summary.RoiPercent = summary.TotalStakedUnits > 0 ? summary.NetProfitUnits / summary.TotalStakedUnits : 0.0;
+        summary.YieldPercent = summary.RoiPercent;
+        summary.MaxDrawdownUnits = CalculateMaxDrawdown(returns);
+
+        var clvSeries = snapshots
+            .GroupBy(snapshot => snapshot.PredictionId)
+            .Select(group =>
+            {
+                var publish = group.FirstOrDefault(item => item.SnapshotKind == PredictionOddsSnapshotKind.Publish);
+                var close = group.FirstOrDefault(item => item.SnapshotKind == PredictionOddsSnapshotKind.Close);
+                return BetPricingMath.CalculateClosingLineValuePercent(publish?.DecimalOdds, close?.DecimalOdds);
+            })
+            .Where(value => value.HasValue)
+            .Select(value => value!.Value)
+            .ToList();
+
+        summary.ClosingLineSamples = clvSeries.Count;
+        summary.AverageClosingLineValuePercent = clvSeries.Count > 0 ? clvSeries.Average() : 0.0;
+        return summary;
+    }
+
+    private async Task PopulateSettledOutcomeSignalsAsync(IReadOnlyCollection<ValueBetCandidate> candidates, CancellationToken ct)
+    {
+        var predictionIds = candidates
+            .Where(candidate => candidate.PredictionId.HasValue)
+            .Select(candidate => candidate.PredictionId!.Value)
+            .Distinct()
+            .ToList();
+        if (predictionIds.Count == 0)
+        {
+            return;
+        }
+
+        var predictions = await _dbContext.Predictions
+            .AsNoTracking()
+            .Where(prediction => predictionIds.Contains(prediction.Id))
+            .ToDictionaryAsync(prediction => prediction.Id, ct);
+        var snapshots = await _dbContext.PredictionOddsSnapshots
+            .AsNoTracking()
+            .Where(snapshot => predictionIds.Contains(snapshot.PredictionId))
+            .Where(snapshot => snapshot.SnapshotKind == PredictionOddsSnapshotKind.Publish || snapshot.SnapshotKind == PredictionOddsSnapshotKind.Close)
+            .ToListAsync(ct);
+
+        foreach (var candidate in candidates)
+        {
+            if (!candidate.PredictionId.HasValue || !predictions.TryGetValue(candidate.PredictionId.Value, out var prediction))
+            {
+                continue;
+            }
+
+            if (!prediction.IsLive && (prediction.ActualScore != null || prediction.ActualOutcome != null))
+            {
+                var won = IsPredictionWin(prediction);
+                candidate.IsSettledWin = won;
+                candidate.RealizedReturnPercent = won ? candidate.DecimalOdds - 1.0 : -1.0;
+            }
+
+            var publish = snapshots.FirstOrDefault(item =>
+                item.PredictionId == prediction.Id &&
+                item.SnapshotKind == PredictionOddsSnapshotKind.Publish);
+            var close = snapshots.FirstOrDefault(item =>
+                item.PredictionId == prediction.Id &&
+                item.SnapshotKind == PredictionOddsSnapshotKind.Close);
+            candidate.ClosingLineValuePercent = BetPricingMath.CalculateClosingLineValuePercent(publish?.DecimalOdds, close?.DecimalOdds);
+        }
+    }
+
+    private static double ResolvePublishOdds(int predictionId, IReadOnlyCollection<PredictionOddsSnapshot> snapshots, Prediction prediction)
+    {
+        var publish = snapshots.FirstOrDefault(item =>
+            item.PredictionId == predictionId &&
+            item.SnapshotKind == PredictionOddsSnapshotKind.Publish);
+        if (publish is { DecimalOdds: > 1.0 })
+        {
+            return publish.DecimalOdds;
+        }
+
+        var implied = prediction.ConfidenceScore.HasValue
+            ? BetPricingMath.ConvertProbabilityToDecimalOdds((double)prediction.ConfidenceScore.Value)
+            : null;
+        return implied is > 1.0 ? implied.Value : 2.0;
+    }
+
+    private static bool IsPredictionWin(Prediction prediction)
+    {
+        var actual = ResolveActualOutcome(prediction);
+        return !string.IsNullOrWhiteSpace(actual) &&
+               string.Equals(prediction.PredictedOutcome?.Trim(), actual.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? ResolveActualOutcome(Prediction prediction)
+    {
+        if (!string.IsNullOrWhiteSpace(prediction.ActualOutcome) &&
+            !string.Equals(prediction.ActualOutcome, "Unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            return prediction.ActualOutcome;
+        }
+
+        if (!TryParseScore(prediction.ActualScore, out var homeGoals, out var awayGoals))
+        {
+            return null;
+        }
+
+        return prediction.PredictionCategory switch
+        {
+            "BothTeamsScore" => homeGoals > 0 && awayGoals > 0 ? "BTTS" : "No BTTS",
+            "Over2.5Goals" => homeGoals + awayGoals > 2 ? "Over 2.5" : "Under 2.5",
+            "Under2.5Goals" => homeGoals + awayGoals > 2 ? "Over 2.5" : "Under 2.5",
+            "StraightWin" => homeGoals > awayGoals ? "Home Win" : awayGoals > homeGoals ? "Away Win" : "Draw",
+            "Draw" => homeGoals == awayGoals ? "Draw" : "Not Draw",
+            _ => null
+        };
+    }
+
+    private static bool TryParseScore(string? score, out int homeGoals, out int awayGoals)
+    {
+        homeGoals = 0;
+        awayGoals = 0;
+        if (string.IsNullOrWhiteSpace(score))
+        {
+            return false;
+        }
+
+        var normalized = score.Replace("–", "-").Replace("—", "-").Trim();
+        var parts = normalized.Contains(':')
+            ? normalized.Split(':', StringSplitOptions.TrimEntries)
+            : normalized.Split('-', StringSplitOptions.TrimEntries);
+        return parts.Length == 2 &&
+               int.TryParse(parts[0], out homeGoals) &&
+               int.TryParse(parts[1], out awayGoals);
+    }
+
+    private static double CalculateMaxDrawdown(IEnumerable<double> returns)
+    {
+        var equity = 0.0;
+        var peak = 0.0;
+        var maxDrawdown = 0.0;
+        foreach (var value in returns)
+        {
+            equity += value;
+            peak = Math.Max(peak, equity);
+            maxDrawdown = Math.Max(maxDrawdown, peak - equity);
+        }
+
+        return maxDrawdown;
+    }
+
     private sealed class ValueBetCandidate
     {
         public string CandidateKey { get; init; } = string.Empty;
@@ -514,6 +704,9 @@ public class ValueBetsService : IValueBetsService
         public string OddsDerivationSource { get; init; } = MarketQuoteResolver.StoredDerivedOddsDerivationLabel;
         public string EdgeSource { get; init; } = string.Empty;
         public string AiJustification { get; set; } = string.Empty;
+        public bool? IsSettledWin { get; set; }
+        public double? RealizedReturnPercent { get; set; }
+        public double? ClosingLineValuePercent { get; set; }
 
         public ValueBetDto ToDto()
         {
@@ -540,7 +733,10 @@ public class ValueBetsService : IValueBetsService
                 OddsFreshness = OddsFreshness,
                 OddsDerivationSource = OddsDerivationSource,
                 EdgeSource = EdgeSource,
-                AiJustification = AiJustification
+                AiJustification = AiJustification,
+                IsSettledWin = IsSettledWin,
+                RealizedReturnPercent = RealizedReturnPercent,
+                ClosingLineValuePercent = ClosingLineValuePercent
             };
         }
     }

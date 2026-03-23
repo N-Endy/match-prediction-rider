@@ -2,6 +2,7 @@ using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 
 namespace MatchPredictor.Infrastructure.Services;
 
@@ -10,17 +11,20 @@ public class DataAnalyzerService : IDataAnalyzerService
     private readonly IProbabilityCalculator _probabilityCalculator;
     private readonly ICalibrationService _calibrationService;
     private readonly IThresholdTuningService _thresholdTuningService;
+    private readonly IProbabilityCorrectionService _probabilityCorrectionService;
     private readonly PredictionSettings _settings;
 
     public DataAnalyzerService(
         IProbabilityCalculator probabilityCalculator,
         ICalibrationService calibrationService,
         IThresholdTuningService thresholdTuningService,
+        IProbabilityCorrectionService probabilityCorrectionService,
         IOptions<PredictionSettings> options)
     {
         _probabilityCalculator = probabilityCalculator;
         _calibrationService = calibrationService;
         _thresholdTuningService = thresholdTuningService;
+        _probabilityCorrectionService = probabilityCorrectionService;
         _settings = options.Value;
     }
 
@@ -147,8 +151,9 @@ public class DataAnalyzerService : IDataAnalyzerService
         if (!HasRequiredTeams(match) || rawProbability <= 0)
             return null;
 
-        var calibration = _calibrationService.CalibrateWithDecision(market, rawProbability);
-        return CreateCandidate(match, market, predictedOutcome, rawProbability, calibration.Probability, calibration.CalibratorUsed);
+        var correctedProbability = _probabilityCorrectionService.ApplyCorrection(market, rawProbability);
+        var calibration = _calibrationService.CalibrateWithDecision(market, correctedProbability);
+        return CreateCandidate(match, market, predictedOutcome, correctedProbability, calibration.Probability, calibration.CalibratorUsed);
     }
 
     private static PredictionCandidate CreateCandidate(
@@ -198,7 +203,8 @@ public class DataAnalyzerService : IDataAnalyzerService
             PredictedOutcome = predictedOutcome,
             RawProbability = Math.Clamp(rawProbability, 0.0, 1.0),
             CalibratedProbability = Math.Clamp(calibratedProbability, 0.0, 1.0),
-            CalibratorUsed = calibratorUsed
+            CalibratorUsed = calibratorUsed,
+            FeatureContributionsJson = "{}"
         };
     }
 
@@ -248,8 +254,47 @@ public class DataAnalyzerService : IDataAnalyzerService
                 probabilities.AwayWin)
         };
 
-        return candidates
+        var realizedCandidates = candidates
             .Where(candidate => candidate != null)
-            .Cast<PredictionCandidate>();
+            .Cast<PredictionCandidate>()
+            .ToList();
+
+        foreach (var candidate in realizedCandidates)
+        {
+            candidate.FeatureContributionsJson = BuildFeatureContributionSummary(match, probabilities, candidate.Market);
+        }
+
+        return realizedCandidates;
+    }
+
+    private static string BuildFeatureContributionSummary(MatchData match, MatchProbabilities probabilities, PredictionMarket market)
+    {
+        var oneX2Available = match.TryGetNormalizedOneX2(out var oneX2);
+        var over25Available = match.TryGetNormalizedOver25Pair(out var over25Pair);
+        var bttsAvailable = match.TryGetNormalizedBttsPair(out var bttsPair);
+
+        var summary = new Dictionary<string, object?>
+        {
+            ["market"] = market.ToString(),
+            ["sourceSignals"] = new Dictionary<string, double?>
+            {
+                ["homeWin"] = oneX2Available ? oneX2.home : null,
+                ["draw"] = oneX2Available ? oneX2.draw : null,
+                ["awayWin"] = oneX2Available ? oneX2.away : null,
+                ["over25"] = over25Available ? over25Pair.over25 : null,
+                ["bttsYes"] = bttsAvailable ? bttsPair.yes : null
+            },
+            ["modelOutputs"] = new Dictionary<string, double>
+            {
+                ["btts"] = probabilities.Btts,
+                ["over25"] = probabilities.Over25,
+                ["under25"] = probabilities.Under25,
+                ["homeWin"] = probabilities.HomeWin,
+                ["awayWin"] = probabilities.AwayWin,
+                ["draw"] = probabilities.Draw
+            }
+        };
+
+        return JsonSerializer.Serialize(summary);
     }
 }

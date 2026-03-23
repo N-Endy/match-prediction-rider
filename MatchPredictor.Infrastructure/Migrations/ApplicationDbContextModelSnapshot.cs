@@ -145,6 +145,10 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("FeatureContributionsJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<string>("FixtureKey")
                         .IsRequired()
                         .HasColumnType("text");
@@ -262,8 +266,14 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<int>("ObservationCount")
                         .HasColumnType("integer");
 
+                    b.Property<double>("ObservationWeight")
+                        .HasColumnType("double precision");
+
                     b.Property<int>("SuccessCount")
                         .HasColumnType("integer");
+
+                    b.Property<double>("SuccessWeight")
+                        .HasColumnType("double precision");
 
                     b.HasKey("Id");
 
@@ -271,6 +281,52 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("MarketCalibrationProfiles");
+                });
+
+            modelBuilder.Entity("MatchPredictor.Domain.Models.MetaModelProfile", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<double>("BaselineBrierScore")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("CandidateBrierScore")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("Improvement")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("Intercept")
+                        .HasColumnType("double precision");
+
+                    b.Property<bool>("IsPromoted")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("LastUpdated")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Market")
+                        .HasColumnType("integer");
+
+                    b.Property<double>("Slope")
+                        .HasColumnType("double precision");
+
+                    b.Property<int>("TrainingSampleCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("ValidationSampleCount")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Market")
+                        .IsUnique();
+
+                    b.ToTable("MetaModelProfiles");
                 });
 
             modelBuilder.Entity("MatchPredictor.Domain.Models.MatchData", b =>

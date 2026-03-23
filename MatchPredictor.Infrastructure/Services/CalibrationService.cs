@@ -9,6 +9,8 @@ public class CalibrationService : ICalibrationService
 {
     private const double BucketSize = 0.05;
     private const int MinimumBetaSampleCount = 40;
+    private const int RebuildWindowDays = 120;
+    private const double RecencyHalfLifeDays = 30.0;
     private static readonly PredictionMarket[] ActiveCalibrationMarkets =
     [
         PredictionMarket.BothTeamsScore,
@@ -71,7 +73,8 @@ public class CalibrationService : ICalibrationService
             .AsNoTracking()
             .Where(p =>
                 p.IsSettled &&
-                p.OutcomeOccurred != null)
+                p.OutcomeOccurred != null &&
+                (p.SettledAt ?? p.CreatedAt) >= DateTime.UtcNow.AddDays(-RebuildWindowDays))
             .ToListAsync();
         var pointInTimeForecasts = PointInTimeBacktestingSelector.SelectForecasts(settledForecasts)
             .Where(forecast => ActiveCalibrationMarkets.Contains(forecast.Market))
@@ -87,8 +90,10 @@ public class CalibrationService : ICalibrationService
             {
                 var observationCount = group.Count();
                 var successCount = group.Count(item => item.OutcomeOccurred == true);
-                var empiricalBucketProbability = (successCount + 1.0) / (observationCount + 2.0);
-                var weight = Math.Min(observationCount / 20.0, 1.0);
+                var weightedSuccesses = group.Sum(item => item.OutcomeOccurred == true ? CalculateRecencyWeight(item.SettledAt ?? item.CreatedAt) : 0.0);
+                var weightedObservations = group.Sum(item => CalculateRecencyWeight(item.SettledAt ?? item.CreatedAt));
+                var empiricalBucketProbability = (weightedSuccesses + 1.0) / (weightedObservations + 2.0);
+                var weight = Math.Min(weightedObservations / 20.0, 1.0);
                 var averageRawProbability = group.Average(item => item.RawProbability);
 
                 return new MarketCalibrationProfile
@@ -98,6 +103,8 @@ public class CalibrationService : ICalibrationService
                     BucketEnd = Math.Min(group.Key.BucketStart + BucketSize, 1.0),
                     ObservationCount = observationCount,
                     SuccessCount = successCount,
+                    ObservationWeight = weightedObservations,
+                    SuccessWeight = weightedSuccesses,
                     CalibratedProbability = Math.Clamp(
                         averageRawProbability + (weight * (empiricalBucketProbability - averageRawProbability)),
                         0.0,
@@ -216,12 +223,16 @@ public class CalibrationService : ICalibrationService
         }
 
         var training = forecasts.Take(splitIndex)
-            .Select(forecast => (forecast.RawProbability, Outcome: forecast.OutcomeOccurred == true))
+            .Select(forecast => (
+                forecast.RawProbability,
+                Outcome: forecast.OutcomeOccurred == true,
+                Weight: CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt)))
             .ToList();
         var validation = forecasts.Skip(splitIndex)
             .Select(forecast => (
                 RawProbability: forecast.RawProbability,
-                Outcome: forecast.OutcomeOccurred == true))
+                Outcome: forecast.OutcomeOccurred == true,
+                Weight: CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt)))
             .ToList();
 
         if (training.Count < 20 || validation.Count < 15)
@@ -233,14 +244,17 @@ public class CalibrationService : ICalibrationService
         var bestValidationParameters = FitBetaCalibration(training);
         var baselineBrier = validation.Average(item => SquaredError(
             CalibrateWithBucket(item.RawProbability, trainingBucketProfiles),
-            item.Outcome));
+            item.Outcome) * item.Weight) / validation.Sum(item => item.Weight);
         var betaBrier = validation.Average(item => SquaredError(
             ApplyBetaCalibration(item.RawProbability, bestValidationParameters.alpha, bestValidationParameters.beta, bestValidationParameters.gamma),
-            item.Outcome));
+            item.Outcome) * item.Weight) / validation.Sum(item => item.Weight);
         var improvement = baselineBrier - betaBrier;
         var shouldPromote = improvement > 0.0025 && betaBrier < baselineBrier;
         var deployedParameters = FitBetaCalibration(forecasts
-            .Select(forecast => (forecast.RawProbability, Outcome: forecast.OutcomeOccurred == true))
+            .Select(forecast => (
+                forecast.RawProbability,
+                Outcome: forecast.OutcomeOccurred == true,
+                Weight: CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt)))
             .ToList());
 
         return new BetaCalibrationProfile
@@ -260,15 +274,15 @@ public class CalibrationService : ICalibrationService
     }
 
     private static IReadOnlyDictionary<double, BucketCalibrationStats> BuildTrainingBucketProfiles(
-        IReadOnlyCollection<(double RawProbability, bool Outcome)> training)
+        IReadOnlyCollection<(double RawProbability, bool Outcome, double Weight)> training)
     {
         return training
             .GroupBy(item => GetBucketStart(item.RawProbability))
             .ToDictionary(
                 group => group.Key,
                 group => new BucketCalibrationStats(
-                    group.Count(),
-                    group.Count(item => item.Outcome)));
+                    group.Sum(item => item.Weight),
+                    group.Sum(item => item.Outcome ? item.Weight : 0.0)));
     }
 
     private static double CalibrateWithBucket(
@@ -277,13 +291,13 @@ public class CalibrationService : ICalibrationService
     {
         var bucketStart = GetBucketStart(rawProbability);
         var profile = profiles.FirstOrDefault(p => p.BucketStart == bucketStart);
-        if (profile == null || profile.ObservationCount <= 0)
+        if (profile == null || profile.ObservationWeight <= 0)
         {
             return rawProbability;
         }
 
-        var empiricalBucketProbability = (profile.SuccessCount + 1.0) / (profile.ObservationCount + 2.0);
-        var weight = Math.Min(profile.ObservationCount / 20.0, 1.0);
+        var empiricalBucketProbability = (profile.SuccessWeight + 1.0) / (profile.ObservationWeight + 2.0);
+        var weight = Math.Min(profile.ObservationWeight / 20.0, 1.0);
         return Math.Clamp(rawProbability + (weight * (empiricalBucketProbability - rawProbability)), 0.0, 1.0);
     }
 
@@ -292,17 +306,17 @@ public class CalibrationService : ICalibrationService
         IReadOnlyDictionary<double, BucketCalibrationStats> profiles)
     {
         var bucketStart = GetBucketStart(rawProbability);
-        if (!profiles.TryGetValue(bucketStart, out var profile) || profile.ObservationCount <= 0)
+        if (!profiles.TryGetValue(bucketStart, out var profile) || profile.ObservationWeight <= 0)
         {
             return rawProbability;
         }
 
-        var empiricalBucketProbability = (profile.SuccessCount + 1.0) / (profile.ObservationCount + 2.0);
-        var weight = Math.Min(profile.ObservationCount / 20.0, 1.0);
+        var empiricalBucketProbability = (profile.SuccessWeight + 1.0) / (profile.ObservationWeight + 2.0);
+        var weight = Math.Min(profile.ObservationWeight / 20.0, 1.0);
         return Math.Clamp(rawProbability + (weight * (empiricalBucketProbability - rawProbability)), 0.0, 1.0);
     }
 
-    private static (double alpha, double beta, double gamma) FitBetaCalibration(IReadOnlyList<(double RawProbability, bool Outcome)> training)
+    private static (double alpha, double beta, double gamma) FitBetaCalibration(IReadOnlyList<(double RawProbability, bool Outcome, double Weight)> training)
     {
         var best = (alpha: 1.0, beta: 1.0, gamma: 0.0);
         var bestScore = ScoreBetaParameters(training, best.alpha, best.beta, best.gamma);
@@ -342,9 +356,12 @@ public class CalibrationService : ICalibrationService
         return best;
     }
 
-    private static double ScoreBetaParameters(IReadOnlyList<(double RawProbability, bool Outcome)> observations, double alpha, double beta, double gamma)
+    private static double ScoreBetaParameters(IReadOnlyList<(double RawProbability, bool Outcome, double Weight)> observations, double alpha, double beta, double gamma)
     {
-        return observations.Average(item => SquaredError(ApplyBetaCalibration(item.RawProbability, alpha, beta, gamma), item.Outcome));
+        var weightedError = observations.Sum(item =>
+            SquaredError(ApplyBetaCalibration(item.RawProbability, alpha, beta, gamma), item.Outcome) * item.Weight);
+        var totalWeight = observations.Sum(item => item.Weight);
+        return totalWeight <= 0 ? 0.0 : weightedError / totalWeight;
     }
 
     private static double ApplyBetaCalibration(double rawProbability, double alpha, double beta, double gamma)
@@ -365,5 +382,11 @@ public class CalibrationService : ICalibrationService
         return Math.Floor(clamped / BucketSize) * BucketSize;
     }
 
-    private sealed record BucketCalibrationStats(int ObservationCount, int SuccessCount);
+    private static double CalculateRecencyWeight(DateTime timestampUtc)
+    {
+        var ageDays = Math.Max((DateTime.UtcNow - timestampUtc).TotalDays, 0.0);
+        return Math.Pow(0.5, ageDays / RecencyHalfLifeDays);
+    }
+
+    private sealed record BucketCalibrationStats(double ObservationWeight, double SuccessWeight);
 }

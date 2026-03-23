@@ -9,6 +9,7 @@ namespace MatchPredictor.Infrastructure.Services;
 public class ThresholdTuningService : IThresholdTuningService
 {
     private const int EvaluationWindowDays = 60;
+    private const double RecencyHalfLifeDays = 21.0;
     private const int MinimumTrainingSampleCount = 25;
     private const int MinimumValidationSampleCount = 15;
     private const int MinimumPublishedSampleCount = 20;
@@ -218,12 +219,18 @@ public class ThresholdTuningService : IThresholdTuningService
             return null;
         }
 
+        var weightedCount = published.Sum(forecast => CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt));
+        var weightedHits = published.Sum(forecast => (forecast.OutcomeOccurred == true ? 1.0 : 0.0) * CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt));
+        var weightedProbability = published.Sum(forecast => forecast.CalibratedProbability * CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt));
+        var weightedBrier = published.Sum(forecast =>
+            Math.Pow(forecast.CalibratedProbability - (forecast.OutcomeOccurred == true ? 1.0 : 0.0), 2) *
+            CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt));
+
         var totalWeeks = Math.Max(totalWindowDays / 7.0, 1.0);
-        var hitRate = published.Average(forecast => forecast.OutcomeOccurred == true ? 1.0 : 0.0);
-        var averageProbability = published.Average(forecast => forecast.CalibratedProbability);
-        var brierScore = published.Average(forecast =>
-            Math.Pow(forecast.CalibratedProbability - (forecast.OutcomeOccurred == true ? 1.0 : 0.0), 2));
-        var publishedPerWeek = published.Count / totalWeeks;
+        var hitRate = weightedCount > 0 ? weightedHits / weightedCount : 0.0;
+        var averageProbability = weightedCount > 0 ? weightedProbability / weightedCount : 0.0;
+        var brierScore = weightedCount > 0 ? weightedBrier / weightedCount : 0.0;
+        var publishedPerWeek = weightedCount / totalWeeks;
         var calibrationGap = Math.Abs(averageProbability - hitRate);
         var objectiveScore = hitRate - (brierScore * 0.25) - (calibrationGap * 0.10);
 
@@ -231,6 +238,7 @@ public class ThresholdTuningService : IThresholdTuningService
         {
             Threshold = threshold,
             SampleCount = published.Count,
+            WeightedSampleCount = weightedCount,
             HitRate = hitRate,
             PublishedPerWeek = publishedPerWeek,
             AverageCalibratedProbability = averageProbability,
@@ -337,11 +345,18 @@ public class ThresholdTuningService : IThresholdTuningService
     {
         public double Threshold { get; init; }
         public int SampleCount { get; init; }
+        public double WeightedSampleCount { get; init; }
         public double HitRate { get; init; }
         public double PublishedPerWeek { get; init; }
         public double AverageCalibratedProbability { get; init; }
         public double ObservedFrequency { get; init; }
         public double BrierScore { get; init; }
         public double ObjectiveScore { get; init; }
+    }
+
+    private static double CalculateRecencyWeight(DateTime timestampUtc)
+    {
+        var ageDays = Math.Max((DateTime.UtcNow - timestampUtc).TotalDays, 0.0);
+        return Math.Pow(0.5, ageDays / RecencyHalfLifeDays);
     }
 }

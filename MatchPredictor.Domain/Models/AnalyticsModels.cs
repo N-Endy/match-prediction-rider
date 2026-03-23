@@ -9,8 +9,15 @@ public class AnalyticsStats
     public int SettledForecasts { get; set; }
     public double RawBrierScore { get; set; }
     public double BrierScore { get; set; }
+    public double LogLoss { get; set; }
+    public double Precision { get; set; }
+    public double Recall { get; set; }
+    public double F1Score { get; set; }
     public Dictionary<string, CategoryStat> CategoryStats { get; set; } = new();
     public List<ForecastMarketStat> ForecastMarketStats { get; set; } = [];
+    public List<ConfidenceBandStat> ConfidenceBandStats { get; set; } = [];
+    public List<LeagueSegmentStat> LeagueSegmentStats { get; set; } = [];
+    public List<SourceSegmentStat> SourceSegmentStats { get; set; } = [];
     public List<PromotionTimelineItem> PromotionTimeline { get; set; } = [];
 }
 
@@ -28,6 +35,10 @@ public class CategoryStat
     public int Correct { get; set; }
     public double Accuracy { get; set; }
     public double BrierScore { get; set; }
+    public double LogLoss { get; set; }
+    public double Precision { get; set; }
+    public double Recall { get; set; }
+    public double F1Score { get; set; }
 }
 
 public class ForecastMarketStat
@@ -35,6 +46,11 @@ public class ForecastMarketStat
     public PredictionMarket Market { get; set; }
     public string MarketName { get; set; } = string.Empty;
     public int SettledCount { get; set; }
+    public double HitRate { get; set; }
+    public double LogLoss { get; set; }
+    public double Precision { get; set; }
+    public double Recall { get; set; }
+    public double F1Score { get; set; }
     public string ActiveCalibrator { get; set; } = "Bucket";
     public double FallbackThreshold { get; set; }
     public double ActiveThreshold { get; set; }
@@ -59,6 +75,35 @@ public class ForecastMarketStat
     public List<ReliabilityCurvePoint> CalibratedReliabilityCurve { get; set; } = [];
     public List<EraPerformanceStat> CalibratorEraStats { get; set; } = [];
     public List<EraPerformanceStat> ThresholdEraStats { get; set; } = [];
+}
+
+public class ConfidenceBandStat
+{
+    public double MinProbability { get; set; }
+    public double MaxProbability { get; set; }
+    public int SampleCount { get; set; }
+    public double HitRate { get; set; }
+    public double AverageProbability { get; set; }
+    public double BrierScore { get; set; }
+    public double LogLoss { get; set; }
+}
+
+public class LeagueSegmentStat
+{
+    public string League { get; set; } = string.Empty;
+    public int SampleCount { get; set; }
+    public double HitRate { get; set; }
+    public double BrierScore { get; set; }
+    public double LogLoss { get; set; }
+}
+
+public class SourceSegmentStat
+{
+    public string SourceName { get; set; } = string.Empty;
+    public int SampleCount { get; set; }
+    public double HitRate { get; set; }
+    public double BrierScore { get; set; }
+    public double LogLoss { get; set; }
 }
 
 public class BrierDecomposition

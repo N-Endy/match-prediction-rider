@@ -37,12 +37,43 @@ public class AnalyzerService  : IAnalyzerService
     private readonly ILogger<AnalyzerService> _logger;
     private readonly IRegressionPredictorService _regressionPredictorService;
     private readonly ICalibrationService _calibrationService;
+    private readonly IProbabilityCorrectionService _probabilityCorrectionService;
     private readonly IThresholdTuningService _thresholdTuningService;
     private readonly ISourceMarketPricingService _sourceMarketPricingService;
     private readonly AiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
     private readonly SofaScoreSourceHealthTracker _sofaScoreSourceHealthTracker;
     private readonly PredictionSettings _predictionSettings;
     
+    public AnalyzerService(
+        IDataAnalyzerService dataAnalyzerService,
+        IWebScraperService webScraperService,
+        ApplicationDbContext dbContext,
+        IExtractFromExcel excelExtract,
+        IRegressionPredictorService regressionPredictorService,
+        ICalibrationService calibrationService,
+        IProbabilityCorrectionService probabilityCorrectionService,
+        IThresholdTuningService thresholdTuningService,
+        ISourceMarketPricingService sourceMarketPricingService,
+        AiScoreSourceHealthTracker aiScoreSourceHealthTracker,
+        IOptions<PredictionSettings> predictionOptions,
+        ILogger<AnalyzerService> logger)
+        : this(
+            dataAnalyzerService,
+            webScraperService,
+            dbContext,
+            excelExtract,
+            regressionPredictorService,
+            calibrationService,
+            probabilityCorrectionService,
+            thresholdTuningService,
+            sourceMarketPricingService,
+            aiScoreSourceHealthTracker,
+            new SofaScoreSourceHealthTracker(),
+            predictionOptions,
+            logger)
+    {
+    }
+
     public AnalyzerService(
         IDataAnalyzerService dataAnalyzerService,
         IWebScraperService webScraperService,
@@ -62,6 +93,7 @@ public class AnalyzerService  : IAnalyzerService
             excelExtract,
             regressionPredictorService,
             calibrationService,
+            new ProbabilityCorrectionService(dbContext),
             thresholdTuningService,
             sourceMarketPricingService,
             aiScoreSourceHealthTracker,
@@ -84,6 +116,37 @@ public class AnalyzerService  : IAnalyzerService
         SofaScoreSourceHealthTracker sofaScoreSourceHealthTracker,
         IOptions<PredictionSettings> predictionOptions,
         ILogger<AnalyzerService> logger)
+        : this(
+            dataAnalyzerService,
+            webScraperService,
+            dbContext,
+            excelExtract,
+            regressionPredictorService,
+            calibrationService,
+            new ProbabilityCorrectionService(dbContext),
+            thresholdTuningService,
+            sourceMarketPricingService,
+            aiScoreSourceHealthTracker,
+            sofaScoreSourceHealthTracker,
+            predictionOptions,
+            logger)
+    {
+    }
+
+    public AnalyzerService(
+        IDataAnalyzerService dataAnalyzerService,
+        IWebScraperService webScraperService,
+        ApplicationDbContext dbContext,
+        IExtractFromExcel excelExtract,
+        IRegressionPredictorService regressionPredictorService,
+        ICalibrationService calibrationService,
+        IProbabilityCorrectionService probabilityCorrectionService,
+        IThresholdTuningService thresholdTuningService,
+        ISourceMarketPricingService sourceMarketPricingService,
+        AiScoreSourceHealthTracker aiScoreSourceHealthTracker,
+        SofaScoreSourceHealthTracker sofaScoreSourceHealthTracker,
+        IOptions<PredictionSettings> predictionOptions,
+        ILogger<AnalyzerService> logger)
     {
         _dataAnalyzerService = dataAnalyzerService;
         _webScraperService = webScraperService;
@@ -91,6 +154,7 @@ public class AnalyzerService  : IAnalyzerService
         _excelExtract = excelExtract;
         _regressionPredictorService = regressionPredictorService;
         _calibrationService = calibrationService;
+        _probabilityCorrectionService = probabilityCorrectionService;
         _thresholdTuningService = thresholdTuningService;
         _sourceMarketPricingService = sourceMarketPricingService;
         _aiScoreSourceHealthTracker = aiScoreSourceHealthTracker;
@@ -482,6 +546,16 @@ public class AnalyzerService  : IAnalyzerService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "⚠️ Calibration rebuild failed, continuing with regression predictions.");
+        }
+
+        try
+        {
+            await RebuildProbabilityCorrectionProfiles();
+            _logger.LogInformation("✅ Probability correction rebuild completed.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Probability correction rebuild failed, continuing with threshold tuning.");
         }
 
         try
@@ -1729,6 +1803,14 @@ public class AnalyzerService  : IAnalyzerService
         var profileCount = await _dbContext.ThresholdProfiles.CountAsync();
         _logger.LogInformation("Updated {Count} threshold profiles.", profileCount);
     }
+
+    private async Task RebuildProbabilityCorrectionProfiles()
+    {
+        _logger.LogInformation("Starting probability correction rebuild...");
+        await _probabilityCorrectionService.RebuildProfilesAsync();
+        var profileCount = await _dbContext.MetaModelProfiles.CountAsync();
+        _logger.LogInformation("Updated {Count} probability correction profiles.", profileCount);
+    }
     
     private async Task SaveMatchScores(List<MatchScore> scores)
     {
@@ -2252,6 +2334,7 @@ public class AnalyzerService  : IAnalyzerService
                 CalibratorUsed = candidate.CalibratorUsed,
                 ThresholdUsed = Math.Round(candidate.ThresholdUsed, 4),
                 ThresholdSource = candidate.ThresholdSource,
+                FeatureContributionsJson = candidate.FeatureContributionsJson,
                 IsPublished = isPublished,
                 PredictionRunId = predictionRun.Id,
                 RunLabel = predictionRun.RunLabel,

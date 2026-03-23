@@ -28,6 +28,7 @@ public class DataAnalyzerServiceTests
                 };
             }),
             new FakeThresholdTuningService(),
+            new IdentityProbabilityCorrectionService(),
             Options.Create(new PredictionSettings
             {
                 HomeWinStrong = 0.68,
@@ -59,6 +60,7 @@ public class DataAnalyzerServiceTests
             new FakeCalibrationService((market, raw) =>
                 market == PredictionMarket.Over25Goals ? 0.60 : raw),
             new FakeThresholdTuningService(),
+            new IdentityProbabilityCorrectionService(),
             Options.Create(new PredictionSettings
             {
                 OverTwoGoalsStrongThreshold = 0.58
@@ -91,6 +93,7 @@ public class DataAnalyzerServiceTests
             },
             new FakeCalibrationService((_, raw) => raw),
             new FakeThresholdTuningService(),
+            new IdentityProbabilityCorrectionService(),
             Options.Create(new PredictionSettings
             {
                 OverTwoGoalsStrongThreshold = 0.58
@@ -129,6 +132,7 @@ public class DataAnalyzerServiceTests
                     ? new CalibrationDecision { Probability = 0.67, CalibratorUsed = "Beta" }
                     : new CalibrationDecision { Probability = raw, CalibratorUsed = "Bucket" }),
             thresholdService,
+            new IdentityProbabilityCorrectionService(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55
@@ -159,6 +163,7 @@ public class DataAnalyzerServiceTests
             probabilityCalculator,
             new FakeCalibrationService((_, raw) => raw),
             new FakeThresholdTuningService(),
+            new IdentityProbabilityCorrectionService(),
             Options.Create(new PredictionSettings()));
 
         var candidates = service.BuildForecastCandidates([match]);
@@ -280,6 +285,13 @@ public class DataAnalyzerServiceTests
                 ThresholdSource = "Configured"
             };
         }
+
+        public Task RebuildProfilesAsync() => Task.CompletedTask;
+    }
+
+    private sealed class IdentityProbabilityCorrectionService : IProbabilityCorrectionService
+    {
+        public double ApplyCorrection(PredictionMarket market, double rawProbability) => rawProbability;
 
         public Task RebuildProfilesAsync() => Task.CompletedTask;
     }

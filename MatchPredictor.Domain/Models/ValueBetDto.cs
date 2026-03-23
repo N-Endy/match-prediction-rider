@@ -24,4 +24,7 @@ public class ValueBetDto
     public string OddsDerivationSource { get; set; } = "Derived from stored sync probability";
     public string EdgeSource { get; set; } = string.Empty;
     public string AiJustification { get; set; } = null!;
+    public bool? IsSettledWin { get; set; }
+    public double? RealizedReturnPercent { get; set; }
+    public double? ClosingLineValuePercent { get; set; }
 }

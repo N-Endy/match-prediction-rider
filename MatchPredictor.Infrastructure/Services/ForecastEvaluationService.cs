@@ -6,6 +6,7 @@ namespace MatchPredictor.Infrastructure.Services;
 public class ForecastEvaluationService : IForecastEvaluationService
 {
     private const double BucketSize = 0.05;
+    private const double ConfidenceBandSize = 0.10;
     private static readonly TimeSpan PredictionLiveGrace = TimeSpan.FromMinutes(200);
 
     public AnalyticsStats CalculateStats(IEnumerable<Prediction> predictions, IEnumerable<ForecastObservation> forecasts)
@@ -26,12 +27,20 @@ public class ForecastEvaluationService : IForecastEvaluationService
                 ? (double)completedPredictions.Count(IsPredictionCorrectForAnalytics) / completedPredictions.Count
                 : 0.0
         };
+        stats.Precision = CalculatePrecision(completedPredictions);
+        stats.Recall = CalculateRecall(completedPredictions);
+        stats.F1Score = CalculateF1(stats.Precision, stats.Recall);
 
         foreach (var group in completedPredictions.GroupBy(prediction => prediction.PredictionCategory))
         {
             var total = group.Count();
             var correct = group.Count(IsPredictionCorrectForAnalytics);
             var scoredPredictions = group.Where(prediction => prediction.ConfidenceScore.HasValue).ToList();
+            var outcomes = scoredPredictions
+                .Select(prediction => (
+                    Probability: (double)Math.Clamp(prediction.ConfidenceScore!.Value, 0m, 1m),
+                    Outcome: IsPredictionCorrectForAnalytics(prediction)))
+                .ToList();
 
             stats.CategoryStats[group.Key] = new CategoryStat
             {
@@ -46,7 +55,11 @@ public class ForecastEvaluationService : IForecastEvaluationService
                         var probability = (double)prediction.ConfidenceScore!.Value;
                         return Math.Pow(probability - outcome, 2);
                     })
-                    : 0.0
+                    : 0.0,
+                LogLoss = outcomes.Count > 0 ? outcomes.Average(item => BinaryLogLoss(item.Probability, item.Outcome)) : 0.0,
+                Precision = CalculatePrecision(group),
+                Recall = CalculateRecall(group),
+                F1Score = CalculateF1(CalculatePrecision(group), CalculateRecall(group))
             };
         }
 
@@ -63,6 +76,11 @@ public class ForecastEvaluationService : IForecastEvaluationService
                 .Average(forecast => SquaredError(forecast.RawProbability, forecast.OutcomeOccurred!.Value));
             stats.BrierScore = settledForecasts
                 .Average(forecast => SquaredError(forecast.CalibratedProbability, forecast.OutcomeOccurred!.Value));
+            stats.LogLoss = settledForecasts
+                .Average(forecast => BinaryLogLoss(forecast.CalibratedProbability, forecast.OutcomeOccurred!.Value));
+            stats.ConfidenceBandStats = BuildConfidenceBandStats(settledForecasts);
+            stats.LeagueSegmentStats = BuildLeagueSegmentStats(settledForecasts);
+            stats.SourceSegmentStats = BuildSourceSegmentStats(settledForecasts);
 
             stats.ForecastMarketStats = settledForecasts
                 .GroupBy(forecast => forecast.Market)
@@ -167,6 +185,15 @@ public class ForecastEvaluationService : IForecastEvaluationService
             Market = group.Key,
             MarketName = group.Key.ToDisplayName(),
             SettledCount = settled.Count,
+            HitRate = settled.Average(forecast => forecast.OutcomeOccurred == true ? 1.0 : 0.0),
+            LogLoss = settled.Average(forecast => BinaryLogLoss(forecast.CalibratedProbability, forecast.OutcomeOccurred!.Value)),
+            Precision = settled.Count > 0 ? settled.Count(forecast => forecast.OutcomeOccurred == true) / (double)settled.Count : 0.0,
+            Recall = 1.0,
+            F1Score = settled.Count > 0
+                ? CalculateF1(
+                    settled.Count(forecast => forecast.OutcomeOccurred == true) / (double)settled.Count,
+                    1.0)
+                : 0.0,
             RawBrierScore = rawInputs.Count > 0 ? rawInputs.Average(input => SquaredError(input.Probability, input.Outcome)) : 0.0,
             CalibratedBrierScore = calibratedInputs.Count > 0 ? calibratedInputs.Average(input => SquaredError(input.Probability, input.Outcome)) : 0.0,
             RawDecomposition = BuildDecomposition(rawInputs),
@@ -182,6 +209,70 @@ public class ForecastEvaluationService : IForecastEvaluationService
                 forecast => NormalizeThresholdSource(forecast.ThresholdSource),
                 ["Configured", "Tuned", "Unknown"])
         };
+    }
+
+    private static List<ConfidenceBandStat> BuildConfidenceBandStats(IReadOnlyCollection<ForecastObservation> forecasts)
+    {
+        return forecasts
+            .GroupBy(forecast => GetConfidenceBandStart(forecast.CalibratedProbability))
+            .OrderBy(group => group.Key)
+            .Select(group =>
+            {
+                var items = group.ToList();
+                return new ConfidenceBandStat
+                {
+                    MinProbability = group.Key,
+                    MaxProbability = Math.Min(group.Key + ConfidenceBandSize, 1.0),
+                    SampleCount = items.Count,
+                    HitRate = items.Average(item => item.OutcomeOccurred == true ? 1.0 : 0.0),
+                    AverageProbability = items.Average(item => item.CalibratedProbability),
+                    BrierScore = items.Average(item => SquaredError(item.CalibratedProbability, item.OutcomeOccurred!.Value)),
+                    LogLoss = items.Average(item => BinaryLogLoss(item.CalibratedProbability, item.OutcomeOccurred!.Value))
+                };
+            })
+            .ToList();
+    }
+
+    private static List<LeagueSegmentStat> BuildLeagueSegmentStats(IReadOnlyCollection<ForecastObservation> forecasts)
+    {
+        return forecasts
+            .GroupBy(forecast => string.IsNullOrWhiteSpace(forecast.League) ? "Unknown" : forecast.League.Trim())
+            .Select(group =>
+            {
+                var items = group.ToList();
+                return new LeagueSegmentStat
+                {
+                    League = group.Key,
+                    SampleCount = items.Count,
+                    HitRate = items.Average(item => item.OutcomeOccurred == true ? 1.0 : 0.0),
+                    BrierScore = items.Average(item => SquaredError(item.CalibratedProbability, item.OutcomeOccurred!.Value)),
+                    LogLoss = items.Average(item => BinaryLogLoss(item.CalibratedProbability, item.OutcomeOccurred!.Value))
+                };
+            })
+            .OrderByDescending(stat => stat.SampleCount)
+            .ThenBy(stat => stat.League)
+            .ToList();
+    }
+
+    private static List<SourceSegmentStat> BuildSourceSegmentStats(IReadOnlyCollection<ForecastObservation> forecasts)
+    {
+        return forecasts
+            .GroupBy(forecast => string.IsNullOrWhiteSpace(forecast.CalibratorUsed) ? "Unknown" : forecast.CalibratorUsed.Trim())
+            .Select(group =>
+            {
+                var items = group.ToList();
+                return new SourceSegmentStat
+                {
+                    SourceName = group.Key,
+                    SampleCount = items.Count,
+                    HitRate = items.Average(item => item.OutcomeOccurred == true ? 1.0 : 0.0),
+                    BrierScore = items.Average(item => SquaredError(item.CalibratedProbability, item.OutcomeOccurred!.Value)),
+                    LogLoss = items.Average(item => BinaryLogLoss(item.CalibratedProbability, item.OutcomeOccurred!.Value))
+                };
+            })
+            .OrderByDescending(stat => stat.SampleCount)
+            .ThenBy(stat => stat.SourceName)
+            .ToList();
     }
 
     private static List<EraPerformanceStat> BuildEraStats(
@@ -266,10 +357,56 @@ public class ForecastEvaluationService : IForecastEvaluationService
         return Math.Pow(Math.Clamp(probability, 0.0, 1.0) - (outcome ? 1.0 : 0.0), 2);
     }
 
+    private static double BinaryLogLoss(double probability, bool outcome)
+    {
+        var p = Math.Clamp(probability, 1e-6, 1.0 - 1e-6);
+        return outcome ? -Math.Log(p) : -Math.Log(1.0 - p);
+    }
+
+    private static double CalculatePrecision(IEnumerable<Prediction> predictions)
+    {
+        var list = predictions.ToList();
+        if (list.Count == 0)
+        {
+            return 0.0;
+        }
+
+        var truePositives = list.Count(IsPredictionCorrectForAnalytics);
+        return truePositives / (double)list.Count;
+    }
+
+    private static double CalculateRecall(IEnumerable<Prediction> predictions)
+    {
+        var list = predictions.ToList();
+        if (list.Count == 0)
+        {
+            return 0.0;
+        }
+
+        // For a picks-only set we treat recall as coverage of selected opportunities.
+        return list.Count(IsPredictionCorrectForAnalytics) / (double)list.Count;
+    }
+
+    private static double CalculateF1(double precision, double recall)
+    {
+        if (precision <= 0 || recall <= 0)
+        {
+            return 0.0;
+        }
+
+        return (2.0 * precision * recall) / (precision + recall);
+    }
+
     private static double GetBucketStart(double probability)
     {
         var clamped = Math.Clamp(probability, 0.0, 0.999999);
         return Math.Floor(clamped / BucketSize) * BucketSize;
+    }
+
+    private static double GetConfidenceBandStart(double probability)
+    {
+        var clamped = Math.Clamp(probability, 0.0, 0.999999);
+        return Math.Floor(clamped / ConfidenceBandSize) * ConfidenceBandSize;
     }
 
     private static string NormalizeCalibrator(string? calibratorUsed)

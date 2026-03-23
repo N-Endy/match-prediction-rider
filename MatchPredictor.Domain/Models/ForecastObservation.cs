@@ -19,6 +19,7 @@ public class ForecastObservation
     public string CalibratorUsed { get; set; } = "Unknown";
     public double ThresholdUsed { get; set; }
     public string ThresholdSource { get; set; } = "Unknown";
+    public string FeatureContributionsJson { get; set; } = "{}";
     public bool? OutcomeOccurred { get; set; }
     public string? ActualOutcome { get; set; }
     public string? ActualScore { get; set; }
