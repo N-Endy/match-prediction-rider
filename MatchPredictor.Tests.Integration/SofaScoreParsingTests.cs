@@ -455,4 +455,148 @@ public class SofaScoreParsingTests
         Assert.True(entries[1].IsLive);
         Assert.Equal("https://www.sofascore.com/football/match/lernayin-artsakh-fc-pyunik-ii/byosHPHc", entries[1].EventUrl);
     }
+
+    [Fact]
+    public void ParseEntries_ParsesRenderedTennisDomRowsFromBrowserSnapshot()
+    {
+        var entries = SofaScoreBrowserDomParser.ParseEntries(
+            [
+                new SofaScoreRenderedDomCandidate
+                {
+                    Href = "/tennis/match/jiri-lehecka-ethan-quinn/abc123",
+                    Text = """
+                        18:00
+                        Ethan Quinn
+                        Jiri Lehecka
+                        0
+                        2
+                        FT
+                        """,
+                    SectionText = """
+                        ATP Miami
+                        18:00
+                        Ethan Quinn
+                        Jiri Lehecka
+                        0
+                        2
+                        FT
+                        """
+                },
+                new SofaScoreRenderedDomCandidate
+                {
+                    Href = "/tennis/match/coco-gauff-alycia-parks/def456",
+                    Text = """
+                        Set 2
+                        Alycia Parks
+                        Coco Gauff
+                        0
+                        1
+                        """,
+                    SectionText = """
+                        WTA Miami
+                        Set 2
+                        Alycia Parks
+                        Coco Gauff
+                        0
+                        1
+                        """
+                }
+            ],
+            "https://www.sofascore.com");
+
+        Assert.Equal(2, entries.Count);
+
+        Assert.Equal("ATP Miami", entries[0].League);
+        Assert.Equal("Ethan Quinn", entries[0].HomeTeam);
+        Assert.Equal("Jiri Lehecka", entries[0].AwayTeam);
+        Assert.Equal("0:2", entries[0].Score);
+        Assert.Equal("FT", entries[0].StatusText);
+        Assert.False(entries[0].IsLive);
+        Assert.Equal(new TimeOnly(18, 0), entries[0].KickoffLocalTime);
+        Assert.Equal("https://www.sofascore.com/tennis/match/jiri-lehecka-ethan-quinn/abc123", entries[0].EventUrl);
+
+        Assert.Equal("WTA Miami", entries[1].League);
+        Assert.Equal("Alycia Parks", entries[1].HomeTeam);
+        Assert.Equal("Coco Gauff", entries[1].AwayTeam);
+        Assert.Equal("0:1", entries[1].Score);
+        Assert.Equal("Set 2", entries[1].StatusText);
+        Assert.True(entries[1].IsLive);
+    }
+
+    [Fact]
+    public void ParseEventSummaries_SplitsBrowserTennisLiveAndScheduledPayloads()
+    {
+        const string liveJson = """
+            {
+              "events": [
+                {
+                  "id": 801,
+                  "startTimestamp": 1774288800,
+                  "status": { "type": "inprogress", "description": "Set 2" },
+                  "homeTeam": { "name": "Alycia Parks" },
+                  "awayTeam": { "name": "Coco Gauff" },
+                  "tournament": {
+                    "name": "Miami",
+                    "category": { "name": "WTA" }
+                  },
+                  "homeScore": { "current": 0, "display": 0 },
+                  "awayScore": { "current": 1, "display": 1 }
+                }
+              ]
+            }
+            """;
+
+        const string scheduledJson = """
+            {
+              "events": [
+                {
+                  "id": 802,
+                  "startTimestamp": 1774292400,
+                  "status": { "type": "finished", "description": "FT" },
+                  "homeTeam": { "name": "Ethan Quinn" },
+                  "awayTeam": { "name": "Jiri Lehecka" },
+                  "tournament": {
+                    "name": "Miami",
+                    "category": { "name": "ATP" }
+                  },
+                  "homeScore": { "current": 0, "display": 0 },
+                  "awayScore": { "current": 2, "display": 2 }
+                }
+              ]
+            }
+            """;
+
+        var responses = new[]
+        {
+            new SofaScoreBrowserFetchResponse
+            {
+                RelativePath = "/api/v1/sport/tennis/events/live",
+                Ok = true,
+                Status = 200,
+                Body = liveJson
+            },
+            new SofaScoreBrowserFetchResponse
+            {
+                RelativePath = "/api/v1/sport/tennis/scheduled-events/2026-03-23",
+                Ok = true,
+                Status = 200,
+                Body = scheduledJson
+            }
+        };
+
+        SofaScoreBrowserFetchParser.ParseEventSummaries(
+            responses,
+            "https://www.sofascore.com",
+            out var liveEvents,
+            out var scheduledEvents);
+
+        Assert.Single(liveEvents);
+        Assert.Single(scheduledEvents);
+        Assert.Equal("Alycia Parks", liveEvents[0].HomeTeam);
+        Assert.Equal("Coco Gauff", liveEvents[0].AwayTeam);
+        Assert.Equal("0:1", liveEvents[0].Score);
+        Assert.Equal("Ethan Quinn", scheduledEvents[0].HomeTeam);
+        Assert.Equal("Jiri Lehecka", scheduledEvents[0].AwayTeam);
+        Assert.Equal("0:2", scheduledEvents[0].Score);
+    }
 }

@@ -829,6 +829,7 @@ public partial class WebScraperService : IWebScraperService
         return await RunWithChromeSessionAsync(
             async driver =>
             {
+                EnsureSofaScoreBrowserCaptureInstalled(driver);
                 var listingUrls = BuildSofaScoreBrowserListingUrls();
                 var listingAttempt = await TryFetchSofaScoreScoresViaBrowserSessionAsync(driver, fixtures, listingUrls);
                 if (listingAttempt.Scores.Count > 0)
@@ -957,6 +958,7 @@ public partial class WebScraperService : IWebScraperService
     {
         try
         {
+            ClearSofaScoreBrowserCapturedResponses(driver);
             await driver.Navigate().GoToUrlAsync(listingUrl);
             WaitForDocumentReady(driver);
             DismissCookieBanners(driver);
@@ -975,6 +977,12 @@ public partial class WebScraperService : IWebScraperService
             }
 
             var baseUrl = (_configuration["ScrapingValues:SofaScoreBaseUrl"] ?? "https://www.sofascore.com").TrimEnd('/');
+            var apiAttempt = TryFetchSofaScoreScoresViaBrowserApiResponses(driver, fixtures, baseUrl, listingUrl);
+            if (apiAttempt.Scores.Count > 0)
+            {
+                return apiAttempt;
+            }
+
             var listingEntries = SofaScoreListingPageParser.ParseEntries(pageSource, baseUrl);
             var listingScores = ResolveSofaScoreListingScores(fixtures, listingEntries);
 
@@ -986,13 +994,27 @@ public partial class WebScraperService : IWebScraperService
                     $"SofaScore browser listing DOM matched {listingScores.Count} targeted fixture(s) from {listingEntries.Count} rendered row(s).");
             }
 
+            var domEntries = ExtractSofaScoreBrowserDomEntries(driver, baseUrl);
+            var domScores = ResolveSofaScoreListingScores(fixtures, domEntries);
+            if (domScores.Count > 0)
+            {
+                return BuildSofaScoreListingAttempt(
+                    domScores,
+                    domEntries.Count,
+                    $"SofaScore browser rendered text matched {domScores.Count} targeted fixture(s) from {domEntries.Count} Selenium row candidate(s).");
+            }
+
             return new SofaScoreApiAttemptResult(
                 [],
-                "browser-listing-dom",
-                listingEntries.Count > 0
-                    ? $"SofaScore browser listing DOM parsed {listingEntries.Count} rendered row(s) from {listingUrl}, but none matched the targeted fixtures."
-                    : $"SofaScore browser listing DOM found no rendered match rows on {listingUrl}.",
-                listingEntries.Count,
+                domEntries.Count > 0 ? "browser-listing-dom-text" : "browser-listing-dom",
+                domEntries.Count > 0
+                    ? $"SofaScore browser rendered text parsed {domEntries.Count} Selenium row candidate(s) from {listingUrl}, but none matched the targeted fixtures."
+                    : listingEntries.Count > 0
+                        ? $"SofaScore browser listing DOM parsed {listingEntries.Count} rendered row(s) from {listingUrl}, but none matched the targeted fixtures."
+                        : apiAttempt.CandidateCount > 0
+                            ? apiAttempt.Detail
+                            : $"SofaScore browser listing DOM found no rendered match rows on {listingUrl}.",
+                Math.Max(Math.Max(listingEntries.Count, domEntries.Count), apiAttempt.CandidateCount),
                 0);
         }
         catch (Exception ex)
@@ -1018,6 +1040,336 @@ public partial class WebScraperService : IWebScraperService
             detail,
             candidateCount,
             0);
+    }
+
+    private SofaScoreApiAttemptResult TryFetchSofaScoreScoresViaBrowserApiResponses(
+        ChromeDriver driver,
+        IReadOnlyList<SofaScoreFixtureRequest> fixtures,
+        string baseUrl,
+        string listingUrl)
+    {
+        var responses = ReadSofaScoreBrowserCapturedResponses(driver);
+        if (responses.Count == 0)
+        {
+            return new SofaScoreApiAttemptResult(
+                [],
+                "browser-listing-api",
+                $"SofaScore browser capture observed no relevant API responses on {listingUrl}.",
+                0,
+                0);
+        }
+
+        SofaScoreBrowserFetchParser.ParseEventSummaries(
+            responses,
+            baseUrl,
+            out var liveEvents,
+            out var scheduledEvents);
+
+        var summaries = liveEvents
+            .Concat(scheduledEvents)
+            .GroupBy(summary => summary.EventId)
+            .Select(group => group.First())
+            .ToList();
+
+        if (summaries.Count == 0)
+        {
+            return new SofaScoreApiAttemptResult(
+                [],
+                "browser-listing-api",
+                $"SofaScore browser captured {responses.Count} API response(s) on {listingUrl}, but none contained parsable tennis event summaries.",
+                responses.Count,
+                responses.Count);
+        }
+
+        var resolvedScores = ResolveSofaScoreApiSummaryScores(fixtures, summaries);
+        if (resolvedScores.Count > 0)
+        {
+            return new SofaScoreApiAttemptResult(
+                resolvedScores,
+                "browser-listing-api",
+                $"SofaScore browser API capture matched {resolvedScores.Count} targeted fixture(s) from {summaries.Count} captured tennis event summary row(s).",
+                summaries.Count,
+                responses.Count);
+        }
+
+        return new SofaScoreApiAttemptResult(
+            [],
+            "browser-listing-api",
+            $"SofaScore browser API capture parsed {summaries.Count} tennis event summary row(s) from {responses.Count} response(s) on {listingUrl}, but none matched the targeted fixtures.",
+            summaries.Count,
+            responses.Count);
+    }
+
+    private List<SofaScoreMatchScore> ResolveSofaScoreApiSummaryScores(
+        IReadOnlyList<SofaScoreFixtureRequest> fixtures,
+        IReadOnlyList<SofaScoreApiEventSummary> summaries)
+    {
+        if (fixtures.Count == 0 || summaries.Count == 0)
+        {
+            return [];
+        }
+
+        var remainingSummaries = summaries.ToList();
+        var resolvedScores = new List<SofaScoreMatchScore>();
+
+        foreach (var fixture in fixtures)
+        {
+            var bestSummary = remainingSummaries
+                .Select(summary => new
+                {
+                    Summary = summary,
+                    Score = ScoreSofaScoreApiSummaryCandidate(fixtures, fixture, summary)
+                })
+                .Where(entry => entry.Score > 0)
+                .OrderByDescending(entry => entry.Score)
+                .ThenBy(entry => Math.Abs(GetKickoffDeltaMinutes(entry.Summary.MatchTime, fixture.ScheduledMatchTimeUtc)))
+                .Select(entry => entry.Summary)
+                .FirstOrDefault();
+
+            if (bestSummary is null)
+            {
+                continue;
+            }
+
+            resolvedScores.Add(bestSummary.ToMatchScore());
+            remainingSummaries.Remove(bestSummary);
+        }
+
+        return resolvedScores;
+    }
+
+    private int ScoreSofaScoreApiSummaryCandidate(
+        IReadOnlyList<SofaScoreFixtureRequest> allFixtures,
+        SofaScoreFixtureRequest fixture,
+        SofaScoreApiEventSummary candidate)
+    {
+        if (!TeamsLookEquivalent(candidate.HomeTeam, fixture.HomeTeam) ||
+            !TeamsLookEquivalent(candidate.AwayTeam, fixture.AwayTeam))
+        {
+            return 0;
+        }
+
+        var score = 0;
+
+        if (string.Equals(NormalizeFixtureKeyPart(candidate.HomeTeam), NormalizeFixtureKeyPart(fixture.HomeTeam), StringComparison.OrdinalIgnoreCase))
+        {
+            score += 45;
+        }
+        else
+        {
+            score += 25;
+        }
+
+        if (string.Equals(NormalizeFixtureKeyPart(candidate.AwayTeam), NormalizeFixtureKeyPart(fixture.AwayTeam), StringComparison.OrdinalIgnoreCase))
+        {
+            score += 45;
+        }
+        else
+        {
+            score += 25;
+        }
+
+        if (!string.IsNullOrWhiteSpace(candidate.League) &&
+            !string.IsNullOrWhiteSpace(fixture.League) &&
+            TeamsLookEquivalent(candidate.League, fixture.League))
+        {
+            score += 15;
+        }
+
+        var kickoffDeltaMinutes = Math.Abs(GetKickoffDeltaMinutes(candidate.MatchTime, fixture.ScheduledMatchTimeUtc));
+        if (kickoffDeltaMinutes <= 5)
+        {
+            score += 25;
+        }
+        else if (kickoffDeltaMinutes <= 30)
+        {
+            score += 15;
+        }
+        else if (kickoffDeltaMinutes <= 90)
+        {
+            score += 5;
+        }
+
+        if (candidate.IsLive)
+        {
+            score += 5;
+        }
+
+        var sameDayFixtureCollisions = allFixtures.Count(other =>
+            other.MatchLocalDate == fixture.MatchLocalDate &&
+            TeamsLookEquivalent(other.HomeTeam, fixture.HomeTeam) &&
+            TeamsLookEquivalent(other.AwayTeam, fixture.AwayTeam));
+
+        if (sameDayFixtureCollisions > 1)
+        {
+            score -= 15;
+        }
+
+        return score;
+    }
+
+    private IReadOnlyList<SofaScoreListingEntry> ExtractSofaScoreBrowserDomEntries(
+        ChromeDriver driver,
+        string baseUrl)
+    {
+        try
+        {
+            var js = (IJavaScriptExecutor)driver;
+            var rawJson = js.ExecuteScript(
+                """
+                const normalize = value => (value || '').replace(/\u00a0/g, ' ').trim();
+                const rows = Array.from(document.querySelectorAll("a[href*='/tennis/match/']")).map(anchor => {
+                  const row = anchor.closest('a[data-id]') || anchor;
+                  const section = row.closest('.pb_sm') || row.parentElement;
+                  const titleNode = row.querySelector('[title*="live score"], [title*="score"]');
+                  return {
+                    href: anchor.href || anchor.getAttribute('href') || '',
+                    text: normalize(row.innerText || row.textContent || ''),
+                    sectionText: normalize(section ? (section.innerText || section.textContent || '') : ''),
+                    title: normalize((titleNode && titleNode.getAttribute('title')) || row.getAttribute('title') || '')
+                  };
+                });
+                return JSON.stringify(rows);
+                """)?.ToString();
+
+            var candidates = SofaScoreBrowserDomParser.ParseCandidates(rawJson);
+            return SofaScoreBrowserDomParser.ParseEntries(candidates, baseUrl);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "SofaScore browser DOM text extraction failed.");
+            return [];
+        }
+    }
+
+    private void EnsureSofaScoreBrowserCaptureInstalled(ChromeDriver driver)
+    {
+        try
+        {
+            driver.ExecuteCdpCommand(
+                "Page.addScriptToEvaluateOnNewDocument",
+                new Dictionary<string, object>
+                {
+                    ["source"] =
+                        """
+                        (() => {
+                          if (window.__tennisPredictorSofaCaptureInstalled) {
+                            return;
+                          }
+
+                          const shouldCapture = rawUrl => {
+                            try {
+                              const url = new URL(rawUrl, location.origin);
+                              return url.pathname.includes('/api/v1/event/') ||
+                                     (url.pathname.includes('/api/v1/sport/tennis/') &&
+                                      (url.pathname.includes('/events/live') || url.pathname.includes('/scheduled-events/')));
+                            } catch {
+                              return false;
+                            }
+                          };
+
+                          const normalizePath = rawUrl => {
+                            try {
+                              const url = new URL(rawUrl, location.origin);
+                              return `${url.pathname}${url.search}`;
+                            } catch {
+                              return rawUrl || '';
+                            }
+                          };
+
+                          const pushResponse = payload => {
+                            window.__tennisPredictorSofaResponses = window.__tennisPredictorSofaResponses || [];
+                            window.__tennisPredictorSofaResponses.push(payload);
+                            if (window.__tennisPredictorSofaResponses.length > 250) {
+                              window.__tennisPredictorSofaResponses.splice(0, window.__tennisPredictorSofaResponses.length - 250);
+                            }
+                          };
+
+                          window.__tennisPredictorSofaResponses = window.__tennisPredictorSofaResponses || [];
+                          window.__tennisPredictorSofaCaptureInstalled = true;
+
+                          const originalFetch = window.fetch.bind(window);
+                          window.fetch = async (...args) => {
+                            const response = await originalFetch(...args);
+                            try {
+                              const url = typeof args[0] === 'string' ? args[0] : args[0]?.url;
+                              if (shouldCapture(url)) {
+                                const cloned = response.clone();
+                                cloned.text().then(body => pushResponse({
+                                  relativePath: normalizePath(url),
+                                  ok: response.ok,
+                                  status: response.status,
+                                  body: body
+                                })).catch(() => {});
+                              }
+                            } catch {}
+                            return response;
+                          };
+
+                          const originalOpen = XMLHttpRequest.prototype.open;
+                          const originalSend = XMLHttpRequest.prototype.send;
+
+                          XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+                            this.__tennisPredictorSofaUrl = url;
+                            return originalOpen.call(this, method, url, ...rest);
+                          };
+
+                          XMLHttpRequest.prototype.send = function(body) {
+                            this.addEventListener('loadend', function() {
+                              try {
+                                const url = this.__tennisPredictorSofaUrl;
+                                if (shouldCapture(url)) {
+                                  pushResponse({
+                                    relativePath: normalizePath(url),
+                                    ok: this.status >= 200 && this.status < 300,
+                                    status: this.status,
+                                    body: typeof this.responseText === 'string' ? this.responseText : ''
+                                  });
+                                }
+                              } catch {}
+                            });
+
+                            return originalSend.call(this, body);
+                          };
+                        })();
+                        """
+                });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "SofaScore browser capture installation failed.");
+        }
+    }
+
+    private static void ClearSofaScoreBrowserCapturedResponses(ChromeDriver driver)
+    {
+        try
+        {
+            var js = (IJavaScriptExecutor)driver;
+            js.ExecuteScript("window.__tennisPredictorSofaResponses = [];");
+        }
+        catch
+        {
+            // Ignore best-effort cleanup failures.
+        }
+    }
+
+    private IReadOnlyList<SofaScoreBrowserFetchResponse> ReadSofaScoreBrowserCapturedResponses(ChromeDriver driver)
+    {
+        try
+        {
+            var js = (IJavaScriptExecutor)driver;
+            var rawJson = js.ExecuteScript("return JSON.stringify(window.__tennisPredictorSofaResponses || []);")?.ToString();
+            return SofaScoreBrowserFetchParser.ParseResponses(rawJson)
+                .GroupBy(response => $"{response.RelativePath}|{response.Status}|{response.Ok}|{response.Body}", StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Reading captured SofaScore browser responses failed.");
+            return [];
+        }
     }
 
     private async Task<SofaScoreApiAttemptResult> FetchSofaScoreBrowserEventPagesAsync(
