@@ -201,32 +201,50 @@ if (runtimeMode.RunBackgroundJobs)
         recurringJobs.RemoveIfExists("prediction-prewarm-job");
         recurringJobs.RemoveIfExists("prediction-generation-post-analysis-job");
         recurringJobs.RemoveIfExists("prediction-generation-refresh-job");
+        recurringJobs.RemoveIfExists("prediction-sync-0035-job");
+        recurringJobs.RemoveIfExists("prediction-sync-0430-job");
+        recurringJobs.RemoveIfExists("prediction-sync-1030-job");
+        recurringJobs.RemoveIfExists("prediction-sync-1230-job");
+        recurringJobs.RemoveIfExists("prediction-sync-1430-job");
+        recurringJobs.RemoveIfExists("prediction-sync-1630-job");
         recurringJobs.RemoveIfExists("score-update-job");
         recurringJobs.RemoveIfExists("score-backfill-job");
         recurringJobs.RemoveIfExists("closing-line-snapshot-job");
 
         recurringJobs.AddOrUpdate<IAnalyzerService>(
-            "prediction-prewarm-job",
-            service => service.ExtractDataAndSyncDatabaseAsync(1, "prewarm"),
-            "40 23 * * *",
-            new RecurringJobOptions { TimeZone = watTimeZone });
-
-        recurringJobs.AddOrUpdate<IAnalyzerService>(
-            "prediction-generation-job",
-            service => service.ExtractDataAndSyncDatabaseAsync(0, "scheduled-sync"),
+            "prediction-sync-0035-job",
+            service => service.ExtractDataAndSyncDatabaseAsync(0, "scheduled-sync-0035"),
             "35 0 * * *",
             new RecurringJobOptions { TimeZone = watTimeZone });
 
         recurringJobs.AddOrUpdate<IAnalyzerService>(
-            "prediction-generation-post-analysis-job",
-            service => service.ExtractDataAndSyncDatabaseAsync(0, "morning-refresh"),
-            "32 4 * * *",
+            "prediction-sync-0430-job",
+            service => service.ExtractDataAndSyncDatabaseAsync(0, "scheduled-sync-0430"),
+            "30 4 * * *",
             new RecurringJobOptions { TimeZone = watTimeZone });
 
         recurringJobs.AddOrUpdate<IAnalyzerService>(
-            "prediction-generation-refresh-job",
-            service => service.ExtractDataAndSyncDatabaseAsync(0, "day-refresh"),
-            "32 12,16 * * *",
+            "prediction-sync-1030-job",
+            service => service.ExtractDataAndSyncDatabaseAsync(0, "scheduled-sync-1030"),
+            "30 10 * * *",
+            new RecurringJobOptions { TimeZone = watTimeZone });
+
+        recurringJobs.AddOrUpdate<IAnalyzerService>(
+            "prediction-sync-1230-job",
+            service => service.ExtractDataAndSyncDatabaseAsync(0, "scheduled-sync-1230"),
+            "30 12 * * *",
+            new RecurringJobOptions { TimeZone = watTimeZone });
+
+        recurringJobs.AddOrUpdate<IAnalyzerService>(
+            "prediction-sync-1430-job",
+            service => service.ExtractDataAndSyncDatabaseAsync(0, "scheduled-sync-1430"),
+            "30 14 * * *",
+            new RecurringJobOptions { TimeZone = watTimeZone });
+
+        recurringJobs.AddOrUpdate<IAnalyzerService>(
+            "prediction-sync-1630-job",
+            service => service.ExtractDataAndSyncDatabaseAsync(0, "scheduled-sync-1630"),
+            "30 16 * * *",
             new RecurringJobOptions { TimeZone = watTimeZone });
 
         recurringJobs.AddOrUpdate<IAnalyzerService>(
