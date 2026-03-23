@@ -352,19 +352,61 @@ public partial class WebScraperService : IWebScraperService
 
             await RunWithChromeSessionAsync(async driver =>
             {
+                EnsureSofaScoreBrowserCaptureInstalled(driver);
+                ClearSofaScoreBrowserCapturedResponses(driver);
+
                 driver.Navigate().GoToUrl(url);
+                WaitForDocumentReady(driver);
+                DismissCookieBanners(driver);
 
-                var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(15));
-                try
+                var waitDeadlineUtc = DateTime.UtcNow.AddSeconds(15);
+                var observedAnchorCount = 0;
+                var observedTennisApiResponseCount = 0;
+
+                while (DateTime.UtcNow < waitDeadlineUtc)
                 {
-                    wait.Until(d => d.FindElements(By.CssSelector("div")).Count > 100);
-                }
-                catch (WebDriverTimeoutException)
-                {
-                    _logger.LogWarning("Timeout waiting for generic elements, proceeding anyway...");
+                    observedAnchorCount = driver.FindElements(By.CssSelector("a[href*='/tennis/match/']")).Count;
+                    observedTennisApiResponseCount = ReadSofaScoreBrowserCapturedResponses(driver)
+                        .Count(response => response.RelativePath.Contains("/api/v1/sport/tennis/", StringComparison.OrdinalIgnoreCase));
+
+                    if (observedAnchorCount > 0 || observedTennisApiResponseCount > 0)
+                    {
+                        break;
+                    }
+
+                    await Task.Delay(1000);
                 }
 
-                await Task.Delay(5000); // Wait for matches to load
+                await Task.Delay(1000);
+
+                var pageTitle = driver.Title;
+                var pageSource = driver.PageSource;
+                var capturedResponses = ReadSofaScoreBrowserCapturedResponses(driver);
+                var capturedTennisApiResponses = capturedResponses
+                    .Where(response => response.RelativePath.Contains("/api/v1/sport/tennis/", StringComparison.OrdinalIgnoreCase))
+                    .Select(response => response.RelativePath)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                _logger.LogInformation(
+                    "Sofascore tennis page diagnostics: title '{Title}', HTML length {HtmlLength}, rendered match anchors {AnchorCount}, captured /api/v1/sport/tennis responses {ApiResponseCount}, any tennis API captured: {HasCapturedResponses}.",
+                    pageTitle,
+                    pageSource.Length,
+                    observedAnchorCount,
+                    capturedTennisApiResponses.Count,
+                    capturedTennisApiResponses.Count > 0);
+
+                if (capturedTennisApiResponses.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "Sofascore captured tennis API paths: {CapturedPaths}",
+                        string.Join(", ", capturedTennisApiResponses.Take(8)));
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Sofascore did not expose any /api/v1/sport/tennis/... responses during the direct browser scrape window.");
+                }
 
                 var matchElements = driver.FindElements(By.XPath("//div[contains(@class, 'EventCell')] | //a[contains(@href, '/tennis/match/')] | //div[contains(@class, 'sc-') and .//div[contains(@direction, 'column')]]"));
                 _logger.LogInformation("Found {Count} potential match elements.", matchElements.Count);
