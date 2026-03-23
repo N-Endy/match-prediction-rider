@@ -1345,6 +1345,9 @@ public class ScoreUpdaterMatchingTests
         public IReadOnlyList<PredictionCandidate> OverTwoGoals(IEnumerable<MatchData> matches) => [];
         public IReadOnlyList<PredictionCandidate> UnderTwoGoals(IEnumerable<MatchData> matches) => [];
         public IReadOnlyList<PredictionCandidate> StraightWin(IEnumerable<MatchData> matches) => [];
+        public IReadOnlyList<PredictionCandidate> MatchWinner(IEnumerable<MatchData> matches) => [];
+        public IReadOnlyList<PredictionCandidate> OverUnderSets(IEnumerable<MatchData> matches) => [];
+        public IReadOnlyList<PredictionCandidate> SetHandicap(IEnumerable<MatchData> matches) => [];
     }
 
     private sealed class StubWebScraperService : IWebScraperService

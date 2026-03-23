@@ -231,6 +231,11 @@ public class DataAnalyzerServiceTests
             SingleMarketCalls++;
             return AwayWin;
         }
+
+        public double CalculateOverTwoPointFiveSetsProbability(MatchData match) => 0;
+        public double CalculateUnderTwoPointFiveSetsProbability(MatchData match) => 0;
+        public double CalculateHomeSetHandicapProbability(MatchData match) => 0;
+        public double CalculateAwaySetHandicapProbability(MatchData match) => 0;
     }
 
     private sealed class FakeCalibrationService : ICalibrationService

@@ -351,8 +351,8 @@ public class ForecastEvaluationServiceTests
         string calibratorUsed,
         string thresholdSource,
         bool isPublished,
-        PredictionMarket market = PredictionMarket.BothTeamsScore,
-        string predictedOutcome = "BTTS")
+        PredictionMarket market = PredictionMarket.HomeWin,
+        string predictedOutcome = "Home Win")
     {
         return new ForecastObservation
         {

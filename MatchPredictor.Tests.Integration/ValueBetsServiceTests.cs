@@ -708,6 +708,9 @@ public class ValueBetsServiceTests
         public IReadOnlyList<PredictionCandidate> OverTwoGoals(IEnumerable<MatchData> matches) => BuildForecastCandidates(matches);
         public IReadOnlyList<PredictionCandidate> UnderTwoGoals(IEnumerable<MatchData> matches) => BuildForecastCandidates(matches);
         public IReadOnlyList<PredictionCandidate> StraightWin(IEnumerable<MatchData> matches) => BuildForecastCandidates(matches);
+        public IReadOnlyList<PredictionCandidate> MatchWinner(IEnumerable<MatchData> matches) => BuildForecastCandidates(matches);
+        public IReadOnlyList<PredictionCandidate> OverUnderSets(IEnumerable<MatchData> matches) => BuildForecastCandidates(matches);
+        public IReadOnlyList<PredictionCandidate> SetHandicap(IEnumerable<MatchData> matches) => BuildForecastCandidates(matches);
 
         private static string BuildKey(string homeTeam, string awayTeam) =>
             $"{homeTeam}|{awayTeam}";
