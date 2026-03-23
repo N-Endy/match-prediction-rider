@@ -72,7 +72,7 @@ public class AnalyticsModel : PageModel
             .ToDictionaryAsync(profile => profile.Market);
         var recentPromotionHistory = await _db.PromotionHistories
             .AsNoTracking()
-            .Where(history => history.EffectiveAt >= DateTime.UtcNow.AddDays(-30))
+            .Where(history => history.EffectiveAt >= DateTime.UtcNow.AddDays(-7))
             .OrderByDescending(history => history.EffectiveAt)
             .ToListAsync();
 
@@ -201,15 +201,22 @@ public class AnalyticsModel : PageModel
             })
             .ToList();
 
+        const int liveConfigLookbackDays = 3;
+        var timelineStartDate = DateOnly.FromDateTime(generatedAtLocal.Date.AddDays(-(liveConfigLookbackDays - 1)));
+        var liveConfigTimelineDates = recentPromotionHistory
+            .Select(history => DateOnly.FromDateTime(DateTimeProvider.ConvertUtcToLocal(history.EffectiveAt)))
+            .Where(date => date >= timelineStartDate)
+            .ToHashSet();
+
         return new AnalyticsLiveConfigSnapshot
         {
             GeneratedAtLocal = generatedAtLocal,
             Markets = markets,
             PromotionTimeline = BuildPromotionTimeline(
                 recentPromotionHistory,
-                recentPromotionHistory
-                    .Select(history => DateOnly.FromDateTime(DateTimeProvider.ConvertUtcToLocal(history.EffectiveAt)))
-                    .ToHashSet())
+                liveConfigTimelineDates)
+                .Take(18)
+                .ToList()
         };
     }
 

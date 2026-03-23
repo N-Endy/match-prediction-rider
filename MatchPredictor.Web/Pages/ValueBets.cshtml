@@ -10,6 +10,42 @@
         <h3 class="mp-page-subtitle">Calibrated model-vs-market edges, with short AI notes layered on top.</h3>
     </div>
 
+    <section class="mp-valuebets-guide">
+        <article class="mp-valuebets-guide-card">
+            <h3>How to use this page</h3>
+            <p>Start with the overall read. <strong>Strong</strong> means the recent sample and closing-line movement support normal-sized bets. <strong>Caution</strong> means lighter staking. <strong>Avoid</strong> means pass and let the evidence improve.</p>
+        </article>
+        <details class="mp-valuebets-guide-card" open>
+            <summary>Common terms</summary>
+            <div class="mp-valuebets-term-grid">
+                <article class="mp-valuebets-term-card">
+                    <strong>EV</strong>
+                    <span>The model edge over the market price. Higher is better.</span>
+                </article>
+                <article class="mp-valuebets-term-card">
+                    <strong>CLV</strong>
+                    <span>How your publish price compared to the closing market price. Positive is usually a healthy sign.</span>
+                </article>
+                <article class="mp-valuebets-term-card">
+                    <strong>ROI / Yield</strong>
+                    <span>Profit per unit staked across settled bets. Positive is good, but sample size matters.</span>
+                </article>
+                <article class="mp-valuebets-term-card">
+                    <strong>Max Drawdown</strong>
+                    <span>The worst bankroll drop from a previous peak. It shows how rough the ride can get.</span>
+                </article>
+                <article class="mp-valuebets-term-card">
+                    <strong>Threshold</strong>
+                    <span>The minimum model probability needed before a pick can be published.</span>
+                </article>
+                <article class="mp-valuebets-term-card">
+                    <strong>Calibrator</strong>
+                    <span>The probability-correction layer, such as Bucket or Beta, used before the pick is shown.</span>
+                </article>
+            </div>
+        </details>
+    </section>
+
     <!-- AI Loading State -->
     <div id="aiLoadingState" style="text-align: center; padding: 4rem 1rem;">
         <div style="display: flex; justify-content: center; margin-bottom: 1.5rem;">
@@ -267,6 +303,7 @@
             }
 
             const performance = report.performanceSummary || {};
+            const read = getPerformanceRead(performance);
             const generatedAt = report.generatedAtLocal
                 ? new Date(report.generatedAtLocal).toLocaleString()
                 : 'Awaiting fresh analysis';
@@ -281,6 +318,19 @@
                 : '';
 
             summary.innerHTML = `
+                <div class="mp-summary-read ${read.shellClass}">
+                    <div>
+                        <div class="mp-summary-read-label">Current Betting Read</div>
+                        <div class="mp-summary-read-title">
+                            <span class="mp-read-badge ${read.badgeClass}">${escapeHtml(read.label)}</span>
+                        </div>
+                        <p>${escapeHtml(read.summary)}</p>
+                    </div>
+                    <div class="mp-summary-read-meta">
+                        <span>${Number(performance.settledBetCount || 0)} settled bets</span>
+                        <span>${Number(performance.closingLineSamples || 0)} CLV samples</span>
+                    </div>
+                </div>
                 <div class="mp-stat-grid" style="margin-bottom: 1rem;">
                     <div class="mp-stat-card">
                         <div class="mp-stat-label">Markets Considered</div>
@@ -312,7 +362,7 @@
                     </div>
                     <div class="mp-stat-card">
                         <div class="mp-stat-label">Max Drawdown</div>
-                        <div class="mp-stat-value mp-stat-figure" style="color: ${Number(performance.maxDrawdownUnits || 0) > 0 ? '#f59e0b' : 'var(--text-primary)'};">${formatUnits(performance.maxDrawdownUnits)}</div>
+                        <div class="mp-stat-value mp-stat-figure" style="color: ${Number(performance.maxDrawdownUnits || 0) > 0 ? '#f59e0b' : 'var(--text-primary)'};">${formatDrawdownUnits(performance.maxDrawdownUnits)}</div>
                     </div>
                     <div class="mp-stat-card">
                         <div class="mp-stat-label">Avg CLV</div>
@@ -324,12 +374,54 @@
                     </div>
                 </div>
                 <div class="mp-analytics-note" style="margin-bottom: 1rem;">
-                    We only surface picks that clear the publish threshold and still beat the source market by a real edge. Performance figures assume flat 1-unit stakes across the recent settled sample, and CLV compares the publish price against the captured closing price.
+                    We only surface picks that clear the publish threshold and still beat the source market by a real edge. Performance figures assume flat 1-unit stakes across the recent settled sample, and CLV compares the publish price against the captured closing price. Use <strong>Strong</strong> for normal-sized plays, <strong>Caution</strong> for reduced exposure, and <strong>Avoid</strong> as a pass.
                 </div>
                 ${exclusionCards ? `<div class="mp-stat-grid">${exclusionCards}</div>` : ''}
             `;
 
             summary.style.display = 'block';
+        }
+
+        function getPerformanceRead(performance) {
+            const settledCount = Number(performance.settledBetCount || 0);
+            const clvSamples = Number(performance.closingLineSamples || 0);
+            const roi = Number(performance.roiPercent);
+            const clv = Number(performance.averageClosingLineValuePercent);
+            const drawdown = Number(performance.maxDrawdownUnits || 0);
+
+            if (settledCount < 10) {
+                return {
+                    label: 'Avoid',
+                    badgeClass: 'mp-read-badge-avoid',
+                    shellClass: 'mp-summary-read-avoid',
+                    summary: 'The settled sample is still too small to trust this page as a strong betting signal.'
+                };
+            }
+
+            if (roi < -0.03 || clv < -0.005) {
+                return {
+                    label: 'Avoid',
+                    badgeClass: 'mp-read-badge-avoid',
+                    shellClass: 'mp-summary-read-avoid',
+                    summary: 'Recent results or closing-line movement are working against the process, so this is a pass for now.'
+                };
+            }
+
+            if (settledCount >= 40 && clvSamples >= 20 && clv >= 0.002 && roi >= 0 && drawdown <= Math.max(35, settledCount * 1.1)) {
+                return {
+                    label: 'Strong',
+                    badgeClass: 'mp-read-badge-strong',
+                    shellClass: 'mp-summary-read-strong',
+                    summary: 'The sample is deep enough and prices are moving in our favor, so this is the healthiest betting environment on the page.'
+                };
+            }
+
+            return {
+                label: 'Caution',
+                badgeClass: 'mp-read-badge-caution',
+                shellClass: 'mp-summary-read-caution',
+                summary: 'There is usable signal here, but the sample depth or market feedback is not clean enough for full confidence yet.'
+            };
         }
 
         function formatRate(value) {
@@ -369,6 +461,15 @@
 
         function formatSignedUnits(value) {
             return formatUnits(value);
+        }
+
+        function formatDrawdownUnits(value) {
+            const numeric = Math.abs(Number(value));
+            if (!Number.isFinite(numeric)) {
+                return '--';
+            }
+
+            return `${numeric.toFixed(2)}u worst drop`;
         }
 
         function getSignedColor(value) {
@@ -414,6 +515,197 @@
     </script>
     
     <style>
+        .mp-valuebets-guide {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .mp-valuebets-guide-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 1.1rem 1.15rem;
+        }
+
+        .mp-valuebets-guide-card h3,
+        .mp-valuebets-guide-card summary {
+            color: white;
+            font-size: 1rem;
+            font-weight: 700;
+        }
+
+        .mp-valuebets-guide-card p {
+            margin: 0.6rem 0 0;
+            color: var(--text-secondary);
+            line-height: 1.65;
+            font-size: 0.92rem;
+        }
+
+        .mp-valuebets-guide-card summary {
+            cursor: pointer;
+            list-style: none;
+        }
+
+        .mp-valuebets-guide-card summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .mp-valuebets-term-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 0.75rem;
+            margin-top: 0.9rem;
+        }
+
+        .mp-valuebets-term-card {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            padding: 0.8rem;
+            border-radius: var(--radius-md);
+            background: rgba(255, 255, 255, 0.025);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .mp-valuebets-term-card strong {
+            color: white;
+            font-size: 0.84rem;
+        }
+
+        .mp-valuebets-term-card span {
+            color: var(--text-muted);
+            font-size: 0.82rem;
+            line-height: 1.5;
+        }
+
+        .mp-summary-read {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 1rem;
+            padding: 1rem 1.1rem;
+            border-radius: var(--radius-lg);
+            margin-bottom: 1rem;
+            border: 1px solid transparent;
+        }
+
+        .mp-summary-read-strong {
+            background: rgba(16, 185, 129, 0.08);
+            border-color: rgba(16, 185, 129, 0.18);
+        }
+
+        .mp-summary-read-caution {
+            background: rgba(245, 158, 11, 0.08);
+            border-color: rgba(245, 158, 11, 0.18);
+        }
+
+        .mp-summary-read-avoid {
+            background: rgba(244, 63, 94, 0.08);
+            border-color: rgba(244, 63, 94, 0.18);
+        }
+
+        .mp-summary-read-label {
+            color: var(--text-muted);
+            font-size: 0.76rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .mp-summary-read-title {
+            margin: 0.45rem 0 0.5rem;
+        }
+
+        .mp-summary-read p {
+            margin: 0;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            max-width: 700px;
+        }
+
+        .mp-summary-read-meta {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 0.5rem;
+        }
+
+        .mp-summary-read-meta span,
+        .mp-read-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.32rem 0.7rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            white-space: nowrap;
+        }
+
+        .mp-summary-read-meta span {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-secondary);
+        }
+
+        .mp-read-badge-strong {
+            background: rgba(16, 185, 129, 0.14);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.18);
+        }
+
+        .mp-read-badge-caution {
+            background: rgba(245, 158, 11, 0.14);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.18);
+        }
+
+        .mp-read-badge-avoid {
+            background: rgba(244, 63, 94, 0.14);
+            color: #fb7185;
+            border: 1px solid rgba(244, 63, 94, 0.18);
+        }
+
+        .mp-stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem;
+        }
+
+        .mp-stat-card {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 0.45rem;
+            min-height: 132px;
+        }
+
+        .mp-stat-figure {
+            font-variant-numeric: tabular-nums;
+            font-feature-settings: "tnum" 1;
+            min-height: 2.1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+
+        .mp-stat-value-compact {
+            font-size: 1.2rem;
+            line-height: 1.35;
+            word-break: break-word;
+        }
+
+        .mp-analytics-note {
+            padding: 0.95rem 1rem;
+            border-radius: var(--radius-md);
+            background: rgba(148, 163, 184, 0.08);
+            border: 1px solid rgba(148, 163, 184, 0.12);
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
         .mp-spinner {
             width: 3.5rem;
             height: 3.5rem;
@@ -425,6 +717,20 @@
         
         @@keyframes mp-spin {
             to { transform: rotate(360deg); }
+        }
+
+        @@media (max-width: 720px) {
+            .mp-summary-read {
+                flex-direction: column;
+            }
+
+            .mp-summary-read-meta {
+                justify-content: flex-start;
+            }
+
+            .mp-stat-grid {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 }

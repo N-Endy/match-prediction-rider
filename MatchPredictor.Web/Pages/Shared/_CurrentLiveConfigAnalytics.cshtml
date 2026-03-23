@@ -94,7 +94,12 @@
 </div>
 
 <div class="mp-switch-log">
-    <h3 style="margin-bottom: 1.5rem; font-size: 1.1rem; color: white;">Recent Switch Timeline</h3>
+    <div class="mp-switch-log-header">
+        <div>
+            <h3 style="margin-bottom: 0.35rem; font-size: 1.1rem; color: white;">Recent Switch Timeline</h3>
+            <p class="mp-switch-caption">Showing the last 3 days of live threshold and calibrator changes. The list scrolls if it gets crowded.</p>
+        </div>
+    </div>
 
     @if (Model.PromotionTimeline.Any())
     {

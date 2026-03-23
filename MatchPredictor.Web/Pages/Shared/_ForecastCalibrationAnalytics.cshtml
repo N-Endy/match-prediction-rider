@@ -1,5 +1,9 @@
 @model MatchPredictor.Domain.Models.AnalyticsStats
 
+@{
+    var overallRead = GetCalibrationRead(Model.SettledForecasts, Model.BrierScore, Model.LogLoss);
+}
+
 <div class="mp-stat-grid">
     <div class="mp-stat-card">
         <div class="mp-stat-label">Settled Forecasts</div>
@@ -43,8 +47,14 @@
     </div>
 </div>
 
-<div class="mp-analytics-note">
-    This section is about probability quality. Lower Brier is better, and curves closer to the diagonal are better calibrated.
+<div class="mp-analytics-note mp-note-with-read">
+    <div>
+        <strong>Probability quality view.</strong> Lower Brier and Log Loss are better, and curves closer to the diagonal are better calibrated.
+    </div>
+    <div class="mp-note-read">
+        <span class="mp-read-badge @overallRead.CssClass">@overallRead.Label</span>
+        <span class="mp-note-caption">@overallRead.Detail</span>
+    </div>
 </div>
 
 <div class="mp-market-analytics">
@@ -53,6 +63,7 @@
         <div class="mp-market-grid">
             @foreach (var market in Model.ForecastMarketStats)
             {
+                var marketRead = GetCalibrationRead(market.SettledCount, market.CalibratedBrierScore, market.LogLoss);
                 <article class="mp-market-card">
                     <div class="mp-market-header">
                         <div>
@@ -63,6 +74,11 @@
                             <span>Raw @market.RawBrierScore.ToString("F3")</span>
                             <span>Cal @market.CalibratedBrierScore.ToString("F3")</span>
                         </div>
+                    </div>
+
+                    <div class="mp-read-strip">
+                        <span class="mp-read-badge @marketRead.CssClass">@marketRead.Label</span>
+                        <span class="mp-read-detail">@marketRead.Detail</span>
                     </div>
 
                     <div class="mp-market-metrics">
@@ -288,23 +304,31 @@
         </div>
         @if (Model.LeagueSegmentStats.Any())
         {
-            <div class="mp-era-row mp-era-row-head">
-                <span class="mp-era-name">League</span>
-                <span class="mp-era-metric">Count</span>
-                <span class="mp-era-metric">Hit</span>
-                <span class="mp-era-metric">Brier</span>
-                <span class="mp-era-metric">Log</span>
-            </div>
-            foreach (var stat in Model.LeagueSegmentStats)
-            {
-                <div class="mp-era-row">
-                    <span class="mp-era-name">@stat.League</span>
-                    <span class="mp-era-metric">@stat.SampleCount</span>
-                    <span class="mp-era-metric">@((stat.HitRate * 100).ToString("F1"))%</span>
-                    <span class="mp-era-metric">@stat.BrierScore.ToString("F3")</span>
-                    <span class="mp-era-metric">@stat.LogLoss.ToString("F3")</span>
+            <div class="mp-segment-table">
+                <div class="mp-segment-row mp-segment-row-head">
+                    <span class="mp-segment-name">League</span>
+                    <span class="mp-segment-metric">Read</span>
+                    <span class="mp-segment-metric">Count</span>
+                    <span class="mp-segment-metric">Hit</span>
+                    <span class="mp-segment-metric">Brier</span>
+                    <span class="mp-segment-metric">Log</span>
                 </div>
-            }
+                @foreach (var stat in Model.LeagueSegmentStats)
+                {
+                    var read = GetCalibrationRead(stat.SampleCount, stat.BrierScore, stat.LogLoss);
+                    <div class="mp-segment-row">
+                        <div class="mp-segment-name">
+                            <span class="mp-segment-title">@stat.League</span>
+                            <span class="mp-segment-subtitle">@read.Detail</span>
+                        </div>
+                        <span class="mp-read-badge @read.CssClass">@read.Label</span>
+                        <span class="mp-segment-metric">@stat.SampleCount</span>
+                        <span class="mp-segment-metric">@((stat.HitRate * 100).ToString("F1"))%</span>
+                        <span class="mp-segment-metric">@stat.BrierScore.ToString("F3")</span>
+                        <span class="mp-segment-metric">@stat.LogLoss.ToString("F3")</span>
+                    </div>
+                }
+            </div>
         }
         else
         {
@@ -323,23 +347,31 @@
         </div>
         @if (Model.SourceSegmentStats.Any())
         {
-            <div class="mp-era-row mp-era-row-head">
-                <span class="mp-era-name">Tag</span>
-                <span class="mp-era-metric">Count</span>
-                <span class="mp-era-metric">Hit</span>
-                <span class="mp-era-metric">Brier</span>
-                <span class="mp-era-metric">Log</span>
-            </div>
-            foreach (var stat in Model.SourceSegmentStats)
-            {
-                <div class="mp-era-row">
-                    <span class="mp-era-name">@stat.SourceName</span>
-                    <span class="mp-era-metric">@stat.SampleCount</span>
-                    <span class="mp-era-metric">@((stat.HitRate * 100).ToString("F1"))%</span>
-                    <span class="mp-era-metric">@stat.BrierScore.ToString("F3")</span>
-                    <span class="mp-era-metric">@stat.LogLoss.ToString("F3")</span>
+            <div class="mp-segment-table">
+                <div class="mp-segment-row mp-segment-row-head">
+                    <span class="mp-segment-name">Tag</span>
+                    <span class="mp-segment-metric">Read</span>
+                    <span class="mp-segment-metric">Count</span>
+                    <span class="mp-segment-metric">Hit</span>
+                    <span class="mp-segment-metric">Brier</span>
+                    <span class="mp-segment-metric">Log</span>
                 </div>
-            }
+                @foreach (var stat in Model.SourceSegmentStats)
+                {
+                    var read = GetCalibrationRead(stat.SampleCount, stat.BrierScore, stat.LogLoss);
+                    <div class="mp-segment-row">
+                        <div class="mp-segment-name">
+                            <span class="mp-segment-title">@stat.SourceName</span>
+                            <span class="mp-segment-subtitle">@read.Detail</span>
+                        </div>
+                        <span class="mp-read-badge @read.CssClass">@read.Label</span>
+                        <span class="mp-segment-metric">@stat.SampleCount</span>
+                        <span class="mp-segment-metric">@((stat.HitRate * 100).ToString("F1"))%</span>
+                        <span class="mp-segment-metric">@stat.BrierScore.ToString("F3")</span>
+                        <span class="mp-segment-metric">@stat.LogLoss.ToString("F3")</span>
+                    </div>
+                }
+            </div>
         }
         else
         {
@@ -349,3 +381,49 @@
         }
     </article>
 </div>
+
+@functions {
+    private sealed class CalibrationRead
+    {
+        public CalibrationRead(string label, string cssClass, string detail)
+        {
+            Label = label;
+            CssClass = cssClass;
+            Detail = detail;
+        }
+
+        public string Label { get; }
+        public string CssClass { get; }
+        public string Detail { get; }
+    }
+
+    private static CalibrationRead GetCalibrationRead(int sampleCount, double brierScore, double logLoss)
+    {
+        if (sampleCount < 10)
+        {
+            return new CalibrationRead("Avoid", "mp-read-badge-avoid", "Too little settled history to trust this segment on its own yet.");
+        }
+
+        if (sampleCount < 30)
+        {
+            return new CalibrationRead("Caution", "mp-read-badge-caution", "Signal is starting to form, but the sample is still light.");
+        }
+
+        if (brierScore >= 0.24 || logLoss >= 0.70)
+        {
+            return new CalibrationRead("Avoid", "mp-read-badge-avoid", "Forecast quality is currently too loose for normal staking.");
+        }
+
+        if (sampleCount >= 60 && brierScore <= 0.20 && logLoss <= 0.60)
+        {
+            return new CalibrationRead("Strong", "mp-read-badge-strong", "Large sample with efficient, stable calibration.");
+        }
+
+        if (sampleCount >= 35 && brierScore <= 0.22 && logLoss <= 0.64)
+        {
+            return new CalibrationRead("Strong", "mp-read-badge-strong", "Healthy sample and clean enough probability quality to lean on.");
+        }
+
+        return new CalibrationRead("Caution", "mp-read-badge-caution", "Playable, but keep stake size measured until the edge looks cleaner.");
+    }
+}

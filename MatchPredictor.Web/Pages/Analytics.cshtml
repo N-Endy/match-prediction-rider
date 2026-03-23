@@ -64,6 +64,30 @@
         <partial name="_CurrentLiveConfigAnalytics" model="Model.CurrentLiveConfig" />
     </section>
 
+    <section class="mp-guide-shell">
+        <div class="mp-glossary-header">
+            <h3>Quick Playbook</h3>
+            <p>Read the dashboard in this order so the numbers turn into a cleaner betting decision.</p>
+        </div>
+        <div class="mp-guide-grid">
+            <article class="mp-guide-card">
+                <span class="mp-guide-step">1</span>
+                <h4>Start with the read</h4>
+                <p><strong>Strong</strong> means enough sample plus cleaner calibration. <strong>Caution</strong> means reduce stake size. <strong>Avoid</strong> means skip or wait for more evidence.</p>
+            </article>
+            <article class="mp-guide-card">
+                <span class="mp-guide-step">2</span>
+                <h4>Favor stronger environments</h4>
+                <p>League and calibrator segments tell you where the model is behaving best. Trust those environments before trusting a single eye-catching edge.</p>
+            </article>
+            <article class="mp-guide-card">
+                <span class="mp-guide-step">3</span>
+                <h4>Use process metrics, not hot streaks</h4>
+                <p>Positive CLV, lower Brier, and lower Log Loss are better signs of a repeatable edge than a short run of recent wins.</p>
+            </article>
+        </div>
+    </section>
+
     <section class="mp-glossary-shell">
         <div class="mp-glossary-header">
             <h3>How To Read These Numbers</h3>
@@ -83,16 +107,24 @@
                 <p>Lower is better. It rewards both being correct and being honest about uncertainty.</p>
             </article>
             <article class="mp-glossary-card">
-                <h4>Reliability</h4>
-                <p>Lower is better. It measures how far forecast probabilities are from what actually happened.</p>
+                <h4>Log Loss</h4>
+                <p>Lower is better. It punishes overconfident wrong calls more heavily than Brier does, so it is a strong check on reckless forecasts.</p>
             </article>
             <article class="mp-glossary-card">
-                <h4>Resolution</h4>
-                <p>Higher is better. It shows whether the model meaningfully separates strong spots from marginal ones.</p>
+                <h4>Precision / Recall / F1</h4>
+                <p>Precision asks how often positive calls were right. Recall asks how many real wins the model found. F1 balances both into one score.</p>
             </article>
             <article class="mp-glossary-card">
-                <h4>Uncertainty</h4>
-                <p>This is the background difficulty of the market itself. It is descriptive, not a quality score.</p>
+                <h4>REL / RES / UNC</h4>
+                <p><strong>Reliability</strong> should be low, <strong>Resolution</strong> should be high, and <strong>Uncertainty</strong> describes how noisy the market is in the first place.</p>
+            </article>
+            <article class="mp-glossary-card">
+                <h4>Confidence Bands</h4>
+                <p>These compare what the model predicted against what really happened in each probability bucket, such as 60-70% calls.</p>
+            </article>
+            <article class="mp-glossary-card">
+                <h4>League / Calibrator Segments</h4>
+                <p>These isolate where the model is strongest or weakest by competition and by the active calibrator tag, so underperforming cohorts are easier to spot.</p>
             </article>
             <article class="mp-glossary-card">
                 <h4>Threshold Source</h4>
@@ -101,6 +133,22 @@
             <article class="mp-glossary-card">
                 <h4>Calibrator Era</h4>
                 <p>This shows how forecasts performed while a specific calibrator was live, such as Bucket or Beta.</p>
+            </article>
+            <article class="mp-glossary-card">
+                <h4>CLV</h4>
+                <p>Closing Line Value compares the price you got at publish time to the closing market price. Positive CLV is usually a healthy sign of process quality.</p>
+            </article>
+            <article class="mp-glossary-card">
+                <h4>ROI / Yield</h4>
+                <p>Both tell you whether the strategy is making money per unit staked. Positive is good, but tiny values need a decent sample before you trust them.</p>
+            </article>
+            <article class="mp-glossary-card">
+                <h4>Max Drawdown</h4>
+                <p>This is the worst bankroll drop from a previous peak. It tells you how rough the ride can get even when the strategy is profitable overall.</p>
+            </article>
+            <article class="mp-glossary-card">
+                <h4>Strong / Caution / Avoid</h4>
+                <p>These labels are shorthand for action. <strong>Strong</strong> means usable evidence, <strong>Caution</strong> means lighter staking, and <strong>Avoid</strong> means pass or wait.</p>
             </article>
             <article class="mp-glossary-card">
                 <h4>Promotion Timeline</h4>
@@ -203,6 +251,74 @@
         border: 1px solid rgba(148, 163, 184, 0.12);
         color: var(--text-secondary);
         line-height: 1.6;
+    }
+
+    .mp-note-with-read {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .mp-note-read {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 0.35rem;
+    }
+
+    .mp-note-caption {
+        color: var(--text-muted);
+        font-size: 0.78rem;
+        max-width: 320px;
+        text-align: right;
+        line-height: 1.45;
+    }
+
+    .mp-read-strip {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.65rem;
+        margin-top: -0.15rem;
+    }
+
+    .mp-read-detail {
+        color: var(--text-muted);
+        font-size: 0.82rem;
+        line-height: 1.5;
+    }
+
+    .mp-read-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.32rem 0.7rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+
+    .mp-read-badge-strong {
+        background: rgba(16, 185, 129, 0.14);
+        color: #34d399;
+        border: 1px solid rgba(16, 185, 129, 0.18);
+    }
+
+    .mp-read-badge-caution {
+        background: rgba(245, 158, 11, 0.14);
+        color: #fbbf24;
+        border: 1px solid rgba(245, 158, 11, 0.18);
+    }
+
+    .mp-read-badge-avoid {
+        background: rgba(244, 63, 94, 0.14);
+        color: #fb7185;
+        border: 1px solid rgba(244, 63, 94, 0.18);
     }
 
     .mp-stat-grid {
@@ -348,10 +464,38 @@
         margin-top: 2rem;
     }
 
+    .mp-switch-log-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 1rem;
+        margin-bottom: 1.2rem;
+    }
+
+    .mp-switch-caption {
+        margin: 0;
+        color: var(--text-muted);
+        font-size: 0.84rem;
+        line-height: 1.55;
+    }
+
     .mp-switch-list {
         display: flex;
         flex-direction: column;
         gap: 0.85rem;
+        max-height: 480px;
+        overflow-y: auto;
+        padding-right: 0.25rem;
+        scrollbar-width: thin;
+    }
+
+    .mp-switch-list::-webkit-scrollbar {
+        width: 8px;
+    }
+
+    .mp-switch-list::-webkit-scrollbar-thumb {
+        background: rgba(148, 163, 184, 0.18);
+        border-radius: 999px;
     }
 
     .mp-switch-item {
@@ -613,6 +757,65 @@
         font-feature-settings: "tnum" 1;
     }
 
+    .mp-segment-table {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        overflow-x: auto;
+        padding-bottom: 0.15rem;
+    }
+
+    .mp-segment-row {
+        display: grid;
+        grid-template-columns: minmax(190px, 1.8fr) auto repeat(4, minmax(70px, 0.8fr));
+        gap: 0.7rem;
+        align-items: center;
+        min-width: 660px;
+        padding: 0.7rem 0.75rem;
+        border-radius: var(--radius-md);
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .mp-segment-row-head {
+        background: transparent;
+        border: none;
+        padding: 0 0 0.35rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-size: 0.7rem;
+    }
+
+    .mp-segment-name {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+        min-width: 0;
+    }
+
+    .mp-segment-title {
+        color: white;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .mp-segment-subtitle {
+        color: var(--text-muted);
+        font-size: 0.78rem;
+        line-height: 1.45;
+    }
+
+    .mp-segment-metric {
+        text-align: right;
+        color: var(--text-secondary);
+        font-size: 0.82rem;
+        font-variant-numeric: tabular-nums;
+        font-feature-settings: "tnum" 1;
+    }
+
     .mp-reliability-shell {
         display: flex;
         flex-direction: column;
@@ -692,10 +895,19 @@
         background: #10b981;
     }
 
+    .mp-guide-shell,
     .mp-glossary-shell {
         margin-top: 2.25rem;
         padding: 1.5rem;
         border-radius: var(--radius-lg);
+    }
+
+    .mp-guide-shell {
+        border: 1px solid rgba(59, 130, 246, 0.18);
+        background: linear-gradient(180deg, rgba(30, 41, 59, 0.55), rgba(15, 23, 42, 0.35));
+    }
+
+    .mp-glossary-shell {
         border: 1px solid var(--border-color);
         background: linear-gradient(180deg, rgba(15, 23, 42, 0.55), rgba(15, 23, 42, 0.35));
     }
@@ -712,6 +924,7 @@
         line-height: 1.6;
     }
 
+    .mp-guide-grid,
     .mp-glossary-grid {
         margin-top: 1.25rem;
         display: grid;
@@ -719,11 +932,39 @@
         gap: 0.9rem;
     }
 
+    .mp-guide-card,
     .mp-glossary-card {
         padding: 1rem;
         border-radius: var(--radius-md);
         background: rgba(255, 255, 255, 0.03);
         border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .mp-guide-step {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.8rem;
+        height: 1.8rem;
+        border-radius: 999px;
+        background: rgba(59, 130, 246, 0.14);
+        color: #93c5fd;
+        font-size: 0.82rem;
+        font-weight: 700;
+        margin-bottom: 0.8rem;
+    }
+
+    .mp-guide-card h4 {
+        margin: 0 0 0.4rem;
+        color: white;
+        font-size: 0.95rem;
+    }
+
+    .mp-guide-card p {
+        margin: 0;
+        color: var(--text-muted);
+        font-size: 0.84rem;
+        line-height: 1.6;
     }
 
     .mp-glossary-card h4 {
@@ -747,12 +988,17 @@
         .mp-market-beta-grid,
         .mp-era-grid,
         .mp-market-grid,
+        .mp-guide-grid,
         .mp-glossary-grid {
             grid-template-columns: 1fr;
         }
 
         .mp-switch-item {
             grid-template-columns: 1fr;
+        }
+
+        .mp-switch-list {
+            max-height: 360px;
         }
 
         .mp-cat-header {
@@ -779,6 +1025,15 @@
 
         .mp-cat-metric {
             flex: 0 0 auto;
+        }
+
+        .mp-note-read {
+            align-items: flex-start;
+        }
+
+        .mp-note-caption {
+            max-width: none;
+            text-align: left;
         }
     }
 </style>
