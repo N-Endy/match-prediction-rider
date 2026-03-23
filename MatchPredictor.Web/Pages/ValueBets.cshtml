@@ -83,15 +83,22 @@
                 grid.style.display = 'grid';
                 grid.style.gap = '1.5rem';
                 grid.innerHTML = valueBets.map(bet => {
-                    const modelProbString = (bet.mathematicalProbability * 100).toFixed(1) + '%';
-                    const marketProbString = (bet.marketProbability * 100).toFixed(1) + '%';
-                    const impliedProbString = (bet.impliedProbability * 100).toFixed(1) + '%';
+                    const modelProbString = formatRate(bet.mathematicalProbability);
+                    const marketProbString = formatRate(bet.marketProbability);
+                    const impliedProbString = formatRate(bet.impliedProbability);
                     const decimalOddsString = Number(bet.decimalOdds || 0).toFixed(2);
-                    const expectedValueValue = (bet.expectedValuePercent || 0) * 100;
-                    const expectedValueString = `${expectedValueValue >= 0 ? '+' : ''}${expectedValueValue.toFixed(1)}%`;
-                    const edgeString = '+' + (bet.edge * 100).toFixed(1) + ' pts';
-                    const thresholdString = (bet.thresholdUsed * 100).toFixed(1) + '%';
+                    const expectedValueString = formatSignedPercent(bet.expectedValuePercent);
+                    const edgeString = formatSignedPoints(bet.edge);
+                    const thresholdString = formatRate(bet.thresholdUsed);
                     const thresholdSource = (bet.thresholdSource || 'Configured').toLowerCase();
+                    const calibratorUsed = bet.calibratorUsed || 'Bucket';
+                    const settledState = getSettledState(bet);
+                    const realizedReturnString = bet.realizedReturnPercent == null
+                        ? 'Open'
+                        : formatSignedPercent(bet.realizedReturnPercent);
+                    const clvString = bet.closingLineValuePercent == null
+                        ? 'Pending'
+                        : formatSignedPercent(bet.closingLineValuePercent);
                     const marketKey =
                         bet.predictionCategory === 'BothTeamsScore' ? 'BTTS' :
                         bet.predictionCategory === 'Over2.5Goals' ? 'Over2.5' :
@@ -116,7 +123,8 @@
                         bet.pricingSource ? `<span class="mp-insight-chip">${escapeHtml(bet.pricingSource)}</span>` : '',
                         bet.oddsFreshness ? `<span class="mp-insight-chip">${escapeHtml(bet.oddsFreshness)}</span>` : '',
                         bet.oddsDerivationSource ? `<span class="mp-insight-chip">${escapeHtml(bet.oddsDerivationSource)}</span>` : '',
-                        bet.edgeSource ? `<span class="mp-insight-chip">${escapeHtml(bet.edgeSource)}</span>` : ''
+                        bet.edgeSource ? `<span class="mp-insight-chip">${escapeHtml(bet.edgeSource)}</span>` : '',
+                        `<span class="mp-insight-chip">${escapeHtml(calibratorUsed)} calibrator</span>`
                     ].filter(Boolean).join('');
 
                     return `
@@ -191,6 +199,25 @@
                                     </div>
                                 </div>
 
+                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 1rem;">
+                                    <div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Calibrator</div>
+                                        <div style="font-weight: 700; color: var(--text-primary); font-size: 1.05rem;">${escapeHtml(calibratorUsed)}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Settled</div>
+                                        <div style="font-weight: 700; color: ${settledState.color}; font-size: 1.05rem;">${settledState.label}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Return</div>
+                                        <div style="font-weight: 700; color: ${settledState.returnColor}; font-size: 1.05rem;">${realizedReturnString}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">CLV</div>
+                                        <div style="font-weight: 700; color: ${getSignedColor(bet.closingLineValuePercent)}; font-size: 1.05rem;">${clvString}</div>
+                                    </div>
+                                </div>
+
                                 <div style="font-size: 0.95rem; line-height: 1.6; color: var(--text-secondary); display: flex; gap: 12px; align-items: flex-start;">
                                     <span style="font-size: 1.4rem; line-height: 1;">🤖</span>
                                     <em style="font-style: italic;">"${escapeHtml(bet.aiJustification || '')}"</em>
@@ -239,6 +266,7 @@
                 return;
             }
 
+            const performance = report.performanceSummary || {};
             const generatedAt = report.generatedAtLocal
                 ? new Date(report.generatedAtLocal).toLocaleString()
                 : 'Awaiting fresh analysis';
@@ -263,17 +291,125 @@
                         <div class="mp-stat-value mp-stat-figure">${Number(report.includedCandidateCount || 0)}</div>
                     </div>
                     <div class="mp-stat-card">
+                        <div class="mp-stat-label">Settled Bets</div>
+                        <div class="mp-stat-value mp-stat-figure">${Number(performance.settledBetCount || 0)}</div>
+                    </div>
+                    <div class="mp-stat-card">
+                        <div class="mp-stat-label">Win Rate</div>
+                        <div class="mp-stat-value mp-stat-figure">${formatRate(performance.winRate)}</div>
+                    </div>
+                    <div class="mp-stat-card">
+                        <div class="mp-stat-label">Net Units</div>
+                        <div class="mp-stat-value mp-stat-figure" style="color: ${getSignedColor(performance.netProfitUnits)};">${formatSignedUnits(performance.netProfitUnits)}</div>
+                    </div>
+                    <div class="mp-stat-card">
+                        <div class="mp-stat-label">ROI</div>
+                        <div class="mp-stat-value mp-stat-figure" style="color: ${getSignedColor(performance.roiPercent)};">${formatSignedPercent(performance.roiPercent)}</div>
+                    </div>
+                    <div class="mp-stat-card">
+                        <div class="mp-stat-label">Yield</div>
+                        <div class="mp-stat-value mp-stat-figure" style="color: ${getSignedColor(performance.yieldPercent)};">${formatSignedPercent(performance.yieldPercent)}</div>
+                    </div>
+                    <div class="mp-stat-card">
+                        <div class="mp-stat-label">Max Drawdown</div>
+                        <div class="mp-stat-value mp-stat-figure" style="color: ${Number(performance.maxDrawdownUnits || 0) > 0 ? '#f59e0b' : 'var(--text-primary)'};">${formatUnits(performance.maxDrawdownUnits)}</div>
+                    </div>
+                    <div class="mp-stat-card">
+                        <div class="mp-stat-label">Avg CLV</div>
+                        <div class="mp-stat-value mp-stat-figure" style="color: ${getSignedColor(performance.averageClosingLineValuePercent)};">${formatSignedPercent(performance.averageClosingLineValuePercent)}</div>
+                    </div>
+                    <div class="mp-stat-card">
                         <div class="mp-stat-label">Report Freshness</div>
                         <div class="mp-stat-value mp-stat-value-compact" style="font-size: 1.05rem;">${escapeHtml(generatedAt)}</div>
                     </div>
                 </div>
                 <div class="mp-analytics-note" style="margin-bottom: 1rem;">
-                    We only surface picks that clear the publish threshold and still beat the source market by a real edge. The cards below are now ranked by expected value, with the market price source and freshness shown on each fixture.
+                    We only surface picks that clear the publish threshold and still beat the source market by a real edge. Performance figures assume flat 1-unit stakes across the recent settled sample, and CLV compares the publish price against the captured closing price.
                 </div>
                 ${exclusionCards ? `<div class="mp-stat-grid">${exclusionCards}</div>` : ''}
             `;
 
             summary.style.display = 'block';
+        }
+
+        function formatRate(value) {
+            const numeric = Number(value);
+            return Number.isFinite(numeric) ? `${(numeric * 100).toFixed(1)}%` : '0.0%';
+        }
+
+        function formatSignedPercent(value) {
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) {
+                return '--';
+            }
+
+            const prefix = numeric >= 0 ? '+' : '';
+            return `${prefix}${(numeric * 100).toFixed(1)}%`;
+        }
+
+        function formatSignedPoints(value) {
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) {
+                return '--';
+            }
+
+            const prefix = numeric >= 0 ? '+' : '';
+            return `${prefix}${(numeric * 100).toFixed(1)} pts`;
+        }
+
+        function formatUnits(value) {
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) {
+                return '--';
+            }
+
+            const prefix = numeric >= 0 ? '+' : '';
+            return `${prefix}${numeric.toFixed(2)}u`;
+        }
+
+        function formatSignedUnits(value) {
+            return formatUnits(value);
+        }
+
+        function getSignedColor(value) {
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) {
+                return 'var(--text-muted)';
+            }
+
+            if (numeric > 0) {
+                return '#10b981';
+            }
+
+            if (numeric < 0) {
+                return '#ef4444';
+            }
+
+            return 'var(--text-primary)';
+        }
+
+        function getSettledState(bet) {
+            if (bet.isSettledWin === true) {
+                return {
+                    label: 'Win',
+                    color: '#10b981',
+                    returnColor: '#10b981'
+                };
+            }
+
+            if (bet.isSettledWin === false) {
+                return {
+                    label: 'Loss',
+                    color: '#ef4444',
+                    returnColor: '#ef4444'
+                };
+            }
+
+            return {
+                label: 'Open',
+                color: 'var(--text-muted)',
+                returnColor: 'var(--text-muted)'
+            };
         }
     </script>
     

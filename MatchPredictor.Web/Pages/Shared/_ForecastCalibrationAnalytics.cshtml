@@ -17,6 +17,30 @@
             @(Model.SettledForecasts > 0 ? Model.BrierScore.ToString("F3") : "0.000")
         </div>
     </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Log Loss</div>
+        <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">
+            @(Model.SettledForecasts > 0 ? Model.LogLoss.ToString("F3") : "0.000")
+        </div>
+    </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Precision</div>
+        <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">
+            @(Model.SettledForecasts > 0 ? $"{Model.Precision * 100:F1}%" : "0.0%")
+        </div>
+    </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">Recall</div>
+        <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">
+            @(Model.SettledForecasts > 0 ? $"{Model.Recall * 100:F1}%" : "0.0%")
+        </div>
+    </div>
+    <div class="mp-stat-card">
+        <div class="mp-stat-label">F1 Score</div>
+        <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">
+            @(Model.SettledForecasts > 0 ? Model.F1Score.ToString("F3") : "0.000")
+        </div>
+    </div>
 </div>
 
 <div class="mp-analytics-note">
@@ -42,6 +66,26 @@
                     </div>
 
                     <div class="mp-market-metrics">
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Hit Rate</span>
+                            <strong>@((market.HitRate * 100).ToString("F1"))%</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Log Loss</span>
+                            <strong>@market.LogLoss.ToString("F3")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Precision</span>
+                            <strong>@((market.Precision * 100).ToString("F1"))%</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Recall</span>
+                            <strong>@((market.Recall * 100).ToString("F1"))%</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">F1</span>
+                            <strong>@market.F1Score.ToString("F3")</strong>
+                        </div>
                         <div class="mp-market-metric-block">
                             <span class="mp-market-metric-label">Raw REL</span>
                             <strong>@market.RawDecomposition.Reliability.ToString("F3")</strong>
@@ -182,4 +226,126 @@
             No settled forecast data is available for this date range yet, so the calibration view cannot be drawn.
         </div>
     }
+</div>
+
+<div class="mp-analytics-note" style="margin-top: 2rem;">
+    Confidence bands help check whether 60-70% calls are really landing like 60-70% calls. Segment views help isolate drift by league and by the stored calibrator/source tag.
+</div>
+
+@if (Model.ConfidenceBandStats.Any())
+{
+    <div class="mp-category-stats" style="margin-top: 2rem;">
+        <h3 style="margin-bottom: 1.5rem; font-size: 1.1rem; color: white;">Confidence Bands</h3>
+        <div class="mp-market-grid">
+            @foreach (var band in Model.ConfidenceBandStats)
+            {
+                <article class="mp-market-card">
+                    <div class="mp-market-header">
+                        <div>
+                            <h4>@($"{band.MinProbability * 100:F0}-{band.MaxProbability * 100:F0}%")</h4>
+                            <p>@band.SampleCount settled forecasts</p>
+                        </div>
+                        <div class="mp-market-briers">
+                            <span>Avg @((band.AverageProbability * 100).ToString("F1"))%</span>
+                            <span>Hit @((band.HitRate * 100).ToString("F1"))%</span>
+                        </div>
+                    </div>
+                    <div class="mp-market-metrics">
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Samples</span>
+                            <strong>@band.SampleCount</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Avg Prob</span>
+                            <strong>@((band.AverageProbability * 100).ToString("F1"))%</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Hit Rate</span>
+                            <strong>@((band.HitRate * 100).ToString("F1"))%</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Brier</span>
+                            <strong>@band.BrierScore.ToString("F3")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Log Loss</span>
+                            <strong>@band.LogLoss.ToString("F3")</strong>
+                        </div>
+                    </div>
+                </article>
+            }
+        </div>
+    </div>
+}
+
+<div class="mp-market-grid" style="margin-top: 2rem;">
+    <article class="mp-market-card">
+        <div class="mp-market-header">
+            <div>
+                <h4>League Segments</h4>
+                <p>Where calibration is strongest or weakest by competition.</p>
+            </div>
+        </div>
+        @if (Model.LeagueSegmentStats.Any())
+        {
+            <div class="mp-era-row mp-era-row-head">
+                <span class="mp-era-name">League</span>
+                <span class="mp-era-metric">Count</span>
+                <span class="mp-era-metric">Hit</span>
+                <span class="mp-era-metric">Brier</span>
+                <span class="mp-era-metric">Log</span>
+            </div>
+            foreach (var stat in Model.LeagueSegmentStats)
+            {
+                <div class="mp-era-row">
+                    <span class="mp-era-name">@stat.League</span>
+                    <span class="mp-era-metric">@stat.SampleCount</span>
+                    <span class="mp-era-metric">@((stat.HitRate * 100).ToString("F1"))%</span>
+                    <span class="mp-era-metric">@stat.BrierScore.ToString("F3")</span>
+                    <span class="mp-era-metric">@stat.LogLoss.ToString("F3")</span>
+                </div>
+            }
+        }
+        else
+        {
+            <div class="mp-market-empty">
+                League segment stats will appear once enough settled forecasts are available.
+            </div>
+        }
+    </article>
+
+    <article class="mp-market-card">
+        <div class="mp-market-header">
+            <div>
+                <h4>Calibrator Segments</h4>
+                <p>Grouped by the stored model/calibrator tag on each forecast.</p>
+            </div>
+        </div>
+        @if (Model.SourceSegmentStats.Any())
+        {
+            <div class="mp-era-row mp-era-row-head">
+                <span class="mp-era-name">Tag</span>
+                <span class="mp-era-metric">Count</span>
+                <span class="mp-era-metric">Hit</span>
+                <span class="mp-era-metric">Brier</span>
+                <span class="mp-era-metric">Log</span>
+            </div>
+            foreach (var stat in Model.SourceSegmentStats)
+            {
+                <div class="mp-era-row">
+                    <span class="mp-era-name">@stat.SourceName</span>
+                    <span class="mp-era-metric">@stat.SampleCount</span>
+                    <span class="mp-era-metric">@((stat.HitRate * 100).ToString("F1"))%</span>
+                    <span class="mp-era-metric">@stat.BrierScore.ToString("F3")</span>
+                    <span class="mp-era-metric">@stat.LogLoss.ToString("F3")</span>
+                </div>
+            }
+        }
+        else
+        {
+            <div class="mp-market-empty">
+                Calibrator segment stats will appear once enough settled forecasts are available.
+            </div>
+        }
+    </article>
 </div>
