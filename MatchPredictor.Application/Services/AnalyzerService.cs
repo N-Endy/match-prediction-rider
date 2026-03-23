@@ -190,10 +190,6 @@ public class AnalyzerService : IAnalyzerService
                     targetDateString);
             }
             var publishedCandidates = _dataAnalyzerService.SelectPublishedPredictions(forecastCandidates).ToList();
-            var publishedLookup = publishedCandidates.ToDictionary(
-                candidate => BuildCandidateKey(candidate),
-                candidate => candidate,
-                StringComparer.Ordinal);
 
             var existingCurrentPredictions = await _dbContext.Predictions
                 .Where(prediction => prediction.MatchLocalDate == targetLocalDate)
@@ -210,15 +206,53 @@ public class AnalyzerService : IAnalyzerService
             var forecastRevisionLookup = existingCurrentForecasts
                 .GroupBy(forecast => BuildForecastRevisionKey(forecast.FixtureKey, forecast.Market))
                 .ToDictionary(group => group.Key, group => group.Max(forecast => forecast.RevisionNumber), StringComparer.Ordinal);
+            var predictionStateLookup = existingCurrentPredictions
+                .GroupBy(prediction => BuildPredictionStateKey(prediction.FixtureKey, prediction.PredictionCategory))
+                .ToDictionary(
+                    group => group.Key,
+                    group => group
+                        .OrderByDescending(prediction => prediction.CreatedAt)
+                        .ThenByDescending(prediction => prediction.RevisionNumber)
+                        .First(),
+                    StringComparer.Ordinal);
+            var forecastStateLookup = existingCurrentForecasts
+                .GroupBy(forecast => BuildForecastRevisionKey(forecast.FixtureKey, forecast.Market))
+                .ToDictionary(
+                    group => group.Key,
+                    group => group
+                        .OrderByDescending(forecast => forecast.CreatedAt)
+                        .ThenByDescending(forecast => forecast.RevisionNumber)
+                        .First(),
+                    StringComparer.Ordinal);
+            var generationForecastCandidates = forecastCandidates
+                .Where(candidate => ShouldGenerateFreshRevision(candidate.MatchDateTime, runStartedAt))
+                .ToList();
+            var generationPublishedCandidates = publishedCandidates
+                .Where(candidate => ShouldGenerateFreshRevision(candidate.MatchDateTime, runStartedAt))
+                .ToList();
+            var publishedLookup = generationPublishedCandidates.ToDictionary(
+                candidate => BuildCandidateKey(candidate),
+                candidate => candidate,
+                StringComparer.Ordinal);
 
             foreach (var prediction in existingCurrentPredictions)
             {
+                if (ShouldFreezeExistingRevision(prediction.MatchDateTime, runStartedAt))
+                {
+                    continue;
+                }
+
                 prediction.IsCurrentRevision = false;
                 prediction.SupersededAt = runStartedAt;
             }
 
             foreach (var forecast in existingCurrentForecasts)
             {
+                if (ShouldFreezeExistingRevision(forecast.MatchDateTime, runStartedAt))
+                {
+                    continue;
+                }
+
                 forecast.IsCurrentRevision = false;
                 forecast.SupersededAt = runStartedAt;
             }
@@ -226,7 +260,7 @@ public class AnalyzerService : IAnalyzerService
             var forecastEntities = new List<ForecastObservation>();
             var predictionEntities = new List<Prediction>();
 
-            foreach (var candidate in forecastCandidates)
+            foreach (var candidate in generationForecastCandidates)
             {
                 var fixtureIdentity = FixtureIdentityFactory.Build(
                     candidate.HomeTeam,
@@ -246,7 +280,7 @@ public class AnalyzerService : IAnalyzerService
                 predictionRevisionLookup[candidateKey] = nextPredictionRevision;
                 forecastRevisionLookup[forecastKey] = nextForecastRevision;
 
-                forecastEntities.Add(new ForecastObservation
+                var forecastEntity = new ForecastObservation
                 {
                     Date = candidate.Date,
                     Time = candidate.Time,
@@ -273,10 +307,17 @@ public class AnalyzerService : IAnalyzerService
                     IsCurrentRevision = true,
                     RevisionNumber = nextForecastRevision,
                     CreatedAt = runStartedAt
-                });
+                };
+
+                if (forecastStateLookup.TryGetValue(forecastKey, out var existingForecastState))
+                {
+                    CopyExistingSettlementState(forecastEntity, existingForecastState);
+                }
+
+                forecastEntities.Add(forecastEntity);
             }
 
-            foreach (var candidate in publishedCandidates)
+            foreach (var candidate in generationPublishedCandidates)
             {
                 var fixtureIdentity = FixtureIdentityFactory.Build(
                     candidate.HomeTeam,
@@ -288,7 +329,7 @@ public class AnalyzerService : IAnalyzerService
                 var predictionKey = BuildPredictionRevisionKey(fixtureIdentity.FixtureKey, candidate.PredictionCategory, candidate.PredictedOutcome);
                 var nextPredictionRevision = predictionRevisionLookup[predictionKey];
 
-                predictionEntities.Add(new Prediction
+                var predictionEntity = new Prediction
                 {
                     Date = candidate.Date,
                     Time = candidate.Time,
@@ -314,7 +355,15 @@ public class AnalyzerService : IAnalyzerService
                     IsCurrentRevision = true,
                     RevisionNumber = nextPredictionRevision,
                     CreatedAt = runStartedAt
-                });
+                };
+
+                var predictionStateKey = BuildPredictionStateKey(fixtureIdentity.FixtureKey, candidate.PredictionCategory);
+                if (predictionStateLookup.TryGetValue(predictionStateKey, out var existingPredictionState))
+                {
+                    CopyExistingSettlementState(predictionEntity, existingPredictionState);
+                }
+
+                predictionEntities.Add(predictionEntity);
             }
 
             await _dbContext.ForecastObservations.AddRangeAsync(forecastEntities);
@@ -1282,6 +1331,11 @@ public class AnalyzerService : IAnalyzerService
         return $"{fixtureKey}|{category}|{predictedOutcome}";
     }
 
+    private static string BuildPredictionStateKey(string fixtureKey, string category)
+    {
+        return $"{fixtureKey}|{category}";
+    }
+
     private static string BuildForecastRevisionKey(string fixtureKey, PredictionMarket market)
     {
         return $"{fixtureKey}|{market}";
@@ -1371,6 +1425,33 @@ public class AnalyzerService : IAnalyzerService
         }
 
         return changed;
+    }
+
+    private static bool ShouldGenerateFreshRevision(DateTime? kickoffUtc, DateTime runStartedAtUtc)
+    {
+        return !kickoffUtc.HasValue || kickoffUtc.Value > runStartedAtUtc;
+    }
+
+    private static bool ShouldFreezeExistingRevision(DateTime? kickoffUtc, DateTime runStartedAtUtc)
+    {
+        return kickoffUtc.HasValue && kickoffUtc.Value <= runStartedAtUtc;
+    }
+
+    private static void CopyExistingSettlementState(Prediction target, Prediction source)
+    {
+        target.ActualScore = source.ActualScore;
+        target.ActualOutcome = source.ActualOutcome;
+        target.IsLive = source.IsLive;
+    }
+
+    private static void CopyExistingSettlementState(ForecastObservation target, ForecastObservation source)
+    {
+        target.ActualScore = source.ActualScore;
+        target.ActualOutcome = source.ActualOutcome;
+        target.IsLive = source.IsLive;
+        target.IsSettled = source.IsSettled;
+        target.OutcomeOccurred = source.OutcomeOccurred;
+        target.SettledAt = source.SettledAt;
     }
 
     private static List<ResolvedTennisScore> BuildScoreCandidates(

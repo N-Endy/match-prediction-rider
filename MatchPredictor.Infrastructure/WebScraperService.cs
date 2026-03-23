@@ -339,9 +339,23 @@ public partial class WebScraperService : IWebScraperService
 
         if (!_browserScrapingEnabled)
         {
-            _logger.LogWarning("Browser scraping is disabled. Cannot scrape Sofascore using the headless browser approach.");
-            return scores;
+            _logger.LogWarning("Browser scraping is disabled. Skipping direct Sofascore browser scrape and trying the HTML fallback path.");
+
+            try
+            {
+                using var client = CreateSofaScoreHttpClient();
+                return await ScrapeSofaScoreViaHtmlFallbackAsync(requestedFixtures, client);
+            }
+            catch (Exception ex)
+            {
+                _sofaScoreSourceHealthTracker.RecordFailure("html-fallback", ex.Message);
+                _logger.LogWarning(ex, "SofaScore HTML fallback failed while browser scraping was disabled.");
+                return scores;
+            }
         }
+
+        var capturedTennisApiResponseCount = 0;
+        var renderedMatchElementCount = 0;
 
         try
         {
@@ -387,6 +401,7 @@ public partial class WebScraperService : IWebScraperService
                     .Select(response => response.RelativePath)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
+                capturedTennisApiResponseCount = capturedTennisApiResponses.Count;
 
                 _logger.LogInformation(
                     "Sofascore tennis page diagnostics: title '{Title}', HTML length {HtmlLength}, rendered match anchors {AnchorCount}, captured /api/v1/sport/tennis responses {ApiResponseCount}, any tennis API captured: {HasCapturedResponses}.",
@@ -408,30 +423,93 @@ public partial class WebScraperService : IWebScraperService
                         "Sofascore did not expose any /api/v1/sport/tennis/... responses during the direct browser scrape window.");
                 }
 
-                var matchElements = driver.FindElements(By.XPath("//div[contains(@class, 'EventCell')] | //a[contains(@href, '/tennis/match/')] | //div[contains(@class, 'sc-') and .//div[contains(@direction, 'column')]]"));
-                _logger.LogInformation("Found {Count} potential match elements.", matchElements.Count);
+                var normalizedBaseUrl = baseUrl.TrimEnd('/');
 
-                foreach (var ev in matchElements)
+                var listingEntries = SofaScoreListingPageParser.ParseEntries(pageSource, normalizedBaseUrl);
+                renderedMatchElementCount = Math.Max(renderedMatchElementCount, listingEntries.Count);
+                _logger.LogInformation(
+                    "Sofascore direct listing parser extracted {Count} rendered row(s) from the current page source.",
+                    listingEntries.Count);
+
+                var listingScores = ResolveSofaScoreListingScores(requestedFixtures, listingEntries);
+                if (listingScores.Count > 0)
                 {
-                    try
-                    {
-                        var text = ev.Text.Replace("\n", " - ").Trim();
-                        if (string.IsNullOrWhiteSpace(text) || text.Length < 5) continue;
+                    _logger.LogInformation(
+                        "Sofascore direct listing parser matched {Count} targeted fixture(s) from {CandidateCount} rendered row(s).",
+                        listingScores.Count,
+                        listingEntries.Count);
+                    scores.AddRange(listingScores);
+                }
 
-                        var parsed = ParseSofaScoreTextSelenium(text);
-                        if (parsed != null)
+                var domEntries = ExtractSofaScoreBrowserDomEntries(driver, normalizedBaseUrl);
+                renderedMatchElementCount = Math.Max(renderedMatchElementCount, domEntries.Count);
+                _logger.LogInformation(
+                    "Sofascore direct rendered-text parser extracted {Count} Selenium row candidate(s).",
+                    domEntries.Count);
+
+                var domScores = ResolveSofaScoreListingScores(requestedFixtures, domEntries);
+                if (domScores.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "Sofascore direct rendered-text parser matched {Count} targeted fixture(s) from {CandidateCount} Selenium row candidate(s).",
+                        domScores.Count,
+                        domEntries.Count);
+
+                    foreach (var score in domScores)
+                    {
+                        if (scores.Any(existing =>
+                                TeamsLookEquivalent(existing.HomeTeam, score.HomeTeam) &&
+                                TeamsLookEquivalent(existing.AwayTeam, score.AwayTeam) &&
+                                string.Equals(existing.Score, score.Score, StringComparison.OrdinalIgnoreCase)))
                         {
-                            scores.Add(parsed);
+                            continue;
+                        }
+
+                        scores.Add(score);
+                    }
+                }
+
+                if (scores.Count == 0)
+                {
+                    var matchElements = driver.FindElements(By.XPath("//div[contains(@class, 'EventCell')] | //a[contains(@href, '/tennis/match/')] | //div[contains(@class, 'sc-') and .//div[contains(@direction, 'column')]]"));
+                    renderedMatchElementCount = Math.Max(renderedMatchElementCount, matchElements.Count);
+                    _logger.LogInformation("Sofascore direct raw fallback found {Count} potential match elements.", matchElements.Count);
+
+                    foreach (var ev in matchElements)
+                    {
+                        try
+                        {
+                            var text = ev.Text.Replace("\n", " - ").Trim();
+                            if (string.IsNullOrWhiteSpace(text) || text.Length < 5)
+                            {
+                                continue;
+                            }
+
+                            var parsed = ParseSofaScoreTextSelenium(text);
+                            if (parsed != null)
+                            {
+                                scores.Add(parsed);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogDebug(ex, "Failed to parse individual match element from Sofascore raw fallback.");
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        _logger.LogDebug(ex, "Failed to parse individual match element from Sofascore.");
-                    }
+
+                    _logger.LogInformation("Sofascore direct raw fallback parsed {Count} row(s).", scores.Count);
                 }
             }, ConfigureSofaScoreBrowserOptions, "SofaScore direct tennis UI scrape");
 
             _logger.LogInformation("Successfully scraped {Count} total matches from Sofascore.", scores.Count);
+            if (scores.Count == 0)
+            {
+                _sofaScoreSourceHealthTracker.RecordEmpty(
+                    "browser-direct",
+                    $"Rendered {renderedMatchElementCount} potential SofaScore element(s) and captured {capturedTennisApiResponseCount} tennis API response path(s), but parsed 0 tennis rows.",
+                    capturedTennisApiResponseCount,
+                    1);
+            }
         }
         catch (Exception ex)
         {
@@ -441,89 +519,247 @@ public partial class WebScraperService : IWebScraperService
 
         // Return only the requested fixtures by doing string similarity/exact match
         var matchedScores = MatchScoresToRequestsSofa(requestedFixtures, scores);
-        
+
+        if (matchedScores.Count > 0)
+        {
+            _sofaScoreSourceHealthTracker.RecordSuccess(
+                "browser-direct",
+                matchedScores.Count,
+                capturedTennisApiResponseCount,
+                1,
+                $"Parsed {scores.Count} SofaScore row(s) and matched {matchedScores.Count} of {requestedFixtures.Count} requested fixture(s).");
+        }
+        else if (scores.Count > 0)
+        {
+            _sofaScoreSourceHealthTracker.RecordEmpty(
+                "browser-direct",
+                $"Parsed {scores.Count} SofaScore row(s) but matched 0 of {requestedFixtures.Count} requested fixture(s).",
+                capturedTennisApiResponseCount,
+                1);
+        }
+
         _logger.LogInformation("Filtered down to {Count} matches corresponding to the requested fixtures.", matchedScores.Count);
+        if (matchedScores.Count > 0)
+        {
+            return matchedScores;
+        }
+
+        try
+        {
+            var browserAttempt = await ScrapeSofaScoreViaBrowserCrawlerAsync(requestedFixtures);
+            RecordSofaScoreAttemptResult(browserAttempt);
+
+            if (browserAttempt.Scores.Count > 0)
+            {
+                _logger.LogInformation(
+                    "SofaScore browser crawler matched {Count} targeted fixture score(s) after the direct scrape returned none.",
+                    browserAttempt.Scores.Count);
+                return browserAttempt.Scores;
+            }
+
+            _logger.LogInformation("SofaScore browser crawler returned no targeted rows: {Detail}", browserAttempt.Detail);
+        }
+        catch (Exception ex)
+        {
+            _sofaScoreSourceHealthTracker.RecordFailure("browser-crawler", ex.Message);
+            _logger.LogWarning(ex, "SofaScore browser crawler fallback failed.");
+        }
+
+        try
+        {
+            using var client = CreateSofaScoreHttpClient();
+            var htmlFallbackScores = await ScrapeSofaScoreViaHtmlFallbackAsync(requestedFixtures, client);
+            if (htmlFallbackScores.Count > 0)
+            {
+                _logger.LogInformation(
+                    "SofaScore HTML fallback matched {Count} targeted fixture score(s) after browser attempts returned none.",
+                    htmlFallbackScores.Count);
+                return htmlFallbackScores;
+            }
+        }
+        catch (Exception ex)
+        {
+            _sofaScoreSourceHealthTracker.RecordFailure("html-fallback", ex.Message);
+            _logger.LogWarning(ex, "SofaScore HTML fallback failed.");
+        }
+
         return matchedScores;
     }
 
     private SofaScoreMatchScore? ParseSofaScoreTextSelenium(string text)
     {
-        var parts = text.Split(new[] { " - " }, StringSplitOptions.None);
-        if (parts.Length < 4) return null;
-
-        string matchTimeOrStatus = parts[0].Trim();
-        string statusText = parts[1].Trim();
-        
-        // Handle variations in empty segments
-        int teamStartIndex = 2;
-        if (string.IsNullOrWhiteSpace(parts[2]))
+        var tokens = text
+            .Split(new[] { " - " }, StringSplitOptions.None)
+            .Select(NormalizeTennisScoresText)
+            .Where(token => !string.IsNullOrWhiteSpace(token))
+            .ToList();
+        if (tokens.Count < 3)
         {
-            teamStartIndex = 3;
-            if (parts.Length > 3 && string.IsNullOrWhiteSpace(parts[3])) { teamStartIndex = 4; }
+            return null;
         }
 
-        if (parts.Length <= teamStartIndex + 1) return null;
+        var tokenIndex = 0;
+        var matchTime = DateTime.UtcNow;
+        var statusText = string.Empty;
 
-        string homeTeam = parts[teamStartIndex].Trim();
-        string awayTeam = parts[teamStartIndex + 1].Trim();
-
-        bool isLive = statusText.Contains("LIVE", StringComparison.OrdinalIgnoreCase) ||
-                      statusText.Contains("1ST", StringComparison.OrdinalIgnoreCase) ||
-                      statusText.Contains("2ND", StringComparison.OrdinalIgnoreCase) ||
-                      statusText.Contains("3RD", StringComparison.OrdinalIgnoreCase) ||
-                      statusText.Contains("4TH", StringComparison.OrdinalIgnoreCase) ||
-                      statusText.Contains("5TH", StringComparison.OrdinalIgnoreCase);
-
-        // Try extracting score if any
-        string score = "";
-        int homeSets = 0;
-        int awaySets = 0;
-        
-        int scoreStartIndex = teamStartIndex + 2;
-        if (parts.Length > scoreStartIndex + 1 && int.TryParse(parts[scoreStartIndex], out int h1) && int.TryParse(parts[scoreStartIndex + 1], out int a1))
+        if (TryParseSofaScoreLeadingToken(tokens[0], out var parsedMatchTime, out var leadingStatus))
         {
-            homeSets = h1;
-            awaySets = a1;
-            score = $"{homeSets}:{awaySets}";
+            matchTime = parsedMatchTime;
+            statusText = leadingStatus;
+            tokenIndex = 1;
+        }
+        else if (LooksLikeSofaScoreStatusToken(tokens[0]))
+        {
+            statusText = tokens[0];
+            tokenIndex = 1;
         }
 
-        DateTime matchTime = DateTime.UtcNow;
-        if (!isLive && TimeOnly.TryParse(matchTimeOrStatus, out var time))
+        if (tokens.Count - tokenIndex >= 3 &&
+            string.IsNullOrWhiteSpace(statusText) &&
+            LooksLikeSofaScoreStatusToken(tokens[tokenIndex]))
         {
-            matchTime = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, DateTime.UtcNow.Day, time.Hour, time.Minute, 0, DateTimeKind.Utc);
+            statusText = tokens[tokenIndex];
+            tokenIndex++;
+        }
+
+        if (tokens.Count - tokenIndex < 2)
+        {
+            return null;
+        }
+
+        var homeTeam = tokens[tokenIndex];
+        var awayTeam = tokens[tokenIndex + 1];
+        if (string.IsNullOrWhiteSpace(homeTeam) || string.IsNullOrWhiteSpace(awayTeam))
+        {
+            return null;
+        }
+
+        var isLive = LooksLikeSofaScoreLiveStatus(statusText);
+        string? normalizedScoreline = null;
+        int? homeSetsWon = null;
+        int? awaySetsWon = null;
+
+        foreach (var token in tokens.Skip(tokenIndex + 2))
+        {
+            if (TryParseSofaScoreScoreToken(token, out var parsedHomeSets, out var parsedAwaySets, out var parsedScore))
+            {
+                homeSetsWon = parsedHomeSets;
+                awaySetsWon = parsedAwaySets;
+                normalizedScoreline = parsedScore;
+                break;
+            }
+        }
+
+        if (!homeSetsWon.HasValue || !awaySetsWon.HasValue)
+        {
+            return null;
         }
 
         return new SofaScoreMatchScore
         {
-             HomeTeam = homeTeam,
-             AwayTeam = awayTeam,
-             Score = score,
-             HomeSetsWon = homeSets,
-             AwaySetsWon = awaySets,
-             StatusText = statusText,
-             MatchTime = matchTime,
-             IsLive = isLive,
-             League = "Unknown" // Could be enriched 
+            HomeTeam = homeTeam,
+            AwayTeam = awayTeam,
+            Score = normalizedScoreline ?? $"{homeSetsWon.Value}:{awaySetsWon.Value}",
+            NormalizedScoreline = normalizedScoreline,
+            HomeSetsWon = homeSetsWon,
+            AwaySetsWon = awaySetsWon,
+            StatusText = string.IsNullOrWhiteSpace(statusText) ? null : statusText,
+            MatchTime = matchTime,
+            IsLive = isLive,
+            League = "Unknown"
         };
     }
 
     private List<SofaScoreMatchScore> MatchScoresToRequestsSofa(List<SofaScoreFixtureRequest> requests, List<SofaScoreMatchScore> scraped)
     {
         var results = new List<SofaScoreMatchScore>();
+        var remainingScores = scraped.ToList();
+
         foreach (var req in requests)
         {
-            var bestMatch = scraped.FirstOrDefault(s => 
-                s.HomeTeam.Contains(req.HomeTeam, StringComparison.OrdinalIgnoreCase) || 
-                req.HomeTeam.Contains(s.HomeTeam, StringComparison.OrdinalIgnoreCase) ||
-                s.AwayTeam.Contains(req.AwayTeam, StringComparison.OrdinalIgnoreCase) || 
-                req.AwayTeam.Contains(s.AwayTeam, StringComparison.OrdinalIgnoreCase));
+            var bestMatch = remainingScores
+                .Select(score => new
+                {
+                    Score = ScoreDirectSofaScoreCandidate(req, score),
+                    Match = score
+                })
+                .Where(entry => entry.Score > 0)
+                .OrderByDescending(entry => entry.Score)
+                .ThenBy(entry => Math.Abs(GetKickoffDeltaMinutes(entry.Match.MatchTime, req.ScheduledMatchTimeUtc)))
+                .Select(entry => entry.Match)
+                .FirstOrDefault();
 
             if (bestMatch != null)
             {
                 results.Add(bestMatch);
+                remainingScores.Remove(bestMatch);
             }
         }
+
         return results;
+    }
+
+    private int ScoreDirectSofaScoreCandidate(SofaScoreFixtureRequest fixture, SofaScoreMatchScore candidate)
+    {
+        if (!TeamsLookEquivalent(candidate.HomeTeam, fixture.HomeTeam) ||
+            !TeamsLookEquivalent(candidate.AwayTeam, fixture.AwayTeam))
+        {
+            return 0;
+        }
+
+        var score = 0;
+
+        score += string.Equals(
+            NormalizeFixtureKeyPart(candidate.HomeTeam),
+            NormalizeFixtureKeyPart(fixture.HomeTeam),
+            StringComparison.OrdinalIgnoreCase)
+            ? 40
+            : 24;
+
+        score += string.Equals(
+            NormalizeFixtureKeyPart(candidate.AwayTeam),
+            NormalizeFixtureKeyPart(fixture.AwayTeam),
+            StringComparison.OrdinalIgnoreCase)
+            ? 40
+            : 24;
+
+        var candidateLocalDate = DateTimeProvider.ConvertUtcToLocalDate(candidate.MatchTime);
+        if (candidateLocalDate == fixture.MatchLocalDate)
+        {
+            score += 15;
+        }
+        else
+        {
+            return 0;
+        }
+
+        if (!string.IsNullOrWhiteSpace(candidate.League) &&
+            !string.IsNullOrWhiteSpace(fixture.League) &&
+            TeamsLookEquivalent(candidate.League, fixture.League))
+        {
+            score += 10;
+        }
+
+        var kickoffDeltaMinutes = Math.Abs(GetKickoffDeltaMinutes(candidate.MatchTime, fixture.ScheduledMatchTimeUtc));
+        if (kickoffDeltaMinutes <= 15)
+        {
+            score += 20;
+        }
+        else if (kickoffDeltaMinutes <= 90)
+        {
+            score += 10;
+        }
+        else if (kickoffDeltaMinutes <= 240)
+        {
+            score += 4;
+        }
+
+        if (!candidate.IsLive)
+        {
+            score += 5;
+        }
+
+        return score >= 70 ? score : 0;
     }
 
     private void RecordSofaScoreAttemptResult(SofaScoreApiAttemptResult attempt)
@@ -1542,9 +1778,15 @@ public partial class WebScraperService : IWebScraperService
         IReadOnlyDictionary<string, List<string>> eventUrlsByFixture,
         ChromeDriver driver)
     {
+        var baseUrl = (_configuration["ScrapingValues:SofaScoreBaseUrl"] ?? "https://www.sofascore.com").TrimEnd('/');
         var eventPageBudget = ParseConfiguredInt("ScrapingValues:SofaScoreMaxEventPagesPerRun", DefaultSofaScoreMaxEventPagesPerRun);
         var pagesFetched = 0;
         var scrapedScores = new List<SofaScoreMatchScore>();
+        var emptyHtmlCount = 0;
+        var parseFailureCount = 0;
+        var fixtureMismatchCount = 0;
+        var apiDetailCount = 0;
+        var apiDetailMismatchCount = 0;
 
         foreach (var fixture in fixtures)
         {
@@ -1568,16 +1810,48 @@ public partial class WebScraperService : IWebScraperService
                 pagesFetched++;
                 try
                 {
+                    ClearSofaScoreBrowserCapturedResponses(driver);
                     await driver.Navigate().GoToUrlAsync(candidateUrl);
                     WaitForDocumentReady(driver);
                     DismissCookieBanners(driver);
                     await Task.Delay(1500);
 
-                    var html = driver.PageSource;
-                    if (string.IsNullOrWhiteSpace(html) ||
-                        !SofaScoreEventPageParser.TryParse(html, candidateUrl, out var parsedScore) ||
-                        !SofaScoreEventMatchesFixture(parsedScore, fixture))
+                    var capturedResponses = ReadSofaScoreBrowserCapturedResponses(driver);
+                    var apiDetailScores = SofaScoreBrowserFetchParser.ParseEventDetails(capturedResponses, baseUrl);
+                    if (apiDetailScores.Count > 0)
                     {
+                        apiDetailCount += apiDetailScores.Count;
+
+                        var apiMatchedScore = apiDetailScores.Values
+                            .Where(score => SofaScoreEventMatchesFixture(score, fixture))
+                            .OrderByDescending(score => ScoreDirectSofaScoreCandidate(fixture, score))
+                            .FirstOrDefault();
+
+                        if (apiMatchedScore is not null)
+                        {
+                            scrapedScores.Add(apiMatchedScore);
+                            break;
+                        }
+
+                        apiDetailMismatchCount++;
+                    }
+
+                    var html = driver.PageSource;
+                    if (string.IsNullOrWhiteSpace(html))
+                    {
+                        emptyHtmlCount++;
+                        continue;
+                    }
+
+                    if (!SofaScoreEventPageParser.TryParse(html, candidateUrl, out var parsedScore))
+                    {
+                        parseFailureCount++;
+                        continue;
+                    }
+
+                    if (!SofaScoreEventMatchesFixture(parsedScore, fixture))
+                    {
+                        fixtureMismatchCount++;
                         continue;
                     }
 
@@ -1596,7 +1870,7 @@ public partial class WebScraperService : IWebScraperService
             "browser-event-page",
             scrapedScores.Count > 0
                 ? $"SofaScore browser crawler parsed {scrapedScores.Count} targeted event page(s) from {eventUrlsByFixture.Values.Sum(urls => urls.Count)} candidate URL(s)."
-                : $"SofaScore browser crawler found {eventUrlsByFixture.Values.Sum(urls => urls.Count)} candidate URL(s) but no targeted event pages parsed successfully.",
+                : $"SofaScore browser crawler found {eventUrlsByFixture.Values.Sum(urls => urls.Count)} candidate URL(s) but matched none. Captured API detail payloads: {apiDetailCount}; API detail mismatches: {apiDetailMismatchCount}; empty HTML pages: {emptyHtmlCount}; parse failures: {parseFailureCount}; fixture mismatches: {fixtureMismatchCount}.",
             eventUrlsByFixture.Values.Sum(urls => urls.Count),
             pagesFetched);
     }
@@ -1716,6 +1990,9 @@ public partial class WebScraperService : IWebScraperService
         var scrapedScores = new List<SofaScoreMatchScore>();
         var pagesFetched = 0;
         var candidateUrlCount = eventUrlsByFixture.Values.Sum(urls => urls.Count);
+        var emptyHtmlCount = 0;
+        var parseFailureCount = 0;
+        var fixtureMismatchCount = 0;
 
         foreach (var fixture in requestedFixtures)
         {
@@ -1736,10 +2013,21 @@ public partial class WebScraperService : IWebScraperService
 
                 pagesFetched++;
                 var html = await TryFetchSofaScorePageAsync(client, candidateUrl);
-                if (string.IsNullOrWhiteSpace(html) ||
-                    !SofaScoreEventPageParser.TryParse(html, candidateUrl, out var parsedScore) ||
-                    !SofaScoreEventMatchesFixture(parsedScore, fixture))
+                if (string.IsNullOrWhiteSpace(html))
                 {
+                    emptyHtmlCount++;
+                    continue;
+                }
+
+                if (!SofaScoreEventPageParser.TryParse(html, candidateUrl, out var parsedScore))
+                {
+                    parseFailureCount++;
+                    continue;
+                }
+
+                if (!SofaScoreEventMatchesFixture(parsedScore, fixture))
+                {
+                    fixtureMismatchCount++;
                     continue;
                 }
 
@@ -1766,7 +2054,7 @@ public partial class WebScraperService : IWebScraperService
         {
             _sofaScoreSourceHealthTracker.RecordEmpty(
                 "event-page-fallback",
-                $"SofaScore HTML fallback found {candidateUrlCount} candidate URL(s) but no matching event pages were parsed successfully.",
+                $"SofaScore HTML fallback found {candidateUrlCount} candidate URL(s) but matched none. Empty HTML pages: {emptyHtmlCount}; parse failures: {parseFailureCount}; fixture mismatches: {fixtureMismatchCount}.",
                 candidateUrlCount,
                 pagesFetched);
         }
@@ -2161,14 +2449,72 @@ public partial class WebScraperService : IWebScraperService
 
     private bool SofaScoreEventMatchesFixture(SofaScoreMatchScore parsedScore, SofaScoreFixtureRequest fixture)
     {
-        var parsedLocalDate = DateTimeProvider.ConvertUtcToLocal(parsedScore.MatchTime).Date;
-        if (parsedLocalDate != fixture.MatchLocalDate.ToDateTime(TimeOnly.MinValue).Date)
+        if (!TeamsLookEquivalent(parsedScore.HomeTeam, fixture.HomeTeam) ||
+            !TeamsLookEquivalent(parsedScore.AwayTeam, fixture.AwayTeam))
         {
             return false;
         }
 
-        return TeamsLookEquivalent(parsedScore.HomeTeam, fixture.HomeTeam) &&
-               TeamsLookEquivalent(parsedScore.AwayTeam, fixture.AwayTeam);
+        var score = 0;
+
+        score += string.Equals(
+            NormalizeFixtureKeyPart(parsedScore.HomeTeam),
+            NormalizeFixtureKeyPart(fixture.HomeTeam),
+            StringComparison.OrdinalIgnoreCase)
+            ? 45
+            : 25;
+
+        score += string.Equals(
+            NormalizeFixtureKeyPart(parsedScore.AwayTeam),
+            NormalizeFixtureKeyPart(fixture.AwayTeam),
+            StringComparison.OrdinalIgnoreCase)
+            ? 45
+            : 25;
+
+        var parsedLocalDate = DateTimeProvider.ConvertUtcToLocal(parsedScore.MatchTime).Date;
+        var fixtureLocalDate = fixture.MatchLocalDate.ToDateTime(TimeOnly.MinValue).Date;
+        var kickoffDeltaMinutes = Math.Abs(GetKickoffDeltaMinutes(parsedScore.MatchTime, fixture.ScheduledMatchTimeUtc));
+
+        if (parsedLocalDate == fixtureLocalDate)
+        {
+            score += 15;
+        }
+        else if (kickoffDeltaMinutes <= 12 * 60)
+        {
+            // Allow for SofaScore detail pages that drift the visible date across UTC/local boundaries.
+            score += 5;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(parsedScore.League) &&
+            !string.IsNullOrWhiteSpace(fixture.League) &&
+            TeamsLookEquivalent(parsedScore.League, fixture.League))
+        {
+            score += 10;
+        }
+
+        if (kickoffDeltaMinutes <= 15)
+        {
+            score += 20;
+        }
+        else if (kickoffDeltaMinutes <= 90)
+        {
+            score += 10;
+        }
+        else if (kickoffDeltaMinutes <= 12 * 60)
+        {
+            score += 4;
+        }
+
+        if (!parsedScore.IsLive)
+        {
+            score += 5;
+        }
+
+        return score >= 70;
     }
 
     private static bool TeamsLookEquivalent(string left, string right)
@@ -3262,11 +3608,17 @@ public partial class WebScraperService : IWebScraperService
         var root = doc.DocumentNode.SelectSingleNode("//div[@id='matchList']//div[contains(@class,'user')]")
             ?? doc.DocumentNode.SelectSingleNode("//div[@id='matchList']")
             ?? throw new InvalidOperationException("tennisscores.mobi HTML did not contain the expected match list container.");
+        var flowNodes = root.SelectNodes(".//div[contains(concat(' ', normalize-space(@class), ' '), ' group-title ') or contains(concat(' ', normalize-space(@class), ' '), ' list ')]");
 
         var rows = new List<MatchScore>();
         var currentLeague = string.Empty;
 
-        foreach (var node in root.ChildNodes.Where(child => child.NodeType == HtmlNodeType.Element))
+        if (flowNodes is null)
+        {
+            return rows;
+        }
+
+        foreach (var node in flowNodes.Where(child => child.NodeType == HtmlNodeType.Element))
         {
             var className = node.GetAttributeValue("class", string.Empty);
             if (className.Contains("group-title", StringComparison.OrdinalIgnoreCase))
@@ -3343,6 +3695,97 @@ public partial class WebScraperService : IWebScraperService
         }
 
         return rows;
+    }
+
+    private static bool TryParseSofaScoreLeadingToken(string token, out DateTime matchTimeUtc, out string statusText)
+    {
+        matchTimeUtc = DateTime.UtcNow;
+        statusText = string.Empty;
+
+        var normalized = NormalizeTennisScoresText(token);
+        var match = Regex.Match(
+            normalized,
+            @"^(?<time>\d{1,2}:\d{2})(?:\s+(?<day>\d{1,2}/\d{1,2}))?(?:\s+(?<status>.+))?$",
+            RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        if (!TimeOnly.TryParse(match.Groups["time"].Value, CultureInfo.InvariantCulture, out var parsedTime))
+        {
+            return false;
+        }
+
+        var localDate = DateTimeProvider.GetLocalDate();
+        if (match.Groups["day"].Success)
+        {
+            var dayMonth = match.Groups["day"].Value.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (dayMonth.Length == 2 &&
+                int.TryParse(dayMonth[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var day) &&
+                int.TryParse(dayMonth[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var month))
+            {
+                localDate = new DateOnly(DateTimeProvider.GetLocalDate().Year, month, day);
+            }
+        }
+
+        matchTimeUtc = DateTimeProvider.ConvertLocalToUtc(localDate.ToDateTime(parsedTime));
+        statusText = NormalizeTennisScoresText(match.Groups["status"].Value);
+        return true;
+    }
+
+    private static bool LooksLikeSofaScoreStatusToken(string token)
+    {
+        var normalized = NormalizeTennisScoresText(token).ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return false;
+        }
+
+        return normalized.Contains("set ", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("live", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("cancel", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("retired", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("postponed", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("walkover", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Equals("wo", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("interrupted", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("suspended", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeSofaScoreLiveStatus(string? token)
+    {
+        var normalized = NormalizeTennisScoresText(token).ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return false;
+        }
+
+        return normalized.Contains("set ", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("live", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryParseSofaScoreScoreToken(string token, out int homeSetsWon, out int awaySetsWon, out string normalizedScore)
+    {
+        homeSetsWon = 0;
+        awaySetsWon = 0;
+        normalizedScore = string.Empty;
+
+        var normalized = NormalizeTennisScoresText(token);
+        var match = Regex.Match(normalized, @"^(?<home>\d+)\s*:\s*(?<away>\d+)$", RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        if (!int.TryParse(match.Groups["home"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out homeSetsWon) ||
+            !int.TryParse(match.Groups["away"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out awaySetsWon))
+        {
+            return false;
+        }
+
+        normalizedScore = $"{homeSetsWon}:{awaySetsWon}";
+        return true;
     }
 
     private static string NormalizeTennisScoresText(string? value)

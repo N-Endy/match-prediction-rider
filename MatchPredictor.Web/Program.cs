@@ -220,13 +220,13 @@ if (runtimeMode.RunBackgroundJobs)
         recurringJobs.AddOrUpdate<IAnalyzerService>(
             "prediction-generation-post-analysis-job",
             service => service.ExtractDataAndSyncDatabaseAsync(0, "morning-refresh"),
-            "30 4 * * *",
+            "32 4 * * *",
             new RecurringJobOptions { TimeZone = watTimeZone });
 
         recurringJobs.AddOrUpdate<IAnalyzerService>(
             "prediction-generation-refresh-job",
             service => service.ExtractDataAndSyncDatabaseAsync(0, "day-refresh"),
-            "30 12,16 * * *",
+            "32 12,16 * * *",
             new RecurringJobOptions { TimeZone = watTimeZone });
 
         recurringJobs.AddOrUpdate<IAnalyzerService>(
