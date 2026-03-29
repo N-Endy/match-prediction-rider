@@ -76,43 +76,54 @@ public partial class WebScraperService : IWebScraperService
     
     public async Task ScrapeMatchDataAsync()
     {
-        EnsureBrowserScrapingEnabled("match data scraping");
-
         try
         {
-            var scrapeStartedAtUtc = DateTime.UtcNow;
-            await RunWithChromeSessionAsync(
-                async driver =>
-                {
-                    DeletePreviousFile();
+            DeletePreviousFile();
 
-                    var downloadUrl = _configuration["ScrapingValues:ScrapingWebsite"] ??
-                        throw new InvalidOperationException("Download URL not configured in appsettings.json");
+            var downloadUrl = _configuration["ScrapingValues:PredictionsApiUrl"]
+                ?? "https://www.sports-ai.dev/api/generate-excel";
+            var fileName = _configuration["ScrapingValues:PredictionsFileName"]
+                ?? throw new InvalidOperationException("Predictions file name not configured in appsettings.json");
+            var targetPath = Path.Combine(_downloadFolder, fileName);
 
-                    await driver.Navigate().GoToUrlAsync(downloadUrl);
+            using var handler = new HttpClientHandler
+            {
+                AutomaticDecompression = System.Net.DecompressionMethods.GZip |
+                                         System.Net.DecompressionMethods.Deflate |
+                                         System.Net.DecompressionMethods.Brotli
+            };
+            using var client = new HttpClient(handler)
+            {
+                Timeout = TimeSpan.FromMinutes(2)
+            };
 
-                    // ensure page fully loaded first
-                    WaitForDocumentReady(driver);
+            client.DefaultRequestHeaders.Add(
+                "User-Agent",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
+            client.DefaultRequestHeaders.Add(
+                "Accept",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream;q=0.9,*/*;q=0.8");
 
-                    // Accept/hide cookie banners if any (optional but helpful)
-                    DismissCookieBanners(driver);
+            _logger.LogInformation("Downloading predictions workbook from {Url}.", downloadUrl);
 
-                    // Choose one: if your selector in config is XPath, set isXPath=true; else false for CSS
-                    var selector = _configuration["ScrapingValues:PredictionsButtonSelector"]
-                                   ?? throw new InvalidOperationException("Predictions button selector not configured");
-                    var isXPath = selector.TrimStart().StartsWith("/") || selector.StartsWith("(."); // crude check
+            using var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
 
-                    var clicked = ClickByJsAcrossFrames(driver, selector, isXPath, timeoutSec: 30);
-                    if (!clicked)
-                    {
-                        await File.WriteAllTextAsync("debug.html", driver.PageSource);
-                        throw new WebDriverTimeoutException($"Could not locate/click element by {(isXPath ? "XPath" : "CSS")}: {selector}");
-                    }
+            await using var responseStream = await response.Content.ReadAsStreamAsync();
+            await using var fileStream = File.Create(targetPath);
+            await responseStream.CopyToAsync(fileStream);
+            await fileStream.FlushAsync();
 
-                    _logger.LogInformation("Download button clicked successfully.");
-                    await CheckFileIsDownloaded(scrapeStartedAtUtc);
-                },
-                purpose: "match data scraping");
+            var fileInfo = new FileInfo(targetPath);
+            if (!fileInfo.Exists || fileInfo.Length == 0)
+            {
+                throw new IOException($"Predictions workbook download from {downloadUrl} produced an empty file.");
+            }
+
+            _logger.LogInformation(
+                "Predictions workbook downloaded successfully to {Path} ({SizeBytes} bytes).",
+                targetPath,
+                fileInfo.Length);
         }
         catch (Exception ex)
         {
