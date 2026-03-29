@@ -21,20 +21,6 @@ public partial class AddMetaModelAndFeatureDiagnostics : Migration
             nullable: false,
             defaultValue: "{}");
 
-        migrationBuilder.AddColumn<double>(
-            name: "ObservationWeight",
-            table: "MarketCalibrationProfiles",
-            type: "double precision",
-            nullable: false,
-            defaultValue: 0.0);
-
-        migrationBuilder.AddColumn<double>(
-            name: "SuccessWeight",
-            table: "MarketCalibrationProfiles",
-            type: "double precision",
-            nullable: false,
-            defaultValue: 0.0);
-
         migrationBuilder.CreateTable(
             name: "MetaModelProfiles",
             columns: table => new
@@ -68,14 +54,6 @@ public partial class AddMetaModelAndFeatureDiagnostics : Migration
     {
         migrationBuilder.DropTable(
             name: "MetaModelProfiles");
-
-        migrationBuilder.DropColumn(
-            name: "ObservationWeight",
-            table: "MarketCalibrationProfiles");
-
-        migrationBuilder.DropColumn(
-            name: "SuccessWeight",
-            table: "MarketCalibrationProfiles");
 
         migrationBuilder.DropColumn(
             name: "FeatureContributionsJson",

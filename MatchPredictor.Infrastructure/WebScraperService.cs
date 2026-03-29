@@ -37,6 +37,7 @@ public partial class WebScraperService : IWebScraperService
     private const int DefaultSofaScoreMaxEventPagesPerRun = 24;
     private const int DefaultSofaScoreBrowserScrollRounds = 6;
     private const int DefaultSofaScoreBrowserListingPagesPerRun = 2;
+    private const string DefaultPredictionsExcelDownloadUrl = "https://www.sports-ai.dev/api/generate-excel";
     private static readonly ConcurrentDictionary<string, SofaScoreDiscoveryCacheEntry> SofaScoreEventUrlCache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object SofaScoreSitemapPoolGate = new();
     private static SofaScoreSitemapPoolCacheEntry? _sofaScoreSitemapPoolCache;
@@ -75,43 +76,13 @@ public partial class WebScraperService : IWebScraperService
     
     public async Task ScrapeMatchDataAsync()
     {
-        EnsureBrowserScrapingEnabled("match data scraping");
-
         try
         {
-            var scrapeStartedAtUtc = DateTime.UtcNow;
-            await RunWithChromeSessionAsync(
-                async driver =>
-                {
-                    DeletePreviousFile();
+            DeletePreviousFile();
 
-                    var downloadUrl = _configuration["ScrapingValues:ScrapingWebsite"] ??
-                        throw new InvalidOperationException("Download URL not configured in appsettings.json");
-
-                    await driver.Navigate().GoToUrlAsync(downloadUrl);
-
-                    // ensure page fully loaded first
-                    WaitForDocumentReady(driver);
-
-                    // Accept/hide cookie banners if any (optional but helpful)
-                    DismissCookieBanners(driver);
-
-                    // Choose one: if your selector in config is XPath, set isXPath=true; else false for CSS
-                    var selector = _configuration["ScrapingValues:PredictionsButtonSelector"]
-                                   ?? throw new InvalidOperationException("Predictions button selector not configured");
-                    var isXPath = selector.TrimStart().StartsWith("/") || selector.StartsWith("(."); // crude check
-
-                    var clicked = ClickByJsAcrossFrames(driver, selector, isXPath, timeoutSec: 30);
-                    if (!clicked)
-                    {
-                        await File.WriteAllTextAsync("debug.html", driver.PageSource);
-                        throw new WebDriverTimeoutException($"Could not locate/click element by {(isXPath ? "XPath" : "CSS")}: {selector}");
-                    }
-
-                    _logger.LogInformation("Download button clicked successfully.");
-                    await CheckFileIsDownloaded(scrapeStartedAtUtc);
-                },
-                purpose: "match data scraping");
+            var downloadUrl = _configuration["ScrapingValues:PredictionsFileDownloadUrl"]
+                              ?? DefaultPredictionsExcelDownloadUrl;
+            await DownloadPredictionsExcelAsync(downloadUrl);
         }
         catch (Exception ex)
         {
@@ -1968,6 +1939,49 @@ public partial class WebScraperService : IWebScraperService
 
         throw new FileNotFoundException($"File {fileName} not found in any expected location after {maxWaitTime} seconds.");
     }
+
+    private async Task DownloadPredictionsExcelAsync(string downloadUrl)
+    {
+        var fileName = _configuration["ScrapingValues:PredictionsFileName"]
+                       ?? throw new InvalidOperationException("Predictions file name not configured in appsettings.json");
+        var targetPath = Path.Combine(_downloadFolder, fileName);
+        var referringPage = _configuration["ScrapingValues:ScrapingWebsite"] ?? "https://www.sports-ai.dev/predictions";
+
+        using var handler = new HttpClientHandler
+        {
+            AutomaticDecompression = System.Net.DecompressionMethods.GZip |
+                                     System.Net.DecompressionMethods.Deflate |
+                                     System.Net.DecompressionMethods.Brotli
+        };
+        using var client = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(60)
+        };
+
+        client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
+        client.DefaultRequestHeaders.Add("Accept", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream;q=0.9,*/*;q=0.8");
+        client.DefaultRequestHeaders.Referrer = new Uri(referringPage);
+
+        _logger.LogInformation("Downloading predictions Excel directly from {DownloadUrl}.", downloadUrl);
+
+        using var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
+        response.EnsureSuccessStatusCode();
+
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+        if (bytes.Length == 0)
+        {
+            throw new InvalidOperationException($"Predictions download from {downloadUrl} returned an empty response.");
+        }
+
+        if (!LooksLikeExcelFile(bytes))
+        {
+            var contentType = response.Content.Headers.ContentType?.MediaType ?? "unknown";
+            throw new InvalidOperationException($"Predictions download from {downloadUrl} did not return an Excel file. Content-Type: {contentType}.");
+        }
+
+        await File.WriteAllBytesAsync(targetPath, bytes);
+        _logger.LogInformation("Predictions Excel saved to {TargetPath}.", targetPath);
+    }
     
     private void DeletePreviousFile()
     {
@@ -2351,6 +2365,15 @@ public partial class WebScraperService : IWebScraperService
                 return false;
             }
         }
+    }
+
+    private static bool LooksLikeExcelFile(byte[] bytes)
+    {
+        return bytes.Length >= 4 &&
+               bytes[0] == 0x50 &&
+               bytes[1] == 0x4B &&
+               bytes[2] == 0x03 &&
+               bytes[3] == 0x04;
     }
 
 }

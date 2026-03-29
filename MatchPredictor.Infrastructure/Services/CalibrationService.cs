@@ -103,8 +103,6 @@ public class CalibrationService : ICalibrationService
                     BucketEnd = Math.Min(group.Key.BucketStart + BucketSize, 1.0),
                     ObservationCount = observationCount,
                     SuccessCount = successCount,
-                    ObservationWeight = weightedObservations,
-                    SuccessWeight = weightedSuccesses,
                     CalibratedProbability = Math.Clamp(
                         averageRawProbability + (weight * (empiricalBucketProbability - averageRawProbability)),
                         0.0,
