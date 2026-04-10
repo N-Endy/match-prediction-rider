@@ -33,6 +33,7 @@ public class AiAdvisorService : IAiAdvisorService
     private readonly AiChatKnowledgeService _knowledgeService;
     private readonly AiChatRequestParser _requestParser;
     private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly IAiChatFootballInsightService _footballInsightService;
 
     public AiAdvisorService(
         ApplicationDbContext dbContext,
@@ -42,7 +43,8 @@ public class AiAdvisorService : IAiAdvisorService
         IDistributedCache cache,
         AiChatKnowledgeService knowledgeService,
         AiChatRequestParser requestParser,
-        IServiceScopeFactory serviceScopeFactory)
+        IServiceScopeFactory serviceScopeFactory,
+        IAiChatFootballInsightService footballInsightService)
     {
         _dbContext = dbContext;
         _configuration = configuration;
@@ -52,6 +54,7 @@ public class AiAdvisorService : IAiAdvisorService
         _knowledgeService = knowledgeService;
         _requestParser = requestParser;
         _serviceScopeFactory = serviceScopeFactory;
+        _footballInsightService = footballInsightService;
     }
 
     public async Task<AiChatResponse> GetAdviceAsync(string userPrompt, string sessionId, CancellationToken ct = default)
@@ -130,6 +133,50 @@ public class AiAdvisorService : IAiAdvisorService
 
         var selection = AiChatContextBuilder.BuildSelection(predictionsForSelection, normalizedRequest, DateTime.UtcNow, pricingByPredictionId);
         var relevantCandidates = selection.Candidates.Count > 0 ? selection.Candidates : contextCandidates;
+        var groqApiKey = ResolveGroqApiKey();
+
+        if (normalizedRequest.Intent == AiChatIntent.WorkingSlipRefinement)
+        {
+            await EnrichCandidatePoolWithFootballInsightsAsync(
+                groqApiKey,
+                normalizedPrompt,
+                normalizedRequest,
+                workingSlipCandidates,
+                ct);
+
+            if (NeedsCatalogInsightEnrichment(normalizedRequest, normalizedPrompt))
+            {
+                await EnrichCandidatePoolWithFootballInsightsAsync(
+                    groqApiKey,
+                    normalizedPrompt,
+                    normalizedRequest,
+                    candidateCatalog.Where(candidate => candidate.CanBook).ToList(),
+                    ct);
+            }
+        }
+        else if (normalizedRequest.Intent == AiChatIntent.MatchDiscussion)
+        {
+            await EnrichCandidatePoolWithFootballInsightsAsync(
+                groqApiKey,
+                normalizedPrompt,
+                normalizedRequest,
+                relevantCandidates.ToList(),
+                ct);
+        }
+        else if (selection.Candidates.Count > 0 &&
+                 normalizedRequest.Intent is AiChatIntent.RecommendPicks or AiChatIntent.MixedMarketRecommendation)
+        {
+            await EnrichCandidatePoolWithFootballInsightsAsync(
+                groqApiKey,
+                normalizedPrompt,
+                normalizedRequest,
+                selection.Candidates.ToList(),
+                ct);
+
+            var reorderedCandidates = AiChatContextBuilder.ReorderCandidates(selection.Candidates, normalizedRequest, DateTime.UtcNow);
+            selection = CloneSelectionWithCandidates(selection, reorderedCandidates);
+            relevantCandidates = selection.Candidates;
+        }
 
         if (normalizedRequest.Intent is AiChatIntent.AppHelp or AiChatIntent.SettlementExplanation &&
             _knowledgeService.TryBuildPublicAppHelpResponse(normalizedPrompt, relevantCandidates, out var helpResponse, out var knowledgeTopic))
@@ -270,8 +317,7 @@ public class AiAdvisorService : IAiAdvisorService
             return rolloverResponse;
         }
 
-        var apiKey = _configuration["GroqApiKey"];
-        if (string.IsNullOrEmpty(apiKey) || apiKey.Contains("stored in user-secrets") || apiKey.Contains("set via environment variable"))
+        if (string.IsNullOrEmpty(groqApiKey))
         {
             var missingKey = new AiChatResponse
             {
@@ -287,7 +333,7 @@ public class AiAdvisorService : IAiAdvisorService
         var systemPrompt = BuildChatSystemPrompt();
         var userPayload = BuildChatPayload(normalizedPrompt, selection, normalizedRequest);
         var rawResponse = await CallGroqAsync(
-            apiKey,
+            groqApiKey,
             systemPrompt,
             userPayload,
             sessionState.History,
@@ -313,13 +359,576 @@ public class AiAdvisorService : IAiAdvisorService
 
     public async Task<string> AnalyzeValueBetsAsync(string payload, CancellationToken ct = default)
     {
-        var apiKey = _configuration["GroqApiKey"];
-        if (string.IsNullOrEmpty(apiKey) || apiKey.Contains("stored in user-secrets") || apiKey.Contains("set via environment variable"))
+        var apiKey = ResolveGroqApiKey();
+        if (string.IsNullOrEmpty(apiKey))
             throw new InvalidOperationException("Groq API key is not configured or is using a placeholder dummy value.");
 
         var systemPrompt = BuildValueBetsSystemPrompt();
 
         return await CallGroqAsync(apiKey, systemPrompt, payload, null, ct, jsonMode: true);
+    }
+
+    private string ResolveGroqApiKey()
+    {
+        var apiKey = _configuration["GroqApiKey"];
+        if (string.IsNullOrWhiteSpace(apiKey) ||
+            apiKey.Contains("stored in user-secrets", StringComparison.OrdinalIgnoreCase) ||
+            apiKey.Contains("set via environment variable", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        return apiKey;
+    }
+
+    private static bool NeedsCatalogInsightEnrichment(AiChatNormalizedRequest normalizedRequest, string userPrompt)
+    {
+        if (normalizedRequest.Intent != AiChatIntent.WorkingSlipRefinement)
+        {
+            return false;
+        }
+
+        return normalizedRequest.ActionDirective is "target_odds" or "make_safer" or "remove_weakest" or "swap_draw_out" or "show_riskiest" ||
+               string.Equals(normalizedRequest.SafetyBias, "safer", StringComparison.OrdinalIgnoreCase) ||
+               userPrompt.Contains("safer", StringComparison.OrdinalIgnoreCase) ||
+               userPrompt.Contains("swap", StringComparison.OrdinalIgnoreCase) ||
+               userPrompt.Contains("remove", StringComparison.OrdinalIgnoreCase) ||
+               userPrompt.Contains("weakest", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static AiChatContextBuilder.AiChatContextSelection CloneSelectionWithCandidates(
+        AiChatContextBuilder.AiChatContextSelection selection,
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidates)
+    {
+        return new AiChatContextBuilder.AiChatContextSelection
+        {
+            Candidates = candidates,
+            TotalAvailableCount = selection.TotalAvailableCount,
+            NoRelevantMatchesFound = selection.NoRelevantMatchesFound,
+            RequestedMarketSlices = selection.RequestedMarketSlices,
+            RequestedCandidateCount = selection.RequestedCandidateCount,
+            IsRolloverRequest = selection.IsRolloverRequest,
+            RequestedCombinedOdds = selection.RequestedCombinedOdds,
+            NeedsRolloverTargetOdds = selection.NeedsRolloverTargetOdds,
+            DateScopeLabel = selection.DateScopeLabel,
+            NormalizedRequest = selection.NormalizedRequest,
+            ResolvedMarketMix = selection.ResolvedMarketMix,
+            ShortfallWarnings = selection.ShortfallWarnings,
+            InterpretationNotes = selection.InterpretationNotes
+        };
+    }
+
+    private async Task EnrichCandidatePoolWithFootballInsightsAsync(
+        string groqApiKey,
+        string userPrompt,
+        AiChatNormalizedRequest normalizedRequest,
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidatePool,
+        CancellationToken ct)
+    {
+        if (candidatePool.Count == 0)
+        {
+            return;
+        }
+
+        var footballCandidates = candidatePool
+            .Where(candidate => IsFootballInsightEligible(candidate, normalizedRequest))
+            .OrderByDescending(AiChatContextBuilder.ComputeAppCoreStrength)
+            .Take(12)
+            .ToList();
+
+        if (footballCandidates.Count == 0)
+        {
+            return;
+        }
+
+        var actionKeysToInspect = await DetermineFootballLookupActionKeysAsync(
+            groqApiKey,
+            userPrompt,
+            normalizedRequest,
+            footballCandidates,
+            ct);
+        if (actionKeysToInspect.Count == 0)
+        {
+            return;
+        }
+
+        var requestLookup = footballCandidates
+            .Where(candidate => actionKeysToInspect.Contains(candidate.ActionKey, StringComparer.OrdinalIgnoreCase))
+            .ToDictionary(candidate => candidate.ActionKey, StringComparer.OrdinalIgnoreCase);
+
+        var insightRequests = requestLookup.Values
+            .Select(BuildInsightRequest)
+            .ToList();
+        var insights = await _footballInsightService.GetInsightsAsync(insightRequests, ct);
+
+        foreach (var actionKey in actionKeysToInspect)
+        {
+            if (!requestLookup.TryGetValue(actionKey, out var candidate) ||
+                !insights.TryGetValue(actionKey, out var insight))
+            {
+                continue;
+            }
+
+            candidate.FootballInsight = insight;
+            candidate.FootballSupportScore = ComputeFootballSupportScore(candidate, insight);
+        }
+    }
+
+    private async Task<List<string>> DetermineFootballLookupActionKeysAsync(
+        string groqApiKey,
+        string userPrompt,
+        AiChatNormalizedRequest normalizedRequest,
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> shortlist,
+        CancellationToken ct)
+    {
+        var deterministicTopKeys = shortlist
+            .Take(4)
+            .Select(candidate => candidate.ActionKey)
+            .ToList();
+
+        if (shortlist.Count <= 4 || !ShouldUseLookupPlan(normalizedRequest, shortlist.Count) || string.IsNullOrWhiteSpace(groqApiKey))
+        {
+            return deterministicTopKeys;
+        }
+
+        try
+        {
+            var rawPlan = await CallGroqAsync(
+                groqApiKey,
+                BuildLookupPlanSystemPrompt(),
+                BuildLookupPlanPayload(userPrompt, normalizedRequest, shortlist),
+                null,
+                ct,
+                jsonMode: true,
+                temperature: 0.1,
+                maxTokens: 300);
+            if (TryParseLookupPlan(rawPlan, shortlist, out var actionKeysToInspect))
+            {
+                return actionKeysToInspect;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Football lookup plan selection failed; falling back to deterministic shortlist.");
+        }
+
+        return deterministicTopKeys;
+    }
+
+    private static bool ShouldUseLookupPlan(AiChatNormalizedRequest normalizedRequest, int shortlistCount)
+    {
+        if (shortlistCount <= 4)
+        {
+            return false;
+        }
+
+        if (normalizedRequest.Intent == AiChatIntent.MatchDiscussion)
+        {
+            return true;
+        }
+
+        if (normalizedRequest.ActionDirective == "target_odds" || normalizedRequest.TargetCombinedOdds.HasValue)
+        {
+            return true;
+        }
+
+        if (normalizedRequest.EntityTerms.Count > 0)
+        {
+            return true;
+        }
+
+        return normalizedRequest.Intent is AiChatIntent.RecommendPicks or AiChatIntent.MixedMarketRecommendation &&
+               (!normalizedRequest.RequestedTotalCount.HasValue || normalizedRequest.RequestedTotalCount.Value <= 10);
+    }
+
+    private static bool IsFootballInsightEligible(
+        AiChatContextBuilder.AiChatContextCandidate candidate,
+        AiChatNormalizedRequest normalizedRequest)
+    {
+        if (candidate.MatchState == "Finished")
+        {
+            return false;
+        }
+
+        if (candidate.PredictionCategory is not ("BothTeamsScore" or "Over2.5Goals" or "Under2.5Goals" or "Draw" or "StraightWin"))
+        {
+            return false;
+        }
+
+        return normalizedRequest.Intent == AiChatIntent.MatchDiscussion || candidate.CanBook || candidate.MatchState == "Upcoming";
+    }
+
+    private static AiChatFootballInsightRequest BuildInsightRequest(AiChatContextBuilder.AiChatContextCandidate candidate)
+    {
+        return new AiChatFootballInsightRequest
+        {
+            ActionKey = candidate.ActionKey,
+            League = candidate.League,
+            HomeTeam = candidate.HomeTeam,
+            AwayTeam = candidate.AwayTeam,
+            PredictionCategory = candidate.PredictionCategory,
+            PredictedOutcome = candidate.PredictedOutcome,
+            MatchLocalDate = candidate.MatchLocalDate,
+            KickoffTime = candidate.KickoffTime,
+            MatchDateTimeUtc = candidate.MatchDateTimeUtc
+        };
+    }
+
+    private static string BuildLookupPlanSystemPrompt()
+    {
+        return """
+            IDENTITY: You are helping MatchPredictor decide which football fixtures deserve deeper stats lookup before the final response.
+
+            TASK:
+            - Pick at most 4 ActionKeys from the supplied shortlist.
+            - Prefer fixtures where recent form, venue trends, and scoring patterns could materially change the final ranking or slip shape.
+            - Stay inside the supplied shortlist only.
+            - For target-odds or safer-slip requests, prioritize legs that are near the top of the current ranking or most likely to be kept/swapped.
+
+            OUTPUT:
+            Return exactly one JSON object:
+            {
+              "actionKeysToInspect": ["P123", "P456"]
+            }
+
+            RULES:
+            - Do not return keys outside the shortlist.
+            - Do not return more than 4 keys.
+            - If the shortlist is already narrow, focus on the strongest or most decision-sensitive fixtures.
+            - Do not return any extra keys or prose.
+            """;
+    }
+
+    private static string BuildLookupPlanPayload(
+        string userPrompt,
+        AiChatNormalizedRequest normalizedRequest,
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> shortlist)
+    {
+        var payload = new
+        {
+            question = userPrompt,
+            normalizedIntent = normalizedRequest.Intent.ToString(),
+            normalizedRequest.ActionDirective,
+            normalizedRequest.SafetyBias,
+            normalizedRequest.TargetCombinedOdds,
+            shortlist = shortlist.Select((candidate, index) => new
+            {
+                rank = index + 1,
+                candidate.ActionKey,
+                candidate.HomeTeam,
+                candidate.AwayTeam,
+                candidate.League,
+                candidate.PredictionCategory,
+                candidate.PredictedOutcome,
+                candidate.MatchState,
+                candidate.CanBook,
+                calibratedConfidence = candidate.ConfidenceScore,
+                candidate.MarginAboveThreshold,
+                candidate.MarketProbability,
+                candidate.EstimatedOdds,
+                candidate.EdgePoints
+            })
+        };
+
+        return JsonSerializer.Serialize(payload);
+    }
+
+    private static bool TryParseLookupPlan(
+        string rawPlan,
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> shortlist,
+        out List<string> actionKeysToInspect)
+    {
+        actionKeysToInspect = [];
+
+        if (string.IsNullOrWhiteSpace(rawPlan))
+        {
+            return false;
+        }
+
+        try
+        {
+            var plan = JsonSerializer.Deserialize<AiChatLookupPlan>(rawPlan, JsonOptions());
+            if (plan?.ActionKeysToInspect is not { Count: > 0 })
+            {
+                return false;
+            }
+
+            var allowedKeys = shortlist
+                .Select(candidate => candidate.ActionKey)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            actionKeysToInspect = plan.ActionKeysToInspect
+                .Where(key => !string.IsNullOrWhiteSpace(key) && allowedKeys.Contains(key.Trim()))
+                .Select(key => key.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(4)
+                .ToList();
+
+            return actionKeysToInspect.Count > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static double? ComputeFootballSupportScore(
+        AiChatContextBuilder.AiChatContextCandidate candidate,
+        FootballMatchInsightSnapshot snapshot)
+    {
+        if (snapshot.HomeForm.SampleSize == 0 && snapshot.AwayForm.SampleSize == 0)
+        {
+            return null;
+        }
+
+        var rawScore = candidate.PredictionCategory switch
+        {
+            "StraightWin" => ComputeStraightWinSupport(candidate, snapshot),
+            "Draw" => ComputeDrawSupport(snapshot),
+            "BothTeamsScore" => ComputeBttsSupport(candidate, snapshot),
+            "Over2.5Goals" => ComputeTotalsSupport(snapshot, wantOver: true),
+            "Under2.5Goals" => ComputeTotalsSupport(snapshot, wantOver: false),
+            _ => 0d
+        };
+
+        var qualityWeight = snapshot.DataQuality switch
+        {
+            "High" => 1d,
+            "Medium" => 0.8d,
+            _ => 0.6d
+        };
+
+        return Math.Clamp(rawScore * qualityWeight, -1d, 1d);
+    }
+
+    private static double ComputeStraightWinSupport(
+        AiChatContextBuilder.AiChatContextCandidate candidate,
+        FootballMatchInsightSnapshot snapshot)
+    {
+        var supportsHome = string.Equals(candidate.PredictedOutcome, "Home Win", StringComparison.OrdinalIgnoreCase);
+        var supportsAway = string.Equals(candidate.PredictedOutcome, "Away Win", StringComparison.OrdinalIgnoreCase);
+        if (!supportsHome && !supportsAway)
+        {
+            return 0d;
+        }
+
+        var favored = supportsHome ? snapshot.HomeForm : snapshot.AwayForm;
+        var opponent = supportsHome ? snapshot.AwayForm : snapshot.HomeForm;
+        var venueEdge = ScaleSignedDifference(favored.VenuePointsPerMatch - opponent.VenuePointsPerMatch, 1.4d);
+        var overallEdge = ScaleSignedDifference(favored.PointsPerMatch - opponent.PointsPerMatch, 1.4d);
+        var attackVsConcede = ScaleSignedDifference(favored.GoalsForPerMatch - opponent.GoalsAgainstPerMatch, 1.1d);
+        var defensiveEdge = ScaleSignedDifference(opponent.GoalsForPerMatch - favored.GoalsAgainstPerMatch, 1.1d);
+        var cleanSheetEdge = ScaleSignedDifference(favored.CleanSheetRate - opponent.CleanSheetRate, 0.45d);
+
+        return Math.Clamp(
+            (venueEdge * 0.35d) +
+            (overallEdge * 0.25d) +
+            (attackVsConcede * 0.20d) +
+            (defensiveEdge * 0.10d) +
+            (cleanSheetEdge * 0.10d),
+            -1d,
+            1d);
+    }
+
+    private static double ComputeDrawSupport(FootballMatchInsightSnapshot snapshot)
+    {
+        var parity = 1d - Math.Clamp(Math.Abs(snapshot.HomeForm.PointsPerMatch - snapshot.AwayForm.PointsPerMatch) / 1.4d, 0d, 1d);
+        var paritySupport = (parity * 2d) - 1d;
+        var drawTrend = RateToSupport((snapshot.HomeForm.DrawRate + snapshot.AwayForm.DrawRate + snapshot.HomeForm.VenueDrawRate + snapshot.AwayForm.VenueDrawRate) / 4d);
+        var lowScoring = RateToSupport((snapshot.HomeForm.Under25Rate + snapshot.AwayForm.Under25Rate) / 2d);
+        var tightGoals = -ScaleSignedDifference(
+            ((snapshot.HomeForm.GoalsForPerMatch + snapshot.HomeForm.GoalsAgainstPerMatch +
+              snapshot.AwayForm.GoalsForPerMatch + snapshot.AwayForm.GoalsAgainstPerMatch) / 2d) - 2.35d,
+            1.2d);
+
+        return Math.Clamp(
+            (paritySupport * 0.40d) +
+            (drawTrend * 0.30d) +
+            (lowScoring * 0.20d) +
+            (tightGoals * 0.10d),
+            -1d,
+            1d);
+    }
+
+    private static double ComputeBttsSupport(
+        AiChatContextBuilder.AiChatContextCandidate candidate,
+        FootballMatchInsightSnapshot snapshot)
+    {
+        var bttsYesSupport = Math.Clamp(
+            (RateToSupport((snapshot.HomeForm.BttsRate + snapshot.AwayForm.BttsRate) / 2d) * 0.45d) +
+            (GoalsToSupport((snapshot.HomeForm.GoalsForPerMatch + snapshot.AwayForm.GoalsForPerMatch) / 2d, 1.2d, 0.9d) * 0.25d) +
+            (GoalsToSupport((snapshot.HomeForm.GoalsAgainstPerMatch + snapshot.AwayForm.GoalsAgainstPerMatch) / 2d, 1.1d, 0.9d) * 0.20d) +
+            (RateToSupport((snapshot.HomeForm.Over25Rate + snapshot.AwayForm.Over25Rate) / 2d) * 0.10d),
+            -1d,
+            1d);
+
+        return candidate.PredictedOutcome.Contains("No", StringComparison.OrdinalIgnoreCase)
+            ? -bttsYesSupport
+            : bttsYesSupport;
+    }
+
+    private static double ComputeTotalsSupport(FootballMatchInsightSnapshot snapshot, bool wantOver)
+    {
+        var totalGoals = (snapshot.HomeForm.GoalsForPerMatch + snapshot.HomeForm.GoalsAgainstPerMatch +
+                          snapshot.AwayForm.GoalsForPerMatch + snapshot.AwayForm.GoalsAgainstPerMatch) / 2d;
+        var overSupport = Math.Clamp(
+            (GoalsToSupport(totalGoals, 2.65d, 1.15d) * 0.45d) +
+            (RateToSupport((snapshot.HomeForm.Over25Rate + snapshot.AwayForm.Over25Rate) / 2d) * 0.35d) +
+            (RateToSupport((snapshot.HomeForm.BttsRate + snapshot.AwayForm.BttsRate) / 2d) * 0.10d) +
+            (GoalsToSupport((snapshot.HomeForm.GoalsForPerMatch + snapshot.AwayForm.GoalsForPerMatch) / 2d, 1.2d, 0.8d) * 0.10d),
+            -1d,
+            1d);
+
+        return wantOver
+            ? overSupport
+            : -overSupport;
+    }
+
+    private static double ScaleSignedDifference(double difference, double band)
+    {
+        return Math.Clamp(difference / Math.Max(band, 0.01d), -1d, 1d);
+    }
+
+    private static double GoalsToSupport(double goalsPerMatch, double neutral, double band)
+    {
+        return Math.Clamp((goalsPerMatch - neutral) / Math.Max(band, 0.01d), -1d, 1d);
+    }
+
+    private static double RateToSupport(double rate)
+    {
+        return Math.Clamp((rate * 2d) - 1d, -1d, 1d);
+    }
+
+    private static string AppendInsightSummary(string baseText, string? insightSummary)
+    {
+        return string.IsNullOrWhiteSpace(insightSummary)
+            ? baseText
+            : $"{baseText} {insightSummary}";
+    }
+
+    private static string BuildFootballInsightSummary(AiChatContextBuilder.AiChatContextCandidate candidate)
+    {
+        return BuildFootballAnalysisSummary(candidate) ?? string.Empty;
+    }
+
+    private static string? BuildFootballAnalysisSummary(AiChatContextBuilder.AiChatContextCandidate candidate)
+    {
+        if (candidate.FootballInsight is null)
+        {
+            return null;
+        }
+
+        var snapshot = candidate.FootballInsight;
+        var summary = candidate.PredictionCategory switch
+        {
+            "StraightWin" => BuildStraightWinAnalysisSummary(candidate, snapshot),
+            "Draw" => BuildDrawAnalysisSummary(snapshot),
+            "BothTeamsScore" => BuildBttsAnalysisSummary(candidate, snapshot),
+            "Over2.5Goals" => BuildTotalsAnalysisSummary(snapshot, wantOver: true),
+            "Under2.5Goals" => BuildTotalsAnalysisSummary(snapshot, wantOver: false),
+            _ => null
+        };
+
+        if (string.IsNullOrWhiteSpace(summary))
+        {
+            return null;
+        }
+
+        return snapshot.IsLowConfidence
+            ? $"Form sample is thin, but {summary}"
+            : summary;
+    }
+
+    private static string? BuildStraightWinAnalysisSummary(
+        AiChatContextBuilder.AiChatContextCandidate candidate,
+        FootballMatchInsightSnapshot snapshot)
+    {
+        return candidate.PredictedOutcome switch
+        {
+            "Home Win" => $"{snapshot.HomeTeam}'s recent home form is stronger than {snapshot.AwayTeam}'s away sample, which supports the home-win angle.",
+            "Away Win" => $"{snapshot.AwayTeam}'s recent away profile is stronger than {snapshot.HomeTeam}'s home sample, which supports the away-win angle.",
+            _ => null
+        };
+    }
+
+    private static string BuildDrawAnalysisSummary(FootballMatchInsightSnapshot snapshot)
+    {
+        return $"{snapshot.HomeTeam} and {snapshot.AwayTeam} grade out fairly close on recent form, and the draw/low-total profile keeps the stalemate angle live.";
+    }
+
+    private static string BuildBttsAnalysisSummary(
+        AiChatContextBuilder.AiChatContextCandidate candidate,
+        FootballMatchInsightSnapshot snapshot)
+    {
+        var wantsNo = candidate.PredictedOutcome.Contains("No", StringComparison.OrdinalIgnoreCase);
+        return wantsNo
+            ? $"The recent scoring sample leans more controlled than open, so the no-BTTS angle has some support."
+            : $"{snapshot.HomeTeam} and {snapshot.AwayTeam} have both carried enough scoring and conceding activity lately to support BTTS.";
+    }
+
+    private static string BuildTotalsAnalysisSummary(FootballMatchInsightSnapshot snapshot, bool wantOver)
+    {
+        return wantOver
+            ? $"Recent totals and BTTS activity point to a more open scoring profile in this matchup."
+            : $"Recent totals lean lower, with enough defensive control in the sample to support the under angle.";
+    }
+
+    private static List<string> BuildFootballInsightBullets(AiChatContextBuilder.AiChatContextCandidate candidate)
+    {
+        if (candidate.FootballInsight is null)
+        {
+            return [];
+        }
+
+        var snapshot = candidate.FootballInsight;
+        var bullets = new List<string>();
+
+        bullets.Add(
+            $"{snapshot.HomeTeam}: {snapshot.HomeForm.Wins}W-{snapshot.HomeForm.Draws}D-{snapshot.HomeForm.Losses}L in the last {snapshot.HomeForm.SampleSize}, {snapshot.HomeForm.GoalsForPerMatch:0.00} GF / {snapshot.HomeForm.GoalsAgainstPerMatch:0.00} GA per match.");
+        bullets.Add(
+            $"{snapshot.AwayTeam}: {snapshot.AwayForm.Wins}W-{snapshot.AwayForm.Draws}D-{snapshot.AwayForm.Losses}L in the last {snapshot.AwayForm.SampleSize}, {snapshot.AwayForm.GoalsForPerMatch:0.00} GF / {snapshot.AwayForm.GoalsAgainstPerMatch:0.00} GA per match.");
+
+        var marketBullet = candidate.PredictionCategory switch
+        {
+            "StraightWin" => $"{snapshot.HomeTeam} home PPM {snapshot.HomeForm.VenuePointsPerMatch:0.00} vs {snapshot.AwayTeam} away PPM {snapshot.AwayForm.VenuePointsPerMatch:0.00}.",
+            "Draw" => $"Draw rates: {snapshot.HomeTeam} {snapshot.HomeForm.DrawRate * 100:0}% and {snapshot.AwayTeam} {snapshot.AwayForm.DrawRate * 100:0}%; under 2.5 average {(snapshot.HomeForm.Under25Rate + snapshot.AwayForm.Under25Rate) * 50:0}%.",
+            "BothTeamsScore" => $"BTTS rates: {snapshot.HomeTeam} {snapshot.HomeForm.BttsRate * 100:0}% and {snapshot.AwayTeam} {snapshot.AwayForm.BttsRate * 100:0}%.",
+            "Over2.5Goals" => $"Over 2.5 rates: {snapshot.HomeTeam} {snapshot.HomeForm.Over25Rate * 100:0}% and {snapshot.AwayTeam} {snapshot.AwayForm.Over25Rate * 100:0}%.",
+            "Under2.5Goals" => $"Under 2.5 rates: {snapshot.HomeTeam} {snapshot.HomeForm.Under25Rate * 100:0}% and {snapshot.AwayTeam} {snapshot.AwayForm.Under25Rate * 100:0}%.",
+            _ => string.Empty
+        };
+
+        if (!string.IsNullOrWhiteSpace(marketBullet))
+        {
+            bullets.Add(marketBullet);
+        }
+
+        if (snapshot.HeadToHead is { SampleSize: > 0 } h2h)
+        {
+            bullets.Add($"Head-to-head sample: {h2h.HomeTeamWins}-{h2h.Draws}-{h2h.AwayTeamWins} across {h2h.SampleSize} meetings.");
+        }
+
+        return bullets.Take(3).ToList();
+    }
+
+    private static string? BuildAnalysisConfidence(AiChatContextBuilder.AiChatContextCandidate candidate)
+    {
+        return candidate.FootballInsight?.DataQuality;
+    }
+
+    private static string? BuildInsightSourceLabel(AiChatContextBuilder.AiChatContextCandidate candidate)
+    {
+        if (candidate.FootballInsight is null)
+        {
+            return null;
+        }
+
+        return candidate.FootballInsight.InsightSource switch
+        {
+            "InternalHistory" => "Internal history",
+            "InternalHistory+ApiFootballFallback" => "Internal history + API-Football fallback",
+            "Unavailable" => "Unavailable",
+            _ => candidate.FootballInsight.InsightSource
+        };
     }
 
     private async Task<List<Prediction>> LoadPublishedPredictionsForChatAsync(CancellationToken ct)
@@ -952,8 +1561,7 @@ public class AiAdvisorService : IAiAdvisorService
 
     private static double BuildSafetyScore(AiChatContextBuilder.AiChatContextCandidate candidate)
     {
-        var score = (double)(candidate.ConfidenceScore ?? decimal.Zero) * 100d;
-        score += candidate.MarginAboveThreshold * 150d;
+        var score = AiChatContextBuilder.ComputeBlendedCoreStrength(candidate) * 100d;
         score += (candidate.EdgePoints ?? 0d) * 2d;
 
         if (candidate.PredictionCategory == "Draw")
@@ -993,13 +1601,16 @@ public class AiAdvisorService : IAiAdvisorService
     {
         var confidence = (double)(candidate.ConfidenceScore ?? decimal.Zero) * 100d;
         var marginPoints = candidate.MarginAboveThreshold * 100d;
+        var insightSummary = BuildFootballInsightSummary(candidate);
 
         if (candidate.MarketProbability is > 0 && candidate.EstimatedOdds is > 0)
         {
-            return $"{candidate.HomeTeam} vs {candidate.AwayTeam} is an upcoming {candidate.PredictionCategory} angle. The published lean is {candidate.PredictedOutcome} at {confidence:0.0}% calibrated confidence, versus {candidate.MarketProbability.Value * 100d:0.0}% on the synced market side, with estimated odds around {candidate.EstimatedOdds.Value:0.00}.";
+            var message = $"{candidate.HomeTeam} vs {candidate.AwayTeam} is an upcoming {candidate.PredictionCategory} angle. The published lean is {candidate.PredictedOutcome} at {confidence:0.0}% calibrated confidence, versus {candidate.MarketProbability.Value * 100d:0.0}% on the synced market side, with estimated odds around {candidate.EstimatedOdds.Value:0.00}.";
+            return AppendInsightSummary(message, insightSummary);
         }
 
-        return $"{candidate.HomeTeam} vs {candidate.AwayTeam} is an upcoming {candidate.PredictionCategory} angle. The published lean is {candidate.PredictedOutcome} at {confidence:0.0}% calibrated confidence, {marginPoints:+0.0;-0.0;0.0} points over the live threshold.";
+        var fallbackMessage = $"{candidate.HomeTeam} vs {candidate.AwayTeam} is an upcoming {candidate.PredictionCategory} angle. The published lean is {candidate.PredictedOutcome} at {confidence:0.0}% calibrated confidence, {marginPoints:+0.0;-0.0;0.0} points over the live threshold.";
+        return AppendInsightSummary(fallbackMessage, insightSummary);
     }
 
     private static string BuildDiscussionExplanation(AiChatContextBuilder.AiChatContextCandidate candidate)
@@ -1014,10 +1625,14 @@ public class AiAdvisorService : IAiAdvisorService
 
         if (candidate.MarketProbability is > 0 && candidate.EstimatedOdds is > 0)
         {
-            return $"{candidate.PredictedOutcome} sits at {confidence:0.0}% model confidence versus {candidate.MarketProbability.Value * 100d:0.0}% on the synced market side, with estimated odds around {candidate.EstimatedOdds.Value:0.00}.";
+            return AppendInsightSummary(
+                $"{candidate.PredictedOutcome} sits at {confidence:0.0}% model confidence versus {candidate.MarketProbability.Value * 100d:0.0}% on the synced market side, with estimated odds around {candidate.EstimatedOdds.Value:0.00}.",
+                BuildFootballInsightSummary(candidate));
         }
 
-        return $"{candidate.PredictedOutcome} is running at {confidence:0.0}% calibrated confidence, {marginPoints:+0.0;-0.0;0.0} points above threshold.";
+        return AppendInsightSummary(
+            $"{candidate.PredictedOutcome} is running at {confidence:0.0}% calibrated confidence, {marginPoints:+0.0;-0.0;0.0} points above threshold.",
+            BuildFootballInsightSummary(candidate));
     }
 
     private AiChatResponse BuildRolloverResponse(
@@ -1178,8 +1793,8 @@ public class AiAdvisorService : IAiAdvisorService
 
     private static double BuildRolloverCandidateStrength(AiChatContextBuilder.AiChatContextCandidate candidate)
     {
-        var confidence = (double)(candidate.ConfidenceScore ?? decimal.Zero) * 100d;
-        var margin = candidate.MarginAboveThreshold * 150d;
+        var confidence = AiChatContextBuilder.ComputeBlendedCoreStrength(candidate) * 100d;
+        var margin = candidate.MarginAboveThreshold * 120d;
         var edge = (candidate.EdgePoints ?? 0d) * 3d;
         var priceAdjustment = candidate.EstimatedOdds switch
         {
@@ -1211,13 +1826,17 @@ public class AiAdvisorService : IAiAdvisorService
             SCOPE:
             - You may discuss only the prediction candidates supplied in the current request payload.
             - If a team, league, or fixture is not in the supplied candidates, say so plainly.
-            - Do not invent injuries, lineups, bookmaker odds, expected goals, form streaks, motivation, or weather unless those fields are explicitly present.
+            - Do not invent injuries, lineups, bookmaker odds, expected goals, motivation, or weather unless those fields are explicitly present.
             - If marketProbability, estimatedDecimalOdds, or modelEdgePoints are present, you may use them. Otherwise say the pricing is unavailable.
+            - If footballInsight is present for a candidate, you may use only those supplied form, venue, goal, BTTS, totals, and head-to-head stats.
+            - If footballInsight is absent, do not claim form or team-performance stats.
             - If a candidate includes actualScore or actualOutcome, you may explain why it settled green/red using only those fields.
 
             PICKING RULES:
             - "Best" and "safe" picks should lean on higher calibrated confidence, stronger margin above threshold, and positive modelEdgePoints when available.
             - Prefer low-variance Straight Win setups when the user asks for safer options.
+            - When footballInsight is present, blend the app edge with 1-2 concrete football signals from the supplied stats.
+            - If footballInsight.dataQuality is Low or footballInsight.isLowConfidence is true, say the model edge matters more than the thin form sample.
             - If multiple picks are suggested, keep them grounded and avoid hype or guarantees.
             - If you recommend a set of legs, make the message feel like you are guiding the user through the card with calm confidence.
             - If the payload includes requestedMarkets with counts, try to satisfy that market mix as closely as the supplied candidates allow.
@@ -1343,7 +1962,59 @@ public class AiAdvisorService : IAiAdvisorService
                 candidate.ThresholdUsed,
                 candidate.ThresholdSource,
                 candidate.CalibratorUsed,
-                candidate.WasPublished
+                candidate.WasPublished,
+                footballSupportScore = candidate.FootballSupportScore,
+                footballInsight = candidate.FootballInsight is null
+                    ? null
+                    : new
+                    {
+                        candidate.FootballInsight.InsightSource,
+                        candidate.FootballInsight.DataQuality,
+                        candidate.FootballInsight.IsLowConfidence,
+                        homeForm = new
+                        {
+                            candidate.FootballInsight.HomeForm.TeamName,
+                            candidate.FootballInsight.HomeForm.SampleSize,
+                            candidate.FootballInsight.HomeForm.VenueSampleSize,
+                            candidate.FootballInsight.HomeForm.Wins,
+                            candidate.FootballInsight.HomeForm.Draws,
+                            candidate.FootballInsight.HomeForm.Losses,
+                            candidate.FootballInsight.HomeForm.PointsPerMatch,
+                            candidate.FootballInsight.HomeForm.VenuePointsPerMatch,
+                            candidate.FootballInsight.HomeForm.GoalsForPerMatch,
+                            candidate.FootballInsight.HomeForm.GoalsAgainstPerMatch,
+                            candidate.FootballInsight.HomeForm.VenueGoalsForPerMatch,
+                            candidate.FootballInsight.HomeForm.VenueGoalsAgainstPerMatch,
+                            candidate.FootballInsight.HomeForm.BttsRate,
+                            candidate.FootballInsight.HomeForm.Over25Rate,
+                            candidate.FootballInsight.HomeForm.Under25Rate,
+                            candidate.FootballInsight.HomeForm.CleanSheetRate,
+                            candidate.FootballInsight.HomeForm.LastFiveOverallResults,
+                            candidate.FootballInsight.HomeForm.LastFiveVenueResults
+                        },
+                        awayForm = new
+                        {
+                            candidate.FootballInsight.AwayForm.TeamName,
+                            candidate.FootballInsight.AwayForm.SampleSize,
+                            candidate.FootballInsight.AwayForm.VenueSampleSize,
+                            candidate.FootballInsight.AwayForm.Wins,
+                            candidate.FootballInsight.AwayForm.Draws,
+                            candidate.FootballInsight.AwayForm.Losses,
+                            candidate.FootballInsight.AwayForm.PointsPerMatch,
+                            candidate.FootballInsight.AwayForm.VenuePointsPerMatch,
+                            candidate.FootballInsight.AwayForm.GoalsForPerMatch,
+                            candidate.FootballInsight.AwayForm.GoalsAgainstPerMatch,
+                            candidate.FootballInsight.AwayForm.VenueGoalsForPerMatch,
+                            candidate.FootballInsight.AwayForm.VenueGoalsAgainstPerMatch,
+                            candidate.FootballInsight.AwayForm.BttsRate,
+                            candidate.FootballInsight.AwayForm.Over25Rate,
+                            candidate.FootballInsight.AwayForm.Under25Rate,
+                            candidate.FootballInsight.AwayForm.CleanSheetRate,
+                            candidate.FootballInsight.AwayForm.LastFiveOverallResults,
+                            candidate.FootballInsight.AwayForm.LastFiveVenueResults
+                        },
+                        headToHead = candidate.FootballInsight.HeadToHead
+                    }
             }),
             rolloverTargetOdds = selection.RequestedCombinedOdds
         };
@@ -1616,10 +2287,14 @@ public class AiAdvisorService : IAiAdvisorService
 
         if (candidate.MarketProbability is > 0 && candidate.EstimatedOdds is > 0)
         {
-            return $"{candidate.PredictedOutcome} rates at {confidence:0.#}% model confidence versus {candidate.MarketProbability.Value * 100d:0.#}% market probability (+{candidate.EdgePoints.GetValueOrDefault():0.#} pts), with estimated odds around {candidate.EstimatedOdds.Value:0.00}.";
+            return AppendInsightSummary(
+                $"{candidate.PredictedOutcome} rates at {confidence:0.#}% model confidence versus {candidate.MarketProbability.Value * 100d:0.#}% market probability (+{candidate.EdgePoints.GetValueOrDefault():0.#} pts), with estimated odds around {candidate.EstimatedOdds.Value:0.00}.",
+                BuildFootballInsightSummary(candidate));
         }
 
-        return $"{candidate.PredictedOutcome} rates at {confidence:0.#}% calibrated confidence, {marginPoints:+0.#;-0.#;0.0} pts versus the {thresholdLabel} threshold.";
+        return AppendInsightSummary(
+            $"{candidate.PredictedOutcome} rates at {confidence:0.#}% calibrated confidence, {marginPoints:+0.#;-0.#;0.0} pts versus the {thresholdLabel} threshold.",
+            BuildFootballInsightSummary(candidate));
     }
 
     private static string BuildDefaultActionExplanation(Prediction prediction)
@@ -1740,6 +2415,10 @@ public class AiAdvisorService : IAiAdvisorService
             MarketProbability = candidate.MarketProbability,
             EdgePoints = candidate.EdgePoints,
             EstimatedOdds = candidate.EstimatedOdds,
+            AnalysisSummary = BuildFootballAnalysisSummary(candidate),
+            AnalysisConfidence = BuildAnalysisConfidence(candidate),
+            InsightBullets = BuildFootballInsightBullets(candidate),
+            InsightSource = BuildInsightSourceLabel(candidate),
             CanBook = candidate.CanBook
         };
     }

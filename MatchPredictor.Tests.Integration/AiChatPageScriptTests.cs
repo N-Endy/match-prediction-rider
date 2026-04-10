@@ -66,6 +66,18 @@ public class AiChatPageScriptTests
     }
 
     [Fact]
+    public void ChatScript_RendersFootballInsightMetadata_ForReturnedActions()
+    {
+        var script = ExtractScript(
+            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/Pages/AiChat.cshtml");
+
+        Assert.Contains("action.analysisSummary", script);
+        Assert.Contains("action.analysisConfidence", script);
+        Assert.Contains("action.insightSource", script);
+        Assert.Contains("action.insightBullets", script);
+    }
+
+    [Fact]
     public void ChatScript_RendersWorkingSlipSummary_AndSuggestedPrompts()
     {
         var script = ExtractScript(

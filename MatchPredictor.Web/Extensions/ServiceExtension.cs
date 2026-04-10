@@ -40,6 +40,15 @@ public static class ServiceExtension
                 .HandleTransientHttpError()
                 .OrResult(msg => msg.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                 .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))));
+
+        services.AddHttpClient("ApiFootball", client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(30);
+            })
+            .AddPolicyHandler(HttpPolicyExtensions
+                .HandleTransientHttpError()
+                .OrResult(msg => msg.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                .WaitAndRetryAsync(2, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))));
     }
 
     public static void AddRedisMemoryCache(this IServiceCollection services, IConfiguration configuration)

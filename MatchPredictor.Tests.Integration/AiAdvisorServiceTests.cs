@@ -737,6 +737,45 @@ public class AiAdvisorServiceTests
         Assert.Equal(1, handler.CallCount);
     }
 
+    [Fact]
+    public async Task GetAdviceAsync_UsesTwoStepFootballLookup_AndSurfacesAnalysisFields()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(context, 6);
+
+        var firstActionKey = $"P{predictions[0].Id}";
+        var secondActionKey = $"P{predictions[1].Id}";
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "actionKeysToInspect": ["{{firstActionKey}}", "{{secondActionKey}}"]
+                }
+                """),
+            BuildGroqResponse($$"""
+                {
+                  "message": "Here are five grounded picks from today's card.",
+                  "recommendedActionKeys": ["{{firstActionKey}}", "{{secondActionKey}}"],
+                  "showBookAll": true
+                }
+                """));
+
+        var footballInsightService = new StubFootballInsightService(new Dictionary<string, FootballMatchInsightSnapshot>
+        {
+            [firstActionKey] = CreateInsightSnapshot(predictions[0].HomeTeam, predictions[0].AwayTeam),
+            [secondActionKey] = CreateInsightSnapshot(predictions[1].HomeTeam, predictions[1].AwayTeam)
+        });
+
+        var service = CreateService(context, handler, footballInsightService: footballInsightService);
+
+        var response = await service.GetAdviceAsync("Give me 5 strong picks", "football-lookup-session");
+
+        Assert.Equal(2, handler.CallCount);
+        Assert.Equal(5, response.Actions.Count);
+        Assert.Contains(response.Actions, action => action.ActionKey == firstActionKey && !string.IsNullOrWhiteSpace(action.AnalysisSummary));
+        Assert.Contains(response.Actions, action => action.ActionKey == secondActionKey && action.InsightBullets.Count > 0);
+    }
+
     private static async Task<List<Prediction>> SeedPredictionsAsync(ApplicationDbContext context, int count)
     {
         var localNow = DateTimeProvider.GetLocalTime();
@@ -847,7 +886,8 @@ public class AiAdvisorServiceTests
         ApplicationDbContext context,
         SequenceHttpMessageHandler handler,
         TestDistributedCache? cache = null,
-        IValueBetsService? valueBetsService = null)
+        IValueBetsService? valueBetsService = null,
+        IAiChatFootballInsightService? footballInsightService = null)
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -865,7 +905,66 @@ public class AiAdvisorServiceTests
             cache ?? new TestDistributedCache(),
             new AiChatKnowledgeService(),
             new AiChatRequestParser(new StubSchemaFallbackService(), NullLogger<AiChatRequestParser>.Instance),
-            new StubServiceScopeFactory(valueBetsService));
+            new StubServiceScopeFactory(valueBetsService),
+            footballInsightService ?? new StubFootballInsightService());
+    }
+
+    private static FootballMatchInsightSnapshot CreateInsightSnapshot(string homeTeam, string awayTeam)
+    {
+        return new FootballMatchInsightSnapshot
+        {
+            HomeTeam = homeTeam,
+            AwayTeam = awayTeam,
+            InsightSource = "InternalHistory",
+            DataQuality = "High",
+            HomeForm = new TeamFormSnapshot
+            {
+                TeamName = homeTeam,
+                SampleSize = 5,
+                VenueSampleSize = 3,
+                Wins = 3,
+                Draws = 1,
+                Losses = 1,
+                PointsPerMatch = 2.0,
+                VenuePointsPerMatch = 2.33,
+                GoalsForPerMatch = 1.8,
+                GoalsAgainstPerMatch = 0.8,
+                VenueGoalsForPerMatch = 2.0,
+                VenueGoalsAgainstPerMatch = 0.67,
+                BttsRate = 0.6,
+                Over25Rate = 0.6,
+                Under25Rate = 0.4,
+                CleanSheetRate = 0.4
+            },
+            AwayForm = new TeamFormSnapshot
+            {
+                TeamName = awayTeam,
+                SampleSize = 5,
+                VenueSampleSize = 3,
+                Wins = 1,
+                Draws = 2,
+                Losses = 2,
+                PointsPerMatch = 1.0,
+                VenuePointsPerMatch = 0.67,
+                GoalsForPerMatch = 1.0,
+                GoalsAgainstPerMatch = 1.6,
+                VenueGoalsForPerMatch = 0.67,
+                VenueGoalsAgainstPerMatch = 1.67,
+                BttsRate = 0.6,
+                Over25Rate = 0.4,
+                Under25Rate = 0.6,
+                CleanSheetRate = 0.2
+            },
+            HeadToHead = new HeadToHeadSummary
+            {
+                SampleSize = 2,
+                HomeTeamWins = 1,
+                AwayTeamWins = 0,
+                Draws = 1,
+                BttsRate = 0.5,
+                Over25Rate = 0.5
+            }
+        };
     }
 
     private static string BuildGroqResponse(string modelContent)
@@ -949,6 +1048,27 @@ public class AiAdvisorServiceTests
             };
 
             return Task.FromResult(limitedReport);
+        }
+    }
+
+    private sealed class StubFootballInsightService : IAiChatFootballInsightService
+    {
+        private readonly IReadOnlyDictionary<string, FootballMatchInsightSnapshot> _insights;
+
+        public StubFootballInsightService(IReadOnlyDictionary<string, FootballMatchInsightSnapshot>? insights = null)
+        {
+            _insights = insights ?? new Dictionary<string, FootballMatchInsightSnapshot>();
+        }
+
+        public Task<IReadOnlyDictionary<string, FootballMatchInsightSnapshot>> GetInsightsAsync(
+            IReadOnlyCollection<AiChatFootballInsightRequest> requests,
+            CancellationToken ct = default)
+        {
+            IReadOnlyDictionary<string, FootballMatchInsightSnapshot> results = requests
+                .Where(request => _insights.ContainsKey(request.ActionKey))
+                .ToDictionary(request => request.ActionKey, request => _insights[request.ActionKey], StringComparer.OrdinalIgnoreCase);
+
+            return Task.FromResult(results);
         }
     }
 

@@ -356,9 +356,20 @@ public static partial class AiChatContextBuilder
         DateOnly todayLocalDate)
     {
         var entityMatches = candidate.SearchTokens.Intersect(entityTerms, StringComparer.OrdinalIgnoreCase).Count();
-        var score = (double)(candidate.ConfidenceScore ?? decimal.Zero) * 100d;
-        score += candidate.MarginAboveThreshold * 150d;
-        score += (candidate.EdgePoints ?? 0d) * 3d;
+        var score = CalculateRankingScore(candidate, request, marketFilters, selectionIntent, todayLocalDate, entityMatches);
+
+        return new RankedCandidate(candidate, score, entityMatches);
+    }
+
+    private static double CalculateRankingScore(
+        AiChatContextCandidate candidate,
+        AiChatNormalizedRequest request,
+        HashSet<string> marketFilters,
+        SelectionIntent selectionIntent,
+        DateOnly todayLocalDate,
+        int entityMatches)
+    {
+        var score = ComputeBlendedCoreStrength(candidate) * 100d;
         score += GetDateRecencyBoost(candidate.MatchLocalDate, todayLocalDate);
         score += candidate.CanBook ? 8d : 0d;
 
@@ -399,8 +410,7 @@ public static partial class AiChatContextBuilder
         }
 
         score += entityMatches * 40d;
-
-        return new RankedCandidate(candidate, score, entityMatches);
+        return score;
     }
 
     private static double GetDateRecencyBoost(DateOnly matchDate, DateOnly todayLocalDate)
@@ -414,6 +424,34 @@ public static partial class AiChatContextBuilder
             3 => 2d,
             _ => Math.Max(0d, 1d - ((daysBack - 3) * 0.25d))
         };
+    }
+
+    internal static double ComputeAppCoreStrength(AiChatContextCandidate candidate)
+    {
+        var confidence = Math.Clamp((double)(candidate.ConfidenceScore ?? candidate.RawConfidenceScore ?? decimal.Zero), 0d, 1d);
+        var marginStrength = Math.Clamp(candidate.MarginAboveThreshold / 0.18d, 0d, 1d);
+        var edgeStrength = candidate.EdgePoints.HasValue
+            ? Math.Clamp((candidate.EdgePoints.Value + 2d) / 12d, 0d, 1d)
+            : 0.5d;
+
+        return (confidence * 0.55d) + (marginStrength * 0.25d) + (edgeStrength * 0.20d);
+    }
+
+    internal static double ComputeBlendedCoreStrength(AiChatContextCandidate candidate)
+    {
+        var appStrength = ComputeAppCoreStrength(candidate);
+        if (!candidate.FootballSupportScore.HasValue)
+        {
+            return appStrength;
+        }
+
+        var footballStrength = NormalizeFootballSupportScore(candidate.FootballSupportScore.Value);
+        return (appStrength * 0.75d) + (footballStrength * 0.25d);
+    }
+
+    internal static double NormalizeFootballSupportScore(double supportScore)
+    {
+        return Math.Clamp((supportScore + 1d) / 2d, 0d, 1d);
     }
 
     private static SelectionIntent DetectSelectionIntent(AiChatNormalizedRequest request)
@@ -948,6 +986,33 @@ public static partial class AiChatContextBuilder
             .ToList();
     }
 
+    public static IReadOnlyList<AiChatContextCandidate> ReorderCandidates(
+        IReadOnlyList<AiChatContextCandidate> candidates,
+        AiChatNormalizedRequest request,
+        DateTime nowUtc)
+    {
+        var todayLocalDate = DateOnly.FromDateTime(DateTimeProvider.ConvertUtcToLocal(nowUtc));
+        var selectionIntent = DetectSelectionIntent(request);
+        var marketFilters = request.RequestedMarkets
+            .Select(market => market.PredictionCategory)
+            .Where(category => !string.IsNullOrWhiteSpace(category))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var entityTerms = request.EntityTerms.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var ranked = candidates
+            .Select(candidate =>
+            {
+                var entityMatches = candidate.SearchTokens.Intersect(entityTerms, StringComparer.OrdinalIgnoreCase).Count();
+                var score = CalculateRankingScore(candidate, request, marketFilters, selectionIntent, todayLocalDate, entityMatches);
+                return new RankedCandidate(candidate, score, entityMatches);
+            })
+            .ToList();
+
+        return OrderRankedCandidates(ranked, request, nowUtc)
+            .Select(item => item.Candidate)
+            .ToList();
+    }
+
     private static ulong ComputeStableRandomOrderKey(string seedText, string actionKey)
     {
         var combinedBytes = Encoding.UTF8.GetBytes($"{seedText}\n{actionKey}");
@@ -1125,6 +1190,8 @@ public static partial class AiChatContextBuilder
         public double? MarketProbability { get; init; }
         public double? EstimatedOdds { get; init; }
         public double? EdgePoints { get; init; }
+        public FootballMatchInsightSnapshot? FootballInsight { get; set; }
+        public double? FootballSupportScore { get; set; }
         internal HashSet<string> SearchTokens { get; init; } = new(StringComparer.OrdinalIgnoreCase);
         internal string FixtureKey { get; init; } = string.Empty;
     }

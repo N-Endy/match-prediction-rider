@@ -66,6 +66,7 @@ builder.Services.AddScoped<ISourceMarketPricingService>(provider => provider.Get
 builder.Services.AddScoped<AiChatKnowledgeService>();
 builder.Services.AddScoped<IAiChatSchemaFallbackService, AiChatSchemaFallbackService>();
 builder.Services.AddScoped<AiChatRequestParser>();
+builder.Services.AddScoped<IAiChatFootballInsightService, AiChatFootballInsightService>();
 builder.Services.AddScoped<IAiAdvisorService, AiAdvisorService>();
 builder.Services.AddScoped<IValueBetsService, ValueBetsService>();
 builder.Services.AddScoped<IUserTrackingService, UserTrackingService>();

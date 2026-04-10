@@ -219,6 +219,80 @@ else
                     card.appendChild(explanation);
                 }
 
+                if (action.analysisSummary || (Array.isArray(action.insightBullets) && action.insightBullets.length > 0) || action.analysisConfidence || action.insightSource) {
+                    const insightPanel = document.createElement('div');
+                    insightPanel.style.marginTop = '0.7rem';
+                    insightPanel.style.padding = '0.75rem';
+                    insightPanel.style.borderRadius = '10px';
+                    insightPanel.style.border = '1px solid rgba(56, 189, 248, 0.18)';
+                    insightPanel.style.background = 'rgba(8, 47, 73, 0.22)';
+
+                    const insightHeader = document.createElement('div');
+                    insightHeader.style.display = 'flex';
+                    insightHeader.style.flexWrap = 'wrap';
+                    insightHeader.style.alignItems = 'center';
+                    insightHeader.style.gap = '0.45rem';
+
+                    const insightTitle = document.createElement('div');
+                    insightTitle.style.fontSize = '0.74rem';
+                    insightTitle.style.fontWeight = '700';
+                    insightTitle.style.letterSpacing = '0.05em';
+                    insightTitle.style.textTransform = 'uppercase';
+                    insightTitle.style.opacity = '0.78';
+                    insightTitle.textContent = 'Football Read';
+                    insightHeader.appendChild(insightTitle);
+
+                    if (action.analysisConfidence) {
+                        const confidenceChip = document.createElement('span');
+                        confidenceChip.style.fontSize = '0.7rem';
+                        confidenceChip.style.padding = '0.2rem 0.45rem';
+                        confidenceChip.style.borderRadius = '999px';
+                        confidenceChip.style.background = 'rgba(14, 165, 233, 0.14)';
+                        confidenceChip.style.border = '1px solid rgba(14, 165, 233, 0.22)';
+                        confidenceChip.textContent = `${action.analysisConfidence} sample`;
+                        insightHeader.appendChild(confidenceChip);
+                    }
+
+                    if (action.insightSource) {
+                        const source = document.createElement('span');
+                        source.style.fontSize = '0.7rem';
+                        source.style.opacity = '0.68';
+                        source.textContent = action.insightSource;
+                        insightHeader.appendChild(source);
+                    }
+
+                    insightPanel.appendChild(insightHeader);
+
+                    if (action.analysisSummary) {
+                        const summary = document.createElement('div');
+                        summary.style.marginTop = '0.45rem';
+                        summary.style.fontSize = '0.8rem';
+                        summary.style.lineHeight = '1.45';
+                        summary.innerHTML = formatMessageHtml(action.analysisSummary);
+                        insightPanel.appendChild(summary);
+                    }
+
+                    if (Array.isArray(action.insightBullets) && action.insightBullets.length > 0) {
+                        const bulletList = document.createElement('div');
+                        bulletList.style.display = 'grid';
+                        bulletList.style.gap = '0.28rem';
+                        bulletList.style.marginTop = action.analysisSummary ? '0.45rem' : '0.35rem';
+
+                        action.insightBullets.forEach(item => {
+                            const bullet = document.createElement('div');
+                            bullet.style.fontSize = '0.76rem';
+                            bullet.style.lineHeight = '1.45';
+                            bullet.style.opacity = '0.82';
+                            bullet.innerHTML = `• ${formatMessageHtml(item)}`;
+                            bulletList.appendChild(bullet);
+                        });
+
+                        insightPanel.appendChild(bulletList);
+                    }
+
+                    card.appendChild(insightPanel);
+                }
+
                 if (action.actualScore) {
                     const settledScore = document.createElement('div');
                     settledScore.style.marginTop = '0.55rem';

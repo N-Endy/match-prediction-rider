@@ -20,5 +20,9 @@ public class AiChatAction
     public double? MarketProbability { get; set; }
     public double? EdgePoints { get; set; }
     public double? EstimatedOdds { get; set; }
+    public string? AnalysisSummary { get; set; }
+    public string? AnalysisConfidence { get; set; }
+    public List<string> InsightBullets { get; set; } = [];
+    public string? InsightSource { get; set; }
     public bool CanBook { get; set; } = true;
 }
