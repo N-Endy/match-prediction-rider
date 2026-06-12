@@ -20,21 +20,25 @@ public class CalibrationService : ICalibrationService
         PredictionMarket.AwayWin
     ];
     private readonly ApplicationDbContext _dbContext;
-    private List<MarketCalibrationProfile> _profiles;
-    private List<BetaCalibrationProfile> _betaProfiles;
+    private List<MarketCalibrationProfile>? _profiles;
+    private List<BetaCalibrationProfile>? _betaProfiles;
 
     public CalibrationService(ApplicationDbContext dbContext)
     {
         _dbContext = dbContext;
-        _profiles = _dbContext.MarketCalibrationProfiles
-            .AsNoTracking()
-            .Where(profile => ActiveCalibrationMarkets.Contains(profile.Market))
-            .ToList();
-        _betaProfiles = _dbContext.BetaCalibrationProfiles
-            .AsNoTracking()
-            .Where(profile => ActiveCalibrationMarkets.Contains(profile.Market))
-            .ToList();
     }
+
+    // Loaded lazily so resolving the scoped service does not hit the database
+    // on requests that never calibrate.
+    private List<MarketCalibrationProfile> Profiles => _profiles ??= _dbContext.MarketCalibrationProfiles
+        .AsNoTracking()
+        .Where(profile => ActiveCalibrationMarkets.Contains(profile.Market))
+        .ToList();
+
+    private List<BetaCalibrationProfile> BetaProfiles => _betaProfiles ??= _dbContext.BetaCalibrationProfiles
+        .AsNoTracking()
+        .Where(profile => ActiveCalibrationMarkets.Contains(profile.Market))
+        .ToList();
 
     public double Calibrate(PredictionMarket market, double rawProbability)
     {
@@ -45,7 +49,7 @@ public class CalibrationService : ICalibrationService
     {
         rawProbability = Math.Clamp(rawProbability, 0.0, 1.0);
 
-        var betaProfile = _betaProfiles.FirstOrDefault(profile => profile.Market == market && profile.IsRecommended);
+        var betaProfile = BetaProfiles.FirstOrDefault(profile => profile.Market == market && profile.IsRecommended);
         if (betaProfile != null)
         {
             return new CalibrationDecision
@@ -57,14 +61,14 @@ public class CalibrationService : ICalibrationService
 
         return new CalibrationDecision
         {
-            Probability = CalibrateWithBucket(rawProbability, _profiles.Where(profile => profile.Market == market)),
+            Probability = CalibrateWithBucket(rawProbability, Profiles.Where(profile => profile.Market == market)),
             CalibratorUsed = "Bucket"
         };
     }
 
     public async Task RebuildProfilesAsync()
     {
-        var previousCalibratorByMarket = _betaProfiles
+        var previousCalibratorByMarket = BetaProfiles
             .ToDictionary(
                 profile => profile.Market,
                 profile => profile.IsRecommended ? "Beta" : "Bucket");
@@ -84,7 +88,7 @@ public class CalibrationService : ICalibrationService
             .GroupBy(x => new
             {
                 x.Market,
-                BucketStart = GetBucketStart(x.RawProbability)
+                BucketStart = GetBucketStart(GetCalibrationInput(x))
             })
             .Select(group =>
             {
@@ -94,7 +98,7 @@ public class CalibrationService : ICalibrationService
                 var weightedObservations = group.Sum(item => CalculateRecencyWeight(item.SettledAt ?? item.CreatedAt));
                 var empiricalBucketProbability = (weightedSuccesses + 1.0) / (weightedObservations + 2.0);
                 var weight = Math.Min(weightedObservations / 20.0, 1.0);
-                var averageRawProbability = group.Average(item => item.RawProbability);
+                var averageInputProbability = group.Average(GetCalibrationInput);
 
                 return new MarketCalibrationProfile
                 {
@@ -104,7 +108,7 @@ public class CalibrationService : ICalibrationService
                     ObservationCount = observationCount,
                     SuccessCount = successCount,
                     CalibratedProbability = Math.Clamp(
-                        averageRawProbability + (weight * (empiricalBucketProbability - averageRawProbability)),
+                        averageInputProbability + (weight * (empiricalBucketProbability - averageInputProbability)),
                         0.0,
                         1.0),
                     LastUpdated = DateTime.UtcNow
@@ -220,15 +224,17 @@ public class CalibrationService : ICalibrationService
             return null;
         }
 
+        // Calibration receives meta-corrected probabilities at inference time, so it must
+        // also be trained on the corrected values (falling back to raw for legacy rows).
         var training = forecasts.Take(splitIndex)
             .Select(forecast => (
-                forecast.RawProbability,
+                RawProbability: GetCalibrationInput(forecast),
                 Outcome: forecast.OutcomeOccurred == true,
                 Weight: CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt)))
             .ToList();
         var validation = forecasts.Skip(splitIndex)
             .Select(forecast => (
-                RawProbability: forecast.RawProbability,
+                RawProbability: GetCalibrationInput(forecast),
                 Outcome: forecast.OutcomeOccurred == true,
                 Weight: CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt)))
             .ToList();
@@ -240,17 +246,22 @@ public class CalibrationService : ICalibrationService
 
         var trainingBucketProfiles = BuildTrainingBucketProfiles(training);
         var bestValidationParameters = FitBetaCalibration(training);
-        var baselineBrier = validation.Average(item => SquaredError(
-            CalibrateWithBucket(item.RawProbability, trainingBucketProfiles),
-            item.Outcome) * item.Weight) / validation.Sum(item => item.Weight);
-        var betaBrier = validation.Average(item => SquaredError(
-            ApplyBetaCalibration(item.RawProbability, bestValidationParameters.alpha, bestValidationParameters.beta, bestValidationParameters.gamma),
-            item.Outcome) * item.Weight) / validation.Sum(item => item.Weight);
+        var validationWeight = validation.Sum(item => item.Weight);
+        var baselineBrier = validationWeight <= 0
+            ? 0.0
+            : validation.Sum(item => SquaredError(
+                CalibrateWithBucket(item.RawProbability, trainingBucketProfiles),
+                item.Outcome) * item.Weight) / validationWeight;
+        var betaBrier = validationWeight <= 0
+            ? 0.0
+            : validation.Sum(item => SquaredError(
+                ApplyBetaCalibration(item.RawProbability, bestValidationParameters.alpha, bestValidationParameters.beta, bestValidationParameters.gamma),
+                item.Outcome) * item.Weight) / validationWeight;
         var improvement = baselineBrier - betaBrier;
         var shouldPromote = improvement > 0.0025 && betaBrier < baselineBrier;
         var deployedParameters = FitBetaCalibration(forecasts
             .Select(forecast => (
-                forecast.RawProbability,
+                RawProbability: GetCalibrationInput(forecast),
                 Outcome: forecast.OutcomeOccurred == true,
                 Weight: CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt)))
             .ToList());
@@ -384,6 +395,18 @@ public class CalibrationService : ICalibrationService
     {
         var ageDays = Math.Max((DateTime.UtcNow - timestampUtc).TotalDays, 0.0);
         return Math.Pow(0.5, ageDays / RecencyHalfLifeDays);
+    }
+
+    /// <summary>
+    /// The probability that calibration actually receives at inference time is the
+    /// meta-corrected one. Legacy rows (before CorrectedProbability existed) fall back to raw.
+    /// </summary>
+    private static double GetCalibrationInput(ForecastObservation forecast)
+    {
+        var input = forecast.CorrectedProbability > 0
+            ? forecast.CorrectedProbability
+            : forecast.RawProbability;
+        return Math.Clamp(input, 0.0, 1.0);
     }
 
     private sealed record BucketCalibrationStats(double ObservationWeight, double SuccessWeight);

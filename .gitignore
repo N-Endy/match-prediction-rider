@@ -405,3 +405,7 @@ FodyWeavers.xsd
 .obj/
 
 Resources/
+# Environment files with local secrets
+.env
+.env.*
+!.env.example

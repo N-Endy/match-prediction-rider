@@ -15,6 +15,7 @@ public class PredictionCandidate
     public string PredictionCategory { get; set; } = string.Empty;
     public string PredictedOutcome { get; set; } = string.Empty;
     public double RawProbability { get; set; }
+    public double CorrectedProbability { get; set; }
     public double CalibratedProbability { get; set; }
     public string CalibratorUsed { get; set; } = "Bucket";
     public double ThresholdUsed { get; set; }

@@ -1,8 +1,8 @@
 using System.Text.Json;
+using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Domain.Utils;
 using MatchPredictor.Infrastructure.Persistence;
-using MatchPredictor.Infrastructure.Services;
-using MatchPredictor.Infrastructure.Utils;
 using MatchPredictor.Web.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
@@ -13,30 +13,33 @@ namespace MatchPredictor.Web.Pages.Health;
 
 public class Health : PageModel
 {
-    private const string AiScoreRuntimeEventName = "source_runtime_aiscore";
-    private const string SofaScoreRuntimeEventName = "source_runtime_sofascore";
+    private const string AiScoreRuntimeEventName = ScrapingEventNames.AiScoreRuntime;
+    private const string SofaScoreRuntimeEventName = ScrapingEventNames.SofaScoreRuntime;
     private static readonly IReadOnlyList<SignalDefinition> SignalDefinitions =
     [
-        new("Data Sync", "data_sync", TimeSpan.FromHours(8), true),
-        new("Prediction Generation", "prediction_generation", TimeSpan.FromHours(8), true),
-        new("Recent Score Update", "score_update_recent", TimeSpan.FromMinutes(20), true),
-        new("Score Backfill", "score_update_backfill", TimeSpan.FromHours(2), false),
-        new("Daily Analysis", "daily_analysis", TimeSpan.FromHours(30), true),
-        new("Source Quality", "source_quality", TimeSpan.FromHours(36), false)
+        new("Data Sync", ScrapingEventNames.DataSync, TimeSpan.FromHours(8), true),
+        new("Prediction Generation", ScrapingEventNames.PredictionGeneration, TimeSpan.FromHours(8), true),
+        new("Recent Score Update", ScrapingEventNames.ScoreUpdateRecent, TimeSpan.FromMinutes(20), true),
+        new("Score Backfill", ScrapingEventNames.ScoreUpdateBackfill, TimeSpan.FromHours(2), false),
+        new("Daily Analysis", ScrapingEventNames.DailyAnalysis, TimeSpan.FromHours(30), true),
+        new("Source Quality", ScrapingEventNames.SourceQuality, TimeSpan.FromHours(36), false)
     ];
 
     private readonly ApplicationDbContext _dbContext;
+    private readonly IHealthQueryService _healthQueryService;
     private readonly OperationalStartupState _startupState;
-    private readonly AiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
-    private readonly SofaScoreSourceHealthTracker _sofaScoreSourceHealthTracker;
+    private readonly IAiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
+    private readonly ISofaScoreSourceHealthTracker _sofaScoreSourceHealthTracker;
 
     public Health(
         ApplicationDbContext dbContext,
+        IHealthQueryService healthQueryService,
         OperationalStartupState startupState,
-        AiScoreSourceHealthTracker aiScoreSourceHealthTracker,
-        SofaScoreSourceHealthTracker sofaScoreSourceHealthTracker)
+        IAiScoreSourceHealthTracker aiScoreSourceHealthTracker,
+        ISofaScoreSourceHealthTracker sofaScoreSourceHealthTracker)
     {
         _dbContext = dbContext;
+        _healthQueryService = healthQueryService;
         _startupState = startupState;
         _aiScoreSourceHealthTracker = aiScoreSourceHealthTracker;
         _sofaScoreSourceHealthTracker = sofaScoreSourceHealthTracker;
@@ -81,11 +84,7 @@ public class Health : PageModel
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var logs = await _dbContext.ScrapingLogs
-            .AsNoTracking()
-            .Where(log => eventNames.Contains(log.EventName))
-            .OrderByDescending(log => log.Timestamp)
-            .ToListAsync(ct);
+        var logs = await _healthQueryService.GetRecentScrapingLogsAsync(eventNames, limit: 500, ct);
 
         var groupedLogs = logs
             .GroupBy(log => log.EventName, StringComparer.OrdinalIgnoreCase)

@@ -9,6 +9,7 @@ namespace MatchPredictor.Infrastructure.Services;
 public class RegressionPredictorService : IRegressionPredictorService
 {
     private const int ScoreMatrixMaxGoals = 10;
+    private const int HistoryWindowDays = 180;
     private readonly ApplicationDbContext _db;
 
     public RegressionPredictorService(ApplicationDbContext db)
@@ -18,9 +19,26 @@ public class RegressionPredictorService : IRegressionPredictorService
 
     public IEnumerable<RegressionPrediction> GeneratePredictions(IEnumerable<MatchData> upcomingMatches)
     {
+        var upcoming = upcomingMatches.ToList();
+        if (upcoming.Count == 0)
+            return [];
+
+        // Point-in-time guard: team-strength aggregates may only use results that were
+        // known before the earliest upcoming kickoff, never same-day/future scores.
+        var nowUtc = DateTime.UtcNow;
+        var earliestKickoffUtc = upcoming
+            .Where(match => match.MatchDateTime.HasValue)
+            .Select(match => match.MatchDateTime!.Value)
+            .DefaultIfEmpty(nowUtc)
+            .Min();
+        var trainingCutoffUtc = earliestKickoffUtc < nowUtc ? earliestKickoffUtc : nowUtc;
+        var historyStartUtc = trainingCutoffUtc.AddDays(-HistoryWindowDays);
+
         var scores = _db.MatchScores
             .AsNoTracking()
-            .Where(score => !score.IsLive)
+            .Where(score => !score.IsLive &&
+                            score.MatchTime >= historyStartUtc &&
+                            score.MatchTime < trainingCutoffUtc)
             .ToList();
 
         if (scores.Count == 0)
@@ -68,7 +86,7 @@ public class RegressionPredictorService : IRegressionPredictorService
 
         var predictions = new List<RegressionPrediction>();
 
-        foreach (var match in upcomingMatches)
+        foreach (var match in upcoming)
         {
             if (string.IsNullOrWhiteSpace(match.HomeTeam) || string.IsNullOrWhiteSpace(match.AwayTeam))
                 continue;

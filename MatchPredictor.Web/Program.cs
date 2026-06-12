@@ -11,6 +11,7 @@ using MatchPredictor.Infrastructure.Utils;
 using MatchPredictor.Web.Configuration;
 using MatchPredictor.Web.Extensions;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using Polly;
@@ -46,20 +47,32 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(connectionString));
 
 // Register application services
+builder.Services.AddMemoryCache();
 builder.Services.AddScoped<IMatchDataRepository, MatchDataRepository>();
-builder.Services.AddScoped<IPredictionQueries, PredictionQueries>();
-builder.Services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
+builder.Services.AddScoped<PredictionQueries>();
+builder.Services.AddScoped<IPredictionQueries>(provider => new CachedPredictionQueries(
+    provider.GetRequiredService<PredictionQueries>(),
+    provider.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>()));
+        builder.Services.AddScoped<IAnalyticsQueryService, AnalyticsQueryService>();
+        builder.Services.AddScoped<IHealthQueryService, HealthQueryService>();
+        builder.Services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
 builder.Services.AddScoped<IWebScraperService, WebScraperService>();
 builder.Services.AddScoped<IExtractFromExcel, ExtractFromExcel>();
-builder.Services.AddScoped<IProbabilityCalculator, ProbabilityCalculator>();
+builder.Services.AddScoped<IBlendWeightTuningService, BlendWeightTuningService>();
+builder.Services.AddScoped<IBlendWeightProvider>(provider => provider.GetRequiredService<IBlendWeightTuningService>());
+builder.Services.AddScoped<IProbabilityCalculator>(provider =>
+    new ProbabilityCalculator(provider.GetRequiredService<IBlendWeightProvider>()));
 builder.Services.AddScoped<ICalibrationService, CalibrationService>();
 builder.Services.AddScoped<IProbabilityCorrectionService, ProbabilityCorrectionService>();
 builder.Services.AddScoped<IThresholdTuningService, ThresholdTuningService>();
+builder.Services.AddScoped<ILearningLoopService, LearningLoopService>();
 builder.Services.AddScoped<IForecastEvaluationService, ForecastEvaluationService>();
 builder.Services.AddScoped<IAnalyzerService, AnalyzerService>();
 builder.Services.AddScoped<IRegressionPredictorService, RegressionPredictorService>();
 builder.Services.AddSingleton<AiScoreSourceHealthTracker>();
 builder.Services.AddSingleton<SofaScoreSourceHealthTracker>();
+builder.Services.AddSingleton<IAiScoreSourceHealthTracker>(provider => provider.GetRequiredService<AiScoreSourceHealthTracker>());
+builder.Services.AddSingleton<ISofaScoreSourceHealthTracker>(provider => provider.GetRequiredService<SofaScoreSourceHealthTracker>());
 builder.Services.AddScoped<SportyBetBookingService>();
 builder.Services.AddScoped<ISportyBetBookingService>(provider => provider.GetRequiredService<SportyBetBookingService>());
 builder.Services.AddScoped<ISourceMarketPricingService>(provider => provider.GetRequiredService<SportyBetBookingService>());
@@ -75,6 +88,18 @@ builder.Services.AddScoped<IAiChatAuthTicketService, AiChatAuthTicketService>();
 // Controllers for API endpoints (booking, AI chat)
 builder.Services.AddControllers();
 builder.Services.AddMatchPredictorRateLimiting();
+
+// Behind a TLS-terminating proxy (Render/containers) the scheme and client IP arrive
+// via X-Forwarded-* headers; without this, IsHttps, HSTS, and rate-limit keys are wrong.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    // The hosting platform's proxy addresses are not statically known, so clear the
+    // defaults and accept the header from the immediate upstream hop only.
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+    options.ForwardLimit = 1;
+});
 
 // Configure data protection
 builder.Services.AddDataProtection()
@@ -360,11 +385,24 @@ else
 }
 
 // Configure the HTTP request pipeline
+app.UseForwardedHeaders();
+
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");
     app.UseHsts();
 }
+
+// Baseline security headers for all responses.
+app.Use(async (context, next) =>
+{
+    var headers = context.Response.Headers;
+    headers["X-Content-Type-Options"] = "nosniff";
+    headers["X-Frame-Options"] = "DENY";
+    headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+    headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+    await next();
+});
 
 app.UseHttpsRedirection();
 app.UseStaticFiles();
@@ -390,7 +428,7 @@ app.UseHangfireDashboard("/hangfire", new DashboardOptions
     DashboardTitle = "Match Predictor Jobs",
     StatsPollingInterval = 5000,
     Authorization = app.Environment.IsDevelopment()
-        ? new Hangfire.Dashboard.IDashboardAuthorizationFilter[] { new HangfireAllowAllFilter() }
+        ? new Hangfire.Dashboard.IDashboardAuthorizationFilter[] { new HangfireLocalRequestsOnlyFilter() }
         : new Hangfire.Dashboard.IDashboardAuthorizationFilter[]
         {
             new HangfireBasicAuthFilter(

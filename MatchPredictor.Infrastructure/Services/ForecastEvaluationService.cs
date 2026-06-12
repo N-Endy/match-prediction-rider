@@ -188,11 +188,14 @@ public class ForecastEvaluationService : IForecastEvaluationService
             HitRate = settled.Average(forecast => forecast.OutcomeOccurred == true ? 1.0 : 0.0),
             LogLoss = settled.Average(forecast => BinaryLogLoss(forecast.CalibratedProbability, forecast.OutcomeOccurred!.Value)),
             Precision = settled.Count > 0 ? settled.Count(forecast => forecast.OutcomeOccurred == true) / (double)settled.Count : 0.0,
-            Recall = 1.0,
+            // Recall against all opportunities is not observable for a picks-only set;
+            // report coverage-of-picks (same as precision) instead of a hardcoded 1.0
+            // so F1 is not artificially inflated.
+            Recall = settled.Count > 0 ? settled.Count(forecast => forecast.OutcomeOccurred == true) / (double)settled.Count : 0.0,
             F1Score = settled.Count > 0
                 ? CalculateF1(
                     settled.Count(forecast => forecast.OutcomeOccurred == true) / (double)settled.Count,
-                    1.0)
+                    settled.Count(forecast => forecast.OutcomeOccurred == true) / (double)settled.Count)
                 : 0.0,
             RawBrierScore = rawInputs.Count > 0 ? rawInputs.Average(input => SquaredError(input.Probability, input.Outcome)) : 0.0,
             CalibratedBrierScore = calibratedInputs.Count > 0 ? calibratedInputs.Average(input => SquaredError(input.Probability, input.Outcome)) : 0.0,
@@ -457,7 +460,8 @@ public class ForecastEvaluationService : IForecastEvaluationService
         {
             "btts" or "yes" or "gg" => bothTeamsScored,
             "no btts" or "no" or "ng" => !bothTeamsScored,
-            _ => bothTeamsScored
+            // Unknown labels must never count as wins; that inflates accuracy metrics.
+            _ => false
         };
     }
 
@@ -469,7 +473,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
         {
             "over" or "over 2.5" or "over2.5" => isOver,
             "under" or "under 2.5" or "under2.5" => !isOver,
-            _ => isOver
+            _ => false
         };
     }
 
@@ -481,7 +485,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
         {
             "draw" => isDraw,
             "not draw" => !isDraw,
-            _ => isDraw
+            _ => false
         };
     }
 

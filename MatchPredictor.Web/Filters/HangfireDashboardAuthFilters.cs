@@ -1,17 +1,29 @@
 using Hangfire.Dashboard;
 using MatchPredictor.Web.Middleware;
 using Microsoft.AspNetCore.Http;
+using System.Net;
 using System.Text;
 
 namespace MatchPredictor.Web.Filters;
 
 /// <summary>
-/// Allows all requests to the Hangfire dashboard.
-/// Used in Development only — Production uses HangfireBasicAuthFilter.
+/// Allows Hangfire dashboard access only from the local machine. Used in Development
+/// so a host accidentally running with ASPNETCORE_ENVIRONMENT=Development never
+/// exposes the job dashboard to the network — Production uses HangfireBasicAuthFilter.
 /// </summary>
-public class HangfireAllowAllFilter : IDashboardAuthorizationFilter
+public class HangfireLocalRequestsOnlyFilter : IDashboardAuthorizationFilter
 {
-    public bool Authorize(DashboardContext context) => true;
+    public bool Authorize(DashboardContext context)
+    {
+        var connection = context.GetHttpContext().Connection;
+        var remoteIp = connection.RemoteIpAddress;
+        if (remoteIp is null)
+        {
+            return false;
+        }
+
+        return IPAddress.IsLoopback(remoteIp) || remoteIp.Equals(connection.LocalIpAddress);
+    }
 }
 
 /// <summary>

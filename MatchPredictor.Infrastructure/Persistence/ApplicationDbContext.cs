@@ -71,6 +71,8 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.HasIndex(e => new { e.FixtureKey, e.IsCurrentRevision });
             entity.HasIndex(e => new { e.PredictionRunId, e.PredictionCategory });
             entity.HasIndex(e => new { e.PredictionRunId, e.FixtureKey, e.PredictionCategory }).IsUnique();
+            // Closing-line snapshot job (every 5 min) and value-bet performance summary.
+            entity.HasIndex(e => new { e.IsCurrentRevision, e.WasPublished, e.MatchDateTime });
         });
 
         modelBuilder.Entity<MatchData>(entity =>
@@ -104,6 +106,8 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.HasIndex(e => new { e.FixtureKey, e.IsCurrentRevision, e.Market });
             entity.HasIndex(e => new { e.PredictionRunId, e.Market });
             entity.HasIndex(e => new { e.PredictionRunId, e.FixtureKey, e.Market }).IsUnique();
+            // Nightly calibration/threshold/meta-model rebuilds filter settled rows by window.
+            entity.HasIndex(e => new { e.IsSettled, e.SettledAt });
         });
 
         modelBuilder.Entity<PredictionRun>(entity =>

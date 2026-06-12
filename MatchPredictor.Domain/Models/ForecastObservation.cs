@@ -15,6 +15,7 @@ public class ForecastObservation
     public PredictionMarket Market { get; set; }
     public string PredictedOutcome { get; set; } = string.Empty;
     public double RawProbability { get; set; }
+    public double CorrectedProbability { get; set; }
     public double CalibratedProbability { get; set; }
     public string CalibratorUsed { get; set; } = "Unknown";
     public double ThresholdUsed { get; set; }

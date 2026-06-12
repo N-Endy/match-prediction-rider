@@ -447,14 +447,17 @@ public class ProbabilityCalculator : IProbabilityCalculator
 
         var homeWin = 0.0;
         var draw = 0.0;
+        var awayWin = 0.0;
         var over25 = 0.0;
         var btts = 0.0;
+        var includedMass = 0.0;
 
         for (var homeGoals = 0; homeGoals <= goalCap; homeGoals++)
         {
             for (var awayGoals = 0; awayGoals <= goalCap; awayGoals++)
             {
                 var probability = homeGoalProbabilities[homeGoals] * awayGoalProbabilities[awayGoals];
+                includedMass += probability;
 
                 if (homeGoals > awayGoals)
                 {
@@ -463,6 +466,10 @@ public class ProbabilityCalculator : IProbabilityCalculator
                 else if (homeGoals == awayGoals)
                 {
                     draw += probability;
+                }
+                else
+                {
+                    awayWin += probability;
                 }
 
                 if (homeGoals + awayGoals >= 3)
@@ -477,13 +484,19 @@ public class ProbabilityCalculator : IProbabilityCalculator
             }
         }
 
-        var awayWin = Math.Clamp(1.0 - homeWin - draw, 0.0, 1.0);
+        if (includedMass <= 0)
+        {
+            return new PoissonOutcomeModel(HomeWin: 0.0, Draw: 0.0, AwayWin: 0.0, Over25: 0.0, Btts: 0.0);
+        }
+
+        // Normalize by the grid's included mass so any truncated tail (goals > cap) is
+        // distributed proportionally across outcomes instead of being dumped into one.
         return new PoissonOutcomeModel(
-            HomeWin: Math.Clamp(homeWin, 0.0, 1.0),
-            Draw: Math.Clamp(draw, 0.0, 1.0),
-            AwayWin: awayWin,
-            Over25: Math.Clamp(over25, 0.0, 1.0),
-            Btts: Math.Clamp(btts, 0.0, 1.0));
+            HomeWin: Math.Clamp(homeWin / includedMass, 0.0, 1.0),
+            Draw: Math.Clamp(draw / includedMass, 0.0, 1.0),
+            AwayWin: Math.Clamp(awayWin / includedMass, 0.0, 1.0),
+            Over25: Math.Clamp(over25 / includedMass, 0.0, 1.0),
+            Btts: Math.Clamp(btts / includedMass, 0.0, 1.0));
     }
 
     private static double[] BuildPoissonDistribution(double lambda, int goalCap)

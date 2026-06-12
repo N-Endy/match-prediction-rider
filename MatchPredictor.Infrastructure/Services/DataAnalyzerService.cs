@@ -153,7 +153,14 @@ public class DataAnalyzerService : IDataAnalyzerService
 
         var correctedProbability = _probabilityCorrectionService.ApplyCorrection(market, rawProbability);
         var calibration = _calibrationService.CalibrateWithDecision(market, correctedProbability);
-        return CreateCandidate(match, market, predictedOutcome, correctedProbability, calibration.Probability, calibration.CalibratorUsed);
+        return CreateCandidate(
+            match,
+            market,
+            predictedOutcome,
+            rawProbability,
+            correctedProbability,
+            calibration.Probability,
+            calibration.CalibratorUsed);
     }
 
     private static PredictionCandidate CreateCandidate(
@@ -161,6 +168,7 @@ public class DataAnalyzerService : IDataAnalyzerService
         PredictionMarket market,
         string predictedOutcome,
         double rawProbability,
+        double correctedProbability,
         double calibratedProbability,
         string calibratorUsed)
     {
@@ -202,6 +210,7 @@ public class DataAnalyzerService : IDataAnalyzerService
             PredictionCategory = market.ToCategory(),
             PredictedOutcome = predictedOutcome,
             RawProbability = Math.Clamp(rawProbability, 0.0, 1.0),
+            CorrectedProbability = Math.Clamp(correctedProbability, 0.0, 1.0),
             CalibratedProbability = Math.Clamp(calibratedProbability, 0.0, 1.0),
             CalibratorUsed = calibratorUsed,
             FeatureContributionsJson = "{}"

@@ -518,17 +518,19 @@ public class ValueBetsService : IValueBetsService
             .Where(snapshot => snapshot.SnapshotKind == PredictionOddsSnapshotKind.Publish || snapshot.SnapshotKind == PredictionOddsSnapshotKind.Close)
             .ToListAsync(ct);
 
-        var returns = settled
-            .Select(prediction =>
-            {
-                var won = IsPredictionWin(prediction);
-                var odds = ResolvePublishOdds(prediction.Id, snapshots, prediction);
-                return won ? odds - 1.0 : -1.0;
-            })
+        // Only picks with a captured publish-time price can be settled at real odds;
+        // anything else would require inventing a price and corrupt ROI.
+        var settledWithOdds = settled
+            .Select(prediction => (Prediction: prediction, Odds: ResolvePublishOdds(prediction.Id, snapshots)))
+            .Where(item => item.Odds.HasValue)
+            .ToList();
+
+        var returns = settledWithOdds
+            .Select(item => IsPredictionWin(item.Prediction) ? item.Odds!.Value - 1.0 : -1.0)
             .ToList();
 
         summary.SettledBetCount = returns.Count;
-        summary.WinningBetCount = settled.Count(IsPredictionWin);
+        summary.WinningBetCount = settledWithOdds.Count(item => IsPredictionWin(item.Prediction));
         summary.WinRate = summary.SettledBetCount > 0 ? summary.WinningBetCount / (double)summary.SettledBetCount : 0.0;
         summary.TotalStakedUnits = summary.SettledBetCount;
         summary.NetProfitUnits = returns.Sum();
@@ -599,20 +601,12 @@ public class ValueBetsService : IValueBetsService
         }
     }
 
-    private static double ResolvePublishOdds(int predictionId, IReadOnlyCollection<PredictionOddsSnapshot> snapshots, Prediction prediction)
+    private static double? ResolvePublishOdds(int predictionId, IReadOnlyCollection<PredictionOddsSnapshot> snapshots)
     {
         var publish = snapshots.FirstOrDefault(item =>
             item.PredictionId == predictionId &&
             item.SnapshotKind == PredictionOddsSnapshotKind.Publish);
-        if (publish is { DecimalOdds: > 1.0 })
-        {
-            return publish.DecimalOdds;
-        }
-
-        var implied = prediction.ConfidenceScore.HasValue
-            ? BetPricingMath.ConvertProbabilityToDecimalOdds((double)prediction.ConfidenceScore.Value)
-            : null;
-        return implied is > 1.0 ? implied.Value : 2.0;
+        return publish is { DecimalOdds: > 1.0 } ? publish.DecimalOdds : null;
     }
 
     private static bool IsPredictionWin(Prediction prediction)

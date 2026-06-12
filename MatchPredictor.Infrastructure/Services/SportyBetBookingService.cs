@@ -220,7 +220,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             return new BookingResult
             {
                 Success = false,
-                Message = $"Booking error: {ex.Message}",
+                Message = "Booking failed due to an internal error. Please try again later.",
                 BookedCount = 0,
                 SkippedCount = selections.Count
             };

@@ -10,19 +10,23 @@ public class ProbabilityCorrectionService : IProbabilityCorrectionService
     private const int MinimumSampleCount = 60;
     private const int MinimumValidationCount = 20;
     private const double MinimumImprovement = 0.0015;
+    private const int RebuildWindowDays = 120;
     private readonly ApplicationDbContext _dbContext;
-    private List<MetaModelProfile> _profiles;
+    private List<MetaModelProfile>? _profiles;
 
     public ProbabilityCorrectionService(ApplicationDbContext dbContext)
     {
         _dbContext = dbContext;
-        _profiles = _dbContext.MetaModelProfiles.AsNoTracking().ToList();
     }
+
+    // Loaded lazily so resolving the scoped service does not hit the database
+    // on requests that never apply corrections.
+    private List<MetaModelProfile> Profiles => _profiles ??= _dbContext.MetaModelProfiles.AsNoTracking().ToList();
 
     public double ApplyCorrection(PredictionMarket market, double rawProbability)
     {
         var clamped = Math.Clamp(rawProbability, 1e-6, 1.0 - 1e-6);
-        var profile = _profiles.FirstOrDefault(item => item.Market == market && item.IsPromoted);
+        var profile = Profiles.FirstOrDefault(item => item.Market == market && item.IsPromoted);
         if (profile == null)
         {
             return clamped;
@@ -37,12 +41,20 @@ public class ProbabilityCorrectionService : IProbabilityCorrectionService
     {
         var settled = await _dbContext.ForecastObservations
             .AsNoTracking()
-            .Where(item => item.IsSettled && item.OutcomeOccurred != null)
-            .OrderBy(item => item.SettledAt ?? item.CreatedAt)
+            .Where(item =>
+                item.IsSettled &&
+                item.OutcomeOccurred != null &&
+                (item.SettledAt ?? item.CreatedAt) >= DateTime.UtcNow.AddDays(-RebuildWindowDays))
             .ToListAsync();
 
+        // Deduplicate regeneration revisions so each fixture-market contributes one
+        // point-in-time observation, mirroring the calibration rebuild.
+        var pointInTimeSettled = PointInTimeBacktestingSelector.SelectForecasts(settled)
+            .OrderBy(item => item.SettledAt ?? item.CreatedAt)
+            .ToList();
+
         var rebuilt = new List<MetaModelProfile>();
-        foreach (var group in settled.GroupBy(item => item.Market))
+        foreach (var group in pointInTimeSettled.GroupBy(item => item.Market))
         {
             var observations = group
                 .Select(item => (Probability: item.RawProbability, Outcome: item.OutcomeOccurred == true))

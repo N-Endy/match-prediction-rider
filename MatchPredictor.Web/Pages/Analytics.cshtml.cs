@@ -58,10 +58,12 @@ public class AnalyticsModel : PageModel
         var dateSetLast7 = Enumerable.Range(0, 7).Select(i => today.AddDays(-i)).ToHashSet();
 
         var last7Predictions = await _db.Predictions
+            .AsNoTracking()
             .Where(prediction => dateSetLast7.Contains(prediction.MatchLocalDate))
             .ToListAsync();
 
         var last7Forecasts = await _db.ForecastObservations
+            .AsNoTracking()
             .Where(forecast => dateSetLast7.Contains(forecast.MatchLocalDate))
             .ToListAsync();
         var thresholdProfiles = await _db.ThresholdProfiles

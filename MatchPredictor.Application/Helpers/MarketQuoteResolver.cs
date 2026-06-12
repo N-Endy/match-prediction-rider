@@ -49,8 +49,12 @@ public static class MarketQuoteResolver
             return false;
         }
 
+        // When pricing from raw source odds, remove the bookmaker overround so edges are
+        // measured against a fair probability — consistent with the normalized stored
+        // probabilities used on the other path. Without this, raw-odds quotes carry the
+        // vig and systematically understate edges relative to derived quotes.
         var effectiveMarketProbability = rawOdds is > 1d
-            ? impliedProbability
+            ? DeVigImpliedProbability(sourceFixture, market, impliedProbability)
             : selectedProbability.Value;
 
         quote = new MarketQuote
@@ -108,6 +112,35 @@ public static class MarketQuoteResolver
             "StraightWin" => market is PredictionMarket.HomeWin or PredictionMarket.AwayWin,
             _ => false
         };
+    }
+
+    private static double DeVigImpliedProbability(
+        SourceMarketFixture? sourceFixture,
+        PredictionMarket market,
+        double impliedProbability)
+    {
+        var outcomeOdds = market switch
+        {
+            PredictionMarket.HomeWin or PredictionMarket.Draw or PredictionMarket.AwayWin =>
+                new[] { sourceFixture?.HomeWinOdds, sourceFixture?.DrawOdds, sourceFixture?.AwayWinOdds },
+            PredictionMarket.Over25Goals or PredictionMarket.Under25Goals =>
+                new[] { sourceFixture?.Over25Odds, sourceFixture?.Under25Odds },
+            PredictionMarket.BothTeamsScore =>
+                new[] { sourceFixture?.BttsYesOdds, sourceFixture?.BttsNoOdds },
+            _ => null
+        };
+
+        // Only de-vig when the full outcome set is priced; otherwise the overround
+        // cannot be measured and the raw implied probability is the best available.
+        if (outcomeOdds is null || outcomeOdds.Any(odds => odds is not > 1d))
+        {
+            return impliedProbability;
+        }
+
+        var overround = outcomeOdds.Sum(odds => 1d / odds!.Value);
+        return overround > 0d
+            ? Math.Clamp(impliedProbability / overround, 0d, 1d)
+            : impliedProbability;
     }
 
     private static double? GetLiveProbability(SourceMarketFixture? sourceFixture, PredictionMarket market)

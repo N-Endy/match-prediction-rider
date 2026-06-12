@@ -21,6 +21,7 @@ public class ScrapeStatus : PageModel
     public async Task OnGetAsync()
     {
         Logs = await _dbContext.ScrapingLogs
+            .AsNoTracking()
             .OrderByDescending(x => x.Timestamp)
             .Take(20)
             .ToListAsync();
