@@ -11,17 +11,26 @@ namespace MatchPredictor.Web.Api;
 [EnableRateLimiting(RateLimitPolicies.Booking)]
 public class BookingController : ControllerBase
 {
+    private const int DefaultMaxSelections = 50;
+    private const int MaxFieldLength = 120;
+
     private readonly ISportyBetBookingService _bookingService;
     private readonly IUserTrackingService _userTrackingService;
+    private readonly int _maxSelections;
 
-    public BookingController(ISportyBetBookingService bookingService, IUserTrackingService userTrackingService)
+    public BookingController(
+        ISportyBetBookingService bookingService,
+        IUserTrackingService userTrackingService,
+        IConfiguration configuration)
     {
         _bookingService = bookingService;
         _userTrackingService = userTrackingService;
+        _maxSelections = configuration.GetValue("SportyBet:MaxBookingSelections", DefaultMaxSelections);
+        if (_maxSelections < 1)
+        {
+            _maxSelections = DefaultMaxSelections;
+        }
     }
-
-    private const int MaxSelections = 20;
-    private const int MaxFieldLength = 120;
 
     [HttpPost("book")]
     public async Task<IActionResult> Book([FromBody] BookingRequest request)
@@ -42,9 +51,9 @@ public class BookingController : ControllerBase
             return BadRequest(new BookingResult { Success = false, Message = "No games selected." });
         }
 
-        if (request.Selections.Count > MaxSelections)
+        if (request.Selections.Count > _maxSelections)
         {
-            return BadRequest(new BookingResult { Success = false, Message = $"A maximum of {MaxSelections} selections is allowed." });
+            return BadRequest(new BookingResult { Success = false, Message = $"A maximum of {_maxSelections} selections is allowed." });
         }
 
         if (request.Selections.Any(selection =>

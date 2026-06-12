@@ -42,7 +42,7 @@
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=@(Configuration["AdSense:ClientId"] ?? "ca-pub-123456789")"
          crossorigin="anonymous"></script>
 </head>
-<body>
+<body data-max-booking-selections="@(Configuration.GetValue("SportyBet:MaxBookingSelections", 50))">
 
 <!-- Navbar -->
 <nav class="mp-navbar">

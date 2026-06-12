@@ -1,6 +1,12 @@
 // ── Cart State Management ──
 const CART_KEY = 'mp_cart';
 
+function getMaxBookingSelections() {
+    const raw = document.body?.dataset?.maxBookingSelections;
+    const parsed = Number.parseInt(raw ?? '', 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 50;
+}
+
 function getCart() {
     try {
         return JSON.parse(localStorage.getItem(CART_KEY) || '[]');
@@ -16,6 +22,11 @@ function saveCart(cart) {
 
 function addToCart(match) {
     const cart = getCart();
+    const maxSelections = getMaxBookingSelections();
+    if (cart.length >= maxSelections) {
+        showToast(`Betslip full (${maxSelections} max)`);
+        return;
+    }
     const exists = cart.some(m => getCartIdentity(m) === getCartIdentity(match));
     if (exists) {
         showToast('Already in betslip');
@@ -127,8 +138,13 @@ function renderCartItems() {
 // ── Booking ──
 async function bookGames() {
     const cart = getCart();
+    const maxSelections = getMaxBookingSelections();
     if (cart.length === 0) {
         showToast('Cart is empty');
+        return;
+    }
+    if (cart.length > maxSelections) {
+        showToast(`A maximum of ${maxSelections} selections is allowed.`);
         return;
     }
 
