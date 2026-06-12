@@ -224,8 +224,8 @@ public class ThresholdTuningService : IThresholdTuningService
             return false;
         }
 
-        var baselineBrier = PromotionStatistics.WeightedBrier(baselineSamples, static probability => probability);
-        var candidateBrier = PromotionStatistics.WeightedBrier(candidateSamples, static probability => probability);
+        var baselineBrier = PromotionStatistics.WeightedBrier(baselineSamples);
+        var candidateBrier = PromotionStatistics.WeightedBrier(candidateSamples);
         if (baselineBrier - candidateBrier <= MinimumValidationImprovement || candidateBrier >= baselineBrier)
         {
             return false;

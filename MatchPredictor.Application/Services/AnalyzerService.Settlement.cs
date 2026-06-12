@@ -4,7 +4,7 @@ using Hangfire;
 using MatchPredictor.Application.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
-using MatchPredictor.Domain.Utils;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -83,26 +83,6 @@ public partial class AnalyzerService
     private static string GetScoreUpdateEventName(string runLabel) =>
         ScrapingEventNames.ScoreUpdate(runLabel);
 
-    private async Task LogScrapingStatus(string eventName, string status, string message)
-    {
-        try
-        {
-            var log = new ScrapingLog
-            {
-                EventName = string.IsNullOrWhiteSpace(eventName) ? "general" : eventName.Trim().ToLowerInvariant(),
-                Timestamp = DateTime.UtcNow,
-                Status = status,
-                Message = message
-            };
-            await _dbContext.ScrapingLogs.AddAsync(log);
-            await _dbContext.SaveChangesAsync();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to write scraping log.");
-        }
-    }
-
     private async Task PersistSourceRuntimeHealthSafelyAsync()
     {
         try
@@ -138,6 +118,14 @@ public partial class AnalyzerService
         await _dbContext.ScrapingLogs.AddAsync(log);
         await _dbContext.SaveChangesAsync();
     }
+
+    private static bool HasMeaningfulRuntimeSnapshot(string? status, DateTime? lastAttemptUtc, DateTime? lastSuccessUtc)
+    {
+        return lastAttemptUtc.HasValue ||
+               lastSuccessUtc.HasValue ||
+               !string.Equals(status, "Idle", StringComparison.OrdinalIgnoreCase);
+    }
+
     private async Task UpdatePredictionsWithActualResults(int lookbackDays, string runLabel)
     {
         var nowLocal = DateTimeProvider.GetLocalTime();

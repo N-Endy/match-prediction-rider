@@ -53,15 +53,11 @@ builder.Services.AddScoped<PredictionQueries>();
 builder.Services.AddScoped<IPredictionQueries>(provider => new CachedPredictionQueries(
     provider.GetRequiredService<PredictionQueries>(),
     provider.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>()));
-        builder.Services.AddScoped<IAnalyticsQueryService, AnalyticsQueryService>();
-        builder.Services.AddScoped<IHealthQueryService, HealthQueryService>();
+builder.Services.AddScoped<IHealthQueryService, HealthQueryService>();
         builder.Services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
 builder.Services.AddScoped<IWebScraperService, WebScraperService>();
 builder.Services.AddScoped<IExtractFromExcel, ExtractFromExcel>();
-builder.Services.AddScoped<IBlendWeightTuningService, BlendWeightTuningService>();
-builder.Services.AddScoped<IBlendWeightProvider>(provider => provider.GetRequiredService<IBlendWeightTuningService>());
-builder.Services.AddScoped<IProbabilityCalculator>(provider =>
-    new ProbabilityCalculator(provider.GetRequiredService<IBlendWeightProvider>()));
+builder.Services.AddScoped<IProbabilityCalculator, ProbabilityCalculator>();
 builder.Services.AddScoped<ICalibrationService, CalibrationService>();
 builder.Services.AddScoped<IProbabilityCorrectionService, ProbabilityCorrectionService>();
 builder.Services.AddScoped<IThresholdTuningService, ThresholdTuningService>();
@@ -71,8 +67,6 @@ builder.Services.AddScoped<IAnalyzerService, AnalyzerService>();
 builder.Services.AddScoped<IRegressionPredictorService, RegressionPredictorService>();
 builder.Services.AddSingleton<AiScoreSourceHealthTracker>();
 builder.Services.AddSingleton<SofaScoreSourceHealthTracker>();
-builder.Services.AddSingleton<IAiScoreSourceHealthTracker>(provider => provider.GetRequiredService<AiScoreSourceHealthTracker>());
-builder.Services.AddSingleton<ISofaScoreSourceHealthTracker>(provider => provider.GetRequiredService<SofaScoreSourceHealthTracker>());
 builder.Services.AddScoped<SportyBetBookingService>();
 builder.Services.AddScoped<ISportyBetBookingService>(provider => provider.GetRequiredService<SportyBetBookingService>());
 builder.Services.AddScoped<ISourceMarketPricingService>(provider => provider.GetRequiredService<SportyBetBookingService>());

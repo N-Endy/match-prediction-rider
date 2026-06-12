@@ -4,7 +4,9 @@ using Hangfire;
 using MatchPredictor.Application.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
-using MatchPredictor.Domain.Utils;
+using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Services;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -31,7 +33,7 @@ public partial class AnalyzerService : IAnalyzerService
 
     private readonly IDataAnalyzerService _dataAnalyzerService;
     private readonly IWebScraperService _webScraperService;
-    private readonly IMatchPredictorDbContext _dbContext;
+    private readonly ApplicationDbContext _dbContext;
     private readonly IExtractFromExcel _excelExtract;
     private readonly ILogger<AnalyzerService> _logger;
     private readonly IRegressionPredictorService _regressionPredictorService;
@@ -39,23 +41,23 @@ public partial class AnalyzerService : IAnalyzerService
     private readonly IProbabilityCorrectionService _probabilityCorrectionService;
     private readonly IThresholdTuningService _thresholdTuningService;
     private readonly ISourceMarketPricingService _sourceMarketPricingService;
-    private readonly IAiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
-    private readonly ISofaScoreSourceHealthTracker _sofaScoreSourceHealthTracker;
+    private readonly AiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
+    private readonly SofaScoreSourceHealthTracker _sofaScoreSourceHealthTracker;
     private readonly PredictionSettings _predictionSettings;
     private readonly ILearningLoopService _learningLoopService;
 
     public AnalyzerService(
         IDataAnalyzerService dataAnalyzerService,
         IWebScraperService webScraperService,
-        IMatchPredictorDbContext dbContext,
+        ApplicationDbContext dbContext,
         IExtractFromExcel excelExtract,
         IRegressionPredictorService regressionPredictorService,
         ICalibrationService calibrationService,
         IProbabilityCorrectionService probabilityCorrectionService,
         IThresholdTuningService thresholdTuningService,
         ISourceMarketPricingService sourceMarketPricingService,
-        IAiScoreSourceHealthTracker aiScoreSourceHealthTracker,
-        ISofaScoreSourceHealthTracker sofaScoreSourceHealthTracker,
+        AiScoreSourceHealthTracker aiScoreSourceHealthTracker,
+        SofaScoreSourceHealthTracker sofaScoreSourceHealthTracker,
         IOptions<PredictionSettings> predictionOptions,
         ILogger<AnalyzerService> logger,
         ILearningLoopService? learningLoopService = null)

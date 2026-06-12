@@ -1,8 +1,9 @@
 using System.Text.Json;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
-using MatchPredictor.Domain.Utils;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Services;
+using MatchPredictor.Infrastructure.Utils;
 using MatchPredictor.Web.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
@@ -28,15 +29,15 @@ public class Health : PageModel
     private readonly ApplicationDbContext _dbContext;
     private readonly IHealthQueryService _healthQueryService;
     private readonly OperationalStartupState _startupState;
-    private readonly IAiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
-    private readonly ISofaScoreSourceHealthTracker _sofaScoreSourceHealthTracker;
+    private readonly AiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
+    private readonly SofaScoreSourceHealthTracker _sofaScoreSourceHealthTracker;
 
     public Health(
         ApplicationDbContext dbContext,
         IHealthQueryService healthQueryService,
         OperationalStartupState startupState,
-        IAiScoreSourceHealthTracker aiScoreSourceHealthTracker,
-        ISofaScoreSourceHealthTracker sofaScoreSourceHealthTracker)
+        AiScoreSourceHealthTracker aiScoreSourceHealthTracker,
+        SofaScoreSourceHealthTracker sofaScoreSourceHealthTracker)
     {
         _dbContext = dbContext;
         _healthQueryService = healthQueryService;

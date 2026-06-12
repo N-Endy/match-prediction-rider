@@ -4,7 +4,7 @@ using Hangfire;
 using MatchPredictor.Application.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
-using MatchPredictor.Domain.Utils;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -140,21 +140,6 @@ public partial class AnalyzerService
             _logger.LogError(ex, "❌ An error occurred during data scraping and sync.");
             await LogScrapingStatus(DataSyncEventName, "Failed", $"Sync Error: {ex.Message}");
             throw;
-        }
-    }
-    private async Task EnrichTeamStrengthAsync(IEnumerable<MatchData> matches)
-    {
-        var estimator = new TeamStrengthEstimator(_dbContext);
-        foreach (var match in matches)
-        {
-            var lambdas = await estimator.EstimateLambdasAsync(match);
-            if (lambdas is null)
-            {
-                continue;
-            }
-
-            match.EstimatedHomeLambda = lambdas.Value.HomeLambda;
-            match.EstimatedAwayLambda = lambdas.Value.AwayLambda;
         }
     }
 
