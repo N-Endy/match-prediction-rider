@@ -17,7 +17,7 @@ namespace MatchPredictor.Infrastructure.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.9")
+                .HasAnnotation("ProductVersion", "10.0.3")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -111,55 +111,6 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("BetaCalibrationProfiles");
-                });
-
-            modelBuilder.Entity("MatchPredictor.Domain.Models.BlendWeightProfile", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<double>("BaselineBrierScore")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("CandidateBrierScore")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("Improvement")
-                        .HasColumnType("double precision");
-
-                    b.Property<bool>("IsPromoted")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime>("LastUpdated")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("Market")
-                        .HasColumnType("integer");
-
-                    b.Property<double>("PoissonWeight")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("SecondaryWeight")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("SourceWeight")
-                        .HasColumnType("double precision");
-
-                    b.Property<int>("TrainingSampleCount")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("ValidationSampleCount")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Market")
-                        .IsUnique();
-
-                    b.ToTable("BlendWeightProfiles");
                 });
 
             modelBuilder.Entity("MatchPredictor.Domain.Models.ForecastObservation", b =>
