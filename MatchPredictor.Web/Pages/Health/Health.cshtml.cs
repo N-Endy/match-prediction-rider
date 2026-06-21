@@ -141,6 +141,7 @@ public class Health : PageModel
             DatabaseInitialized = _startupState.DatabaseInitialized,
             HangfireInitialized = _startupState.HangfireInitialized,
             RecurringJobsRegistered = _startupState.RecurringJobsRegistered,
+            ExternalCronEnabled = _startupState.ExternalCronEnabled,
             StartupError = _startupState.InitializationError,
             StartedAtUtc = _startupState.StartedAtUtc,
             PredictionsToday = predictionsToday,
@@ -157,7 +158,9 @@ public class Health : PageModel
                 .ToList(),
             IsHealthy = _startupState.DatabaseInitialized &&
                         _startupState.HangfireInitialized &&
-                        (!_startupState.BackgroundJobsEnabled || _startupState.RecurringJobsRegistered) &&
+                        (!_startupState.BackgroundJobsEnabled ||
+                         _startupState.RecurringJobsRegistered ||
+                         _startupState.ExternalCronEnabled) &&
                         string.IsNullOrWhiteSpace(_startupState.InitializationError) &&
                         !criticalSignalIssue &&
                         !missingPredictions
@@ -342,6 +345,7 @@ public sealed class OperationalHealthSnapshot
     public bool DatabaseInitialized { get; init; }
     public bool HangfireInitialized { get; init; }
     public bool RecurringJobsRegistered { get; init; }
+    public bool ExternalCronEnabled { get; init; }
     public string? StartupError { get; init; }
     public int PredictionsToday { get; init; }
     public int LivePredictionsToday { get; init; }

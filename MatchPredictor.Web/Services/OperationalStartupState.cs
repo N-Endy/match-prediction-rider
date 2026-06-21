@@ -8,12 +8,14 @@ public sealed class OperationalStartupState
     public bool DatabaseInitialized { get; private set; }
     public bool HangfireInitialized { get; private set; }
     public bool RecurringJobsRegistered { get; private set; }
+    public bool ExternalCronEnabled { get; private set; }
     public string? InitializationError { get; private set; }
 
-    public void ConfigureRuntimeMode(bool backgroundJobsEnabled, bool browserScrapingEnabled)
+    public void ConfigureRuntimeMode(bool backgroundJobsEnabled, bool browserScrapingEnabled, bool externalCronEnabled)
     {
         BackgroundJobsEnabled = backgroundJobsEnabled;
         BrowserScrapingEnabled = browserScrapingEnabled;
+        ExternalCronEnabled = externalCronEnabled;
     }
 
     public void MarkDatabaseInitialized()
@@ -30,6 +32,12 @@ public sealed class OperationalStartupState
     public void MarkRecurringJobsRegistered()
     {
         RecurringJobsRegistered = true;
+    }
+
+    public void MarkExternalCronEnabled()
+    {
+        ExternalCronEnabled = true;
+        RecurringJobsRegistered = false;
     }
 
     public void MarkInitializationFailed(string message)

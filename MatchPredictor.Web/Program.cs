@@ -161,15 +161,19 @@ using (var scope = app.Services.CreateScope())
     var services = scope.ServiceProvider;
     var logger = services.GetRequiredService<ILogger<Program>>();
     var startupState = services.GetRequiredService<OperationalStartupState>();
-    startupState.ConfigureRuntimeMode(runtimeMode.RunBackgroundJobs, runtimeMode.BrowserScrapingEnabled);
+    startupState.ConfigureRuntimeMode(
+        runtimeMode.RunBackgroundJobs,
+        runtimeMode.BrowserScrapingEnabled,
+        runtimeMode.UseExternalCron);
     
     try
     {
         logger.LogInformation(
-            "Runtime mode: background jobs {BackgroundJobsState}; browser scraping {BrowserScrapingState}; user tracking {UserTrackingState}.",
+            "Runtime mode: background jobs {BackgroundJobsState}; browser scraping {BrowserScrapingState}; user tracking {UserTrackingState}; external cron {ExternalCronState}.",
             runtimeMode.RunBackgroundJobs ? "enabled" : "disabled",
             runtimeMode.BrowserScrapingEnabled ? "enabled" : "disabled",
-            runtimeMode.UserTrackingEnabled ? "enabled" : "disabled");
+            runtimeMode.UserTrackingEnabled ? "enabled" : "disabled",
+            runtimeMode.UseExternalCron ? "enabled" : "disabled");
         if (runtimeMode.RunBackgroundJobs && !runtimeMode.BrowserScrapingEnabled)
         {
             logger.LogWarning(
@@ -208,7 +212,7 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
-// Register recurring Hangfire jobs only on the worker service
+// Register recurring Hangfire jobs only on the worker service (unless external cron is enabled)
 if (runtimeMode.RunBackgroundJobs)
 {
     using var scope = app.Services.CreateScope();
@@ -218,116 +222,25 @@ if (runtimeMode.RunBackgroundJobs)
 
     try
     {
-        // WAT (West Africa Time) = UTC+1, IANA timezone ID: Africa/Lagos
-        var watTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Africa/Lagos");
+        HangfireRecurringJobs.RemoveAll(recurringJobs);
 
-        // Remove the old combined job if it still exists in the Hangfire database
-        recurringJobs.RemoveIfExists("daily-prediction-job");
-
-        // Remove the temporary noon job if it exists
-        recurringJobs.RemoveIfExists("prediction-generation-job-noon");
-        recurringJobs.RemoveIfExists("prediction-prewarm-job");
-        recurringJobs.RemoveIfExists("prediction-generation-post-analysis-job");
-        recurringJobs.RemoveIfExists("prediction-generation-refresh-job");
-        recurringJobs.RemoveIfExists("score-backfill-job");
-        recurringJobs.RemoveIfExists("closing-line-snapshot-job");
-
-        recurringJobs.AddOrUpdate<IAnalyzerService>(
-            "prediction-prewarm-job",
-            service => service.ExtractDataAndSyncDatabaseAsync(1),
-            "40 23 * * *", // 11:40 PM WAT provisional tomorrow card before midnight
-            new RecurringJobOptions
-            {
-                TimeZone = watTimeZone
-            }
-        );
-
-        recurringJobs.AddOrUpdate<IAnalyzerService>(
-            "prediction-generation-job",
-            service => service.ExtractDataAndSyncDatabaseAsync(),
-            "35 0 * * *", // 12:35 AM WAT first pass after daily analysis
-            new RecurringJobOptions
-            {
-                TimeZone = watTimeZone
-            }
-        );
-
-        recurringJobs.AddOrUpdate<IAnalyzerService>(
-            "prediction-generation-post-analysis-job",
-            service => service.ExtractDataAndSyncDatabaseAsync(),
-            "30 4 * * *", // 4:30 AM WAT early-morning refresh
-            new RecurringJobOptions
-            {
-                TimeZone = watTimeZone
-            }
-        );
-
-        recurringJobs.AddOrUpdate<IAnalyzerService>(
-            "prediction-generation-refresh-job",
-            service => service.ExtractDataAndSyncDatabaseAsync(),
-            "30 12,16 * * *", // 12:30 PM and 4:30 PM WAT refreshes
-            new RecurringJobOptions
-            {
-                TimeZone = watTimeZone
-            }
-        );
-
-        recurringJobs.AddOrUpdate<IAnalyzerService>(
-            "score-update-job",
-            service => service.RunScoreUpdaterAsync(1, "recent"),
-            "*/6 * * * *", // Every 6 minutes for today's and yesterday's fixtures
-            new RecurringJobOptions
-            {
-                TimeZone = watTimeZone
-            }
-        );
-
-        recurringJobs.AddOrUpdate<IAnalyzerService>(
-            "score-backfill-job",
-            service => service.RunScoreUpdaterAsync(14, "backfill"),
-            "17 * * * *", // Hourly backfill for older unresolved fixtures
-            new RecurringJobOptions
-            {
-                TimeZone = watTimeZone
-            }
-        );
-
-        recurringJobs.AddOrUpdate<IAnalyzerService>(
-            "closing-line-snapshot-job",
-            service => service.CaptureClosingLineSnapshotsAsync(15),
-            "*/5 * * * *", // Every 5 minutes capture final pre-kickoff price snapshots for CLV
-            new RecurringJobOptions
-            {
-                TimeZone = watTimeZone
-            }
-        );
-
-        recurringJobs.AddOrUpdate<IAnalyzerService>(
-            "daily-analysis-job",
-            service => service.RunDailyAnalysisAsync(),
-            "20 0 * * *", // Daily at 12:20 AM WAT (after 12:17 AM score backfill, before first prediction generation)
-            new RecurringJobOptions
-            {
-                TimeZone = watTimeZone
-            }
-        );
-
-        recurringJobs.AddOrUpdate<IAnalyzerService>(
-            "cleanup-old-predictions",
-            service => service.CleanupOldPredictionsAndMatchDataAsync(),
-            "0 1 * * *", // Daily at 1:00 AM WAT
-            new RecurringJobOptions
-            {
-                TimeZone = watTimeZone
-            }
-        );
-        startupState.MarkRecurringJobsRegistered();
-        logger.LogInformation("✅ Recurring jobs registered successfully (WAT timezone).");
+        if (runtimeMode.UseExternalCron)
+        {
+            startupState.MarkExternalCronEnabled();
+            logger.LogInformation(
+                "External cron mode enabled (USE_EXTERNAL_CRON=true). Hangfire recurring jobs cleared; schedule jobs via cron-job.org HTTP triggers.");
+        }
+        else
+        {
+            HangfireRecurringJobs.Register(recurringJobs);
+            startupState.MarkRecurringJobsRegistered();
+            logger.LogInformation("Recurring jobs registered successfully (WAT timezone).");
+        }
     }
     catch (Exception ex)
     {
         startupState.MarkInitializationFailed(ex.Message);
-        logger.LogCritical(ex, "❌ Startup aborted because recurring Hangfire job registration failed.");
+        logger.LogCritical(ex, "Startup aborted because recurring Hangfire job registration failed.");
         throw;
     }
 }

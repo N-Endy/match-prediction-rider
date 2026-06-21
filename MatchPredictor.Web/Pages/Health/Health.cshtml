@@ -58,7 +58,14 @@
                 <div style="font-size: 0.95rem; margin-top: 0.2rem;">Browser scraping: @(Model.Snapshot.BrowserScrapingEnabled ? "Enabled" : "Disabled")</div>
                 <div style="font-size: 0.95rem; margin-top: 0.5rem;">Database: @(Model.Snapshot.DatabaseInitialized ? "Ready" : "Not Ready")</div>
                 <div style="font-size: 0.95rem; margin-top: 0.2rem;">Hangfire: @(Model.Snapshot.HangfireInitialized ? "Ready" : "Not Ready")</div>
-                <div style="font-size: 0.95rem; margin-top: 0.2rem;">Jobs: @(Model.Snapshot.BackgroundJobsEnabled ? (Model.Snapshot.RecurringJobsRegistered ? "Registered" : "Missing") : "Skipped on this service")</div>
+                <div style="font-size: 0.95rem; margin-top: 0.2rem;">Jobs: @(
+                    Model.Snapshot.BackgroundJobsEnabled
+                        ? Model.Snapshot.ExternalCronEnabled
+                            ? "External cron (Hangfire queue only)"
+                            : Model.Snapshot.RecurringJobsRegistered
+                                ? "Registered"
+                                : "Missing"
+                        : "Skipped on this service")</div>
             </div>
             <span class="mp-prediction-badge" style="@(string.IsNullOrWhiteSpace(Model.Snapshot.StartupError) ? BadgeColors(HealthLevel.Healthy) : BadgeColors(HealthLevel.Failed))">
                 @(string.IsNullOrWhiteSpace(Model.Snapshot.StartupError) ? "Ready" : "Error")
