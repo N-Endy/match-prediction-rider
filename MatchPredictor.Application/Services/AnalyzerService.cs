@@ -30,6 +30,7 @@ public partial class AnalyzerService : IAnalyzerService
     private const string ClosingLineSnapshotEventName = ScrapingEventNames.ClosingLineSnapshot;
     private const string AiScoreRuntimeEventName = ScrapingEventNames.AiScoreRuntime;
     private const string SofaScoreRuntimeEventName = ScrapingEventNames.SofaScoreRuntime;
+    internal const string AnalyzerJobResource = "matchpredictor-analyzer";
 
     private readonly IDataAnalyzerService _dataAnalyzerService;
     private readonly IWebScraperService _webScraperService;
@@ -83,7 +84,7 @@ public partial class AnalyzerService : IAnalyzerService
             NullLogger<LearningLoopService>.Instance);
     }
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
-    [DisableConcurrentExecution(timeoutInSeconds: 300)]
+    [DisableConcurrentExecution(AnalyzerJobResource, 300)]
     public async Task CaptureClosingLineSnapshotsAsync(int lookaheadMinutes = 15)
     {
         var normalizedLookaheadMinutes = Math.Clamp(lookaheadMinutes, 1, 60);
@@ -164,6 +165,7 @@ public partial class AnalyzerService : IAnalyzerService
         }
     }
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
+    [DisableConcurrentExecution(AnalyzerJobResource, 3600)]
     public async Task RunDailyAnalysisAsync()
     {
         _logger.LogInformation("Starting daily analysis process...");
@@ -292,6 +294,7 @@ public partial class AnalyzerService : IAnalyzerService
         }
     }
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
+    [DisableConcurrentExecution(AnalyzerJobResource, 1800)]
     public async Task CleanupOldPredictionsAndMatchDataAsync()
     {
         var cutoffDate = DateTimeProvider.GetLocalTime().AddDays(-90).Date;

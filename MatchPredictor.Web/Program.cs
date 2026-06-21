@@ -363,7 +363,11 @@ static int ResolveHangfireWorkerCount(IConfiguration configuration)
         !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RAILWAY_PROJECT_ID")) ||
         !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RAILWAY_SERVICE_ID"));
 
-    if (runningOnRailway)
+    var runningOnRender =
+        string.Equals(Environment.GetEnvironmentVariable("RENDER"), "true", StringComparison.OrdinalIgnoreCase) ||
+        !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RENDER_SERVICE_ID"));
+
+    if (runningOnRailway || runningOnRender)
     {
         return 1;
     }

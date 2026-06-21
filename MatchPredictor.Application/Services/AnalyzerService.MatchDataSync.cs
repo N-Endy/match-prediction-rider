@@ -16,7 +16,7 @@ namespace MatchPredictor.Application.Services;
 public partial class AnalyzerService
 {
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
-    [DisableConcurrentExecution(timeoutInSeconds: 3600)]
+    [DisableConcurrentExecution(AnalyzerJobResource, 3600)]
     public async Task ExtractDataAndSyncDatabaseAsync(int predictionDayOffset = 0, string? runReason = null)
     {
         var targetLocalDateTime = DateTimeProvider.GetLocalTime().Date.AddDays(predictionDayOffset);

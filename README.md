@@ -55,6 +55,20 @@ Migrations apply automatically at startup. Secrets (Groq, ApiFootball, Hangfire 
 | `ENABLE_USER_TRACKING` | Enables the visitor tracking middleware. |
 | `USE_EXTERNAL_CRON` | When **true** on the worker, disables Hangfire recurring registration and expects cron-job.org HTTP triggers instead. |
 | `CronJob__Secret` | Shared secret for `X-Cron-Secret` header on `POST /api/ops/jobs/{jobName}` (worker only). |
+| `Hangfire__WorkerCount` | Hangfire parallel workers (defaults to **1** on Render/Railway; override only if you have enough RAM). |
+
+### Worker deployment (Render)
+
+The worker runs Chrome-based scraping and needs more memory than the web service.
+
+| Requirement | Recommendation |
+|---|---|
+| **Instance RAM** | **2GB minimum** (Render Standard). 512MB Starter will OOM when Chrome + .NET run together. |
+| `RUN_BACKGROUND_JOBS` | `true` |
+| `ENABLE_BROWSER_SCRAPING` | `true` |
+| `Hangfire__WorkerCount` | `1` on constrained hosts (also the default on Render) |
+
+All analyzer Hangfire jobs share a single execution lock (`matchpredictor-analyzer`) so daily analysis, score updates, and scraping never run in parallel — this prevents memory spikes when cron-job.org triggers overlap.
 
 ### External cron (cron-job.org hybrid)
 

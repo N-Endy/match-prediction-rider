@@ -16,7 +16,7 @@ namespace MatchPredictor.Application.Services;
 public partial class AnalyzerService
 {
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
-    [DisableConcurrentExecution(timeoutInSeconds: 1800)]
+    [DisableConcurrentExecution(AnalyzerJobResource, 1800)]
     public async Task RunScoreUpdaterAsync(int lookbackDays = RecentScoreUpdaterLookbackDays, string runLabel = "recent")
     {
         var normalizedLookbackDays = Math.Clamp(lookbackDays, 0, HistoricalScoreBackfillLookbackDays);
