@@ -54,6 +54,8 @@ builder.Services.AddScoped<IPredictionQueries>(provider => new CachedPredictionQ
     provider.GetRequiredService<PredictionQueries>(),
     provider.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>()));
 builder.Services.AddScoped<IHealthQueryService, HealthQueryService>();
+builder.Services.AddScoped<IScrapeStatusQueries, ScrapeStatusQueries>();
+builder.Services.AddScoped<IAnalyticsQueries, AnalyticsQueries>();
         builder.Services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
 builder.Services.AddScoped<IWebScraperService, WebScraperService>();
 builder.Services.AddScoped<IExtractFromExcel, ExtractFromExcel>();
@@ -65,8 +67,11 @@ builder.Services.AddScoped<ILearningLoopService, LearningLoopService>();
 builder.Services.AddScoped<IForecastEvaluationService, ForecastEvaluationService>();
 builder.Services.AddScoped<IAnalyzerService, AnalyzerService>();
 builder.Services.AddScoped<IRegressionPredictorService, RegressionPredictorService>();
+builder.Services.AddScoped<IStatisticalSignalProvider, StatisticalSignalProvider>();
 builder.Services.AddSingleton<AiScoreSourceHealthTracker>();
 builder.Services.AddSingleton<SofaScoreSourceHealthTracker>();
+builder.Services.AddSingleton<FlashScoreSourceHealthTracker>();
+builder.Services.AddScoped<IHistoricalDatasetService, HistoricalDatasetService>();
 builder.Services.AddScoped<SportyBetBookingService>();
 builder.Services.AddScoped<ISportyBetBookingService>(provider => provider.GetRequiredService<SportyBetBookingService>());
 builder.Services.AddScoped<ISourceMarketPricingService>(provider => provider.GetRequiredService<SportyBetBookingService>());

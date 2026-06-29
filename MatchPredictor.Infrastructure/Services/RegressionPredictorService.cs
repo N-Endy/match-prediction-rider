@@ -1,6 +1,7 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Statistics;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 
@@ -9,7 +10,7 @@ namespace MatchPredictor.Infrastructure.Services;
 public class RegressionPredictorService : IRegressionPredictorService
 {
     private const int ScoreMatrixMaxGoals = 10;
-    private const int HistoryWindowDays = 180;
+    private const int HistoryWindowDays = 365;
     private readonly ApplicationDbContext _db;
 
     public RegressionPredictorService(ApplicationDbContext db)
@@ -43,6 +44,20 @@ public class RegressionPredictorService : IRegressionPredictorService
 
         if (scores.Count == 0)
             return [];
+
+        // Shared statistical core: a Dixon-Coles goals model fitted from the same
+        // point-in-time history. Used whenever both teams have enough matches; the
+        // simple goal-average fallback below covers newly-seen teams.
+        var results = new List<MatchResult>(scores.Count);
+        foreach (var score in scores)
+        {
+            if (TryParseScore(score.Score, out var resultHome, out var resultAway))
+            {
+                results.Add(new MatchResult(score.HomeTeam, score.AwayTeam, resultHome, resultAway, score.MatchTime, score.League));
+            }
+        }
+
+        var goalsModel = DixonColesModel.Fit(results, trainingCutoffUtc, new DixonColesOptions());
 
         var homePlayed = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var homeGf = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
@@ -94,17 +109,36 @@ public class RegressionPredictorService : IRegressionPredictorService
             var homeTeam = match.HomeTeam.Trim();
             var awayTeam = match.AwayTeam.Trim();
 
-            var homeTeamGf = GetAverage(homeGf, homePlayed, homeTeam, globalAvgGoals / 2.0);
-            var homeTeamGa = GetAverage(homeGa, homePlayed, homeTeam, globalAvgGoals / 2.0);
-            var awayTeamGf = GetAverage(awayGf, awayPlayed, awayTeam, globalAvgGoals / 2.0);
-            var awayTeamGa = GetAverage(awayGa, awayPlayed, awayTeam, globalAvgGoals / 2.0);
+            double lambdaHome;
+            double lambdaAway;
+            double over25;
+            double btts;
+            double homeWinProb;
+            double awayWinProb;
 
-            var lambdaHome = Math.Clamp((0.55 * homeTeamGf) + (0.45 * awayTeamGa), 0.1, 3.5);
-            var lambdaAway = Math.Clamp((0.55 * awayTeamGf) + (0.45 * homeTeamGa), 0.1, 3.5);
+            if (goalsModel.HasTeam(homeTeam) && goalsModel.HasTeam(awayTeam))
+            {
+                (lambdaHome, lambdaAway) = goalsModel.ExpectedGoals(homeTeam, awayTeam);
+                var modelPrediction = goalsModel.Predict(homeTeam, awayTeam);
+                over25 = modelPrediction.Over25;
+                btts = modelPrediction.Btts;
+                homeWinProb = modelPrediction.HomeWin;
+                awayWinProb = modelPrediction.AwayWin;
+            }
+            else
+            {
+                var homeTeamGf = GetAverage(homeGf, homePlayed, homeTeam, globalAvgGoals / 2.0);
+                var homeTeamGa = GetAverage(homeGa, homePlayed, homeTeam, globalAvgGoals / 2.0);
+                var awayTeamGf = GetAverage(awayGf, awayPlayed, awayTeam, globalAvgGoals / 2.0);
+                var awayTeamGa = GetAverage(awayGa, awayPlayed, awayTeam, globalAvgGoals / 2.0);
 
-            var over25 = ProbabilityOverTotal(lambdaHome + lambdaAway, threshold: 2.5);
-            var btts = ProbabilityBothTeamsScore(lambdaHome, lambdaAway);
-            var (homeWinProb, awayWinProb, drawProb) = CalculateNormalizedWdl(lambdaHome, lambdaAway);
+                lambdaHome = Math.Clamp((0.55 * homeTeamGf) + (0.45 * awayTeamGa), 0.1, 3.5);
+                lambdaAway = Math.Clamp((0.55 * awayTeamGf) + (0.45 * homeTeamGa), 0.1, 3.5);
+
+                over25 = ProbabilityOverTotal(lambdaHome + lambdaAway, threshold: 2.5);
+                btts = ProbabilityBothTeamsScore(lambdaHome, lambdaAway);
+                (homeWinProb, awayWinProb, _) = CalculateNormalizedWdl(lambdaHome, lambdaAway);
+            }
 
             var (date, time, _) = DateTimeProvider.ParseProperDateAndTime(match.Date, match.Time);
 

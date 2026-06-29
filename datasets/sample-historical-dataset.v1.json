@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "generatedAtUtc": "2026-06-29T00:00:00Z",
+  "count": 6,
+  "matches": [
+    {
+      "league": "England Premier League",
+      "homeTeam": "Arsenal",
+      "awayTeam": "Chelsea",
+      "score": "2:1",
+      "matchTimeUtc": "2026-06-20T14:00:00Z",
+      "bttsLabel": true,
+      "isLive": false
+    },
+    {
+      "league": "England Premier League",
+      "homeTeam": "Liverpool",
+      "awayTeam": "Everton",
+      "score": "1:0",
+      "matchTimeUtc": "2026-06-20T16:30:00Z",
+      "bttsLabel": false,
+      "isLive": false
+    },
+    {
+      "league": "Germany Bundesliga",
+      "homeTeam": "Bayern Munich",
+      "awayTeam": "Borussia Dortmund",
+      "score": "3:3",
+      "matchTimeUtc": "2026-06-21T13:30:00Z",
+      "bttsLabel": true,
+      "isLive": false
+    },
+    {
+      "league": "Spain La Liga",
+      "homeTeam": "Real Madrid",
+      "awayTeam": "Sevilla",
+      "score": "2:0",
+      "matchTimeUtc": "2026-06-21T19:00:00Z",
+      "bttsLabel": false,
+      "isLive": false
+    },
+    {
+      "league": "Italy Serie A",
+      "homeTeam": "Inter",
+      "awayTeam": "Juventus",
+      "score": "1:1",
+      "matchTimeUtc": "2026-06-22T18:45:00Z",
+      "bttsLabel": true,
+      "isLive": false
+    },
+    {
+      "league": "France Ligue 1",
+      "homeTeam": "Paris Saint-Germain",
+      "awayTeam": "Marseille",
+      "score": "4:2",
+      "matchTimeUtc": "2026-06-22T20:00:00Z",
+      "bttsLabel": true,
+      "isLive": false
+    }
+  ]
+}

@@ -18,6 +18,8 @@ var mode = args.FirstOrDefault()?.Trim().ToLowerInvariant() switch
     "--benchmark" or "benchmark" => RunnerMode.Benchmark,
     "--score-backfill" or "score-backfill" => RunnerMode.ScoreBackfill,
     "--score" or "score" => RunnerMode.Score,
+    "--export-history" or "export-history" => RunnerMode.ExportHistory,
+    "--import-history" or "import-history" => RunnerMode.ImportHistory,
     _ => RunnerMode.Sync
 };
 
@@ -51,6 +53,10 @@ services.Configure<PredictionSettings>(configuration.GetSection("PredictionSetti
 services.AddDbContext<ApplicationDbContext>(options => options.UseNpgsql(connectionString));
 services.AddHttpClient("SportyBet", client => client.Timeout = TimeSpan.FromSeconds(30));
 services.AddDistributedMemoryCache();
+services.AddSingleton<AiScoreSourceHealthTracker>();
+services.AddSingleton<SofaScoreSourceHealthTracker>();
+services.AddSingleton<FlashScoreSourceHealthTracker>();
+services.AddScoped<IHistoricalDatasetService, HistoricalDatasetService>();
 services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
 services.AddScoped<IWebScraperService, WebScraperService>();
 if (mode is RunnerMode.Score or RunnerMode.ScoreBackfill)
@@ -87,6 +93,34 @@ await using var scope = serviceProvider.CreateAsyncScope();
 var context = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
 Console.WriteLine($"Mode: {mode}");
+
+if (mode is RunnerMode.ExportHistory)
+{
+    var datasetService = scope.ServiceProvider.GetRequiredService<IHistoricalDatasetService>();
+    var lookbackDays = args.Length > 1 && int.TryParse(args[1], out var parsedLookback) ? parsedLookback : 540;
+    var outputPath = args.Length > 2 ? args[2] : "historical-dataset.json";
+    var json = await datasetService.ExportAsync(lookbackDays);
+    await File.WriteAllTextAsync(outputPath, json);
+    Console.WriteLine($"Exported historical dataset ({lookbackDays}d) to {Path.GetFullPath(outputPath)}");
+    return;
+}
+
+if (mode is RunnerMode.ImportHistory)
+{
+    if (args.Length < 2)
+    {
+        Console.WriteLine("Usage: --import-history <path-to-dataset.json> [--replace]");
+        return;
+    }
+
+    var datasetService = scope.ServiceProvider.GetRequiredService<IHistoricalDatasetService>();
+    var inputPath = args[1];
+    var replaceExisting = args.Any(arg => string.Equals(arg, "--replace", StringComparison.OrdinalIgnoreCase));
+    var json = await File.ReadAllTextAsync(inputPath);
+    var imported = await datasetService.ImportAsync(json, replaceExisting);
+    Console.WriteLine($"Imported {imported} historical match row(s) from {Path.GetFullPath(inputPath)} (replace={replaceExisting}).");
+    return;
+}
 
 switch (mode)
 {
@@ -566,6 +600,17 @@ sealed class BenchmarkAccumulator
 
 sealed class LegacyProbabilityCalculator : IProbabilityCalculator
 {
+    public MatchProbabilities CalculateProbabilities(MatchData match)
+    {
+        return new MatchProbabilities(
+            Btts: CalculateBttsProbability(match),
+            Over25: CalculateOverTwoGoalsProbability(match),
+            Under25: CalculateUnderTwoGoalsProbability(match),
+            Draw: 0.0,
+            HomeWin: CalculateHomeWinProbability(match),
+            AwayWin: CalculateAwayWinProbability(match));
+    }
+
     public double CalculateBttsProbability(MatchData match)
     {
         var totalXg = EstimateTotalXg(match);
@@ -718,7 +763,9 @@ enum RunnerMode
     Sync,
     Score,
     ScoreBackfill,
-    Benchmark
+    Benchmark,
+    ExportHistory,
+    ImportHistory
 }
 
 sealed class NoOpExtractFromExcel : IExtractFromExcel

@@ -1,5 +1,6 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Statistics;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
@@ -12,6 +13,8 @@ public class DataAnalyzerService : IDataAnalyzerService
     private readonly ICalibrationService _calibrationService;
     private readonly IThresholdTuningService _thresholdTuningService;
     private readonly IProbabilityCorrectionService _probabilityCorrectionService;
+    private readonly IStatisticalSignalProvider? _statisticalSignalProvider;
+    private readonly EnsembleWeights _ensembleWeights;
     private readonly PredictionSettings _settings;
 
     public DataAnalyzerService(
@@ -19,19 +22,27 @@ public class DataAnalyzerService : IDataAnalyzerService
         ICalibrationService calibrationService,
         IThresholdTuningService thresholdTuningService,
         IProbabilityCorrectionService probabilityCorrectionService,
-        IOptions<PredictionSettings> options)
+        IOptions<PredictionSettings> options,
+        IStatisticalSignalProvider? statisticalSignalProvider = null)
     {
         _probabilityCalculator = probabilityCalculator;
         _calibrationService = calibrationService;
         _thresholdTuningService = thresholdTuningService;
         _probabilityCorrectionService = probabilityCorrectionService;
+        _statisticalSignalProvider = statisticalSignalProvider;
         _settings = options.Value;
+        // The market-based calculator output enters as the "Market" signal and the
+        // Dixon-Coles + Elo statistical core enters as the "DixonColes" signal.
+        _ensembleWeights = new EnsembleWeights { Market = 1.0, Base = 0.0, DixonColes = 1.1, Elo = 0.0 };
     }
 
     public IReadOnlyList<PredictionCandidate> BuildForecastCandidates(IEnumerable<MatchData> matches)
     {
-        return matches
-            .SelectMany(BuildForecastCandidatesForMatch)
+        var matchList = matches as IReadOnlyCollection<MatchData> ?? matches.ToList();
+        var signalSet = _statisticalSignalProvider?.BuildSignals(matchList);
+
+        return matchList
+            .SelectMany(match => BuildForecastCandidatesForMatch(match, signalSet))
             .Cast<PredictionCandidate>()
             .ToList();
     }
@@ -231,9 +242,19 @@ public class DataAnalyzerService : IDataAnalyzerService
         return !string.IsNullOrWhiteSpace(match.HomeTeam) && !string.IsNullOrWhiteSpace(match.AwayTeam);
     }
 
-    private IEnumerable<PredictionCandidate> BuildForecastCandidatesForMatch(MatchData match)
+    private IEnumerable<PredictionCandidate> BuildForecastCandidatesForMatch(MatchData match, IStatisticalSignalSet? signalSet)
     {
-        var probabilities = _probabilityCalculator.CalculateProbabilities(match);
+        var marketProbabilities = _probabilityCalculator.CalculateProbabilities(match);
+        var statisticalSignal = signalSet?.GetSignal(match);
+        var probabilities = statisticalSignal is null
+            ? marketProbabilities
+            : EnsembleProbabilityBlender.Blend(
+                market: marketProbabilities,
+                baseModel: null,
+                dixonColes: statisticalSignal,
+                elo: null,
+                weights: _ensembleWeights);
+
         var candidates = new[]
         {
             BuildCandidate(
@@ -270,13 +291,13 @@ public class DataAnalyzerService : IDataAnalyzerService
 
         foreach (var candidate in realizedCandidates)
         {
-            candidate.FeatureContributionsJson = BuildFeatureContributionSummary(match, probabilities, candidate.Market);
+            candidate.FeatureContributionsJson = BuildFeatureContributionSummary(match, probabilities, statisticalSignal, candidate.Market);
         }
 
         return realizedCandidates;
     }
 
-    private static string BuildFeatureContributionSummary(MatchData match, MatchProbabilities probabilities, PredictionMarket market)
+    private static string BuildFeatureContributionSummary(MatchData match, MatchProbabilities probabilities, MatchProbabilities? statisticalSignal, PredictionMarket market)
     {
         var oneX2Available = match.TryGetNormalizedOneX2(out var oneX2);
         var over25Available = match.TryGetNormalizedOver25Pair(out var over25Pair);
@@ -301,7 +322,18 @@ public class DataAnalyzerService : IDataAnalyzerService
                 ["homeWin"] = probabilities.HomeWin,
                 ["awayWin"] = probabilities.AwayWin,
                 ["draw"] = probabilities.Draw
-            }
+            },
+            ["statisticalSignal"] = statisticalSignal is null
+                ? null
+                : new Dictionary<string, double>
+                {
+                    ["btts"] = statisticalSignal.Btts,
+                    ["over25"] = statisticalSignal.Over25,
+                    ["homeWin"] = statisticalSignal.HomeWin,
+                    ["awayWin"] = statisticalSignal.AwayWin,
+                    ["draw"] = statisticalSignal.Draw
+                },
+            ["statisticalSignalApplied"] = statisticalSignal is not null
         };
 
         return JsonSerializer.Serialize(summary);

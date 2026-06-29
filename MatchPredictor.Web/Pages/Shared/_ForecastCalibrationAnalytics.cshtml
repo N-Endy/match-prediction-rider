@@ -28,6 +28,13 @@
         </div>
     </div>
     <div class="mp-stat-card">
+        <div class="mp-stat-label">Calibrated ECE</div>
+        <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">
+            @(Model.SettledForecasts > 0 ? Model.ExpectedCalibrationError.ToString("F3") : "0.000")
+        </div>
+        <div class="mp-stat-label">raw @(Model.SettledForecasts > 0 ? Model.RawExpectedCalibrationError.ToString("F3") : "0.000")</div>
+    </div>
+    <div class="mp-stat-card">
         <div class="mp-stat-label">Precision</div>
         <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">
             @(Model.SettledForecasts > 0 ? $"{Model.Precision * 100:F1}%" : "0.0%")
@@ -101,6 +108,14 @@
                         <div class="mp-market-metric-block">
                             <span class="mp-market-metric-label">F1</span>
                             <strong>@market.F1Score.ToString("F3")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Cal ECE</span>
+                            <strong>@market.CalibratedExpectedCalibrationError.ToString("F3")</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Raw ECE</span>
+                            <strong>@market.RawExpectedCalibrationError.ToString("F3")</strong>
                         </div>
                         <div class="mp-market-metric-block">
                             <span class="mp-market-metric-label">Raw REL</span>
@@ -287,8 +302,75 @@
                             <span class="mp-market-metric-label">Log Loss</span>
                             <strong>@band.LogLoss.ToString("F3")</strong>
                         </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Precision</span>
+                            <strong>@((band.Precision * 100).ToString("F1"))%</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">Recall</span>
+                            <strong>@((band.Recall * 100).ToString("F1"))%</strong>
+                        </div>
+                        <div class="mp-market-metric-block">
+                            <span class="mp-market-metric-label">F1</span>
+                            <strong>@band.F1Score.ToString("F3")</strong>
+                        </div>
                     </div>
                 </article>
+            }
+        </div>
+    </div>
+}
+
+@if (Model.FeatureDiagnostics.Any())
+{
+    <div class="mp-category-stats" style="margin-top: 2rem;">
+        <h3 style="margin-bottom: 0.35rem; font-size: 1.1rem; color: white;">Forecast Explainability</h3>
+        <p class="mp-switch-caption" style="margin-bottom: 1.2rem;">
+            Per-forecast feature contributions captured at prediction time: the market signals, the model outputs, and the trained statistical signal (Dixon-Coles + Elo) that fed each pick. Showing the @Model.FeatureDiagnostics.Count most recent settled forecasts.
+        </p>
+        <div class="mp-diag-list">
+            @foreach (var diag in Model.FeatureDiagnostics)
+            {
+                var hitClass = diag.OutcomeOccurred == true ? "mp-read-badge-strong"
+                    : diag.OutcomeOccurred == false ? "mp-read-badge-avoid" : "mp-read-badge-caution";
+                var hitLabel = diag.OutcomeOccurred == true ? "Hit" : diag.OutcomeOccurred == false ? "Miss" : "Pending";
+                <details class="mp-diag-item">
+                    <summary class="mp-diag-summary">
+                        <div class="mp-diag-fixture">
+                            <span class="mp-diag-teams">@diag.HomeTeam vs @diag.AwayTeam</span>
+                            <span class="mp-diag-meta">@diag.League &bull; @diag.MarketName &bull; @diag.PredictedOutcome</span>
+                        </div>
+                        <div class="mp-diag-readout">
+                            <span class="mp-diag-prob">@((diag.RawProbability * 100).ToString("F0"))% &rarr; @((diag.CalibratedProbability * 100).ToString("F0"))%</span>
+                            @if (diag.StatisticalSignalApplied)
+                            {
+                                <span class="mp-market-pill"><em>DC+Elo</em></span>
+                            }
+                            <span class="mp-read-badge @hitClass">@hitLabel</span>
+                        </div>
+                    </summary>
+                    @if (diag.Contributions.Any())
+                    {
+                        <div class="mp-diag-groups">
+                            @foreach (var group in diag.Contributions.GroupBy(c => c.Group))
+                            {
+                                <div class="mp-diag-group">
+                                    <span class="mp-market-metric-label">@group.Key</span>
+                                    <div class="mp-diag-chips">
+                                        @foreach (var item in group)
+                                        {
+                                            <span class="mp-market-pill">@item.Label <strong>@(item.Value.HasValue ? (item.Value.Value * 100).ToString("F0") + "%" : "--")</strong></span>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="mp-market-beta-empty">No stored feature contributions for this forecast.</p>
+                    }
+                </details>
             }
         </div>
     </div>

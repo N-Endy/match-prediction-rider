@@ -4,6 +4,10 @@ on:
   push:
     branches: [main, master, fable]
   pull_request:
+  schedule:
+    # Nightly at 03:17 UTC — runs the heavier Postgres/E2E suite against a real database.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
 
 jobs:
   build-and-test:
@@ -25,10 +29,22 @@ jobs:
       - name: Build
         run: dotnet build MatchPredictor.sln --no-restore --configuration Release
 
+      # Fast, deterministic math/ML core unit tests. Coverage is scoped to the statistical
+      # core and gated by the threshold configured in the unit project's csproj — the build
+      # fails if coverage of those namespaces regresses below the floor.
+      - name: Unit tests (with coverage gate)
+        run: >-
+          dotnet test MatchPredictor.Tests.Unit/MatchPredictor.Tests.Unit.csproj
+          --configuration Release
+          /p:CollectCoverage=true
+          /p:CoverletOutput=./TestResults/coverage.cobertura.xml
+          --logger "trx;LogFileName=unit-results.trx"
+
       # Investigate tests drive a real Chrome browser against live sites, and
       # LiveNetwork tests call live scraping endpoints; both are excluded from CI
-      # for determinism and remain runnable locally on demand.
-      - name: Test
+      # for determinism and remain runnable locally on demand. PostgresE2E runs in
+      # the dedicated nightly job below.
+      - name: Integration tests
         run: >-
           dotnet test MatchPredictor.Tests.Integration/MatchPredictor.Tests.Integration.csproj
           --no-build --configuration Release
@@ -40,5 +56,68 @@ jobs:
         if: always()
         with:
           name: test-results
+          path: '**/TestResults/*.trx'
+          retention-days: 7
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: '**/TestResults/coverage*.xml'
+          retention-days: 7
+
+  e2e-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Only run the real-database suite on the nightly schedule or when triggered manually,
+    # to keep the PR pipeline fast and deterministic.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: matchpredictor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MATCHPREDICTOR_TEST_POSTGRES: 'Host=localhost;Port=5432;Database=matchpredictor_test;Username=postgres;Password=postgres'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore MatchPredictor.sln
+
+      - name: Build
+        run: dotnet build MatchPredictor.sln --no-restore --configuration Release
+
+      - name: Postgres E2E tests
+        run: >-
+          dotnet test MatchPredictor.Tests.Integration/MatchPredictor.Tests.Integration.csproj
+          --no-build --configuration Release
+          --filter "Category=PostgresE2E"
+          --logger "trx;LogFileName=e2e-results.trx"
+
+      - name: Upload E2E results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-test-results
           path: '**/TestResults/*.trx'
           retention-days: 7

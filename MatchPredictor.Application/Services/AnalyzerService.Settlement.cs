@@ -4,6 +4,7 @@ using Hangfire;
 using MatchPredictor.Application.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Domain.Sourcing;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -1580,13 +1581,18 @@ public partial class AnalyzerService
             return best.Candidate;
         }
 
-        var distinctScores = extendedWindowCandidates
-            .Select(candidate => NormalizeSettledScore(candidate.Score))
-            .Where(score => !string.IsNullOrWhiteSpace(score))
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
+        // Accept the best candidate only when every source within the extended window agrees on the
+        // normalized score (unanimous consensus), reconciled through the shared voting layer.
+        var consensus = ScoreConsensusResolver.Resolve(
+            extendedWindowCandidates.Select((candidate, index) => new ScoreCandidate(
+                SourceName: index.ToString(),
+                NormalizedScore: NormalizeSettledScore(candidate.Score),
+                IsFinished: true,
+                Reliability: 1.0,
+                ObservedAtUtc: DateTime.UtcNow)),
+            consensusThreshold: 1.0);
 
-        return distinctScores.Count == 1
+        return consensus.HasConsensus && consensus.AgreeingSources == consensus.TotalSources
             ? best.Candidate
             : default;
     }

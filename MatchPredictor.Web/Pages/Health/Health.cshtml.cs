@@ -1,14 +1,10 @@
 using System.Text.Json;
-using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
-using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Services;
 using MatchPredictor.Infrastructure.Utils;
 using MatchPredictor.Web.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using Microsoft.EntityFrameworkCore;
-using Npgsql;
 
 namespace MatchPredictor.Web.Pages.Health;
 
@@ -26,20 +22,17 @@ public class Health : PageModel
         new("Source Quality", ScrapingEventNames.SourceQuality, TimeSpan.FromHours(36), false)
     ];
 
-    private readonly ApplicationDbContext _dbContext;
     private readonly IHealthQueryService _healthQueryService;
     private readonly OperationalStartupState _startupState;
     private readonly AiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
     private readonly SofaScoreSourceHealthTracker _sofaScoreSourceHealthTracker;
 
     public Health(
-        ApplicationDbContext dbContext,
         IHealthQueryService healthQueryService,
         OperationalStartupState startupState,
         AiScoreSourceHealthTracker aiScoreSourceHealthTracker,
         SofaScoreSourceHealthTracker sofaScoreSourceHealthTracker)
     {
-        _dbContext = dbContext;
         _healthQueryService = healthQueryService;
         _startupState = startupState;
         _aiScoreSourceHealthTracker = aiScoreSourceHealthTracker;
@@ -91,43 +84,17 @@ public class Health : PageModel
             .GroupBy(log => log.EventName, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
 
-        var predictionsToday = await _dbContext.Predictions
-            .AsNoTracking()
-            .Where(prediction => prediction.MatchLocalDate == today && prediction.IsCurrentRevision)
-            .CountAsync(ct);
-        var livePredictionsToday = await _dbContext.Predictions
-            .AsNoTracking()
-            .Where(prediction => prediction.MatchLocalDate == today && prediction.IsCurrentRevision && prediction.IsLive)
-            .CountAsync(ct);
+        var predictionCounts = await _healthQueryService.GetPredictionCountsAsync(today, ct);
+        var predictionsToday = predictionCounts.Total;
+        var livePredictionsToday = predictionCounts.Live;
 
         var signals = SignalDefinitions
             .Select(definition => BuildSignalStatus(definition, groupedLogs, nowLocal))
             .ToList();
-        List<SourceQualityProfile> sourceQualityProfiles;
-        List<SourceQualityProfile> weakestSourceProfiles;
-        try
-        {
-            sourceQualityProfiles = await _dbContext.SourceQualityProfiles
-                .AsNoTracking()
-                .Where(profile => profile.LeagueKey == "all" && profile.TimeBucketKey == "all")
-                .OrderByDescending(profile => profile.SourceName)
-                .ToListAsync(ct);
-            weakestSourceProfiles = await _dbContext.SourceQualityProfiles
-                .AsNoTracking()
-                .Where(profile =>
-                    profile.LeagueKey != "all" &&
-                    profile.TimeBucketKey != "all" &&
-                    profile.SampleCount >= 4)
-                .OrderBy(profile => profile.ReliabilityScore)
-                .ThenByDescending(profile => profile.SampleCount)
-                .Take(6)
-                .ToListAsync(ct);
-        }
-        catch (PostgresException ex) when (IsMissingSourceQualityTable(ex))
-        {
-            sourceQualityProfiles = [];
-            weakestSourceProfiles = [];
-        }
+
+        var sourceQualitySnapshot = await _healthQueryService.GetSourceQualityProfilesAsync(ct);
+        var sourceQualityProfiles = sourceQualitySnapshot.Overall;
+        var weakestSourceProfiles = sourceQualitySnapshot.Weakest;
 
         var predictionCoverageExpected = nowLocal.TimeOfDay >= TimeSpan.FromMinutes(45);
         var missingPredictions = predictionCoverageExpected && predictionsToday == 0;
@@ -325,12 +292,6 @@ public class Health : PageModel
         }
 
         return fallbackSnapshot;
-    }
-
-    private static bool IsMissingSourceQualityTable(PostgresException ex)
-    {
-        return ex.SqlState == PostgresErrorCodes.UndefinedTable &&
-               string.Equals(ex.TableName, "SourceQualityProfiles", StringComparison.Ordinal);
     }
 
     private sealed record SignalDefinition(string Name, string EventName, TimeSpan MaxLag, bool IsCritical);

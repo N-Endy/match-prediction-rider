@@ -3,6 +3,11 @@
 @{
     var accClass = Model.OverallAccuracy >= 0.70 ? "acc-high" :
                    Model.OverallAccuracy >= 0.50 ? "acc-med" : "acc-low";
+    var betting = Model.BettingPerformance;
+    string PnlClass(double value) => value > 0 ? "acc-high" : value < 0 ? "acc-low" : "acc-med";
+    string Pct(double value) => (value * 100).ToString("F1") + "%";
+    string SignedPct(double value) => (value >= 0 ? "+" : "") + (value * 100).ToString("F1") + "%";
+    string SignedUnits(double value) => (value >= 0 ? "+" : "") + value.ToString("F2") + "u";
 }
 
 <div class="mp-stat-grid">
@@ -29,6 +34,81 @@
 <div class="mp-analytics-note">
     This section is about published picks only: how many went out, how many settled, and how often the pick itself was right.
 </div>
+
+@if (betting.SettledBetCount > 0)
+{
+    <div class="mp-market-analytics">
+        <h3 style="margin-bottom: 0.35rem; font-size: 1.1rem; color: white;">Realized Betting Performance</h3>
+        <p class="mp-switch-caption" style="margin-bottom: 1.2rem;">
+            Flat 1u staking at captured publish-time odds across @betting.SettledBetCount settled pick(s) that had a recorded price. Closing Line Value compares publish price to the closing market price.
+        </p>
+        <div class="mp-stat-grid">
+            <div class="mp-stat-card">
+                <div class="mp-stat-label">ROI / Yield</div>
+                <div class="mp-stat-value mp-stat-figure mp-stat-value-compact @PnlClass(betting.RoiPercent)">@SignedPct(betting.RoiPercent)</div>
+                <div class="mp-stat-label">@SignedUnits(betting.NetProfitUnits) on @betting.TotalStakedUnits.ToString("F0")u</div>
+            </div>
+            <div class="mp-stat-card">
+                <div class="mp-stat-label">Win Rate</div>
+                <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">@Pct(betting.WinRate)</div>
+                <div class="mp-stat-label">@betting.WinningBetCount / @betting.SettledBetCount &bull; avg @betting.AverageOdds.ToString("F2")</div>
+            </div>
+            <div class="mp-stat-card">
+                <div class="mp-stat-label">¼-Kelly ROI</div>
+                <div class="mp-stat-value mp-stat-figure mp-stat-value-compact @PnlClass(betting.KellyRoiPercent)">@SignedPct(betting.KellyRoiPercent)</div>
+                <div class="mp-stat-label">@SignedUnits(betting.KellyNetProfitUnits) on @betting.KellyStakedUnits.ToString("F2")u (@betting.KellyBetCount bets)</div>
+            </div>
+            <div class="mp-stat-card">
+                <div class="mp-stat-label">Max Drawdown</div>
+                <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">@betting.MaxDrawdownUnits.ToString("F2")u</div>
+                <div class="mp-stat-label">worst peak-to-trough (flat)</div>
+            </div>
+            <div class="mp-stat-card">
+                <div class="mp-stat-label">Avg CLV</div>
+                @if (betting.ClosingLineSamples > 0)
+                {
+                    <div class="mp-stat-value mp-stat-figure mp-stat-value-compact @PnlClass(betting.AverageClosingLineValuePercent)">@SignedPct(betting.AverageClosingLineValuePercent)</div>
+                    <div class="mp-stat-label">@Pct(betting.BeatCloseRate) beat close &bull; @betting.ClosingLineSamples samples</div>
+                }
+                else
+                {
+                    <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">--</div>
+                    <div class="mp-stat-label">no closing prices captured</div>
+                }
+            </div>
+        </div>
+
+        @if (betting.Markets.Any())
+        {
+            <div class="mp-segment-table" style="margin-top: 0.5rem;">
+                <div class="mp-segment-row mp-segment-row-head">
+                    <span>Market</span>
+                    <span class="mp-segment-metric">Bets</span>
+                    <span class="mp-segment-metric">Win%</span>
+                    <span class="mp-segment-metric">ROI</span>
+                    <span class="mp-segment-metric">P/L</span>
+                    <span class="mp-segment-metric">CLV</span>
+                </div>
+                @foreach (var market in betting.Markets)
+                {
+                    <div class="mp-segment-row">
+                        <div class="mp-segment-name">
+                            <span class="mp-segment-title">@market.MarketName</span>
+                            <span class="mp-segment-subtitle">avg odds @market.AverageOdds.ToString("F2")</span>
+                        </div>
+                        <span class="mp-segment-metric">@market.SettledBetCount</span>
+                        <span class="mp-segment-metric">@Pct(market.WinRate)</span>
+                        <span class="mp-segment-metric @PnlClass(market.RoiPercent)">@SignedPct(market.RoiPercent)</span>
+                        <span class="mp-segment-metric @PnlClass(market.NetProfitUnits)">@SignedUnits(market.NetProfitUnits)</span>
+                        <span class="mp-segment-metric">
+                            @(market.ClosingLineSamples > 0 ? SignedPct(market.AverageClosingLineValuePercent) : "--")
+                        </span>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
 
 @if (Model.CategoryStats.Any())
 {

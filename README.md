@@ -117,14 +117,38 @@ Optional recovery: `POST /api/ops/jobs/startup-catchup` enqueues daily analysis 
 
 ## Tests
 
+The suite is split into two projects:
+
+- **`MatchPredictor.Tests.Unit`** — fast, deterministic unit tests for the math/ML core
+  (Dixon-Coles, Elo, de-vig odds math, the logit ensemble blender, and the backtest
+  evaluator/walk-forward harness) plus the source-resilience primitives. It also contains
+  the **backtest regression guards** (`BacktestRegressionGuardTests`): on a seeded synthetic
+  season they fail the build if a model change degrades out-of-sample Brier/ECE/ROI past a
+  locked tolerance or drops below the market baseline. Coverage of the statistical core is
+  enforced at ≥80% line via coverlet (configured in the project file).
+- **`MatchPredictor.Tests.Integration`** — exercises the prediction pipeline end to end
+  against an in-memory store: `DataAnalyzerService` candidate generation, the raw → corrected
+  → calibrated ordering, the calibration/threshold/meta-model learning loops
+  (`CalibrationServiceTests`, `ThresholdTuningServiceTests`), report KPIs
+  (`ForecastEvaluationServiceTests`, `BettingPerformanceStatsTests`, `CalibrationKpiTests`),
+  and an end-to-end `GeneratePredictionsAsync` run (`AnalyzerServiceBackfillTests`).
+
 ```bash
+# Unit suite + coverage gate
+dotnet test MatchPredictor.Tests.Unit/MatchPredictor.Tests.Unit.csproj /p:CollectCoverage=true
+
+# Integration suite (excludes live-browser/live-network and the nightly Postgres E2E)
 dotnet test MatchPredictor.Tests.Integration/MatchPredictor.Tests.Integration.csproj \
-  --filter "FullyQualifiedName!~Investigate"
+  --filter "FullyQualifiedName!~Investigate&Category!=LiveNetwork&Category!=PostgresE2E"
 ```
 
-`PredictionPipelineGuardTests` are the core regression guards: they verify the raw → corrected → calibrated ordering with the real math services, the three learning-loop rebuilds, and an end-to-end `GeneratePredictionsAsync` run.
+`PostgresE2E`-tagged tests run real EF Core migrations against PostgreSQL; they no-op unless a
+connection string is supplied via `MATCHPREDICTOR_TEST_POSTGRES` (or
+`ConnectionStrings__DefaultConnection`).
 
-CI runs the same suite on every push/PR (`.github/workflows/ci.yml`).
+CI runs the unit suite (with the coverage gate) and the integration suite on every push/PR,
+and runs the Postgres E2E suite against a Postgres service container on a nightly schedule
+(`.github/workflows/ci.yml`).
 
 ## Operational surfaces
 

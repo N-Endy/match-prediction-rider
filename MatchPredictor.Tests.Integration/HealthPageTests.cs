@@ -48,7 +48,7 @@ public class HealthPageTests
         sofaScoreTracker.RecordAttempt("discovery", "fixture batch");
         sofaScoreTracker.RecordSuccess("event-page", 2, 4, 3, "SofaScore parsed two pages.");
 
-        var page = new Health(context, startupState, aiScoreTracker, sofaScoreTracker);
+        var page = new Health(new HealthQueryService(context), startupState, aiScoreTracker, sofaScoreTracker);
 
         var result = await page.OnGetAsync(CancellationToken.None);
 
@@ -134,7 +134,7 @@ public class HealthPageTests
         startupState.MarkRecurringJobsRegistered();
 
         var page = new Health(
-            context,
+            new HealthQueryService(context),
             startupState,
             new AiScoreSourceHealthTracker(),
             new SofaScoreSourceHealthTracker());

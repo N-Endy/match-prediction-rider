@@ -1,17 +1,16 @@
 using System.Globalization;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
-using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Utils;
+using MatchPredictor.Web.Services;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace MatchPredictor.Web.Pages;
 
 public class AnalyticsModel : PageModel
 {
-    private readonly ApplicationDbContext _db;
+    private readonly IAnalyticsQueries _analyticsQueries;
     private readonly IForecastEvaluationService _forecastEvaluationService;
     private readonly PredictionSettings _settings;
 
@@ -23,11 +22,11 @@ public class AnalyticsModel : PageModel
     public AnalyticsLiveConfigSnapshot CurrentLiveConfig { get; set; } = new();
 
     public AnalyticsModel(
-        ApplicationDbContext db,
+        IAnalyticsQueries analyticsQueries,
         IForecastEvaluationService forecastEvaluationService,
         IOptions<PredictionSettings> options)
     {
-        _db = db;
+        _analyticsQueries = analyticsQueries;
         _forecastEvaluationService = forecastEvaluationService;
         _settings = options.Value;
     }
@@ -57,46 +56,50 @@ public class AnalyticsModel : PageModel
         var dateSetLast3 = Enumerable.Range(0, 3).Select(i => today.AddDays(-i)).ToHashSet();
         var dateSetLast7 = Enumerable.Range(0, 7).Select(i => today.AddDays(-i)).ToHashSet();
 
-        var last7Predictions = await _db.Predictions
-            .AsNoTracking()
-            .Where(prediction => dateSetLast7.Contains(prediction.MatchLocalDate))
-            .ToListAsync();
+        var snapshot = await _analyticsQueries.GetSnapshotAsync(dateSetLast7, DateTime.UtcNow.AddDays(-7));
 
-        var last7Forecasts = await _db.ForecastObservations
-            .AsNoTracking()
-            .Where(forecast => dateSetLast7.Contains(forecast.MatchLocalDate))
-            .ToListAsync();
-        var thresholdProfiles = await _db.ThresholdProfiles
-            .AsNoTracking()
-            .ToDictionaryAsync(profile => profile.Market);
-        var betaProfiles = await _db.BetaCalibrationProfiles
-            .AsNoTracking()
-            .ToDictionaryAsync(profile => profile.Market);
-        var recentPromotionHistory = await _db.PromotionHistories
-            .AsNoTracking()
-            .Where(history => history.EffectiveAt >= DateTime.UtcNow.AddDays(-7))
-            .OrderByDescending(history => history.EffectiveAt)
-            .ToListAsync();
+        var last7Predictions = snapshot.Predictions;
+        var last7Forecasts = snapshot.Forecasts;
+        var last7OddsSnapshots = snapshot.OddsSnapshots;
+        var oddsSnapshotsByPrediction = last7OddsSnapshots
+            .GroupBy(oddsSnapshot => oddsSnapshot.PredictionId)
+            .ToDictionary(group => group.Key, group => group.ToList());
 
+        var thresholdProfiles = snapshot.ThresholdProfiles;
+        var betaProfiles = snapshot.BetaProfiles;
+        var recentPromotionHistory = snapshot.RecentPromotionHistory;
+
+        List<PredictionOddsSnapshot> SnapshotsFor(IEnumerable<Prediction> windowPredictions) =>
+            windowPredictions
+                .Where(prediction => oddsSnapshotsByPrediction.ContainsKey(prediction.Id))
+                .SelectMany(prediction => oddsSnapshotsByPrediction[prediction.Id])
+                .ToList();
+
+        var todayPredictions = last7Predictions.Where(prediction => dateSetToday.Contains(prediction.MatchLocalDate)).ToList();
         TodayStats = _forecastEvaluationService.CalculateStats(
-            last7Predictions.Where(prediction => dateSetToday.Contains(prediction.MatchLocalDate)),
-            last7Forecasts.Where(forecast => dateSetToday.Contains(forecast.MatchLocalDate)));
+            todayPredictions,
+            last7Forecasts.Where(forecast => dateSetToday.Contains(forecast.MatchLocalDate)),
+            SnapshotsFor(todayPredictions));
         EnrichForecastStats(TodayStats, thresholdProfiles, betaProfiles);
         TodayStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetToday);
 
+        var yesterdayPredictions = last7Predictions.Where(prediction => dateSetYesterday.Contains(prediction.MatchLocalDate)).ToList();
         YesterdayStats = _forecastEvaluationService.CalculateStats(
-            last7Predictions.Where(prediction => dateSetYesterday.Contains(prediction.MatchLocalDate)),
-            last7Forecasts.Where(forecast => dateSetYesterday.Contains(forecast.MatchLocalDate)));
+            yesterdayPredictions,
+            last7Forecasts.Where(forecast => dateSetYesterday.Contains(forecast.MatchLocalDate)),
+            SnapshotsFor(yesterdayPredictions));
         EnrichForecastStats(YesterdayStats, thresholdProfiles, betaProfiles);
         YesterdayStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetYesterday);
 
+        var last3Predictions = last7Predictions.Where(prediction => dateSetLast3.Contains(prediction.MatchLocalDate)).ToList();
         Last3DaysStats = _forecastEvaluationService.CalculateStats(
-            last7Predictions.Where(prediction => dateSetLast3.Contains(prediction.MatchLocalDate)),
-            last7Forecasts.Where(forecast => dateSetLast3.Contains(forecast.MatchLocalDate)));
+            last3Predictions,
+            last7Forecasts.Where(forecast => dateSetLast3.Contains(forecast.MatchLocalDate)),
+            SnapshotsFor(last3Predictions));
         EnrichForecastStats(Last3DaysStats, thresholdProfiles, betaProfiles);
         Last3DaysStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetLast3);
 
-        Last7DaysStats = _forecastEvaluationService.CalculateStats(last7Predictions, last7Forecasts);
+        Last7DaysStats = _forecastEvaluationService.CalculateStats(last7Predictions, last7Forecasts, last7OddsSnapshots);
         EnrichForecastStats(Last7DaysStats, thresholdProfiles, betaProfiles);
         Last7DaysStats.PromotionTimeline = BuildPromotionTimeline(recentPromotionHistory, dateSetLast7);
 

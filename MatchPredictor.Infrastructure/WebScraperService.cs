@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -46,18 +47,24 @@ public partial class WebScraperService : IWebScraperService
     private readonly ILogger<WebScraperService> _logger;
     private readonly AiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
     private readonly SofaScoreSourceHealthTracker _sofaScoreSourceHealthTracker;
+    private readonly FlashScoreSourceHealthTracker _flashScoreSourceHealthTracker;
+    private readonly IHttpClientFactory? _httpClientFactory;
     private readonly bool _browserScrapingEnabled;
 
     public WebScraperService(
         IConfiguration configuration,
         ILogger<WebScraperService> logger,
         AiScoreSourceHealthTracker aiScoreSourceHealthTracker,
-        SofaScoreSourceHealthTracker sofaScoreSourceHealthTracker)
+        SofaScoreSourceHealthTracker sofaScoreSourceHealthTracker,
+        FlashScoreSourceHealthTracker? flashScoreSourceHealthTracker = null,
+        IHttpClientFactory? httpClientFactory = null)
     {
         _logger = logger;
         _configuration = configuration;
         _aiScoreSourceHealthTracker = aiScoreSourceHealthTracker;
         _sofaScoreSourceHealthTracker = sofaScoreSourceHealthTracker;
+        _flashScoreSourceHealthTracker = flashScoreSourceHealthTracker ?? new FlashScoreSourceHealthTracker();
+        _httpClientFactory = httpClientFactory;
         _browserScrapingEnabled = ResolveBrowserScrapingEnabled(configuration);
         
         var baseDirFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources");
@@ -95,23 +102,61 @@ public partial class WebScraperService : IWebScraperService
     {
         EnsureBrowserScrapingEnabled("primary score scraping");
 
+        // Fast-skip the primary scraper while its circuit is open (e.g. after repeated Cloudflare
+        // blocks) so a single failing source can't stall every score-update cycle.
+        if (_flashScoreSourceHealthTracker.IsInCooldown(DateTime.UtcNow, out var cooldownRemaining))
+        {
+            _logger.LogWarning(
+                "FlashScore primary scraper is in cooldown for another {Seconds:F0}s; skipping this cycle.",
+                cooldownRemaining.TotalSeconds);
+            return [];
+        }
+
+        _flashScoreSourceHealthTracker.RecordAttempt("browser");
+
         try
         {
-            return await RunWithChromeSessionAsync(
+            var scores = await RunWithChromeSessionAsync(
                 async driver =>
                 {
                     var downloadUrl = _configuration["ScrapingValues:ScoresWebsite"] ??
                                       throw new InvalidOperationException("Download URL for scores is not configured in appsettings.json");
 
                     _logger.LogInformation("Checking URL for scores...");
+
+                    var js = (IJavaScriptExecutor)driver;
+                    js.ExecuteScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
+
                     await driver.Navigate().GoToUrlAsync(downloadUrl);
+
+                    var pageSource = driver.PageSource;
+                    var title = driver.Title;
+                    if (LooksLikeSofaScoreChallengePage(pageSource, title))
+                    {
+                        _logger.LogWarning("Primary scraper browser was blocked by a challenge page ('{Title}').", title);
+                        throw new WebDriverException($"Blocked by Cloudflare challenge page: {title}");
+                    }
 
                     _logger.LogInformation("Commencing scrapping for scores in inner HTML...");
 
-                    // Wait for dynamic content to render
-                    await Task.Delay(3000);
+                    var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(15));
+                    IWebElement container;
+                    try
+                    {
+                        container = wait.Until(d => d.FindElement(By.Id("score-data")));
+                    }
+                    catch (WebDriverTimeoutException)
+                    {
+                        pageSource = driver.PageSource;
+                        title = driver.Title;
+                        if (LooksLikeSofaScoreChallengePage(pageSource, title))
+                        {
+                            _logger.LogWarning("Primary scraper browser was blocked by a challenge page ('{Title}') during wait.", title);
+                            throw new WebDriverException($"Blocked by Cloudflare challenge page: {title}");
+                        }
+                        throw;
+                    }
 
-                    var container = driver.FindElement(By.Id("score-data"));
                     var rawHtml = container.GetAttribute("innerHTML");
 
                     var doc = new HtmlDocument();
@@ -152,9 +197,9 @@ public partial class WebScraperService : IWebScraperService
                                     }
                                     else if (next.Name == "a")
                                     {
-                                        var cls = next.GetAttributeValue("class", "");
+                                        var cls = next.GetAttributeValue("class", "") == "live";
                                         // Accept both finished ("fin") and live scores
-                                        if (cls == "fin" || isLive || cls == "")
+                                        if (next.GetAttributeValue("class", "") == "fin" || isLive || cls)
                                         {
                                             var rawString = next.InnerText.Trim();
                                             var m = MyRegex().Match(rawString);
@@ -195,10 +240,15 @@ public partial class WebScraperService : IWebScraperService
 
                     return matchScores;
                 },
+                configureOptions: ConfigurePrimaryScraperBrowserOptions,
                 purpose: "score scraping");
+
+            _flashScoreSourceHealthTracker.RecordSuccess("browser", scores.Count);
+            return scores;
         }
         catch (Exception e)
         {
+            _flashScoreSourceHealthTracker.RecordFailure("browser", e.Message);
             _logger.LogError(e, "❌ An error occurred while scraping match score.");
             throw;
         }
@@ -737,12 +787,27 @@ public partial class WebScraperService : IWebScraperService
         var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
         var baseUrl = _configuration["ApiFootball:BaseUrl"] ?? "https://v3.football.api-sports.io";
 
-        using var httpClient = new HttpClient();
-        httpClient.DefaultRequestHeaders.Add("x-apisports-key", apiKey);
-        httpClient.Timeout = TimeSpan.FromSeconds(30);
+        // Prefer the named, Polly-backed "ApiFootball" client (retry + timeout policies) when an
+        // IHttpClientFactory is available; fall back to a plain client for tests/standalone use.
+        HttpClient httpClient;
+        HttpClient? ownedClient = null;
+        if (_httpClientFactory is not null)
+        {
+            httpClient = _httpClientFactory.CreateClient("ApiFootball");
+        }
+        else
+        {
+            ownedClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            httpClient = ownedClient;
+        }
 
-        _logger.LogInformation("Fetching match scores from API-Football for {Date}...", today);
-        var response = await httpClient.GetAsync($"{baseUrl}/fixtures?date={today}");
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/fixtures?date={today}");
+            request.Headers.TryAddWithoutValidation("x-apisports-key", apiKey);
+
+            _logger.LogInformation("Fetching match scores from API-Football for {Date}...", today);
+            var response = await httpClient.SendAsync(request);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -808,8 +873,13 @@ public partial class WebScraperService : IWebScraperService
             }
         }
 
-        _logger.LogInformation("Fetched {Count} from API-Football.", matchScores.Count);
-        return matchScores;
+            _logger.LogInformation("Fetched {Count} from API-Football.", matchScores.Count);
+            return matchScores;
+        }
+        finally
+        {
+            ownedClient?.Dispose();
+        }
     }
 
     private async Task<List<AiScoreMatchScore>> FetchAndTrackApiFootballFallbackAsync(string reason)
@@ -2033,9 +2103,18 @@ public partial class WebScraperService : IWebScraperService
         chromeOptions.AddArgument("--password-store=basic");
         chromeOptions.AddArgument("--use-mock-keychain");
         chromeOptions.AddArgument("--blink-settings=imagesEnabled=false");
-        chromeOptions.AddArgument("--js-flags=--max-old-space-size=128");
+        chromeOptions.AddArgument("--js-flags=--max-old-space-size=512");
 
         return chromeOptions;
+    }
+
+    private static void ConfigurePrimaryScraperBrowserOptions(ChromeOptions chromeOptions)
+    {
+        chromeOptions.AddArgument("--disable-blink-features=AutomationControlled");
+        chromeOptions.AddExcludedArgument("enable-automation");
+        chromeOptions.AddAdditionalOption("useAutomationExtension", false);
+        chromeOptions.AddArgument("--user-agent=Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+        chromeOptions.AddArgument("--disable-gpu");
     }
 
     private static void ConfigureAiScoreBrowserOptions(ChromeOptions chromeOptions)
@@ -2150,6 +2229,8 @@ public partial class WebScraperService : IWebScraperService
             configureOptions?.Invoke(chromeOptions);
 
             driver = new ChromeDriver(service, chromeOptions, ChromeDriverCommandTimeout);
+            driver.Manage().Timeouts().PageLoad = TimeSpan.FromSeconds(30);
+            driver.Manage().Timeouts().AsynchronousJavaScript = TimeSpan.FromSeconds(30);
             return await work(driver);
         }
         finally

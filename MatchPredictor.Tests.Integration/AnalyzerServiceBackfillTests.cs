@@ -61,9 +61,11 @@ public class AnalyzerServiceBackfillTests
             new StubExtractFromExcel(),
             new StubRegressionPredictorService(),
             new StubCalibrationService(),
+            new StubProbabilityCorrectionService(),
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
             new AiScoreSourceHealthTracker(),
+            new SofaScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -161,9 +163,11 @@ public class AnalyzerServiceBackfillTests
             new StubExtractFromExcel(),
             new StubRegressionPredictorService(),
             new StubCalibrationService(),
+            new StubProbabilityCorrectionService(),
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
             new AiScoreSourceHealthTracker(),
+            new SofaScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -222,9 +226,11 @@ public class AnalyzerServiceBackfillTests
             new StubExtractFromExcel(),
             new StubRegressionPredictorService(),
             new StubCalibrationService(),
+            new StubProbabilityCorrectionService(),
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
             new AiScoreSourceHealthTracker(),
+            new SofaScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -311,9 +317,11 @@ public class AnalyzerServiceBackfillTests
             new StubExtractFromExcel(),
             new StubRegressionPredictorService(),
             new StubCalibrationService(),
+            new StubProbabilityCorrectionService(),
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
             new AiScoreSourceHealthTracker(),
+            new SofaScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -533,9 +541,11 @@ public class AnalyzerServiceBackfillTests
             new StubExtractFromExcel(),
             new StubRegressionPredictorService(),
             new StubCalibrationService(),
+            new StubProbabilityCorrectionService(),
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
             new AiScoreSourceHealthTracker(),
+            new SofaScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -628,9 +638,11 @@ public class AnalyzerServiceBackfillTests
             new StubExtractFromExcel(),
             new StubRegressionPredictorService(),
             new StubCalibrationService(),
+            new StubProbabilityCorrectionService(),
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
             new AiScoreSourceHealthTracker(),
+            new SofaScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -721,9 +733,11 @@ public class AnalyzerServiceBackfillTests
             new StubExtractFromExcel(),
             new StubRegressionPredictorService(),
             new StubCalibrationService(),
+            new StubProbabilityCorrectionService(),
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
             new AiScoreSourceHealthTracker(),
+            new SofaScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -806,9 +820,11 @@ public class AnalyzerServiceBackfillTests
             new StubExtractFromExcel(),
             new StubRegressionPredictorService(),
             new StubCalibrationService(),
+            new StubProbabilityCorrectionService(),
             new StubThresholdTuningService(),
             sourcePricing,
             new AiScoreSourceHealthTracker(),
+            new SofaScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -887,9 +903,11 @@ public class AnalyzerServiceBackfillTests
             new StubExtractFromExcel(),
             new StubRegressionPredictorService(),
             new StubCalibrationService(),
+            new StubProbabilityCorrectionService(),
             new StubThresholdTuningService(),
             sourcePricing,
             new AiScoreSourceHealthTracker(),
+            new SofaScoreSourceHealthTracker(),
             Options.Create(new PredictionSettings
             {
                 BttsScoreThreshold = 0.55,
@@ -991,6 +1009,13 @@ public class AnalyzerServiceBackfillTests
     private sealed class StubRegressionPredictorService : IRegressionPredictorService
     {
         public IEnumerable<RegressionPrediction> GeneratePredictions(IEnumerable<MatchData> upcomingMatches) => [];
+    }
+
+    private sealed class StubProbabilityCorrectionService : IProbabilityCorrectionService
+    {
+        public double ApplyCorrection(PredictionMarket market, double rawProbability) => rawProbability;
+
+        public Task RebuildProfilesAsync() => Task.CompletedTask;
     }
 
     private sealed class StubCalibrationService : ICalibrationService

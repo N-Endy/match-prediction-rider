@@ -10,6 +10,8 @@ public class AnalyticsStats
     public double RawBrierScore { get; set; }
     public double BrierScore { get; set; }
     public double LogLoss { get; set; }
+    public double RawExpectedCalibrationError { get; set; }
+    public double ExpectedCalibrationError { get; set; }
     public double Precision { get; set; }
     public double Recall { get; set; }
     public double F1Score { get; set; }
@@ -19,6 +21,66 @@ public class AnalyticsStats
     public List<LeagueSegmentStat> LeagueSegmentStats { get; set; } = [];
     public List<SourceSegmentStat> SourceSegmentStats { get; set; } = [];
     public List<PromotionTimelineItem> PromotionTimeline { get; set; } = [];
+    public BettingPerformanceStats BettingPerformance { get; set; } = new();
+    public List<ForecastFeatureDiagnostic> FeatureDiagnostics { get; set; } = [];
+}
+
+public class ForecastFeatureDiagnostic
+{
+    public DateTime? MatchDateTime { get; set; }
+    public string League { get; set; } = string.Empty;
+    public string HomeTeam { get; set; } = string.Empty;
+    public string AwayTeam { get; set; } = string.Empty;
+    public string MarketName { get; set; } = string.Empty;
+    public string PredictedOutcome { get; set; } = string.Empty;
+    public double RawProbability { get; set; }
+    public double CalibratedProbability { get; set; }
+    public bool? OutcomeOccurred { get; set; }
+    public bool StatisticalSignalApplied { get; set; }
+    public List<FeatureContributionItem> Contributions { get; set; } = [];
+}
+
+public class FeatureContributionItem
+{
+    public string Group { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+    public double? Value { get; set; }
+}
+
+public class BettingPerformanceStats
+{
+    public int SettledBetCount { get; set; }
+    public int WinningBetCount { get; set; }
+    public double WinRate { get; set; }
+    public double TotalStakedUnits { get; set; }
+    public double NetProfitUnits { get; set; }
+    public double RoiPercent { get; set; }
+    public double YieldPercent { get; set; }
+    public double MaxDrawdownUnits { get; set; }
+    public double AverageOdds { get; set; }
+    public double KellyFraction { get; set; }
+    public double KellyStakedUnits { get; set; }
+    public double KellyNetProfitUnits { get; set; }
+    public double KellyRoiPercent { get; set; }
+    public int KellyBetCount { get; set; }
+    public int ClosingLineSamples { get; set; }
+    public double AverageClosingLineValuePercent { get; set; }
+    public double BeatCloseRate { get; set; }
+    public List<MarketBettingStat> Markets { get; set; } = [];
+}
+
+public class MarketBettingStat
+{
+    public string MarketKey { get; set; } = string.Empty;
+    public string MarketName { get; set; } = string.Empty;
+    public int SettledBetCount { get; set; }
+    public int WinningBetCount { get; set; }
+    public double WinRate { get; set; }
+    public double NetProfitUnits { get; set; }
+    public double RoiPercent { get; set; }
+    public double AverageOdds { get; set; }
+    public int ClosingLineSamples { get; set; }
+    public double AverageClosingLineValuePercent { get; set; }
 }
 
 public class AnalyticsLiveConfigSnapshot
@@ -62,6 +124,8 @@ public class ForecastMarketStat
     public DateTime? ThresholdLastUpdated { get; set; }
     public double RawBrierScore { get; set; }
     public double CalibratedBrierScore { get; set; }
+    public double RawExpectedCalibrationError { get; set; }
+    public double CalibratedExpectedCalibrationError { get; set; }
     public double? BetaBaselineBrierScore { get; set; }
     public double? BetaValidationBrierScore { get; set; }
     public double? BetaImprovement { get; set; }
@@ -86,6 +150,9 @@ public class ConfidenceBandStat
     public double AverageProbability { get; set; }
     public double BrierScore { get; set; }
     public double LogLoss { get; set; }
+    public double Precision { get; set; }
+    public double Recall { get; set; }
+    public double F1Score { get; set; }
 }
 
 public class LeagueSegmentStat

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 
@@ -7,9 +8,16 @@ public class ForecastEvaluationService : IForecastEvaluationService
 {
     private const double BucketSize = 0.05;
     private const double ConfidenceBandSize = 0.10;
+    // Quarter-Kelly is the staking convention used for the staking-adjusted return KPI.
+    private const double KellyFraction = 0.25;
+    // Cap on the number of per-forecast explainability rows surfaced per window.
+    private const int MaxFeatureDiagnostics = 40;
     private static readonly TimeSpan PredictionLiveGrace = TimeSpan.FromMinutes(200);
 
-    public AnalyticsStats CalculateStats(IEnumerable<Prediction> predictions, IEnumerable<ForecastObservation> forecasts)
+    public AnalyticsStats CalculateStats(
+        IEnumerable<Prediction> predictions,
+        IEnumerable<ForecastObservation> forecasts,
+        IEnumerable<PredictionOddsSnapshot>? oddsSnapshots = null)
     {
         var predictionList = PointInTimeBacktestingSelector.SelectPredictions(predictions)
             .Where(IsActiveAnalyticsPrediction)
@@ -78,6 +86,10 @@ public class ForecastEvaluationService : IForecastEvaluationService
                 .Average(forecast => SquaredError(forecast.CalibratedProbability, forecast.OutcomeOccurred!.Value));
             stats.LogLoss = settledForecasts
                 .Average(forecast => BinaryLogLoss(forecast.CalibratedProbability, forecast.OutcomeOccurred!.Value));
+            stats.RawExpectedCalibrationError = CalculateExpectedCalibrationError(
+                settledForecasts.Select(forecast => (forecast.RawProbability, forecast.OutcomeOccurred!.Value)));
+            stats.ExpectedCalibrationError = CalculateExpectedCalibrationError(
+                settledForecasts.Select(forecast => (forecast.CalibratedProbability, forecast.OutcomeOccurred!.Value)));
             stats.ConfidenceBandStats = BuildConfidenceBandStats(settledForecasts);
             stats.LeagueSegmentStats = BuildLeagueSegmentStats(settledForecasts);
             stats.SourceSegmentStats = BuildSourceSegmentStats(settledForecasts);
@@ -87,9 +99,297 @@ public class ForecastEvaluationService : IForecastEvaluationService
                 .OrderBy(group => group.Key)
                 .Select(BuildMarketStat)
                 .ToList();
+            stats.FeatureDiagnostics = BuildFeatureDiagnostics(settledForecasts);
         }
 
+        stats.BettingPerformance = BuildBettingPerformance(completedPredictions, oddsSnapshots);
+
         return stats;
+    }
+
+    private static List<ForecastFeatureDiagnostic> BuildFeatureDiagnostics(IReadOnlyCollection<ForecastObservation> settledForecasts)
+    {
+        return settledForecasts
+            .OrderByDescending(forecast => forecast.MatchDateTime ?? DateTime.MinValue)
+            .ThenByDescending(forecast => forecast.CreatedAt)
+            .Take(MaxFeatureDiagnostics)
+            .Select(forecast => new ForecastFeatureDiagnostic
+            {
+                MatchDateTime = forecast.MatchDateTime,
+                League = forecast.League,
+                HomeTeam = forecast.HomeTeam,
+                AwayTeam = forecast.AwayTeam,
+                MarketName = forecast.Market.ToDisplayName(),
+                PredictedOutcome = forecast.PredictedOutcome,
+                RawProbability = forecast.RawProbability,
+                CalibratedProbability = forecast.CalibratedProbability,
+                OutcomeOccurred = forecast.OutcomeOccurred,
+                StatisticalSignalApplied = ReadStatisticalSignalApplied(forecast.FeatureContributionsJson),
+                Contributions = ParseFeatureContributions(forecast.FeatureContributionsJson)
+            })
+            .ToList();
+    }
+
+    private static bool ReadStatisticalSignalApplied(string? featureContributionsJson)
+    {
+        if (string.IsNullOrWhiteSpace(featureContributionsJson))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(featureContributionsJson);
+            return document.RootElement.TryGetProperty("statisticalSignalApplied", out var applied) &&
+                   applied.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static List<FeatureContributionItem> ParseFeatureContributions(string? featureContributionsJson)
+    {
+        var items = new List<FeatureContributionItem>();
+        if (string.IsNullOrWhiteSpace(featureContributionsJson))
+        {
+            return items;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(featureContributionsJson);
+            var root = document.RootElement;
+            AppendContributionGroup(items, root, "sourceSignals", "Market");
+            AppendContributionGroup(items, root, "modelOutputs", "Model");
+            AppendContributionGroup(items, root, "statisticalSignal", "Statistical");
+        }
+        catch (JsonException)
+        {
+            // Diagnostics are best-effort; malformed JSON simply yields no rows.
+        }
+
+        return items;
+    }
+
+    private static void AppendContributionGroup(
+        List<FeatureContributionItem> items,
+        JsonElement root,
+        string propertyName,
+        string groupLabel)
+    {
+        if (!root.TryGetProperty(propertyName, out var group) || group.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        foreach (var property in group.EnumerateObject())
+        {
+            double? value = property.Value.ValueKind == JsonValueKind.Number && property.Value.TryGetDouble(out var parsed)
+                ? parsed
+                : null;
+            items.Add(new FeatureContributionItem
+            {
+                Group = groupLabel,
+                Label = property.Name,
+                Value = value
+            });
+        }
+    }
+
+    private static BettingPerformanceStats BuildBettingPerformance(
+        IReadOnlyCollection<Prediction> completedPredictions,
+        IEnumerable<PredictionOddsSnapshot>? oddsSnapshots)
+    {
+        var performance = new BettingPerformanceStats { KellyFraction = KellyFraction };
+        if (oddsSnapshots is null)
+        {
+            return performance;
+        }
+
+        var snapshotsByPrediction = oddsSnapshots
+            .Where(snapshot => snapshot.SnapshotKind is PredictionOddsSnapshotKind.Publish or PredictionOddsSnapshotKind.Close)
+            .GroupBy(snapshot => snapshot.PredictionId)
+            .ToDictionary(group => group.Key, group => group.ToList());
+
+        var bets = new List<BetRecord>();
+        foreach (var prediction in completedPredictions)
+        {
+            if (!snapshotsByPrediction.TryGetValue(prediction.Id, out var snapshots))
+            {
+                continue;
+            }
+
+            var publishOdds = ResolveSnapshotOdds(snapshots, prediction, PredictionOddsSnapshotKind.Publish);
+            if (publishOdds is not > 1.0)
+            {
+                continue;
+            }
+
+            var closeOdds = ResolveSnapshotOdds(snapshots, prediction, PredictionOddsSnapshotKind.Close);
+            var won = IsPredictionCorrectForAnalytics(prediction);
+            var modelProbability = prediction.ConfidenceScore.HasValue
+                ? (double)Math.Clamp(prediction.ConfidenceScore.Value, 0m, 1m)
+                : 0.0;
+
+            bets.Add(new BetRecord(
+                MarketKey: prediction.PredictionCategory,
+                DecimalOdds: publishOdds.Value,
+                Won: won,
+                ModelProbability: modelProbability,
+                Clv: BetPricingMath.CalculateClosingLineValuePercent(publishOdds, closeOdds)));
+        }
+
+        if (bets.Count == 0)
+        {
+            return performance;
+        }
+
+        PopulateAggregate(performance, bets);
+        performance.Markets = bets
+            .GroupBy(bet => bet.MarketKey)
+            .Select(group =>
+            {
+                var marketBets = group.ToList();
+                var clvSamples = marketBets.Where(bet => bet.Clv.HasValue).Select(bet => bet.Clv!.Value).ToList();
+                var staked = marketBets.Count;
+                var net = marketBets.Sum(bet => bet.FlatProfit);
+                return new MarketBettingStat
+                {
+                    MarketKey = group.Key,
+                    MarketName = MapCategoryToDisplayName(group.Key),
+                    SettledBetCount = marketBets.Count,
+                    WinningBetCount = marketBets.Count(bet => bet.Won),
+                    WinRate = marketBets.Count(bet => bet.Won) / (double)marketBets.Count,
+                    NetProfitUnits = net,
+                    RoiPercent = staked > 0 ? net / staked : 0.0,
+                    AverageOdds = marketBets.Average(bet => bet.DecimalOdds),
+                    ClosingLineSamples = clvSamples.Count,
+                    AverageClosingLineValuePercent = clvSamples.Count > 0 ? clvSamples.Average() : 0.0
+                };
+            })
+            .OrderByDescending(stat => stat.SettledBetCount)
+            .ThenBy(stat => stat.MarketName)
+            .ToList();
+
+        return performance;
+    }
+
+    private static void PopulateAggregate(BettingPerformanceStats performance, IReadOnlyCollection<BetRecord> bets)
+    {
+        var flatReturns = bets.Select(bet => bet.FlatProfit).ToList();
+        performance.SettledBetCount = bets.Count;
+        performance.WinningBetCount = bets.Count(bet => bet.Won);
+        performance.WinRate = performance.WinningBetCount / (double)bets.Count;
+        performance.TotalStakedUnits = bets.Count;
+        performance.NetProfitUnits = flatReturns.Sum();
+        performance.RoiPercent = performance.TotalStakedUnits > 0 ? performance.NetProfitUnits / performance.TotalStakedUnits : 0.0;
+        performance.YieldPercent = performance.RoiPercent;
+        performance.MaxDrawdownUnits = CalculateMaxDrawdown(flatReturns);
+        performance.AverageOdds = bets.Average(bet => bet.DecimalOdds);
+
+        var kellyBets = bets.Where(bet => bet.KellyStake > 0).ToList();
+        performance.KellyBetCount = kellyBets.Count;
+        performance.KellyStakedUnits = kellyBets.Sum(bet => bet.KellyStake);
+        performance.KellyNetProfitUnits = kellyBets.Sum(bet => bet.KellyProfit);
+        performance.KellyRoiPercent = performance.KellyStakedUnits > 0
+            ? performance.KellyNetProfitUnits / performance.KellyStakedUnits
+            : 0.0;
+
+        var clvSamples = bets.Where(bet => bet.Clv.HasValue).Select(bet => bet.Clv!.Value).ToList();
+        performance.ClosingLineSamples = clvSamples.Count;
+        performance.AverageClosingLineValuePercent = clvSamples.Count > 0 ? clvSamples.Average() : 0.0;
+        performance.BeatCloseRate = clvSamples.Count > 0
+            ? clvSamples.Count(value => value > 0) / (double)clvSamples.Count
+            : 0.0;
+    }
+
+    private static double? ResolveSnapshotOdds(
+        IReadOnlyCollection<PredictionOddsSnapshot> snapshots,
+        Prediction prediction,
+        PredictionOddsSnapshotKind kind)
+    {
+        var matching = snapshots.Where(snapshot => snapshot.SnapshotKind == kind).ToList();
+        if (matching.Count == 0)
+        {
+            return null;
+        }
+
+        // Prefer the snapshot whose outcome matches the published pick; otherwise fall back to the first.
+        var preferred = matching.FirstOrDefault(snapshot =>
+            OutcomesMatch(snapshot.Outcome, prediction.PredictedOutcome)) ?? matching[0];
+        return preferred.DecimalOdds > 1.0 ? preferred.DecimalOdds : null;
+    }
+
+    private static double CalculateMaxDrawdown(IEnumerable<double> returns)
+    {
+        var equity = 0.0;
+        var peak = 0.0;
+        var maxDrawdown = 0.0;
+        foreach (var value in returns)
+        {
+            equity += value;
+            peak = Math.Max(peak, equity);
+            maxDrawdown = Math.Max(maxDrawdown, peak - equity);
+        }
+
+        return maxDrawdown;
+    }
+
+    private sealed record BetRecord(string MarketKey, double DecimalOdds, bool Won, double ModelProbability, double? Clv)
+    {
+        public double FlatProfit => Won ? DecimalOdds - 1.0 : -1.0;
+
+        public double KellyStake
+        {
+            get
+            {
+                var b = DecimalOdds - 1.0;
+                if (b <= 0)
+                {
+                    return 0.0;
+                }
+
+                var rawFraction = ((b * ModelProbability) - (1.0 - ModelProbability)) / b;
+                return rawFraction <= 0 ? 0.0 : Math.Clamp(rawFraction * KellyFraction, 0.0, 1.0);
+            }
+        }
+
+        public double KellyProfit => Won ? KellyStake * (DecimalOdds - 1.0) : -KellyStake;
+    }
+
+    private static string MapCategoryToDisplayName(string category)
+    {
+        return category switch
+        {
+            "BothTeamsScore" => PredictionMarket.BothTeamsScore.ToDisplayName(),
+            "Over2.5Goals" => PredictionMarket.Over25Goals.ToDisplayName(),
+            "Under2.5Goals" => PredictionMarket.Under25Goals.ToDisplayName(),
+            "StraightWin" => "Match Result",
+            "Draw" => PredictionMarket.Draw.ToDisplayName(),
+            _ => category
+        };
+    }
+
+    private static double CalculateExpectedCalibrationError(IEnumerable<(double Probability, bool Outcome)> inputs)
+    {
+        var list = inputs.ToList();
+        if (list.Count == 0)
+        {
+            return 0.0;
+        }
+
+        var ece = 0.0;
+        foreach (var group in list.GroupBy(item => GetBucketStart(item.Probability)))
+        {
+            var count = group.Count();
+            var averageProbability = group.Average(item => Math.Clamp(item.Probability, 0.0, 1.0));
+            var observedFrequency = group.Average(item => item.Outcome ? 1.0 : 0.0);
+            ece += (count / (double)list.Count) * Math.Abs(averageProbability - observedFrequency);
+        }
+
+        return ece;
     }
 
     private static bool IsActiveAnalyticsPrediction(Prediction prediction)
@@ -199,6 +499,8 @@ public class ForecastEvaluationService : IForecastEvaluationService
                 : 0.0,
             RawBrierScore = rawInputs.Count > 0 ? rawInputs.Average(input => SquaredError(input.Probability, input.Outcome)) : 0.0,
             CalibratedBrierScore = calibratedInputs.Count > 0 ? calibratedInputs.Average(input => SquaredError(input.Probability, input.Outcome)) : 0.0,
+            RawExpectedCalibrationError = CalculateExpectedCalibrationError(rawInputs),
+            CalibratedExpectedCalibrationError = CalculateExpectedCalibrationError(calibratedInputs),
             RawDecomposition = BuildDecomposition(rawInputs),
             CalibratedDecomposition = BuildDecomposition(calibratedInputs),
             RawReliabilityCurve = BuildReliabilityCurve(rawInputs),
@@ -222,15 +524,23 @@ public class ForecastEvaluationService : IForecastEvaluationService
             .Select(group =>
             {
                 var items = group.ToList();
+                // Within a confidence band every forecast is a "positive" pick, so precision is the
+                // realized hit rate. Recall against the full opportunity set is not observable for a
+                // picks-only sample, so we report coverage-of-picks (equal to precision) for a
+                // consistent, non-inflated F1 - mirroring the per-market convention above.
+                var hitRate = items.Average(item => item.OutcomeOccurred == true ? 1.0 : 0.0);
                 return new ConfidenceBandStat
                 {
                     MinProbability = group.Key,
                     MaxProbability = Math.Min(group.Key + ConfidenceBandSize, 1.0),
                     SampleCount = items.Count,
-                    HitRate = items.Average(item => item.OutcomeOccurred == true ? 1.0 : 0.0),
+                    HitRate = hitRate,
                     AverageProbability = items.Average(item => item.CalibratedProbability),
                     BrierScore = items.Average(item => SquaredError(item.CalibratedProbability, item.OutcomeOccurred!.Value)),
-                    LogLoss = items.Average(item => BinaryLogLoss(item.CalibratedProbability, item.OutcomeOccurred!.Value))
+                    LogLoss = items.Average(item => BinaryLogLoss(item.CalibratedProbability, item.OutcomeOccurred!.Value)),
+                    Precision = hitRate,
+                    Recall = hitRate,
+                    F1Score = CalculateF1(hitRate, hitRate)
                 };
             })
             .ToList();

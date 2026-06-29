@@ -1383,6 +1383,7 @@ public class ScoreUpdaterMatchingTests
             new StubExtractFromExcel(),
             new StubRegressionPredictorService(),
             new StubCalibrationService(),
+            new StubProbabilityCorrectionService(),
             new StubThresholdTuningService(),
             new StubSourceMarketPricingService(),
             aiScoreSourceHealthTracker ?? new AiScoreSourceHealthTracker(),
@@ -1433,6 +1434,13 @@ public class ScoreUpdaterMatchingTests
     private sealed class StubRegressionPredictorService : IRegressionPredictorService
     {
         public IEnumerable<RegressionPrediction> GeneratePredictions(IEnumerable<MatchData> upcomingMatches) => [];
+    }
+
+    private sealed class StubProbabilityCorrectionService : IProbabilityCorrectionService
+    {
+        public double ApplyCorrection(PredictionMarket market, double rawProbability) => rawProbability;
+
+        public Task RebuildProfilesAsync() => Task.CompletedTask;
     }
 
     private sealed class StubCalibrationService : ICalibrationService

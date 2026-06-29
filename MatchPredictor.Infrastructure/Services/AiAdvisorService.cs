@@ -522,6 +522,15 @@ public class AiAdvisorService : IAiAdvisorService
             return false;
         }
 
+        // Working-slip refinement is fully deterministic by design (the user is reshaping an
+        // existing slip, not asking for fresh recommendations), so it must never trigger a
+        // secondary AI lookup-plan call. Football insights are still attached deterministically
+        // from the top-ranked candidates.
+        if (normalizedRequest.Intent == AiChatIntent.WorkingSlipRefinement)
+        {
+            return false;
+        }
+
         if (normalizedRequest.Intent == AiChatIntent.MatchDiscussion)
         {
             return true;
