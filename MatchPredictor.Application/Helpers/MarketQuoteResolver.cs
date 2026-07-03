@@ -1,4 +1,5 @@
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Statistics;
 
 namespace MatchPredictor.Application.Helpers;
 
@@ -119,28 +120,39 @@ public static class MarketQuoteResolver
         PredictionMarket market,
         double impliedProbability)
     {
-        var outcomeOdds = market switch
+        // (odds set, index of the requested outcome within the set)
+        (double?[] Odds, int OutcomeIndex)? outcomeSet = market switch
         {
-            PredictionMarket.HomeWin or PredictionMarket.Draw or PredictionMarket.AwayWin =>
-                new[] { sourceFixture?.HomeWinOdds, sourceFixture?.DrawOdds, sourceFixture?.AwayWinOdds },
-            PredictionMarket.Over25Goals or PredictionMarket.Under25Goals =>
-                new[] { sourceFixture?.Over25Odds, sourceFixture?.Under25Odds },
+            PredictionMarket.HomeWin =>
+                ([sourceFixture?.HomeWinOdds, sourceFixture?.DrawOdds, sourceFixture?.AwayWinOdds], 0),
+            PredictionMarket.Draw =>
+                ([sourceFixture?.HomeWinOdds, sourceFixture?.DrawOdds, sourceFixture?.AwayWinOdds], 1),
+            PredictionMarket.AwayWin =>
+                ([sourceFixture?.HomeWinOdds, sourceFixture?.DrawOdds, sourceFixture?.AwayWinOdds], 2),
+            PredictionMarket.Over25Goals =>
+                ([sourceFixture?.Over25Odds, sourceFixture?.Under25Odds], 0),
+            PredictionMarket.Under25Goals =>
+                ([sourceFixture?.Over25Odds, sourceFixture?.Under25Odds], 1),
             PredictionMarket.BothTeamsScore =>
-                new[] { sourceFixture?.BttsYesOdds, sourceFixture?.BttsNoOdds },
+                ([sourceFixture?.BttsYesOdds, sourceFixture?.BttsNoOdds], 0),
             _ => null
         };
 
         // Only de-vig when the full outcome set is priced; otherwise the overround
         // cannot be measured and the raw implied probability is the best available.
-        if (outcomeOdds is null || outcomeOdds.Any(odds => odds is not > 1d))
+        if (outcomeSet is not { } set || set.Odds.Any(odds => odds is not > 1d))
         {
             return impliedProbability;
         }
 
-        var overround = outcomeOdds.Sum(odds => 1d / odds!.Value);
-        return overround > 0d
-            ? Math.Clamp(impliedProbability / overround, 0d, 1d)
-            : impliedProbability;
+        var quotedOdds = set.Odds.Select(odds => odds!.Value).ToArray();
+
+        // Shin for 3-outcome (models favourite-longshot bias), Power for 2-outcome markets.
+        var fairProbabilities = quotedOdds.Length == 3
+            ? OddsMath.FairProbabilitiesShin(quotedOdds)
+            : OddsMath.FairProbabilitiesPower(quotedOdds);
+
+        return Math.Clamp(fairProbabilities[set.OutcomeIndex], 0d, 1d);
     }
 
     private static double? GetLiveProbability(SourceMarketFixture? sourceFixture, PredictionMarket market)

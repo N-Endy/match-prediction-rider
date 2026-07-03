@@ -1,10 +1,12 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.Configuration;
+using MatchPredictor.Web.Middleware;
 using MatchPredictor.Web.Services;
 
 namespace MatchPredictor.Web.Pages;
 
+[ValidateAntiForgeryToken]
 public class AiChatModel : PageModel
 {
     private readonly IConfiguration _config;
@@ -28,7 +30,9 @@ public class AiChatModel : PageModel
     {
         var validPassword = _config["AiChatPassword"];
         
-        if (!string.IsNullOrEmpty(validPassword) && Password == validPassword)
+        if (!string.IsNullOrEmpty(validPassword) &&
+            !string.IsNullOrEmpty(Password) &&
+            AdminUsageBasicAuthMiddleware.FixedTimeEquals(Password, validPassword))
         {
             _authTicketService.SignIn(HttpContext);
             return RedirectToPage();

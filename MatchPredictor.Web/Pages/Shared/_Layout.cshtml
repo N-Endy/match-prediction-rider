@@ -27,12 +27,6 @@
 
     <!-- Google Analytics -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-ET4NE2RTGC"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-      gtag('config', 'G-ET4NE2RTGC');
-    </script>
 
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
@@ -61,6 +55,7 @@
             <li><a class="mp-nav-link" href="/valuebets">🎯 Value Bets</a></li>
             <li><a class="mp-nav-link" href="/predictions/btts">BTTS</a></li>
             <li><a class="mp-nav-link" href="/predictions/straightwin">Straight Win</a></li>
+            <li><a class="mp-nav-link" href="/predictions/draw">Draw</a></li>
             <li><a class="mp-nav-link" href="/predictions/over2">Over 2.5</a></li>
             <li><a class="mp-nav-link" href="/predictions/under2">Under 2.5</a></li>
             <li><a class="mp-nav-link" href="/predictions/combined">Combined</a></li>
@@ -85,6 +80,7 @@
         <a href="/valuebets">Value Bets</a> ·
         <a href="/predictions/btts">BTTS</a> ·
         <a href="/predictions/straightwin">Straight Win</a> ·
+        <a href="/predictions/draw">Draw</a> ·
         <a href="/predictions/over2">Over 2.5</a> ·
         <a href="/predictions/under2">Under 2.5</a> ·
         <a href="/predictions/combined">Combined</a> ·
@@ -96,74 +92,21 @@
 <!-- Scroll to Top -->
 <button class="mp-scroll-top" id="scrollTopBtn" aria-label="Scroll to top">↑</button>
 
-<script>
-    // Mobile menu toggle
-    document.getElementById('menuToggle')?.addEventListener('click', function() {
-        document.getElementById('navLinks')?.classList.toggle('show');
-    });
-
-    // Active nav link
-    const currentPath = window.location.pathname.toLowerCase();
-    document.querySelectorAll('.mp-nav-link').forEach(link => {
-        if (link.getAttribute('href')?.toLowerCase() === currentPath) {
-            link.classList.add('active');
-        }
-    });
-
-    // Scroll to top button
-    const scrollBtn = document.getElementById('scrollTopBtn');
-    window.addEventListener('scroll', () => {
-        if (window.scrollY > 300) {
-            scrollBtn?.classList.add('visible');
-        } else {
-            scrollBtn?.classList.remove('visible');
-        }
-    });
-    scrollBtn?.addEventListener('click', () => {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-    });
-</script>
-
-<script>
-    window.matchPredictorTracking = {
-        track(eventType, metadata) {
-            if (!eventType) {
-                return;
-            }
-
-            const payload = JSON.stringify({
-                eventType,
-                pagePath: window.location.pathname,
-                metadata: metadata || {}
-            });
-
-            try {
-                fetch('/api/tracking/event', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: payload,
-                    keepalive: true
-                }).catch(() => {});
-            } catch {
-                // Tracking should never interrupt the page flow.
-            }
-        }
-    };
-</script>
+<script src="~/js/site.js" asp-append-version="true"></script>
 
 <!-- Floating Cart Button -->
-<button class="mp-cart-fab" id="cartFab" onclick="openCartModal()" aria-label="Open cart">
+<button class="mp-cart-fab" id="cartFab" data-cart-action="open" aria-label="Open cart">
     🛒
     <span class="mp-cart-badge" id="cartBadge" style="display:none;">0</span>
 </button>
 
 <!-- Cart Modal -->
 <div class="mp-cart-modal" id="cartModal">
-    <div class="mp-cart-overlay" onclick="closeCartModal()"></div>
+    <div class="mp-cart-overlay" data-cart-action="close"></div>
     <div class="mp-cart-drawer">
         <div class="mp-cart-header">
             <h2>🛒 Your Betslip</h2>
-            <button class="mp-cart-close" onclick="closeCartModal()">✕</button>
+            <button class="mp-cart-close" data-cart-action="close">✕</button>
         </div>
         <div class="mp-cart-items" id="cartItemsList"></div>
         <div class="mp-cart-empty" id="cartEmpty" style="display:none;">
@@ -172,8 +115,8 @@
         </div>
         <div id="bookingResult" style="display:none;"></div>
         <div class="mp-cart-footer" id="cartFooter" style="display:none;">
-            <button class="mp-clear-cart-btn" onclick="clearCart()">Clear All</button>
-            <button class="mp-book-btn" id="bookGamesBtn" onclick="bookGames()">🎫 Book Games</button>
+            <button class="mp-clear-cart-btn" data-cart-action="clear">Clear All</button>
+            <button class="mp-book-btn" id="bookGamesBtn" data-cart-action="book">🎫 Book Games</button>
         </div>
     </div>
 </div>
@@ -196,35 +139,6 @@
         </div>
     </div>
 </div>
-
-<script>
-    document.addEventListener("DOMContentLoaded", function () {
-        const consentBanner = document.getElementById("cookieConsentBanner");
-        const acceptBtn = document.getElementById("acceptCookiesBtn");
-        const declineBtn = document.getElementById("declineCookiesBtn");
-
-        // Check if user has already made a choice
-        const hasConsent = localStorage.getItem("cookieConsent");
-
-        if (!hasConsent) {
-            // Show banner if no choice was made
-            consentBanner.style.display = "flex";
-        }
-
-        acceptBtn.addEventListener("click", function () {
-            localStorage.setItem("cookieConsent", "true");
-            consentBanner.style.display = "none";
-            // In a real scenario, you can initialize AdSense here dynamically, 
-            // but typical setup allows the scripts to load while respecting browser ad blocker configs.
-        });
-
-        declineBtn.addEventListener("click", function () {
-            localStorage.setItem("cookieConsent", "false");
-            consentBanner.style.display = "none";
-            // Optional: You could reload the page or strip ad elements
-        });
-    });
-</script>
 
 @await RenderSectionAsync("Scripts", required: false)
 </body>

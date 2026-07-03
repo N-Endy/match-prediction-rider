@@ -1,13 +1,16 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Utils;
+using MatchPredictor.Web.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace MatchPredictor.Web.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[EnableRateLimiting(RateLimitPolicies.ValueBets)]
 public class ValueBetsController : ControllerBase
 {
     private const string ReportCacheKey = "valuebets:report:60";

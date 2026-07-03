@@ -160,4 +160,15 @@ and runs the Postgres E2E suite against a Postgres service container on a nightl
 | `POST /api/ops/jobs/{jobName}` | `X-Cron-Secret` header (`CronJob:Secret`) — worker only |
 | `/health` | Public liveness check |
 
+## Reverse proxy / forwarded headers
+
+When deployed behind Render, Railway, or another reverse proxy, the app enables
+`ForwardedHeaders` (`X-Forwarded-For`, `X-Forwarded-Proto`) in [`Program.cs`](MatchPredictor.Web/Program.cs).
+`KnownProxies` and `KnownIPNetworks` are cleared so the platform load balancer is trusted —
+this is required on PaaS hosts where the proxy IP is not fixed. Rate limiting and visitor
+tracking use the first `X-Forwarded-For` hop as the client key when present.
+
+If you self-host behind a single known reverse proxy, consider pinning that proxy's IP in
+`ForwardedHeadersOptions.KnownProxies` instead of clearing the list.
+
 Further design notes: `ARCHITECTURE_NOTES.md` and `ARCHITECTURE_PREDICTION_BASELINE.md`.

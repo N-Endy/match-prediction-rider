@@ -80,6 +80,19 @@ public static class ApiRateLimitingExtensions
                         ReplenishmentPeriod = TimeSpan.FromMinutes(1),
                         AutoReplenishment = true
                     }));
+
+            options.AddPolicy(
+                RateLimitPolicies.ValueBets,
+                httpContext => RateLimitPartition.GetFixedWindowLimiter(
+                    BuildClientKey(httpContext, "MP_VISITOR_SESSION"),
+                    _ => new FixedWindowRateLimiterOptions
+                    {
+                        PermitLimit = 10,
+                        Window = TimeSpan.FromMinutes(1),
+                        QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                        QueueLimit = 0,
+                        AutoReplenishment = true
+                    }));
         });
 
         return services;

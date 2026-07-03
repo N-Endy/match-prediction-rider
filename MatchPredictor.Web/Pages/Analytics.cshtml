@@ -1,12 +1,13 @@
 @page
 @model MatchPredictor.Web.Pages.AnalyticsModel
+@using MatchPredictor.Domain.Models
 
 @{
     ViewData["Title"] = "Analytics Dashboard";
     var defaultTab = Model.DefaultTabId;
 }
 
-<div class="mp-container">
+<div class="mp-container" data-analytics-default-tab="@defaultTab">
     <div class="mp-page-header">
         <div class="mp-page-title">
             <div class="mp-page-title-icon" style="background: rgba(139, 92, 246, 0.1);">📈</div>
@@ -18,16 +19,17 @@
     </div>
 
     <div class="mp-analytics-mode-tabs">
-        <button class="mp-mode-btn active" data-mode="published" onclick="switchAnalyticsMode(event, 'published')">Published Picks</button>
-        <button class="mp-mode-btn" data-mode="calibration" onclick="switchAnalyticsMode(event, 'calibration')">Forecast Calibration</button>
-        <button class="mp-mode-btn" data-mode="config" onclick="switchAnalyticsMode(event, 'config')">Current Live Config</button>
+        <button class="mp-mode-btn active" data-mode="published">Published Picks</button>
+        <button class="mp-mode-btn" data-mode="calibration">Forecast Calibration</button>
+        <button class="mp-mode-btn" data-mode="config">Current Live Config</button>
+        <button class="mp-mode-btn" data-mode="diagnostics">Diagnostics</button>
     </div>
 
     <div class="mp-analytics-tabs" id="analyticsDateTabs">
-        <button class="mp-tab-btn @(defaultTab == "today" ? "active" : "")" onclick="switchAnalyticsTab(event, 'today')">Today</button>
-        <button class="mp-tab-btn @(defaultTab == "yesterday" ? "active" : "")" onclick="switchAnalyticsTab(event, 'yesterday')">Yesterday</button>
-        <button class="mp-tab-btn @(defaultTab == "3days" ? "active" : "")" onclick="switchAnalyticsTab(event, '3days')">Last 3 Days</button>
-        <button class="mp-tab-btn @(defaultTab == "7days" ? "active" : "")" onclick="switchAnalyticsTab(event, '7days')">Last 7 Days</button>
+        <button class="mp-tab-btn @(defaultTab == "today" ? "active" : "")" data-tab="today">Today</button>
+        <button class="mp-tab-btn @(defaultTab == "yesterday" ? "active" : "")" data-tab="yesterday">Yesterday</button>
+        <button class="mp-tab-btn @(defaultTab == "3days" ? "active" : "")" data-tab="3days">Last 3 Days</button>
+        <button class="mp-tab-btn @(defaultTab == "7days" ? "active" : "")" data-tab="7days">Last 7 Days</button>
     </div>
 
     <section id="published-view" class="mp-analytics-mode-view active">
@@ -62,6 +64,136 @@
 
     <section id="config-view" class="mp-analytics-mode-view" style="display: none;">
         <partial name="_CurrentLiveConfigAnalytics" model="Model.CurrentLiveConfig" />
+    </section>
+
+    <section id="diagnostics-view" class="mp-analytics-mode-view" style="display: none;">
+        <div class="mp-analytics-note">
+            Diagnostics combine recent feature contributions, feed/model promotion state, and real-history backtest trend so regressions are visible before they reach the public card.
+        </div>
+
+        <div class="mp-stat-grid">
+            <div class="mp-stat-card">
+                <div class="mp-stat-label">Feature Samples</div>
+                <div class="mp-stat-value mp-stat-value-compact">@Model.Last7DaysStats.FeatureDiagnostics.Count</div>
+            </div>
+            <div class="mp-stat-card">
+                <div class="mp-stat-label">Backtest Runs</div>
+                <div class="mp-stat-value mp-stat-value-compact">@Model.BacktestTrend.Count</div>
+            </div>
+            <div class="mp-stat-card">
+                <div class="mp-stat-label">Promoted ML Models</div>
+                <div class="mp-stat-value mp-stat-value-compact">@Model.MarketMlProfiles.Count(profile => profile.IsPromoted)</div>
+            </div>
+            <div class="mp-stat-card">
+                <div class="mp-stat-label">Recommended Isotonic</div>
+                <div class="mp-stat-value mp-stat-value-compact">@Model.IsotonicProfiles.Values.Count(profile => profile.IsRecommended)</div>
+            </div>
+        </div>
+
+        <div class="mp-category-stats" style="margin-bottom: 1.5rem;">
+            <h3>Recent Feature Contributions</h3>
+            @if (Model.Last7DaysStats.FeatureDiagnostics.Any())
+            {
+                @foreach (var diagnostic in Model.Last7DaysStats.FeatureDiagnostics.Take(8))
+                {
+                    <div class="mp-category-row">
+                        <div class="mp-cat-header">
+                            <span class="mp-cat-name">@diagnostic.HomeTeam vs @diagnostic.AwayTeam · @diagnostic.MarketName</span>
+                            <span class="mp-cat-details">@diagnostic.CalibratedProbability.ToString("P1") calibrated</span>
+                        </div>
+                        <div class="mp-read-detail">
+                            @diagnostic.League · @diagnostic.PredictedOutcome · statistical signal @(diagnostic.StatisticalSignalApplied ? "applied" : "not applied")
+                        </div>
+                        <div class="mp-read-strip" style="margin-top: 0.65rem;">
+                            @foreach (var contribution in diagnostic.Contributions.Take(5))
+                            {
+                                <span class="mp-read-badge mp-read-badge-caution">@contribution.Label: @(contribution.Value?.ToString("0.000") ?? "--")</span>
+                            }
+                        </div>
+                    </div>
+                }
+            }
+            else
+            {
+                <p class="mp-read-detail">No settled forecasts with stored feature contributions are available in this window yet.</p>
+            }
+        </div>
+
+        <div class="mp-category-stats" style="margin-bottom: 1.5rem;">
+            <h3>Real-History Backtest Trend</h3>
+            @if (Model.BacktestTrend.Any())
+            {
+                @foreach (var run in Model.BacktestTrend.Take(10))
+                {
+                    <div class="mp-category-row">
+                        <div class="mp-cat-header">
+                            <span class="mp-cat-name">@MatchPredictor.Infrastructure.Utils.DateTimeProvider.ConvertUtcToLocal(run.RunAtUtc).ToString("dd MMM HH:mm") · @run.LookbackDays d</span>
+                            <span class="mp-cat-details">@run.SampleCount samples</span>
+                        </div>
+                        <div class="mp-read-strip">
+                            <span class="mp-read-badge mp-read-badge-strong">Brier @run.BrierScore.ToString("0.000")</span>
+                            <span class="mp-read-badge mp-read-badge-caution">ECE @run.ExpectedCalibrationError.ToString("0.000")</span>
+                            <span class="mp-read-badge @(run.FlatStakeRoiPercent >= 0 ? "mp-read-badge-strong" : "mp-read-badge-avoid")">ROI @run.FlatStakeRoiPercent.ToString("+0.0;-0.0;0.0")%</span>
+                            <span class="mp-read-badge @(run.AverageClvPercent >= 0 ? "mp-read-badge-strong" : "mp-read-badge-avoid")">CLV @run.AverageClvPercent.ToString("+0.0;-0.0;0.0")%</span>
+                        </div>
+                    </div>
+                }
+            }
+            else
+            {
+                <p class="mp-read-detail">The nightly real-history backtest has not produced trend rows yet.</p>
+            }
+        </div>
+
+        <div class="mp-category-stats" style="margin-bottom: 1.5rem;">
+            <h3>ML Promotion Status</h3>
+            @if (Model.MarketMlProfiles.Any())
+            {
+                @foreach (var profile in Model.MarketMlProfiles)
+                {
+                    <div class="mp-category-row">
+                        <div class="mp-cat-header">
+                            <span class="mp-cat-name">@profile.Market.ToDisplayName()</span>
+                            <span class="mp-cat-details">@(profile.IsPromoted ? "Promoted" : "Candidate") · @profile.HoldoutSampleCount holdout</span>
+                        </div>
+                        <div class="mp-read-strip">
+                            <span class="mp-read-badge mp-read-badge-caution">Base @profile.BaselineBrierScore.ToString("0.000")</span>
+                            <span class="mp-read-badge mp-read-badge-caution">Model @profile.CandidateBrierScore.ToString("0.000")</span>
+                            <span class="mp-read-badge @(profile.Improvement > 0 ? "mp-read-badge-strong" : "mp-read-badge-avoid")">Delta @profile.Improvement.ToString("+0.000;-0.000;0.000")</span>
+                        </div>
+                    </div>
+                }
+            }
+            else
+            {
+                <p class="mp-read-detail">No ML model profiles have been trained yet.</p>
+            }
+        </div>
+
+        <div class="mp-category-stats">
+            <h3>Isotonic Calibration Profiles</h3>
+            @if (Model.IsotonicProfiles.Any())
+            {
+                @foreach (var profile in Model.IsotonicProfiles.Values.OrderBy(profile => profile.Market))
+                {
+                    <div class="mp-category-row">
+                        <div class="mp-cat-header">
+                            <span class="mp-cat-name">@profile.Market.ToDisplayName()</span>
+                            <span class="mp-cat-details">@(profile.IsRecommended ? "Recommended" : "Shadow") · @profile.ValidationSampleCount validation</span>
+                        </div>
+                        <div class="mp-read-strip">
+                            <span class="mp-read-badge mp-read-badge-caution">Base @profile.BaselineBrierScore.ToString("0.000")</span>
+                            <span class="mp-read-badge mp-read-badge-caution">Iso @profile.ValidationBrierScore.ToString("0.000")</span>
+                            <span class="mp-read-badge @(profile.Improvement > 0 ? "mp-read-badge-strong" : "mp-read-badge-avoid")">Delta @profile.Improvement.ToString("+0.000;-0.000;0.000")</span>
+                        </div>
+                    </div>
+                }
+            }
+            else
+            {
+                <p class="mp-read-detail">No isotonic calibration profiles have been built yet.</p>
+            }
+        </div>
     </section>
 
     <section class="mp-guide-shell">
@@ -159,45 +291,7 @@
 </div>
 
 @section Scripts {
-<script>
-    let currentAnalyticsMode = 'published';
-    let currentAnalyticsTab = '@defaultTab';
-
-    function setAnalyticsVisibility() {
-        document.querySelectorAll('.mp-analytics-mode-view').forEach(view => {
-            view.style.display = view.id === currentAnalyticsMode + '-view' ? 'block' : 'none';
-        });
-
-        const dateTabs = document.getElementById('analyticsDateTabs');
-        if (dateTabs) {
-            dateTabs.style.display = currentAnalyticsMode === 'config' ? 'none' : 'flex';
-        }
-
-        if (currentAnalyticsMode === 'config') {
-            return;
-        }
-
-        document.querySelectorAll(`#${currentAnalyticsMode}-view .mp-analytics-section`).forEach(section => {
-            section.style.display = section.id === `${currentAnalyticsMode}-${currentAnalyticsTab}` ? 'block' : 'none';
-        });
-    }
-
-    function switchAnalyticsMode(event, mode) {
-        currentAnalyticsMode = mode;
-        document.querySelectorAll('.mp-mode-btn').forEach(button => button.classList.remove('active'));
-        event.target.classList.add('active');
-        setAnalyticsVisibility();
-    }
-
-    function switchAnalyticsTab(event, tabId) {
-        currentAnalyticsTab = tabId;
-        document.querySelectorAll('.mp-tab-btn').forEach(button => button.classList.remove('active'));
-        event.target.classList.add('active');
-        setAnalyticsVisibility();
-    }
-
-    document.addEventListener('DOMContentLoaded', setAnalyticsVisibility);
-</script>
+<script src="~/js/analytics.js" asp-append-version="true"></script>
 
 <style>
     .mp-analytics-mode-tabs,

@@ -1,6 +1,9 @@
+using System.Text.Json;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Statistics;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 
 namespace MatchPredictor.Infrastructure.Services;
@@ -17,11 +20,13 @@ public class CalibrationService : ICalibrationService
         PredictionMarket.Over25Goals,
         PredictionMarket.Under25Goals,
         PredictionMarket.HomeWin,
-        PredictionMarket.AwayWin
+        PredictionMarket.AwayWin,
+        PredictionMarket.Draw
     ];
     private readonly ApplicationDbContext _dbContext;
     private List<MarketCalibrationProfile>? _profiles;
     private List<BetaCalibrationProfile>? _betaProfiles;
+    private List<IsotonicCalibrationProfile>? _isotonicProfiles;
 
     public CalibrationService(ApplicationDbContext dbContext)
     {
@@ -40,6 +45,11 @@ public class CalibrationService : ICalibrationService
         .Where(profile => ActiveCalibrationMarkets.Contains(profile.Market))
         .ToList();
 
+    private List<IsotonicCalibrationProfile> IsotonicProfiles => _isotonicProfiles ??= _dbContext.IsotonicCalibrationProfiles
+        .AsNoTracking()
+        .Where(profile => ActiveCalibrationMarkets.Contains(profile.Market))
+        .ToList();
+
     public double Calibrate(PredictionMarket market, double rawProbability)
     {
         return CalibrateWithDecision(market, rawProbability).Probability;
@@ -48,6 +58,17 @@ public class CalibrationService : ICalibrationService
     public CalibrationDecision CalibrateWithDecision(PredictionMarket market, double rawProbability)
     {
         rawProbability = Math.Clamp(rawProbability, 0.0, 1.0);
+
+        var isotonicProfile = IsotonicProfiles.FirstOrDefault(profile => profile.Market == market && profile.IsRecommended);
+        if (isotonicProfile != null)
+        {
+            var knots = DeserializeKnots(isotonicProfile.KnotsJson);
+            return new CalibrationDecision
+            {
+                Probability = IsotonicRegression.Apply(rawProbability, knots),
+                CalibratorUsed = "Isotonic"
+            };
+        }
 
         var betaProfile = BetaProfiles.FirstOrDefault(profile => profile.Market == market && profile.IsRecommended);
         if (betaProfile != null)
@@ -68,10 +89,16 @@ public class CalibrationService : ICalibrationService
 
     public async Task RebuildProfilesAsync()
     {
-        var previousCalibratorByMarket = BetaProfiles
-            .ToDictionary(
-                profile => profile.Market,
-                profile => profile.IsRecommended ? "Beta" : "Bucket");
+        var previousCalibratorByMarket = IsotonicProfiles
+            .Where(profile => profile.IsRecommended)
+            .ToDictionary(profile => profile.Market, _ => "Isotonic");
+        foreach (var profile in BetaProfiles.Where(profile => profile.IsRecommended))
+        {
+            if (!previousCalibratorByMarket.ContainsKey(profile.Market))
+            {
+                previousCalibratorByMarket[profile.Market] = "Beta";
+            }
+        }
 
         var settledForecasts = await _dbContext.ForecastObservations
             .AsNoTracking()
@@ -98,7 +125,9 @@ public class CalibrationService : ICalibrationService
                 var weightedObservations = group.Sum(item => CalculateRecencyWeight(item.SettledAt ?? item.CreatedAt));
                 var empiricalBucketProbability = (weightedSuccesses + 1.0) / (weightedObservations + 2.0);
                 var weight = Math.Min(weightedObservations / 20.0, 1.0);
-                var averageInputProbability = group.Average(GetCalibrationInput);
+                var averageInputProbability = weightedObservations <= 0
+                    ? group.Average(GetCalibrationInput)
+                    : group.Sum(item => GetCalibrationInput(item) * CalculateRecencyWeight(item.SettledAt ?? item.CreatedAt)) / weightedObservations;
 
                 return new MarketCalibrationProfile
                 {
@@ -107,6 +136,8 @@ public class CalibrationService : ICalibrationService
                     BucketEnd = Math.Min(group.Key.BucketStart + BucketSize, 1.0),
                     ObservationCount = observationCount,
                     SuccessCount = successCount,
+                    ObservationWeight = weightedObservations,
+                    SuccessWeight = weightedSuccesses,
                     CalibratedProbability = Math.Clamp(
                         averageInputProbability + (weight * (empiricalBucketProbability - averageInputProbability)),
                         0.0,
@@ -117,7 +148,8 @@ public class CalibrationService : ICalibrationService
             .ToList();
 
         var betaProfiles = BuildBetaCalibrationProfiles(pointInTimeForecasts);
-        var promotionHistory = BuildPromotionHistory(previousCalibratorByMarket, betaProfiles);
+        var isotonicProfiles = BuildIsotonicCalibrationProfiles(pointInTimeForecasts, betaProfiles);
+        var promotionHistory = BuildPromotionHistory(previousCalibratorByMarket, betaProfiles, isotonicProfiles);
 
         try
         {
@@ -142,6 +174,18 @@ public class CalibrationService : ICalibrationService
         }
 
         await _dbContext.BetaCalibrationProfiles.AddRangeAsync(betaProfiles);
+
+        try
+        {
+            await _dbContext.IsotonicCalibrationProfiles.ExecuteDeleteAsync();
+        }
+        catch (InvalidOperationException)
+        {
+            var existingIsotonic = await _dbContext.IsotonicCalibrationProfiles.ToListAsync();
+            _dbContext.IsotonicCalibrationProfiles.RemoveRange(existingIsotonic);
+        }
+
+        await _dbContext.IsotonicCalibrationProfiles.AddRangeAsync(isotonicProfiles);
         if (promotionHistory.Count > 0)
         {
             await _dbContext.PromotionHistories.AddRangeAsync(promotionHistory);
@@ -150,6 +194,111 @@ public class CalibrationService : ICalibrationService
 
         _profiles = rebuiltProfiles;
         _betaProfiles = betaProfiles;
+        _isotonicProfiles = isotonicProfiles;
+    }
+
+    private static List<IsotonicCalibrationProfile> BuildIsotonicCalibrationProfiles(
+        IReadOnlyCollection<ForecastObservation> settledForecasts,
+        IReadOnlyCollection<BetaCalibrationProfile> betaProfiles)
+    {
+        return settledForecasts
+            .GroupBy(forecast => forecast.Market)
+            .Select(group => BuildIsotonicProfile(group.Key, group.OrderBy(forecast => forecast.SettledAt ?? forecast.CreatedAt).ToList(), betaProfiles))
+            .Where(profile => profile != null)
+            .Cast<IsotonicCalibrationProfile>()
+            .ToList();
+    }
+
+    private static IsotonicCalibrationProfile? BuildIsotonicProfile(
+        PredictionMarket market,
+        IReadOnlyList<ForecastObservation> forecasts,
+        IReadOnlyCollection<BetaCalibrationProfile> betaProfiles)
+    {
+        if (forecasts.Count < MinimumBetaSampleCount)
+        {
+            return null;
+        }
+
+        var splitIndex = Math.Clamp((int)Math.Round(forecasts.Count * 0.7), 20, forecasts.Count - 15);
+        if (splitIndex <= 0 || splitIndex >= forecasts.Count)
+        {
+            return null;
+        }
+
+        var training = forecasts.Take(splitIndex)
+            .Select(forecast => (
+                RawProbability: GetCalibrationInput(forecast),
+                Outcome: forecast.OutcomeOccurred == true,
+                Weight: CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt)))
+            .ToList();
+        var validation = forecasts.Skip(splitIndex)
+            .Select(forecast => (
+                RawProbability: GetCalibrationInput(forecast),
+                Outcome: forecast.OutcomeOccurred == true,
+                Weight: CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt)))
+            .ToList();
+
+        if (training.Count < 20 || validation.Count < 15)
+        {
+            return null;
+        }
+
+        var trainingKnots = IsotonicRegression.Fit(training);
+        var betaProfile = betaProfiles.FirstOrDefault(profile => profile.Market == market);
+        var validationWeight = validation.Sum(item => item.Weight);
+        var baselineBrier = validationWeight <= 0
+            ? 0.0
+            : validation.Sum(item => SquaredError(
+                betaProfile is { IsRecommended: true }
+                    ? ApplyBetaCalibration(item.RawProbability, betaProfile.Alpha, betaProfile.Beta, betaProfile.Gamma)
+                    : item.RawProbability,
+                item.Outcome) * item.Weight) / validationWeight;
+        var isotonicBrier = validationWeight <= 0
+            ? 0.0
+            : validation.Sum(item => SquaredError(
+                IsotonicRegression.Apply(item.RawProbability, trainingKnots),
+                item.Outcome) * item.Weight) / validationWeight;
+        var improvement = baselineBrier - isotonicBrier;
+        var shouldPromote = improvement > 0.0025 && isotonicBrier < baselineBrier;
+        var deployedKnots = IsotonicRegression.Fit(forecasts
+            .Select(forecast => (
+                RawProbability: GetCalibrationInput(forecast),
+                Outcome: forecast.OutcomeOccurred == true,
+                Weight: CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt)))
+            .ToList());
+
+        return new IsotonicCalibrationProfile
+        {
+            Market = market,
+            KnotsJson = SerializeKnots(deployedKnots),
+            TrainingSampleCount = training.Count,
+            ValidationSampleCount = validation.Count,
+            BaselineBrierScore = baselineBrier,
+            ValidationBrierScore = isotonicBrier,
+            Improvement = improvement,
+            IsRecommended = shouldPromote,
+            LastUpdated = DateTime.UtcNow
+        };
+    }
+
+    private static string SerializeKnots(IReadOnlyList<IsotonicRegression.Knot> knots) =>
+        JsonSerializer.Serialize(knots.Select(knot => new { input = knot.Input, output = knot.Output }));
+
+    private static IReadOnlyList<IsotonicRegression.Knot> DeserializeKnots(string knotsJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(knotsJson);
+            return document.RootElement.EnumerateArray()
+                .Select(element => new IsotonicRegression.Knot(
+                    element.GetProperty("input").GetDouble(),
+                    element.GetProperty("output").GetDouble()))
+                .ToList();
+        }
+        catch
+        {
+            return [];
+        }
     }
 
     private static List<BetaCalibrationProfile> BuildBetaCalibrationProfiles(IReadOnlyCollection<ForecastObservation> settledForecasts)
@@ -166,13 +315,21 @@ public class CalibrationService : ICalibrationService
 
     private static List<PromotionHistory> BuildPromotionHistory(
         IReadOnlyDictionary<PredictionMarket, string> previousCalibratorByMarket,
-        IReadOnlyCollection<BetaCalibrationProfile> betaProfiles)
+        IReadOnlyCollection<BetaCalibrationProfile> betaProfiles,
+        IReadOnlyCollection<IsotonicCalibrationProfile> isotonicProfiles)
     {
         var history = new List<PromotionHistory>();
-        var nextCalibratorByMarket = betaProfiles
-            .ToDictionary(
-                profile => profile.Market,
-                profile => profile.IsRecommended ? "Beta" : "Bucket");
+        var nextCalibratorByMarket = isotonicProfiles
+            .Where(profile => profile.IsRecommended)
+            .ToDictionary(profile => profile.Market, _ => "Isotonic");
+        foreach (var profile in betaProfiles.Where(profile => profile.IsRecommended))
+        {
+            nextCalibratorByMarket.TryAdd(profile.Market, "Beta");
+        }
+        foreach (var market in ActiveCalibrationMarkets)
+        {
+            nextCalibratorByMarket.TryAdd(market, "Bucket");
+        }
 
         var markets = previousCalibratorByMarket.Keys
             .Union(nextCalibratorByMarket.Keys)
@@ -194,16 +351,32 @@ public class CalibrationService : ICalibrationService
                 continue;
             }
 
-            var profile = betaProfiles.FirstOrDefault(item => item.Market == market);
+            var profile = isotonicProfiles.FirstOrDefault(item => item.Market == market && item.IsRecommended)
+                ?? (object?)betaProfiles.FirstOrDefault(item => item.Market == market);
             history.Add(new PromotionHistory
             {
                 Market = market,
                 ChangeType = "Calibrator",
                 PreviousValue = previous,
                 NewValue = next,
-                BaselineScore = profile?.BaselineBrierScore,
-                CandidateScore = profile?.ValidationBrierScore,
-                Improvement = profile?.Improvement,
+                BaselineScore = profile switch
+                {
+                    IsotonicCalibrationProfile isotonic => isotonic.BaselineBrierScore,
+                    BetaCalibrationProfile beta => beta.BaselineBrierScore,
+                    _ => null
+                },
+                CandidateScore = profile switch
+                {
+                    IsotonicCalibrationProfile isotonic => isotonic.ValidationBrierScore,
+                    BetaCalibrationProfile beta => beta.ValidationBrierScore,
+                    _ => null
+                },
+                Improvement = profile switch
+                {
+                    IsotonicCalibrationProfile isotonic => isotonic.Improvement,
+                    BetaCalibrationProfile beta => beta.Improvement,
+                    _ => null
+                },
                 EffectiveAt = DateTime.UtcNow
             });
         }
@@ -393,8 +566,7 @@ public class CalibrationService : ICalibrationService
 
     private static double CalculateRecencyWeight(DateTime timestampUtc)
     {
-        var ageDays = Math.Max((DateTime.UtcNow - timestampUtc).TotalDays, 0.0);
-        return Math.Pow(0.5, ageDays / RecencyHalfLifeDays);
+        return RecencyWeighting.CalculateWeight(timestampUtc, RecencyHalfLifeDays);
     }
 
     /// <summary>

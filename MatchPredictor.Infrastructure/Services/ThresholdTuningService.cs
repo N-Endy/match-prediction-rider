@@ -26,7 +26,8 @@ public class ThresholdTuningService : IThresholdTuningService
         PredictionMarket.Over25Goals,
         PredictionMarket.Under25Goals,
         PredictionMarket.HomeWin,
-        PredictionMarket.AwayWin
+        PredictionMarket.AwayWin,
+        PredictionMarket.Draw
     ];
 
     private readonly ApplicationDbContext _dbContext;

@@ -42,6 +42,7 @@ public partial class AnalyzerService : IAnalyzerService
     private readonly IProbabilityCorrectionService _probabilityCorrectionService;
     private readonly IThresholdTuningService _thresholdTuningService;
     private readonly ISourceMarketPricingService _sourceMarketPricingService;
+    private readonly IFixtureFeatureService? _fixtureFeatureService;
     private readonly AiScoreSourceHealthTracker _aiScoreSourceHealthTracker;
     private readonly SofaScoreSourceHealthTracker _sofaScoreSourceHealthTracker;
     private readonly PredictionSettings _predictionSettings;
@@ -61,7 +62,8 @@ public partial class AnalyzerService : IAnalyzerService
         SofaScoreSourceHealthTracker sofaScoreSourceHealthTracker,
         IOptions<PredictionSettings> predictionOptions,
         ILogger<AnalyzerService> logger,
-        ILearningLoopService? learningLoopService = null)
+        ILearningLoopService? learningLoopService = null,
+        IFixtureFeatureService? fixtureFeatureService = null)
     {
         _dataAnalyzerService = dataAnalyzerService;
         _webScraperService = webScraperService;
@@ -72,6 +74,7 @@ public partial class AnalyzerService : IAnalyzerService
         _probabilityCorrectionService = probabilityCorrectionService;
         _thresholdTuningService = thresholdTuningService;
         _sourceMarketPricingService = sourceMarketPricingService;
+        _fixtureFeatureService = fixtureFeatureService;
         _aiScoreSourceHealthTracker = aiScoreSourceHealthTracker;
         _sofaScoreSourceHealthTracker = sofaScoreSourceHealthTracker;
         _predictionSettings = predictionOptions.Value;

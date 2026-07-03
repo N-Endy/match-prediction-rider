@@ -15,7 +15,7 @@
   -->
   <PropertyGroup Condition="'$(CollectCoverage)' == 'true'">
     <CoverletOutputFormat>cobertura</CoverletOutputFormat>
-    <Include>[MatchPredictor.Infrastructure]MatchPredictor.Infrastructure.Statistics.*,[MatchPredictor.Domain]MatchPredictor.Domain.Sourcing.*,[MatchPredictor.Infrastructure]MatchPredictor.Infrastructure.Services.FlashScoreSourceHealthTracker</Include>
+    <Include>[MatchPredictor.Infrastructure]MatchPredictor.Infrastructure.Statistics.*,[MatchPredictor.Domain]MatchPredictor.Domain.Helpers.TeamNameNormalizer,[MatchPredictor.Domain]MatchPredictor.Domain.Sourcing.*,[MatchPredictor.Infrastructure]MatchPredictor.Infrastructure.Services.FlashScoreSourceHealthTracker</Include>
     <Threshold>80</Threshold>
     <ThresholdType>line</ThresholdType>
     <ThresholdStat>total</ThresholdStat>

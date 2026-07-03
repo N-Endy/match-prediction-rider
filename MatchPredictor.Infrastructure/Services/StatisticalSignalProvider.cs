@@ -1,4 +1,5 @@
 using MatchPredictor.Domain.Interfaces;
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Statistics;
@@ -69,12 +70,19 @@ public sealed class StatisticalSignalProvider : IStatisticalSignalProvider
                             score.MatchTime < cutoffUtc)
             .ToList();
 
+        var aliasLookup = LoadTeamAliasLookup();
         var results = new List<MatchResult>(scores.Count);
         foreach (var score in scores)
         {
             if (TryParseScore(score.Score, out var homeGoals, out var awayGoals))
             {
-                results.Add(new MatchResult(score.HomeTeam, score.AwayTeam, homeGoals, awayGoals, score.MatchTime, score.League));
+                results.Add(new MatchResult(
+                    ResolveCanonicalTeamKey(score.HomeTeam, score.League, aliasLookup),
+                    ResolveCanonicalTeamKey(score.AwayTeam, score.League, aliasLookup),
+                    homeGoals,
+                    awayGoals,
+                    score.MatchTime,
+                    score.League));
             }
         }
 
@@ -83,7 +91,11 @@ public sealed class StatisticalSignalProvider : IStatisticalSignalProvider
             return EmptySignalSet.Instance;
         }
 
-        var dixonColes = DixonColesModel.Fit(results, cutoffUtc, _dixonColesOptions);
+        var halfLifeTuning = DixonColesModel.TuneHalfLife(results, cutoffUtc, _dixonColesOptions);
+        var effectiveDixonColesOptions = halfLifeTuning.Promoted
+            ? _dixonColesOptions with { HalfLifeDays = halfLifeTuning.SelectedHalfLifeDays }
+            : _dixonColesOptions;
+        var dixonColes = DixonColesModel.Fit(results, cutoffUtc, effectiveDixonColesOptions);
         var elo = new EloRatingModel(_eloOptions).Train(results);
 
         var signals = new Dictionary<string, MatchProbabilities>(StringComparer.OrdinalIgnoreCase);
@@ -98,17 +110,19 @@ public sealed class StatisticalSignalProvider : IStatisticalSignalProvider
             }
 
             // Require enough history for both teams in at least one of the models.
-            if (!dixonColes.HasTeam(home) || !dixonColes.HasTeam(away))
+            var canonicalHome = ResolveCanonicalTeamKey(home, match.League, aliasLookup);
+            var canonicalAway = ResolveCanonicalTeamKey(away, match.League, aliasLookup);
+            if (!dixonColes.HasTeam(canonicalHome, match.League) || !dixonColes.HasTeam(canonicalAway, match.League))
             {
                 continue;
             }
 
-            var dixonColesSignal = dixonColes.Predict(home, away);
+            var dixonColesSignal = dixonColes.Predict(canonicalHome, canonicalAway, match.League);
 
             MatchProbabilities? eloSignal = null;
-            if (elo.HasTeam(home) && elo.HasTeam(away))
+            if (elo.HasTeam(canonicalHome) && elo.HasTeam(canonicalAway))
             {
-                var (homeWin, draw, awayWin) = elo.PredictResult(home, away);
+                var (homeWin, draw, awayWin) = elo.PredictResult(canonicalHome, canonicalAway);
                 eloSignal = new MatchProbabilities(
                     Btts: dixonColesSignal.Btts,
                     Over25: dixonColesSignal.Over25,
@@ -130,6 +144,44 @@ public sealed class StatisticalSignalProvider : IStatisticalSignalProvider
     }
 
     private static string BuildKey(string home, string away) => $"{home}\u0001{away}";
+
+    private IReadOnlyDictionary<string, string> LoadTeamAliasLookup()
+    {
+        return _db.TeamAliases
+            .AsNoTracking()
+            .Select(alias => new
+            {
+                alias.TeamId,
+                alias.NormalizedAlias,
+                alias.LeagueScope
+            })
+            .AsEnumerable()
+            .Select(alias => new
+            {
+                Key = TeamNameNormalizer.BuildAliasKey(alias.NormalizedAlias, alias.LeagueScope),
+                Value = $"team:{alias.TeamId}"
+            })
+            .Where(alias => !string.IsNullOrWhiteSpace(alias.Key))
+            .GroupBy(alias => alias.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().Value, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string ResolveCanonicalTeamKey(
+        string teamName,
+        string? league,
+        IReadOnlyDictionary<string, string> aliasLookup)
+    {
+        var scopedKey = TeamNameNormalizer.BuildAliasKey(teamName, league);
+        if (!string.IsNullOrWhiteSpace(scopedKey) && aliasLookup.TryGetValue(scopedKey, out var scopedTeamId))
+        {
+            return scopedTeamId;
+        }
+
+        var normalized = TeamNameNormalizer.NormalizeAlias(teamName);
+        return !string.IsNullOrWhiteSpace(normalized) && aliasLookup.TryGetValue(normalized, out var globalTeamId)
+            ? globalTeamId
+            : teamName.Trim();
+    }
 
     private static bool TryParseScore(string? score, out int home, out int away)
     {

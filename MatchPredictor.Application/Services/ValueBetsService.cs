@@ -107,11 +107,13 @@ public class ValueBetsService : IValueBetsService
                     .First(),
                 StringComparer.Ordinal);
 
+        var bookmakerSignals = BookmakerSignalSetBuilder.Build(upcomingMatches, sourceMarketFixtures);
+
         foreach (var match in upcomingMatches)
         {
             try
             {
-                var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates([match]);
+                var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates([match], bookmakerSignals);
                 report.ConsideredCandidateCount += forecastCandidates.Count;
                 var pricedCandidates = new List<ValueBetCandidate>();
                 var matchFixtureKey = FixtureIdentityFactory.FromMatchData(match).FixtureKey;

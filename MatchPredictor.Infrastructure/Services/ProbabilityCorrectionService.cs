@@ -1,6 +1,7 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 
 namespace MatchPredictor.Infrastructure.Services;
@@ -11,6 +12,7 @@ public class ProbabilityCorrectionService : IProbabilityCorrectionService
     private const int MinimumValidationCount = 20;
     private const double MinimumImprovement = 0.0015;
     private const int RebuildWindowDays = 120;
+    private const double RecencyHalfLifeDays = 30.0;
     private readonly ApplicationDbContext _dbContext;
     private List<MetaModelProfile>? _profiles;
 
@@ -57,7 +59,10 @@ public class ProbabilityCorrectionService : IProbabilityCorrectionService
         foreach (var group in pointInTimeSettled.GroupBy(item => item.Market))
         {
             var observations = group
-                .Select(item => (Probability: item.RawProbability, Outcome: item.OutcomeOccurred == true))
+                .Select(item => (
+                    Probability: item.RawProbability,
+                    Outcome: item.OutcomeOccurred == true,
+                    Weight: CalculateRecencyWeight(item.SettledAt ?? item.CreatedAt)))
                 .ToList();
             if (observations.Count < MinimumSampleCount)
             {
@@ -73,12 +78,9 @@ public class ProbabilityCorrectionService : IProbabilityCorrectionService
             }
 
             var fitted = FitLogitCorrection(training);
-            var baselineBrier = validation.Average(item => Math.Pow(item.Probability - (item.Outcome ? 1.0 : 0.0), 2));
-            var candidateBrier = validation.Average(item =>
-            {
-                var corrected = ApplyLogitCorrection(item.Probability, fitted.Intercept, fitted.Slope);
-                return Math.Pow(corrected - (item.Outcome ? 1.0 : 0.0), 2);
-            });
+            var baselineBrier = WeightedBrier(validation, item => item.Probability);
+            var candidateBrier = WeightedBrier(validation, item =>
+                ApplyLogitCorrection(item.Probability, fitted.Intercept, fitted.Slope));
             var improvement = baselineBrier - candidateBrier;
 
             rebuilt.Add(new MetaModelProfile
@@ -111,33 +113,43 @@ public class ProbabilityCorrectionService : IProbabilityCorrectionService
         _profiles = rebuilt;
     }
 
-    private static (double Intercept, double Slope) FitLogitCorrection(IReadOnlyCollection<(double Probability, bool Outcome)> training)
+    private static (double Intercept, double Slope) FitLogitCorrection(
+        IReadOnlyCollection<(double Probability, bool Outcome, double Weight)> training)
     {
         var intercept = 0.0;
         var slope = 1.0;
         const double learningRate = 0.05;
+        var totalWeight = Math.Max(training.Sum(item => item.Weight), 1e-6);
 
         for (var i = 0; i < 250; i++)
         {
             var gradIntercept = 0.0;
             var gradSlope = 0.0;
-            foreach (var (probability, outcome) in training)
+            foreach (var (probability, outcome, weight) in training)
             {
                 var p = Math.Clamp(probability, 1e-6, 1.0 - 1e-6);
                 var x = Math.Log(p / (1.0 - p));
                 var y = outcome ? 1.0 : 0.0;
                 var prediction = 1.0 / (1.0 + Math.Exp(-(intercept + (slope * x))));
                 var error = prediction - y;
-                gradIntercept += error;
-                gradSlope += error * x;
+                gradIntercept += error * weight;
+                gradSlope += error * x * weight;
             }
 
-            var scale = 1.0 / Math.Max(training.Count, 1);
-            intercept -= learningRate * gradIntercept * scale;
-            slope -= learningRate * gradSlope * scale;
+            intercept -= learningRate * gradIntercept / totalWeight;
+            slope -= learningRate * gradSlope / totalWeight;
         }
 
         return (intercept, Math.Clamp(slope, 0.3, 1.8));
+    }
+
+    private static double WeightedBrier(
+        IReadOnlyCollection<(double Probability, bool Outcome, double Weight)> samples,
+        Func<(double Probability, bool Outcome, double Weight), double> probabilitySelector)
+    {
+        return PromotionStatistics.WeightedBrier(samples
+            .Select(item => (probabilitySelector(item), item.Outcome, item.Weight))
+            .ToList());
     }
 
     private static double ApplyLogitCorrection(double rawProbability, double intercept, double slope)
@@ -145,5 +157,10 @@ public class ProbabilityCorrectionService : IProbabilityCorrectionService
         var p = Math.Clamp(rawProbability, 1e-6, 1.0 - 1e-6);
         var logit = Math.Log(p / (1.0 - p));
         return 1.0 / (1.0 + Math.Exp(-(intercept + (slope * logit))));
+    }
+
+    private static double CalculateRecencyWeight(DateTime timestampUtc)
+    {
+        return RecencyWeighting.CalculateWeight(timestampUtc, RecencyHalfLifeDays);
     }
 }

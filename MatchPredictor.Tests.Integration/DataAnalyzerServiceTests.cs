@@ -110,6 +110,9 @@ public class DataAnalyzerServiceTests
     public void BuildForecastCandidates_CapturesCalibrationAndThresholdProvenance()
     {
         var match = CreateMatch();
+        match.BttsYes = 0.58;
+        match.BttsNo = 0.42;
+        match.NormalizeSourceProbabilities();
         var thresholdService = new FakeThresholdTuningService
         {
             Decisions =
@@ -139,7 +142,7 @@ public class DataAnalyzerServiceTests
             }));
 
         var candidates = service.SelectPublishedPredictions(service.BuildForecastCandidates([match]));
-        var candidate = Assert.Single(candidates);
+        var candidate = Assert.Single(candidates, c => c.Market == PredictionMarket.BothTeamsScore);
 
         Assert.Equal("Beta", candidate.CalibratorUsed);
         Assert.Equal(0.61, candidate.ThresholdUsed, 3);
@@ -168,7 +171,7 @@ public class DataAnalyzerServiceTests
 
         var candidates = service.BuildForecastCandidates([match]);
 
-        Assert.Equal(5, candidates.Count);
+        Assert.Equal(6, candidates.Count);
         Assert.Equal(1, probabilityCalculator.CalculateProbabilitiesCalls);
         Assert.Equal(0, probabilityCalculator.SingleMarketCalls);
     }

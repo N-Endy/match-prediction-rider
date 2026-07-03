@@ -145,7 +145,7 @@ public class CalibrationServiceTests
     }
 
     [Fact]
-    public async Task RebuildProfilesAsync_IgnoresLegacyDrawMarket_WhenRebuildingActiveCalibrationProfiles()
+    public async Task RebuildProfilesAsync_IncludesDrawMarket_WhenRebuildingActiveCalibrationProfiles()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
@@ -206,10 +206,10 @@ public class CalibrationServiceTests
             .Where(history => history.Market == PredictionMarket.Draw)
             .ToListAsync();
 
-        Assert.Empty(drawBucketProfiles);
-        Assert.Empty(drawBetaProfiles);
+        Assert.NotEmpty(drawBucketProfiles);
+        Assert.Single(drawBetaProfiles);
         Assert.Empty(drawHistory);
-        Assert.Equal(0.34, service.Calibrate(PredictionMarket.Draw, 0.34), 6);
+        Assert.NotEqual(0.34, service.Calibrate(PredictionMarket.Draw, 0.34));
     }
 
     [Fact]
@@ -281,5 +281,81 @@ public class CalibrationServiceTests
             .SumAsync(profile => profile.ObservationCount);
 
         Assert.Equal(40, observationCount);
+    }
+
+    [Fact]
+    public async Task RebuildProfilesAsync_WeightsRecentObservationsMoreHeavilyInBuckets()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var now = DateTime.UtcNow;
+
+        for (var index = 0; index < 50; index++)
+        {
+            context.ForecastObservations.Add(CreateForecast(
+                now.AddDays(-80 + index),
+                rawProbability: 0.62,
+                outcomeOccurred: true,
+                index));
+        }
+
+        for (var index = 0; index < 5; index++)
+        {
+            context.ForecastObservations.Add(CreateForecast(
+                now.AddHours(-index),
+                rawProbability: 0.62,
+                outcomeOccurred: false,
+                index + 100));
+        }
+
+        await context.SaveChangesAsync();
+
+        var service = new CalibrationService(context);
+
+        await service.RebuildProfilesAsync();
+
+        var bucketProfiles = await context.MarketCalibrationProfiles
+            .Where(profile => profile.Market == PredictionMarket.Over25Goals)
+            .ToListAsync();
+
+        Assert.NotEmpty(bucketProfiles);
+        var bucketProfile = Assert.Single(bucketProfiles);
+
+        Assert.True(bucketProfile.ObservationWeight > 0);
+        var weightedHitRate = bucketProfile.SuccessWeight / bucketProfile.ObservationWeight;
+        Assert.True(weightedHitRate < 0.85);
+        Assert.True(weightedHitRate > 0.55);
+    }
+
+    private static ForecastObservation CreateForecast(
+        DateTime settledAt,
+        double rawProbability,
+        bool outcomeOccurred,
+        int index)
+    {
+        return new ForecastObservation
+        {
+            Date = settledAt.ToString("dd-MM-yyyy"),
+            Time = "18:00",
+            MatchLocalDate = DateOnly.FromDateTime(settledAt),
+            MatchLocalTime = new TimeOnly(18, 0),
+            MatchDateTime = settledAt,
+            FixtureKey = $"league|fixture-{index}",
+            League = "League",
+            HomeTeam = $"Home{index}",
+            AwayTeam = $"Away{index}",
+            Market = PredictionMarket.Over25Goals,
+            PredictedOutcome = "Over2.5Goals",
+            RawProbability = rawProbability,
+            CorrectedProbability = rawProbability,
+            CalibratedProbability = rawProbability,
+            OutcomeOccurred = outcomeOccurred,
+            IsSettled = true,
+            CreatedAt = settledAt.AddHours(-1),
+            SettledAt = settledAt
+        };
     }
 }

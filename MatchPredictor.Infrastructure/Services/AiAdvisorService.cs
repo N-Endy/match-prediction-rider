@@ -6,7 +6,6 @@ using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -23,13 +22,12 @@ public class AiAdvisorService : IAiAdvisorService
     private const int MaxHistoryItems = 12;
     private const int MaxMessageLength = 1000;
     private const int MaxRecommendedActions = 60;
-    private static readonly TimeSpan SessionSlidingExpiration = TimeSpan.FromHours(12);
 
     private readonly ApplicationDbContext _dbContext;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AiAdvisorService> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly IDistributedCache _cache;
+    private readonly IAiChatSessionStore _sessionStore;
     private readonly AiChatKnowledgeService _knowledgeService;
     private readonly AiChatRequestParser _requestParser;
     private readonly IServiceScopeFactory _serviceScopeFactory;
@@ -40,7 +38,7 @@ public class AiAdvisorService : IAiAdvisorService
         IConfiguration configuration,
         ILogger<AiAdvisorService> logger,
         IHttpClientFactory httpClientFactory,
-        IDistributedCache cache,
+        IAiChatSessionStore sessionStore,
         AiChatKnowledgeService knowledgeService,
         AiChatRequestParser requestParser,
         IServiceScopeFactory serviceScopeFactory,
@@ -50,7 +48,7 @@ public class AiAdvisorService : IAiAdvisorService
         _configuration = configuration;
         _logger = logger;
         _httpClientFactory = httpClientFactory;
-        _cache = cache;
+        _sessionStore = sessionStore;
         _knowledgeService = knowledgeService;
         _requestParser = requestParser;
         _serviceScopeFactory = serviceScopeFactory;
@@ -2460,26 +2458,7 @@ public class AiAdvisorService : IAiAdvisorService
 
     private async Task<AiChatSessionState> LoadSessionStateAsync(string sessionId, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(sessionId))
-        {
-            return new AiChatSessionState();
-        }
-
-        var cacheValue = await _cache.GetStringAsync(GetSessionCacheKey(sessionId), ct);
-        if (string.IsNullOrWhiteSpace(cacheValue))
-        {
-            return new AiChatSessionState();
-        }
-
-        try
-        {
-            return JsonSerializer.Deserialize<AiChatSessionState>(cacheValue, JsonOptions()) ?? new AiChatSessionState();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to deserialize AI chat session state for session {SessionId}. Resetting state.", sessionId);
-            return new AiChatSessionState();
-        }
+        return await _sessionStore.LoadAsync(sessionId, ct);
     }
 
     private async Task SaveSessionTurnAsync(
@@ -2493,52 +2472,16 @@ public class AiAdvisorService : IAiAdvisorService
         CancellationToken ct,
         string? knowledgeTopic = null)
     {
-        state.History.Add(new ChatHistoryItem { Role = "user", Content = NormalizeHistoryContent(userPrompt) });
-        state.History.Add(new ChatHistoryItem { Role = "assistant", Content = NormalizeHistoryContent(response.Message) });
-        state.History = state.History
-            .TakeLast(MaxHistoryItems)
-            .ToList();
-        state.LastRecommendedActionKeys = response.Actions
-            .Select(action => action.ActionKey)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        state.LastContextPredictionIds = selection?.Candidates
-            .Select(candidate => candidate.PredictionId)
-            .Distinct()
-            .ToList() ?? [];
-        state.LastDiscussedPredictionIds = discussedPredictionIds
-            .Distinct()
-            .ToList();
-        state.LastIntent = response.ContextMode;
-        state.LastKnowledgeTopic = knowledgeTopic ?? state.LastKnowledgeTopic;
-        state.LastNormalizedRequest = normalizedRequest;
-        state.LastResolvedMarketMix = selection?.ResolvedMarketMix.ToList() ?? [];
-        state.LastShortfallWarnings = selection?.ShortfallWarnings.ToList() ?? [];
-
-        if (response.Actions.Count > 0 &&
-            (response.ContextMode == "recommend_picks" ||
-             response.ContextMode == "mixed_market_recommendation" ||
-             response.ContextMode == "working_slip_refinement"))
-        {
-            state.WorkingSlipActionKeys = response.Actions
-                .Select(action => action.ActionKey)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            state.WorkingSlipPredictionIds = response.Actions
-                .Select(action => action.PredictionId)
-                .Distinct()
-                .ToList();
-        }
-
-        var payload = JsonSerializer.Serialize(state);
-        await _cache.SetStringAsync(
-            GetSessionCacheKey(sessionId),
-            payload,
-            new DistributedCacheEntryOptions
-            {
-                SlidingExpiration = SessionSlidingExpiration
-            },
-            ct);
+        await _sessionStore.SaveTurnAsync(
+            sessionId,
+            state,
+            userPrompt,
+            response,
+            selection,
+            discussedPredictionIds,
+            normalizedRequest,
+            ct,
+            knowledgeTopic);
     }
 
     private static string NormalizeHistoryContent(string value)
@@ -2551,8 +2494,6 @@ public class AiAdvisorService : IAiAdvisorService
 
         return normalized[..MaxMessageLength];
     }
-
-    private static string GetSessionCacheKey(string sessionId) => $"ai-chat-session:{sessionId}";
 
     private static bool IsBookingFollowUp(AiChatNormalizedRequest request, AiChatSessionState sessionState)
     {

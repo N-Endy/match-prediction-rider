@@ -14,6 +14,8 @@ public class DataAnalyzerService : IDataAnalyzerService
     private readonly IThresholdTuningService _thresholdTuningService;
     private readonly IProbabilityCorrectionService _probabilityCorrectionService;
     private readonly IStatisticalSignalProvider? _statisticalSignalProvider;
+    private readonly IEnsembleWeightProvider? _ensembleWeightProvider;
+    private readonly IMarketPredictionModelService? _marketPredictionModelService;
     private readonly EnsembleWeights _ensembleWeights;
     private readonly PredictionSettings _settings;
 
@@ -23,26 +25,44 @@ public class DataAnalyzerService : IDataAnalyzerService
         IThresholdTuningService thresholdTuningService,
         IProbabilityCorrectionService probabilityCorrectionService,
         IOptions<PredictionSettings> options,
-        IStatisticalSignalProvider? statisticalSignalProvider = null)
+        IStatisticalSignalProvider? statisticalSignalProvider = null,
+        IEnsembleWeightProvider? ensembleWeightProvider = null,
+        IMarketPredictionModelService? marketPredictionModelService = null)
     {
         _probabilityCalculator = probabilityCalculator;
         _calibrationService = calibrationService;
         _thresholdTuningService = thresholdTuningService;
         _probabilityCorrectionService = probabilityCorrectionService;
         _statisticalSignalProvider = statisticalSignalProvider;
+        _ensembleWeightProvider = ensembleWeightProvider;
+        _marketPredictionModelService = marketPredictionModelService;
         _settings = options.Value;
-        // The market-based calculator output enters as the "Market" signal and the
-        // Dixon-Coles + Elo statistical core enters as the "DixonColes" signal.
-        _ensembleWeights = new EnsembleWeights { Market = 1.0, Base = 0.0, DixonColes = 1.1, Elo = 0.0 };
+        // Signals: de-vigged bookmaker odds ("Bookmaker"), the sports-ai.dev feed as shaped
+        // by ProbabilityCalculator ("Market"), and the Dixon-Coles + Elo statistical core
+        // ("DixonColes"). These defaults apply until learned per-market stacking profiles
+        // (EnsembleWeightProfiles) are promoted by the nightly learning loop.
+        _ensembleWeights = EnsembleWeights.ProductionDefault;
+    }
+
+    private EnsembleWeights ResolveWeights(PredictionMarket market)
+    {
+        return _ensembleWeightProvider?.GetWeights(market, _ensembleWeights) ?? _ensembleWeights;
     }
 
     public IReadOnlyList<PredictionCandidate> BuildForecastCandidates(IEnumerable<MatchData> matches)
+    {
+        return BuildForecastCandidates(matches, bookmakerSignals: null);
+    }
+
+    public IReadOnlyList<PredictionCandidate> BuildForecastCandidates(
+        IEnumerable<MatchData> matches,
+        BookmakerSignalSet? bookmakerSignals)
     {
         var matchList = matches as IReadOnlyCollection<MatchData> ?? matches.ToList();
         var signalSet = _statisticalSignalProvider?.BuildSignals(matchList);
 
         return matchList
-            .SelectMany(match => BuildForecastCandidatesForMatch(match, signalSet))
+            .SelectMany(match => BuildForecastCandidatesForMatch(match, signalSet, bookmakerSignals))
             .Cast<PredictionCandidate>()
             .ToList();
     }
@@ -57,7 +77,8 @@ public class DataAnalyzerService : IDataAnalyzerService
             [PredictionMarket.Over25Goals] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.Over25Goals, _settings.OverTwoGoalsStrongThreshold),
             [PredictionMarket.Under25Goals] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.Under25Goals, _settings.UnderTwoGoalsStrongThreshold),
             [PredictionMarket.HomeWin] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.HomeWin, _settings.HomeWinStrong),
-            [PredictionMarket.AwayWin] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.AwayWin, _settings.AwayWinStrong)
+            [PredictionMarket.AwayWin] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.AwayWin, _settings.AwayWinStrong),
+            [PredictionMarket.Draw] = _thresholdTuningService.GetThresholdDecision(PredictionMarket.Draw, _settings.DrawStrongThreshold)
         };
 
         foreach (var candidate in forecasts)
@@ -71,7 +92,12 @@ public class DataAnalyzerService : IDataAnalyzerService
 
         published.AddRange(MarkPublished(forecasts.Where(candidate =>
             candidate.Market == PredictionMarket.BothTeamsScore &&
+            HasExplicitBttsMarket(candidate) &&
             candidate.CalibratedProbability >= thresholdDecisions[PredictionMarket.BothTeamsScore].Threshold)));
+
+        published.AddRange(MarkPublished(forecasts.Where(candidate =>
+            candidate.Market == PredictionMarket.Draw &&
+            candidate.CalibratedProbability >= thresholdDecisions[PredictionMarket.Draw].Threshold)));
 
         foreach (var totalsGroup in forecasts
                      .Where(candidate => candidate.Market is PredictionMarket.Over25Goals or PredictionMarket.Under25Goals)
@@ -183,13 +209,22 @@ public class DataAnalyzerService : IDataAnalyzerService
         double calibratedProbability,
         string calibratorUsed)
     {
-        var date = match.Date?.Trim() ?? string.Empty;
-        var time = match.Time?.Trim() ?? string.Empty;
         DateTime? utcDateTime = match.MatchDateTime;
         var matchLocalDate = match.MatchLocalDate;
         var matchLocalTime = match.MatchLocalTime;
+        var date = matchLocalDate.HasValue
+            ? DateTimeProvider.FormatLocalDate(matchLocalDate.Value)
+            : match.Date?.Trim() ?? string.Empty;
+        var time = matchLocalTime.HasValue
+            ? DateTimeProvider.FormatLocalTime(matchLocalTime.Value)
+            : match.Time?.Trim() ?? string.Empty;
 
-        if (utcDateTime is null)
+        if (utcDateTime is null && matchLocalDate.HasValue)
+        {
+            var localDateTime = matchLocalDate.Value.ToDateTime(matchLocalTime ?? new TimeOnly(0, 0), DateTimeKind.Unspecified);
+            utcDateTime = DateTimeProvider.ConvertLocalToUtc(localDateTime);
+        }
+        else if (utcDateTime is null)
         {
             var normalizedDateTime = DateTimeProvider.ParseCanonicalMatchDateTime(match.Date, match.Time);
             date = DateTimeProvider.FormatLocalDate(normalizedDateTime.localDate);
@@ -228,6 +263,31 @@ public class DataAnalyzerService : IDataAnalyzerService
         };
     }
 
+    private static bool HasExplicitBttsMarket(PredictionCandidate candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate.FeatureContributionsJson) ||
+            candidate.FeatureContributionsJson == "{}")
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(candidate.FeatureContributionsJson);
+            if (document.RootElement.TryGetProperty("explicitBttsMarket", out var flag) &&
+                flag.ValueKind == System.Text.Json.JsonValueKind.True)
+            {
+                return true;
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
+
+        return false;
+    }
+
     private static IEnumerable<PredictionCandidate> MarkPublished(IEnumerable<PredictionCandidate> candidates)
     {
         foreach (var candidate in candidates)
@@ -242,18 +302,18 @@ public class DataAnalyzerService : IDataAnalyzerService
         return !string.IsNullOrWhiteSpace(match.HomeTeam) && !string.IsNullOrWhiteSpace(match.AwayTeam);
     }
 
-    private IEnumerable<PredictionCandidate> BuildForecastCandidatesForMatch(MatchData match, IStatisticalSignalSet? signalSet)
+    private IEnumerable<PredictionCandidate> BuildForecastCandidatesForMatch(
+        MatchData match,
+        IStatisticalSignalSet? signalSet,
+        BookmakerSignalSet? bookmakerSignals)
     {
         var marketProbabilities = _probabilityCalculator.CalculateProbabilities(match);
         var statisticalSignal = signalSet?.GetSignal(match);
-        var probabilities = statisticalSignal is null
+        var bookmakerSignal = bookmakerSignals?.GetSignal(match);
+        // With a single signal the logit blend is the identity, so skip the work.
+        var probabilities = statisticalSignal is null && bookmakerSignal is null && _marketPredictionModelService is null
             ? marketProbabilities
-            : EnsembleProbabilityBlender.Blend(
-                market: marketProbabilities,
-                baseModel: null,
-                dixonColes: statisticalSignal,
-                elo: null,
-                weights: _ensembleWeights);
+            : BlendWithPerMarketWeights(match, marketProbabilities, statisticalSignal, bookmakerSignal);
 
         var candidates = new[]
         {
@@ -281,7 +341,12 @@ public class DataAnalyzerService : IDataAnalyzerService
                 match,
                 PredictionMarket.AwayWin,
                 "Away Win",
-                probabilities.AwayWin)
+                probabilities.AwayWin),
+            BuildCandidate(
+                match,
+                PredictionMarket.Draw,
+                "Draw",
+                probabilities.Draw)
         };
 
         var realizedCandidates = candidates
@@ -291,17 +356,75 @@ public class DataAnalyzerService : IDataAnalyzerService
 
         foreach (var candidate in realizedCandidates)
         {
-            candidate.FeatureContributionsJson = BuildFeatureContributionSummary(match, probabilities, statisticalSignal, candidate.Market);
+            candidate.FeatureContributionsJson = BuildFeatureContributionSummary(
+                match, probabilities, marketProbabilities, statisticalSignal, bookmakerSignal, candidate.Market);
         }
 
         return realizedCandidates;
     }
 
-    private static string BuildFeatureContributionSummary(MatchData match, MatchProbabilities probabilities, MatchProbabilities? statisticalSignal, PredictionMarket market)
+    /// <summary>
+    /// Blends the three signals per market, honoring learned per-market stacking weights.
+    /// The 1X2 triple is renormalized to sum to 1 and Under 2.5 is the complement of
+    /// Over 2.5 (mirroring <see cref="EnsembleProbabilityBlender.Blend(MatchProbabilities?, MatchProbabilities?, MatchProbabilities?, MatchProbabilities?, EnsembleWeights?)"/>).
+    /// </summary>
+    private MatchProbabilities BlendWithPerMarketWeights(
+        MatchData match,
+        MatchProbabilities calculator,
+        MatchProbabilities? statistical,
+        PartialMatchProbabilities? bookmaker)
+    {
+        double BlendFor(PredictionMarket market, double? bookmakerValue, double calculatorValue, double? statisticalValue)
+        {
+            var weights = ResolveWeights(market);
+            var mlValue = _marketPredictionModelService?.TryPredict(match, market, calculatorValue, statisticalValue, bookmakerValue);
+            return EnsembleProbabilityBlender.BlendLogit(
+                (bookmakerValue, weights.Bookmaker),
+                (calculatorValue, weights.Market),
+                (statisticalValue, weights.DixonColes),
+                (mlValue, weights.Ml));
+        }
+
+        var homeWin = BlendFor(PredictionMarket.HomeWin, bookmaker?.HomeWin, calculator.HomeWin, statistical?.HomeWin);
+        var draw = BlendFor(PredictionMarket.Draw, bookmaker?.Draw, calculator.Draw, statistical?.Draw);
+        var awayWin = BlendFor(PredictionMarket.AwayWin, bookmaker?.AwayWin, calculator.AwayWin, statistical?.AwayWin);
+        var over25 = BlendFor(PredictionMarket.Over25Goals, bookmaker?.Over25, calculator.Over25, statistical?.Over25);
+        var btts = BlendFor(PredictionMarket.BothTeamsScore, bookmaker?.Btts, calculator.Btts, statistical?.Btts);
+
+        var total = homeWin + draw + awayWin;
+        if (total > 0)
+        {
+            homeWin /= total;
+            draw /= total;
+            awayWin /= total;
+        }
+
+        return new MatchProbabilities(
+            Btts: Math.Clamp(btts, 0.0, 1.0),
+            Over25: Math.Clamp(over25, 0.0, 1.0),
+            Under25: Math.Clamp(1.0 - over25, 0.0, 1.0),
+            Draw: Math.Clamp(draw, 0.0, 1.0),
+            HomeWin: Math.Clamp(homeWin, 0.0, 1.0),
+            AwayWin: Math.Clamp(awayWin, 0.0, 1.0));
+    }
+
+    private string BuildFeatureContributionSummary(
+        MatchData match,
+        MatchProbabilities probabilities,
+        MatchProbabilities calculatorSignal,
+        MatchProbabilities? statisticalSignal,
+        PartialMatchProbabilities? bookmakerSignal,
+        PredictionMarket market)
     {
         var oneX2Available = match.TryGetNormalizedOneX2(out var oneX2);
         var over25Available = match.TryGetNormalizedOver25Pair(out var over25Pair);
         var bttsAvailable = match.TryGetNormalizedBttsPair(out var bttsPair);
+        var mlSignal = _marketPredictionModelService?.TryPredict(
+            match,
+            market,
+            GetMarketProbability(calculatorSignal, market),
+            statisticalSignal is null ? null : GetMarketProbability(statisticalSignal, market),
+            bookmakerSignal is null ? null : GetMarketProbability(bookmakerSignal, market));
 
         var summary = new Dictionary<string, object?>
         {
@@ -333,9 +456,55 @@ public class DataAnalyzerService : IDataAnalyzerService
                     ["awayWin"] = statisticalSignal.AwayWin,
                     ["draw"] = statisticalSignal.Draw
                 },
-            ["statisticalSignalApplied"] = statisticalSignal is not null
+            ["statisticalSignalApplied"] = statisticalSignal is not null,
+            ["calculatorSignal"] = new Dictionary<string, double>
+            {
+                ["btts"] = calculatorSignal.Btts,
+                ["over25"] = calculatorSignal.Over25,
+                ["homeWin"] = calculatorSignal.HomeWin,
+                ["awayWin"] = calculatorSignal.AwayWin,
+                ["draw"] = calculatorSignal.Draw
+            },
+            ["bookmakerSignal"] = bookmakerSignal is null
+                ? null
+                : new Dictionary<string, double?>
+                {
+                    ["btts"] = bookmakerSignal.Btts,
+                    ["over25"] = bookmakerSignal.Over25,
+                    ["homeWin"] = bookmakerSignal.HomeWin,
+                    ["awayWin"] = bookmakerSignal.AwayWin,
+                    ["draw"] = bookmakerSignal.Draw
+                },
+            ["bookmakerSignalApplied"] = bookmakerSignal is not null,
+            ["mlSignal"] = mlSignal,
+            ["mlSignalApplied"] = mlSignal is not null,
+            ["explicitBttsMarket"] = match.TryGetNormalizedBttsPair(out _) || bookmakerSignal?.Btts is > 0
         };
 
         return JsonSerializer.Serialize(summary);
     }
+
+    private static double GetMarketProbability(MatchProbabilities probabilities, PredictionMarket market) =>
+        market switch
+        {
+            PredictionMarket.BothTeamsScore => probabilities.Btts,
+            PredictionMarket.Over25Goals => probabilities.Over25,
+            PredictionMarket.Under25Goals => probabilities.Under25,
+            PredictionMarket.HomeWin => probabilities.HomeWin,
+            PredictionMarket.AwayWin => probabilities.AwayWin,
+            PredictionMarket.Draw => probabilities.Draw,
+            _ => 0.0
+        };
+
+    private static double? GetMarketProbability(PartialMatchProbabilities probabilities, PredictionMarket market) =>
+        market switch
+        {
+            PredictionMarket.BothTeamsScore => probabilities.Btts,
+            PredictionMarket.Over25Goals => probabilities.Over25,
+            PredictionMarket.Under25Goals => probabilities.Under25,
+            PredictionMarket.HomeWin => probabilities.HomeWin,
+            PredictionMarket.AwayWin => probabilities.AwayWin,
+            PredictionMarket.Draw => probabilities.Draw,
+            _ => null
+        };
 }

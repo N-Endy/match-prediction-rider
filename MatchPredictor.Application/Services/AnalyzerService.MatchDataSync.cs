@@ -2,8 +2,10 @@ using System.Globalization;
 using System.Text.Json;
 using Hangfire;
 using MatchPredictor.Application.Helpers;
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Statistics;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -34,24 +36,41 @@ public partial class AnalyzerService
 
             var scraped = _excelExtract.ExtractMatchDatasetFromFile(targetLocalDateTime).ToList();
             IReadOnlyList<SourceMarketFixture> sourceMarketFixtures = [];
-            if (predictionDayOffset == 0)
+            try
             {
-                try
-                {
-                    sourceMarketFixtures = await _sourceMarketPricingService.GetTodaySourceMarketFixturesAsync();
-                    _logger.LogInformation("Fetched {Count} source market fixtures for BTTS enrichment.", sourceMarketFixtures.Count);
-                }
-                catch (Exception sourceMarketEx)
-                {
-                    _logger.LogWarning(sourceMarketEx, "⚠️ Failed to fetch source market fixtures for BTTS enrichment. Continuing with workbook-only data.");
-                }
-            }
-            else
-            {
+                sourceMarketFixtures = await _sourceMarketPricingService.GetSourceMarketFixturesForDateAsync(targetLocalDate);
                 _logger.LogInformation(
-                    "Skipping BTTS source market enrichment for target date {TargetDate} because live source pricing is only fetched for the current day.",
+                    "Fetched {Count} source market fixtures for {TargetDate} (market enrichment + odds snapshots).",
+                    sourceMarketFixtures.Count,
                     targetDateString);
             }
+            catch (Exception sourceMarketEx)
+            {
+                _logger.LogWarning(sourceMarketEx, "⚠️ Failed to fetch source market fixtures for {TargetDate}. Continuing with workbook-only data.", targetDateString);
+            }
+
+            var feedQuality = ExcelFeedQualityValidator.Evaluate(scraped);
+            if (feedQuality.Status != ExcelFeedQualityValidator.HealthyStatus)
+            {
+                _logger.LogWarning(
+                    "Sports-ai.dev Excel feed quality {Status}: {Message}",
+                    feedQuality.Status,
+                    feedQuality.Message);
+
+                if (scraped.Count == 0 && sourceMarketFixtures.Count > 0)
+                {
+                    scraped = SourceFixtureMatchDataFactory.BuildFromSourceFixtures(sourceMarketFixtures, targetLocalDate);
+                    feedQuality = ExcelFeedQualityValidator.Evaluate(scraped);
+                    _logger.LogWarning(
+                        "Degraded to bookmaker-sourced fixtures ({Count} rows) after Excel feed failure.",
+                        scraped.Count);
+                }
+            }
+
+            await LogScrapingStatus(
+                "excel-feed-quality",
+                feedQuality.Status == ExcelFeedQualityValidator.FailedStatus ? "Failed" : "Success",
+                feedQuality.Message);
 
             try
             {
@@ -124,6 +143,19 @@ public partial class AnalyzerService
             }
             _logger.LogInformation("Extracted and saved {Count} matches to DB for target date {TargetDate}.", scraped.Count, targetDateString);
 
+            await SaveMarketOddsSnapshotsAsync(scraped, sourceMarketFixtures, targetLocalDate);
+            if (_fixtureFeatureService is not null)
+            {
+                try
+                {
+                    await _fixtureFeatureService.CaptureFeatureSnapshotsAsync(scraped);
+                }
+                catch (Exception featureEx)
+                {
+                    _logger.LogWarning(featureEx, "⚠️ Failed to capture fixture feature snapshots. Continuing with prediction generation.");
+                }
+            }
+
             // Chain the next job: Generate predictions only after data is successfully synced
             var normalizedRunReason = string.IsNullOrWhiteSpace(runReason)
                 ? (predictionDayOffset > 0 ? "prewarm" : "scheduled-sync")
@@ -143,6 +175,96 @@ public partial class AnalyzerService
         }
     }
 
+    /// <summary>
+    /// Persists a point-in-time capture of the real bookmaker card for every synced fixture,
+    /// de-vigged via Shin (1X2) / Power (two-way). These rows are the honest market feature
+    /// for training and backtesting — they are captured before kickoff by construction.
+    /// </summary>
+    private async Task SaveMarketOddsSnapshotsAsync(
+        IReadOnlyList<MatchData> scrapedMatches,
+        IReadOnlyList<SourceMarketFixture> sourceMarketFixtures,
+        DateOnly targetLocalDate)
+    {
+        if (sourceMarketFixtures.Count == 0 || scrapedMatches.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var nowUtc = DateTime.UtcNow;
+            var snapshots = new List<MarketOddsSnapshot>();
+            foreach (var match in scrapedMatches)
+            {
+                if (match.MatchDateTime is { } kickoffUtc && kickoffUtc <= nowUtc)
+                {
+                    continue; // never capture post-kickoff pricing as a pre-match snapshot
+                }
+
+                var sourceFixture = SourceMarketFixtureMatcher.FindBestFixture(
+                    sourceMarketFixtures,
+                    match.HomeTeam,
+                    match.AwayTeam,
+                    match.League,
+                    match.MatchDateTime);
+
+                if (sourceFixture is null)
+                {
+                    continue;
+                }
+
+                var fair = SourceMarketDeVig.ToFairProbabilities(sourceFixture);
+                if (!fair.HasAnySignal)
+                {
+                    continue;
+                }
+
+                snapshots.Add(new MarketOddsSnapshot
+                {
+                    FixtureKey = match.FixtureKey,
+                    MatchLocalDate = targetLocalDate,
+                    MatchDateTimeUtc = match.MatchDateTime,
+                    League = match.League?.Trim() ?? string.Empty,
+                    HomeTeam = match.HomeTeam?.Trim() ?? string.Empty,
+                    AwayTeam = match.AwayTeam?.Trim() ?? string.Empty,
+                    SourceName = MarketQuoteResolver.LiveSourceName,
+                    HomeWinOdds = sourceFixture.HomeWinOdds,
+                    DrawOdds = sourceFixture.DrawOdds,
+                    AwayWinOdds = sourceFixture.AwayWinOdds,
+                    Over25Odds = sourceFixture.Over25Odds,
+                    Under25Odds = sourceFixture.Under25Odds,
+                    BttsYesOdds = sourceFixture.BttsYesOdds,
+                    BttsNoOdds = sourceFixture.BttsNoOdds,
+                    FairHomeWin = fair.HomeWin,
+                    FairDraw = fair.Draw,
+                    FairAwayWin = fair.AwayWin,
+                    FairOver25 = fair.Over25,
+                    FairUnder25 = fair.Under25,
+                    FairBttsYes = fair.Btts,
+                    FairBttsNo = fair.Btts is { } bttsYes ? 1.0 - bttsYes : null,
+                    DeVigMethod = SourceMarketDeVig.ResolveMethod(sourceFixture),
+                    CapturedAtUtc = nowUtc
+                });
+            }
+
+            if (snapshots.Count == 0)
+            {
+                return;
+            }
+
+            _dbContext.MarketOddsSnapshots.AddRange(snapshots);
+            await _dbContext.SaveChangesAsync();
+            _logger.LogInformation(
+                "Captured {Count} market odds snapshot(s) for {TargetDate}.",
+                snapshots.Count,
+                DateTimeProvider.FormatLocalDate(targetLocalDate));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Failed to persist market odds snapshots. Continuing — snapshots are non-critical.");
+        }
+    }
+
     private void EnrichSourceMarketProbabilities(MatchData match, IReadOnlyList<SourceMarketFixture> sourceMarketFixtures)
     {
         if (sourceMarketFixtures.Count == 0)
@@ -155,14 +277,38 @@ public partial class AnalyzerService
             match.League,
             match.MatchDateTime);
 
-        if (sourceFixture?.BttsYesProbability is not double bttsYesProbability ||
-            sourceFixture.BttsNoProbability is not double bttsNoProbability)
+        if (sourceFixture is null)
         {
             return;
         }
 
-        match.BttsYes = bttsYesProbability;
-        match.BttsNo = bttsNoProbability;
+        var fair = SourceMarketDeVig.ToFairProbabilities(sourceFixture);
+
+        if (fair.HomeWin is { } homeWin && fair.Draw is { } draw && fair.AwayWin is { } awayWin)
+        {
+            match.HomeWin = homeWin;
+            match.Draw = draw;
+            match.AwayWin = awayWin;
+        }
+
+        if (fair.Over25 is { } over25 && fair.Under25 is { } under25)
+        {
+            match.OverTwoGoals = over25;
+            match.UnderTwoGoals = under25;
+        }
+
+        if (fair.Btts is { } bttsYes)
+        {
+            match.BttsYes = bttsYes;
+            match.BttsNo = 1.0 - bttsYes;
+        }
+        else if (sourceFixture.BttsYesProbability is { } bttsYesProbability &&
+                 sourceFixture.BttsNoProbability is { } bttsNoProbability)
+        {
+            match.BttsYes = bttsYesProbability;
+            match.BttsNo = bttsNoProbability;
+        }
+
         match.NormalizeSourceProbabilities();
     }
 

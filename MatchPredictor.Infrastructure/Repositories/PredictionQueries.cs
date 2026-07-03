@@ -27,6 +27,9 @@ public class PredictionQueries : IPredictionQueries
     public Task<IReadOnlyList<Prediction>> GetStraightWinAsync(DateTime date) =>
         GetByCategoryAsync(date, "StraightWin");
 
+    public Task<IReadOnlyList<Prediction>> GetDrawAsync(DateTime date) =>
+        GetByCategoryAsync(date, "Draw");
+
     public async Task<IReadOnlyList<Prediction>> GetCombinedSampleAsync(DateTime date, int count)
     {
         var localDate = DateOnly.FromDateTime(date);

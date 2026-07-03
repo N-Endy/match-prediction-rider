@@ -42,19 +42,26 @@ public partial class AnalyzerService
 
             var generationMatches = DeduplicateMatchesForGeneration(matches, targetDateString);
             IReadOnlyList<SourceMarketFixture> publishPricingFixtures = [];
-            if (targetLocalDate == DateTimeProvider.GetLocalDate())
+            try
             {
-                try
-                {
-                    publishPricingFixtures = await _sourceMarketPricingService.GetTodaySourceMarketFixturesAsync();
-                }
-                catch (Exception pricingEx)
-                {
-                    _logger.LogWarning(pricingEx, "Failed to load live source pricing while generating predictions for {TargetDate}. Publish odds snapshots will fall back to derived pricing.", targetDateString);
-                }
+                publishPricingFixtures = await _sourceMarketPricingService.GetSourceMarketFixturesForDateAsync(targetLocalDate);
+            }
+            catch (Exception pricingEx)
+            {
+                _logger.LogWarning(pricingEx, "Failed to load live source pricing while generating predictions for {TargetDate}. Publish odds snapshots will fall back to derived pricing.", targetDateString);
             }
 
-            var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates(generationMatches).ToList();
+            var bookmakerSignals = BookmakerSignalSetBuilder.Build(generationMatches, publishPricingFixtures);
+            if (bookmakerSignals.Count > 0)
+            {
+                _logger.LogInformation(
+                    "Resolved de-vigged bookmaker signals for {SignalCount}/{MatchCount} fixture(s) on {TargetDate}.",
+                    bookmakerSignals.Count,
+                    generationMatches.Count,
+                    targetDateString);
+            }
+
+            var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates(generationMatches, bookmakerSignals).ToList();
             foreach (var candidate in forecastCandidates)
             {
                 ApplyCanonicalFixtureIdentity(candidate);

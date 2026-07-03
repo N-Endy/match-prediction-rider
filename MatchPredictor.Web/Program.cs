@@ -38,10 +38,32 @@ builder.Configuration
     .AddEnvironmentVariables();
 
 var runtimeMode = RuntimeModeOptions.FromConfiguration(builder.Configuration);
+if (builder.Environment.IsEnvironment("Testing"))
+{
+    runtimeMode = runtimeMode with
+    {
+        RunBackgroundJobs = false,
+        BrowserScrapingEnabled = false,
+        UserTrackingEnabled = false,
+        UseExternalCron = true
+    };
+}
+
+var skipStartupInitialization =
+    builder.Environment.IsEnvironment("Testing") ||
+    builder.Configuration.GetValue<bool>("SKIP_STARTUP_INITIALIZATION");
 
 // Configure database
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
-    ?? throw new InvalidOperationException("Connection string 'DefaultConnection' is not configured.");
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (string.IsNullOrWhiteSpace(connectionString))
+{
+    if (!builder.Environment.IsEnvironment("Testing"))
+    {
+        throw new InvalidOperationException("Connection string 'DefaultConnection' is not configured.");
+    }
+
+    connectionString = "Host=localhost;Database=matchpredictor_test;Username=test;Password=test";
+}
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(connectionString));
@@ -56,13 +78,21 @@ builder.Services.AddScoped<IPredictionQueries>(provider => new CachedPredictionQ
 builder.Services.AddScoped<IHealthQueryService, HealthQueryService>();
 builder.Services.AddScoped<IScrapeStatusQueries, ScrapeStatusQueries>();
 builder.Services.AddScoped<IAnalyticsQueries, AnalyticsQueries>();
-        builder.Services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
+builder.Services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
+builder.Services.AddScoped<ISportsAiExcelScraper, SportsAiExcelScraper>();
 builder.Services.AddScoped<IWebScraperService, WebScraperService>();
 builder.Services.AddScoped<IExtractFromExcel, ExtractFromExcel>();
 builder.Services.AddScoped<IProbabilityCalculator, ProbabilityCalculator>();
 builder.Services.AddScoped<ICalibrationService, CalibrationService>();
+builder.Services.AddScoped<IHistoricalBacktestService, HistoricalBacktestService>();
+builder.Services.AddScoped<ITeamResolutionService, TeamResolutionService>();
+builder.Services.AddScoped<IFixtureFeatureService, FixtureFeatureService>();
+builder.Services.AddScoped<IMarketPredictionModelService, MarketPredictionModelService>();
 builder.Services.AddScoped<IProbabilityCorrectionService, ProbabilityCorrectionService>();
 builder.Services.AddScoped<IThresholdTuningService, ThresholdTuningService>();
+builder.Services.AddScoped<EnsembleWeightTuningService>();
+builder.Services.AddScoped<IEnsembleWeightTuningService>(provider => provider.GetRequiredService<EnsembleWeightTuningService>());
+builder.Services.AddScoped<IEnsembleWeightProvider>(provider => provider.GetRequiredService<EnsembleWeightTuningService>());
 builder.Services.AddScoped<ILearningLoopService, LearningLoopService>();
 builder.Services.AddScoped<IForecastEvaluationService, ForecastEvaluationService>();
 builder.Services.AddScoped<IAnalyzerService, AnalyzerService>();
@@ -76,6 +106,7 @@ builder.Services.AddScoped<SportyBetBookingService>();
 builder.Services.AddScoped<ISportyBetBookingService>(provider => provider.GetRequiredService<SportyBetBookingService>());
 builder.Services.AddScoped<ISourceMarketPricingService>(provider => provider.GetRequiredService<SportyBetBookingService>());
 builder.Services.AddScoped<AiChatKnowledgeService>();
+builder.Services.AddScoped<IAiChatSessionStore, AiChatSessionStore>();
 builder.Services.AddScoped<IAiChatSchemaFallbackService, AiChatSchemaFallbackService>();
 builder.Services.AddScoped<AiChatRequestParser>();
 builder.Services.AddScoped<IAiChatFootballInsightService, AiChatFootballInsightService>();
@@ -115,6 +146,8 @@ builder.Host.UseSerilog((context, services, configuration) =>
 // Register configuration settings
 builder.Services.Configure<MatchPredictor.Domain.Models.PredictionSettings>(
     builder.Configuration.GetSection("PredictionSettings"));
+builder.Services.Configure<MatchPredictor.Domain.Models.ProbabilityCalculatorSettings>(
+    builder.Configuration.GetSection("ProbabilityCalculator"));
 
 // Configure Hangfire
 builder.Services.AddLogging();
@@ -144,7 +177,7 @@ builder.Services.AddHangfire((_, config) =>
 });
 
 var hangfireWorkerCount = ResolveHangfireWorkerCount(builder.Configuration);
-if (runtimeMode.RunBackgroundJobs)
+if (runtimeMode.RunBackgroundJobs && !skipStartupInitialization)
 {
     builder.Services.AddHangfireServer(options =>
     {
@@ -170,7 +203,15 @@ using (var scope = app.Services.CreateScope())
         runtimeMode.RunBackgroundJobs,
         runtimeMode.BrowserScrapingEnabled,
         runtimeMode.UseExternalCron);
-    
+
+    if (skipStartupInitialization)
+    {
+        logger.LogWarning("Skipping database and Hangfire initialization because SKIP_STARTUP_INITIALIZATION is enabled.");
+        startupState.MarkDatabaseInitialized();
+        startupState.MarkHangfireInitialized();
+    }
+    else
+    {
     try
     {
         logger.LogInformation(
@@ -214,6 +255,7 @@ using (var scope = app.Services.CreateScope())
         startupState.MarkInitializationFailed(ex.Message);
         logger.LogCritical(ex, "❌ Startup aborted because database or Hangfire initialization failed.");
         throw new InvalidOperationException("Application startup aborted because database initialization failed.", ex);
+    }
     }
 }
 
@@ -335,19 +377,22 @@ else
 app.UseAuthorization();
 
 // Start Hangfire Server and Dashboard
-app.UseHangfireDashboard("/hangfire", new DashboardOptions
+if (!skipStartupInitialization)
 {
-    DashboardTitle = "Match Predictor Jobs",
-    StatsPollingInterval = 5000,
-    Authorization = app.Environment.IsDevelopment()
-        ? new Hangfire.Dashboard.IDashboardAuthorizationFilter[] { new HangfireLocalRequestsOnlyFilter() }
-        : new Hangfire.Dashboard.IDashboardAuthorizationFilter[]
-        {
-            new HangfireBasicAuthFilter(
-                builder.Configuration["Hangfire:Username"],
-                builder.Configuration["Hangfire:Password"])
-        }
-});
+    app.UseHangfireDashboard("/hangfire", new DashboardOptions
+    {
+        DashboardTitle = "Match Predictor Jobs",
+        StatsPollingInterval = 5000,
+        Authorization = app.Environment.IsDevelopment()
+            ? new Hangfire.Dashboard.IDashboardAuthorizationFilter[] { new HangfireLocalRequestsOnlyFilter() }
+            : new Hangfire.Dashboard.IDashboardAuthorizationFilter[]
+            {
+                new HangfireBasicAuthFilter(
+                    builder.Configuration["Hangfire:Username"],
+                    builder.Configuration["Hangfire:Password"])
+            }
+    });
+}
 
 app.MapRazorPages();
 app.MapControllers();

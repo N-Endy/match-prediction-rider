@@ -13,6 +13,7 @@ public class AdminUsageBasicAuthMiddleware
     private static readonly string[] ProtectedPathPrefixes =
     [
         "/admin/usage",
+        "/analytics",
         "/ScrapeStatus",
         "/ops/health"
     ];

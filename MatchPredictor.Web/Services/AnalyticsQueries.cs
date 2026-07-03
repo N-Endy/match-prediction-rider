@@ -13,6 +13,10 @@ public sealed class AnalyticsDataSnapshot
         = new Dictionary<PredictionMarket, ThresholdProfile>();
     public IReadOnlyDictionary<PredictionMarket, BetaCalibrationProfile> BetaProfiles { get; init; }
         = new Dictionary<PredictionMarket, BetaCalibrationProfile>();
+    public IReadOnlyDictionary<PredictionMarket, IsotonicCalibrationProfile> IsotonicProfiles { get; init; }
+        = new Dictionary<PredictionMarket, IsotonicCalibrationProfile>();
+    public IReadOnlyList<HistoricalBacktestSummary> BacktestTrend { get; init; } = [];
+    public IReadOnlyList<MarketMlModelProfile> MarketMlProfiles { get; init; } = [];
     public IReadOnlyList<PromotionHistory> RecentPromotionHistory { get; init; } = [];
 }
 
@@ -67,6 +71,21 @@ public sealed class AnalyticsQueries : IAnalyticsQueries
             .AsNoTracking()
             .ToDictionaryAsync(profile => profile.Market, cancellationToken);
 
+        var isotonicProfiles = await _dbContext.IsotonicCalibrationProfiles
+            .AsNoTracking()
+            .ToDictionaryAsync(profile => profile.Market, cancellationToken);
+
+        var backtestTrend = await _dbContext.HistoricalBacktestSummaries
+            .AsNoTracking()
+            .OrderByDescending(summary => summary.RunAtUtc)
+            .Take(30)
+            .ToListAsync(cancellationToken);
+
+        var marketMlProfiles = await _dbContext.MarketMlModelProfiles
+            .AsNoTracking()
+            .OrderBy(profile => profile.Market)
+            .ToListAsync(cancellationToken);
+
         var recentPromotionHistory = await _dbContext.PromotionHistories
             .AsNoTracking()
             .Where(history => history.EffectiveAt >= promotionCutoffUtc)
@@ -80,6 +99,9 @@ public sealed class AnalyticsQueries : IAnalyticsQueries
             OddsSnapshots = oddsSnapshots,
             ThresholdProfiles = thresholdProfiles,
             BetaProfiles = betaProfiles,
+            IsotonicProfiles = isotonicProfiles,
+            BacktestTrend = backtestTrend,
+            MarketMlProfiles = marketMlProfiles,
             RecentPromotionHistory = recentPromotionHistory
         };
     }

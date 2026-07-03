@@ -1,5 +1,6 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using Microsoft.Extensions.Options;
 
 namespace MatchPredictor.Infrastructure.Services;
 
@@ -9,9 +10,21 @@ namespace MatchPredictor.Infrastructure.Services;
 /// </summary>
 public class ProbabilityCalculator : IProbabilityCalculator
 {
+    private readonly ProbabilityCalculatorSettings _settings;
+
+    public ProbabilityCalculator()
+        : this(Options.Create(new ProbabilityCalculatorSettings()))
+    {
+    }
+
+    public ProbabilityCalculator(IOptions<ProbabilityCalculatorSettings> settings)
+    {
+        _settings = settings.Value;
+    }
+
     public MatchProbabilities CalculateProbabilities(MatchData match)
     {
-        return BuildProbabilityModel(match);
+        return BuildProbabilityModel(match, _settings);
     }
 
     public double CalculateBttsProbability(MatchData match)
@@ -39,10 +52,10 @@ public class ProbabilityCalculator : IProbabilityCalculator
         return CalculateProbabilities(match).AwayWin;
     }
 
-    private static MatchProbabilities BuildProbabilityModel(MatchData match)
+    private static MatchProbabilities BuildProbabilityModel(MatchData match, ProbabilityCalculatorSettings settings)
     {
         var (homeWinSource, drawSource, awayWinSource) = GetNormalizedOneX2(match);
-        var totalXg = EstimateTotalXg(match);
+        var totalXg = EstimateTotalXg(match, settings);
         if (totalXg <= 0)
         {
             var sourceOver25 = match.TryGetNormalizedOver25Pair(out var overUnder25) ? overUnder25.over25 : 0.0;
@@ -62,20 +75,20 @@ public class ProbabilityCalculator : IProbabilityCalculator
         var poisson = ComputePoissonOutcomeModel(homeXg, awayXg);
 
         var over25 = BlendAvailable(
-            (match.TryGetNormalizedOver25Pair(out var overPair) ? overPair.over25 : (double?)null, 0.72),
-            (poisson.Over25, 0.28));
+            (match.TryGetNormalizedOver25Pair(out var overPair) ? overPair.over25 : (double?)null, settings.Over25SourceWeight),
+            (poisson.Over25, settings.Over25PoissonWeight));
 
         var provisionalHomeWin = BlendAvailable(
-            (homeWinSource > 0 ? homeWinSource : (double?)null, 0.48),
-            (TryEstimateHandicapWinProbability(match, drawSource, isHome: true), 0.22),
-            (poisson.HomeWin, 0.30));
+            (homeWinSource > 0 ? homeWinSource : (double?)null, settings.WinSourceWeight),
+            (TryEstimateHandicapWinProbability(match, drawSource, isHome: true), settings.WinHandicapWeight),
+            (poisson.HomeWin, settings.WinPoissonWeight));
         var provisionalAwayWin = BlendAvailable(
-            (awayWinSource > 0 ? awayWinSource : (double?)null, 0.48),
-            (TryEstimateHandicapWinProbability(match, drawSource, isHome: false), 0.22),
-            (poisson.AwayWin, 0.30));
+            (awayWinSource > 0 ? awayWinSource : (double?)null, settings.WinSourceWeight),
+            (TryEstimateHandicapWinProbability(match, drawSource, isHome: false), settings.WinHandicapWeight),
+            (poisson.AwayWin, settings.WinPoissonWeight));
         var provisionalDraw = BlendAvailable(
-            (drawSource > 0 ? drawSource : (double?)null, 0.62),
-            (poisson.Draw, 0.38));
+            (drawSource > 0 ? drawSource : (double?)null, settings.DrawSourceWeight),
+            (poisson.Draw, settings.DrawPoissonWeight));
 
         var (homeWin, draw, awayWin) = ApplyAnchoredOneX2Blend(
             match,
@@ -102,9 +115,9 @@ public class ProbabilityCalculator : IProbabilityCalculator
             0.0,
             1.0);
         var btts = BlendAvailable(
-            (directBtts, 0.58),
-            (heuristicBtts, 0.32),
-            (Math.Clamp(goalSupport * (0.70 + (0.25 * competitiveness)), 0.0, 1.0), 0.10));
+            (directBtts, settings.BttsDirectWeight),
+            (heuristicBtts, settings.BttsHeuristicWeight),
+            (Math.Clamp(goalSupport * (0.70 + (0.25 * competitiveness)), 0.0, 1.0), settings.BttsGoalSupportWeight));
 
         return new MatchProbabilities(
             Btts: Math.Clamp(btts, 0.0, 1.0),
@@ -115,27 +128,27 @@ public class ProbabilityCalculator : IProbabilityCalculator
             AwayWin: Math.Clamp(awayWin, 0.0, 1.0));
     }
 
-    private static double EstimateTotalXg(MatchData match)
+    private static double EstimateTotalXg(MatchData match, ProbabilityCalculatorSettings settings)
     {
         var weightedLambdas = new List<(double Lambda, double Weight)>();
 
         if (match.TryGetNormalizedOver25Pair(out var overUnder25))
         {
-            weightedLambdas.Add((InversePoissonOver(overUnder25.over25, threshold: 2), 1.45));
+            weightedLambdas.Add((InversePoissonOver(overUnder25.over25, threshold: 2), settings.Over25XgWeight));
         }
         else if (match.Over25() > 0)
         {
-            weightedLambdas.Add((InversePoissonOver(match.Over25(), threshold: 2), 1.20));
+            weightedLambdas.Add((InversePoissonOver(match.Over25(), threshold: 2), settings.Over25XgWeight));
         }
 
         if (match.OverOnePointFive > 0)
         {
-            weightedLambdas.Add((InversePoissonOver(match.OverOnePointFive, threshold: 1), 0.90));
+            weightedLambdas.Add((InversePoissonOver(match.OverOnePointFive, threshold: 1), settings.Over15XgWeight));
         }
 
         if (match.Over35() > 0)
         {
-            weightedLambdas.Add((InversePoissonOver(match.Over35(), threshold: 3), 0.75));
+            weightedLambdas.Add((InversePoissonOver(match.Over35(), threshold: 3), settings.Over35XgWeight));
         }
 
         if (weightedLambdas.Count == 0)

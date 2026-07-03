@@ -61,7 +61,7 @@ public class ThresholdTuningServiceTests
     }
 
     [Fact]
-    public async Task RebuildProfilesAsync_IgnoresLegacyDrawMarket_WhenRebuildingActiveThresholds()
+    public async Task RebuildProfilesAsync_PromotesDrawThreshold_WhenValidationBeatsConfiguredBaseline()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
@@ -70,42 +70,30 @@ public class ThresholdTuningServiceTests
         await using var context = new ApplicationDbContext(options);
         var now = DateTime.UtcNow;
 
-        context.ThresholdProfiles.Add(new ThresholdProfile
-        {
-            Market = PredictionMarket.Draw,
-            BaselineThreshold = 0.30,
-            Threshold = 0.42,
-            SampleCount = 30,
-            HitRate = 0.55,
-            PublishedPerWeek = 2.0,
-            AverageCalibratedProbability = 0.44,
-            ObservedFrequency = 0.55,
-            BrierScore = 0.210,
-            TrainingSampleCount = 30,
-            ValidationSampleCount = 15,
-            BaselineHitRate = 0.50,
-            BaselineBrierScore = 0.220,
-            Improvement = 0.010,
-            IsPromoted = true,
-            LastUpdated = now
-        });
-
         SeedForecasts(
             context,
             now,
             PredictionMarket.Draw,
             45,
-            0.60,
+            0.74,
             true,
-            "BalancedWin");
+            "High");
         SeedForecasts(
             context,
             now.AddMinutes(-1),
             PredictionMarket.Draw,
             45,
-            0.60,
+            0.56,
             false,
-            "BalancedLoss");
+            "Mid");
+        SeedForecasts(
+            context,
+            now.AddMinutes(-2),
+            PredictionMarket.Draw,
+            45,
+            0.44,
+            false,
+            "Low");
 
         await context.SaveChangesAsync();
 
@@ -113,18 +101,12 @@ public class ThresholdTuningServiceTests
 
         await service.RebuildProfilesAsync();
 
-        var decision = service.GetThresholdDecision(PredictionMarket.Draw, 0.54);
-        var drawProfiles = await context.ThresholdProfiles
-            .Where(p => p.Market == PredictionMarket.Draw)
-            .ToListAsync();
-        var drawHistory = await context.PromotionHistories
-            .Where(history => history.Market == PredictionMarket.Draw)
-            .ToListAsync();
+        var profile = await context.ThresholdProfiles.SingleAsync(p => p.Market == PredictionMarket.Draw);
+        var decision = service.GetThresholdDecision(PredictionMarket.Draw, 0.30);
 
-        Assert.Empty(drawProfiles);
-        Assert.Empty(drawHistory);
-        Assert.Equal(0.54, decision.Threshold, 3);
-        Assert.Equal("Configured", decision.ThresholdSource);
+        Assert.True(profile.IsPromoted);
+        Assert.True(profile.Threshold > 0.56);
+        Assert.Equal("Tuned", decision.ThresholdSource);
     }
 
     [Fact]

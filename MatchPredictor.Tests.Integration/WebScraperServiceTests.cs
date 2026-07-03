@@ -22,6 +22,7 @@ namespace MatchPredictor.Tests.Integration
         }
 
         [Fact]
+        [Trait("Category", "LiveNetwork")]
         public async Task TestAiScoreHttpExtraction()
         {
             var configBuilder = new ConfigurationBuilder();
@@ -87,6 +88,7 @@ namespace MatchPredictor.Tests.Integration
         }
 
         [Fact]
+        [Trait("Category", "LiveNetwork")]
         public async Task TestSofaScoreBrowserExtraction()
         {
             var scraper = CreateScraper();

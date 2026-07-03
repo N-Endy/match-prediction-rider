@@ -9,6 +9,10 @@
   </PropertyGroup>
 
     <ItemGroup>
+      <InternalsVisibleTo Include="MatchPredictor.Tests.Integration" />
+    </ItemGroup>
+
+    <ItemGroup>
       <ProjectReference Include="..\MatchPredictor.Application\MatchPredictor.Application.csproj" />
       <ProjectReference Include="..\MatchPredictor.Domain\MatchPredictor.Domain.csproj" />
       <ProjectReference Include="..\MatchPredictor.Infrastructure\MatchPredictor.Infrastructure.csproj" />

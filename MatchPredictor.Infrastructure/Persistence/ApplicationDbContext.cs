@@ -23,9 +23,17 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<BetaCalibrationProfile> BetaCalibrationProfiles => Set<BetaCalibrationProfile>();
     public DbSet<ThresholdProfile> ThresholdProfiles => Set<ThresholdProfile>();
     public DbSet<MetaModelProfile> MetaModelProfiles => Set<MetaModelProfile>();
+    public DbSet<EnsembleWeightProfile> EnsembleWeightProfiles => Set<EnsembleWeightProfile>();
+    public DbSet<IsotonicCalibrationProfile> IsotonicCalibrationProfiles => Set<IsotonicCalibrationProfile>();
+    public DbSet<HistoricalBacktestSummary> HistoricalBacktestSummaries => Set<HistoricalBacktestSummary>();
     public DbSet<PromotionHistory> PromotionHistories => Set<PromotionHistory>();
     public DbSet<SourceQualityProfile> SourceQualityProfiles => Set<SourceQualityProfile>();
     public DbSet<PredictionOddsSnapshot> PredictionOddsSnapshots => Set<PredictionOddsSnapshot>();
+    public DbSet<MarketOddsSnapshot> MarketOddsSnapshots => Set<MarketOddsSnapshot>();
+    public DbSet<FixtureFeatureSnapshot> FixtureFeatureSnapshots => Set<FixtureFeatureSnapshot>();
+    public DbSet<MarketMlModelProfile> MarketMlModelProfiles => Set<MarketMlModelProfile>();
+    public DbSet<Team> Teams => Set<Team>();
+    public DbSet<TeamAlias> TeamAliases => Set<TeamAlias>();
     public DbSet<VisitorSession> VisitorSessions => Set<VisitorSession>();
     public DbSet<UserActivityEvent> UserActivityEvents => Set<UserActivityEvent>();
     // Required by IDataProtectionKeyContext
@@ -124,6 +132,38 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.HasIndex(e => new { e.PredictionRunId, e.SnapshotKind });
         });
 
+        modelBuilder.Entity<MarketOddsSnapshot>(entity =>
+        {
+            entity.HasIndex(e => new { e.MatchLocalDate, e.FixtureKey, e.SourceName });
+            entity.HasIndex(e => e.CapturedAtUtc);
+        });
+
+        modelBuilder.Entity<FixtureFeatureSnapshot>(entity =>
+        {
+            entity.HasIndex(e => new { e.FixtureKey, e.CapturedAtUtc });
+            entity.HasIndex(e => new { e.MatchLocalDate, e.FixtureKey });
+        });
+
+        modelBuilder.Entity<MarketMlModelProfile>(entity =>
+        {
+            entity.HasIndex(e => e.Market).IsUnique();
+        });
+
+        modelBuilder.Entity<Team>(entity =>
+        {
+            entity.HasIndex(e => new { e.NormalizedName, e.LeagueScope }).IsUnique();
+        });
+
+        modelBuilder.Entity<TeamAlias>(entity =>
+        {
+            entity.HasIndex(e => new { e.NormalizedAlias, e.LeagueScope, e.SourceName }).IsUnique();
+            entity.HasIndex(e => e.TeamId);
+            entity.HasOne(e => e.Team)
+                .WithMany(e => e.Aliases)
+                .HasForeignKey(e => e.TeamId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
         modelBuilder.Entity<ThresholdProfile>(entity =>
         {
             entity.HasIndex(e => e.Market).IsUnique();
@@ -134,9 +174,24 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.HasIndex(e => e.Market).IsUnique();
         });
 
+        modelBuilder.Entity<EnsembleWeightProfile>(entity =>
+        {
+            entity.HasIndex(e => e.Market).IsUnique();
+        });
+
         modelBuilder.Entity<BetaCalibrationProfile>(entity =>
         {
             entity.HasIndex(e => e.Market).IsUnique();
+        });
+
+        modelBuilder.Entity<IsotonicCalibrationProfile>(entity =>
+        {
+            entity.HasIndex(e => e.Market).IsUnique();
+        });
+
+        modelBuilder.Entity<HistoricalBacktestSummary>(entity =>
+        {
+            entity.HasIndex(e => e.RunAtUtc);
         });
 
         modelBuilder.Entity<PromotionHistory>(entity =>

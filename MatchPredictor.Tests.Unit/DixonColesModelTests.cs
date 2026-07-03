@@ -114,4 +114,71 @@ public class DixonColesModelTests
 
         Assert.Equal(1.0, prediction.HomeWin + prediction.Draw + prediction.AwayWin, 6);
     }
+
+    [Fact]
+    public void Predict_UsesLeagueSpecificModelWhenLeagueHasEnoughHistory()
+    {
+        var start = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var results = new List<MatchResult>();
+        for (var i = 0; i < 24; i++)
+        {
+            results.Add(new MatchResult("Aces", "Bears", 3, 0, start.AddDays(i), "League A"));
+            results.Add(new MatchResult("Bears", "Aces", 0, 2, start.AddDays(i + 30), "League A"));
+            results.Add(new MatchResult("Aces", "Bears", 0, 2, start.AddDays(i + 60), "League B"));
+            results.Add(new MatchResult("Bears", "Aces", 2, 0, start.AddDays(i + 90), "League B"));
+        }
+
+        var model = DixonColesModel.Fit(results, start.AddDays(150), new DixonColesOptions { MinMatchesPerLeague = 16 });
+
+        var leagueA = model.Predict("Aces", "Bears", "League A");
+        var leagueB = model.Predict("Aces", "Bears", "League B");
+
+        Assert.True(leagueA.HomeWin > leagueB.HomeWin);
+    }
+
+    [Fact]
+    public void Predict_FallsBackToGlobalModelForSparseLeague()
+    {
+        var start = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var results = BuildSyntheticLeague(start)
+            .Select(result => result with { League = "Global League" })
+            .Concat(new[]
+            {
+                new MatchResult("Aces", "Dogs", 0, 3, start.AddDays(200), "Sparse League"),
+                new MatchResult("Dogs", "Aces", 3, 0, start.AddDays(201), "Sparse League")
+            })
+            .ToList();
+
+        var model = DixonColesModel.Fit(results, start.AddDays(400), new DixonColesOptions { MinMatchesPerLeague = 12 });
+
+        var noLeague = model.Predict("Aces", "Dogs");
+        var sparseLeague = model.Predict("Aces", "Dogs", "Sparse League");
+
+        Assert.Equal(noLeague.HomeWin, sparseLeague.HomeWin, 6);
+    }
+
+    [Fact]
+    public void TuneHalfLife_ReturnsConfiguredIncumbentWhenHistoryIsTooSmall()
+    {
+        var options = new DixonColesOptions { HalfLifeDays = 75 };
+
+        var result = DixonColesModel.TuneHalfLife([], DateTime.UtcNow, options);
+
+        Assert.Equal(75, result.SelectedHalfLifeDays);
+        Assert.False(result.Promoted);
+    }
+
+    [Fact]
+    public void Fit_AdaptiveOptimizerProducesFiniteParameters()
+    {
+        var start = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var model = DixonColesModel.Fit(
+            BuildSyntheticLeague(start),
+            start.AddDays(400),
+            new DixonColesOptions { Iterations = 250, ConvergenceTolerance = 1e-4 });
+
+        Assert.True(double.IsFinite(model.Intercept));
+        Assert.True(double.IsFinite(model.HomeAdvantage));
+        Assert.True(double.IsFinite(model.Rho));
+    }
 }

@@ -227,13 +227,29 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         }
     }
 
-    public async Task<IReadOnlyList<SourceMarketFixture>> GetTodaySourceMarketFixturesAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<SourceMarketFixture>> GetTodaySourceMarketFixturesAsync(CancellationToken ct = default)
+    {
+        return GetSourceMarketFixturesForDateAsync(DateTimeProvider.GetLocalDate(), ct);
+    }
+
+    public async Task<IReadOnlyList<SourceMarketFixture>> GetSourceMarketFixturesForDateAsync(
+        DateOnly targetLocalDate,
+        CancellationToken ct = default)
     {
         var baseUrl = _configuration["SportyBet:BaseUrl"] ?? "https://www.sportybet.com";
         var soccerSportId = _configuration["SportyBet:SoccerSportId"] ?? "sr:sport:1";
         var market1X2 = _configuration["SportyBet:Market1X2"] ?? "1";
 
-        var fixtures = await FetchTodayFixturesAsync(baseUrl, soccerSportId, market1X2, ct, useBookingClient: false);
+        var todayLocalDate = DateTimeProvider.GetLocalDate();
+        if (targetLocalDate < todayLocalDate)
+        {
+            return [];
+        }
+
+        var fixtures = targetLocalDate == todayLocalDate
+            ? await FetchTodayFixturesAsync(baseUrl, soccerSportId, market1X2, ct, useBookingClient: false)
+            : await FetchUpcomingFixturesForDateAsync(baseUrl, soccerSportId, market1X2, targetLocalDate, ct);
+
         return fixtures.Select(fixture => new SourceMarketFixture
         {
             EventId = fixture.EventId,
@@ -259,6 +275,34 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
     }
 
     /// <summary>
+    /// Fetches football fixtures for a future local date. SportyBet's upcoming-events API
+    /// returns multi-day cards when <c>todayGames</c> is omitted, so we page through and
+    /// filter to the requested local date.
+    /// </summary>
+    private async Task<List<SportyBetFixture>> FetchUpcomingFixturesForDateAsync(
+        string baseUrl,
+        string soccerSportId,
+        string market1X2,
+        DateOnly targetLocalDate,
+        CancellationToken ct)
+    {
+        var fixtures = await FetchTodayFixturesAsync(
+            baseUrl,
+            soccerSportId,
+            market1X2,
+            ct,
+            useBookingClient: false,
+            targetedSelections: null,
+            todayGamesOnly: false,
+            cacheKeySuffix: targetLocalDate.ToString("yyyyMMdd"));
+
+        return fixtures
+            .Where(fixture => fixture.MatchTimeUtc.HasValue &&
+                              DateTimeProvider.ConvertUtcToLocalDate(fixture.MatchTimeUtc.Value) == targetLocalDate)
+            .ToList();
+    }
+
+    /// <summary>
     /// Fetches today's football fixtures from SportyBet and returns a flat list indexed by fixture.
     /// </summary>
     private async Task<List<SportyBetFixture>> FetchTodayFixturesAsync(
@@ -267,9 +311,11 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         string market1X2,
         CancellationToken ct,
         bool useBookingClient,
-        IReadOnlyCollection<ResolvedBookingSelection>? targetedSelections = null)
+        IReadOnlyCollection<ResolvedBookingSelection>? targetedSelections = null,
+        bool todayGamesOnly = true,
+        string? cacheKeySuffix = null)
     {
-        var cacheKey = $"sportybet_fixtures_{DateTime.UtcNow:yyyyMMdd}";
+        var cacheKey = $"sportybet_fixtures_{cacheKeySuffix ?? DateTime.UtcNow.ToString("yyyyMMdd")}";
         var backupCacheKey = $"{cacheKey}_backup";
         string? cachedData = null;
 
@@ -311,7 +357,8 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                            $"?sportId={Uri.EscapeDataString(soccerSportId)}" +
                            $"&marketId={Uri.EscapeDataString(market1X2)},18,29" +
                            $"&pageSize={pageSize}&pageNum={page}" +
-                           $"&todayGames=true&timeline=2.9&_t={timestamp}";
+                           (todayGamesOnly ? "&todayGames=true&timeline=2.9" : string.Empty) +
+                           $"&_t={timestamp}";
 
                 _logger.LogInformation("SportyBet API GET: {Url}", url);
 

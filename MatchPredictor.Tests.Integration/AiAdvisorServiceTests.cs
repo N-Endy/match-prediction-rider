@@ -902,7 +902,7 @@ public class AiAdvisorServiceTests
             configuration,
             NullLogger<AiAdvisorService>.Instance,
             new StubHttpClientFactory(handler),
-            cache ?? new TestDistributedCache(),
+            new AiChatSessionStore(cache ?? new TestDistributedCache(), NullLogger<AiChatSessionStore>.Instance),
             new AiChatKnowledgeService(),
             new AiChatRequestParser(new StubSchemaFallbackService(), NullLogger<AiChatRequestParser>.Instance),
             new StubServiceScopeFactory(valueBetsService),

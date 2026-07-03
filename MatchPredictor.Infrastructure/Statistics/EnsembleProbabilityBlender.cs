@@ -3,20 +3,6 @@ using MatchPredictor.Domain.Models;
 namespace MatchPredictor.Infrastructure.Statistics;
 
 /// <summary>
-/// Relative weights for each signal feeding the ensemble. Missing signals are
-/// skipped and the remaining weights renormalize automatically.
-/// </summary>
-public sealed record EnsembleWeights
-{
-    public double Market { get; init; } = 1.0;
-    public double Base { get; init; } = 0.6;
-    public double DixonColes { get; init; } = 1.1;
-    public double Elo { get; init; } = 0.7;
-
-    public static EnsembleWeights Default => new();
-}
-
-/// <summary>
 /// Blends probabilities from multiple models. Blending happens in <em>logit space</em>
 /// (a weighted geometric mean of odds) which is the standard, well-behaved way to
 /// pool calibrated probabilities. The 1X2 triple is renormalized to sum to 1 and
@@ -58,32 +44,48 @@ public static class EnsembleProbabilityBlender
         MatchProbabilities? elo,
         EnsembleWeights? weights = null)
     {
+        return Blend(bookmaker: null, market, baseModel, dixonColes, elo, weights);
+    }
+
+    public static MatchProbabilities Blend(
+        PartialMatchProbabilities? bookmaker,
+        MatchProbabilities? market,
+        MatchProbabilities? baseModel,
+        MatchProbabilities? dixonColes,
+        MatchProbabilities? elo,
+        EnsembleWeights? weights = null)
+    {
         weights ??= EnsembleWeights.Default;
 
         var homeWin = BlendLogit(
+            (bookmaker?.HomeWin, weights.Bookmaker),
             (market?.HomeWin, weights.Market),
             (baseModel?.HomeWin, weights.Base),
             (dixonColes?.HomeWin, weights.DixonColes),
             (elo?.HomeWin, weights.Elo));
 
         var draw = BlendLogit(
+            (bookmaker?.Draw, weights.Bookmaker),
             (market?.Draw, weights.Market),
             (baseModel?.Draw, weights.Base),
             (dixonColes?.Draw, weights.DixonColes),
             (elo?.Draw, weights.Elo));
 
         var awayWin = BlendLogit(
+            (bookmaker?.AwayWin, weights.Bookmaker),
             (market?.AwayWin, weights.Market),
             (baseModel?.AwayWin, weights.Base),
             (dixonColes?.AwayWin, weights.DixonColes),
             (elo?.AwayWin, weights.Elo));
 
         var over25 = BlendLogit(
+            (bookmaker?.Over25, weights.Bookmaker),
             (market?.Over25, weights.Market),
             (baseModel?.Over25, weights.Base),
             (dixonColes?.Over25, weights.DixonColes));
 
         var btts = BlendLogit(
+            (bookmaker?.Btts, weights.Bookmaker),
             (market?.Btts, weights.Market),
             (baseModel?.Btts, weights.Base),
             (dixonColes?.Btts, weights.DixonColes));

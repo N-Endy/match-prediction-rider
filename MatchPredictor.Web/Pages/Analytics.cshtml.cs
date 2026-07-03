@@ -20,6 +20,10 @@ public class AnalyticsModel : PageModel
     public AnalyticsStats Last3DaysStats { get; set; } = new();
     public AnalyticsStats Last7DaysStats { get; set; } = new();
     public AnalyticsLiveConfigSnapshot CurrentLiveConfig { get; set; } = new();
+    public IReadOnlyDictionary<PredictionMarket, IsotonicCalibrationProfile> IsotonicProfiles { get; private set; }
+        = new Dictionary<PredictionMarket, IsotonicCalibrationProfile>();
+    public IReadOnlyList<HistoricalBacktestSummary> BacktestTrend { get; private set; } = [];
+    public IReadOnlyList<MarketMlModelProfile> MarketMlProfiles { get; private set; } = [];
 
     public AnalyticsModel(
         IAnalyticsQueries analyticsQueries,
@@ -68,6 +72,9 @@ public class AnalyticsModel : PageModel
         var thresholdProfiles = snapshot.ThresholdProfiles;
         var betaProfiles = snapshot.BetaProfiles;
         var recentPromotionHistory = snapshot.RecentPromotionHistory;
+        IsotonicProfiles = snapshot.IsotonicProfiles;
+        BacktestTrend = snapshot.BacktestTrend;
+        MarketMlProfiles = snapshot.MarketMlProfiles;
 
         List<PredictionOddsSnapshot> SnapshotsFor(IEnumerable<Prediction> windowPredictions) =>
             windowPredictions

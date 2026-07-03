@@ -1,4 +1,5 @@
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Domain.Helpers;
 
 namespace MatchPredictor.Application.Helpers;
 
@@ -20,11 +21,15 @@ public static class SourceMarketFixtureMatcher
 
         foreach (var fixture in fixtures)
         {
-            var homeMatch = ScoreMatchingHelper.GetTeamMatchResult(homeTeam ?? string.Empty, fixture.HomeTeam, league, fixture.League);
+            var homeMatch = AreCanonicalAliasesEqual(homeTeam, fixture.HomeTeam, league, fixture.League)
+                ? new ScoreMatchingHelper.TeamMatchResult(true, 1.0, true, false)
+                : ScoreMatchingHelper.GetTeamMatchResult(homeTeam ?? string.Empty, fixture.HomeTeam, league, fixture.League);
             if (!homeMatch.IsMatch)
                 continue;
 
-            var awayMatch = ScoreMatchingHelper.GetTeamMatchResult(awayTeam ?? string.Empty, fixture.AwayTeam, league, fixture.League);
+            var awayMatch = AreCanonicalAliasesEqual(awayTeam, fixture.AwayTeam, league, fixture.League)
+                ? new ScoreMatchingHelper.TeamMatchResult(true, 1.0, true, false)
+                : ScoreMatchingHelper.GetTeamMatchResult(awayTeam ?? string.Empty, fixture.AwayTeam, league, fixture.League);
             if (!awayMatch.IsMatch)
                 continue;
 
@@ -58,5 +63,20 @@ public static class SourceMarketFixtureMatcher
         }
 
         return bestScore >= 1.55 ? bestFixture : null;
+    }
+
+    private static bool AreCanonicalAliasesEqual(string? leftTeam, string? rightTeam, string? leftLeague, string? rightLeague)
+    {
+        var leftKey = TeamNameNormalizer.BuildAliasKey(leftTeam, leftLeague);
+        var rightKey = TeamNameNormalizer.BuildAliasKey(rightTeam, rightLeague);
+        if (!string.IsNullOrWhiteSpace(leftKey) && string.Equals(leftKey, rightKey, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return string.Equals(
+            TeamNameNormalizer.NormalizeAlias(leftTeam),
+            TeamNameNormalizer.NormalizeAlias(rightTeam),
+            StringComparison.OrdinalIgnoreCase);
     }
 }

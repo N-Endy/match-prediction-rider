@@ -58,6 +58,7 @@ services.AddSingleton<SofaScoreSourceHealthTracker>();
 services.AddSingleton<FlashScoreSourceHealthTracker>();
 services.AddScoped<IHistoricalDatasetService, HistoricalDatasetService>();
 services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
+services.AddScoped<ISportsAiExcelScraper, SportsAiExcelScraper>();
 services.AddScoped<IWebScraperService, WebScraperService>();
 if (mode is RunnerMode.Score or RunnerMode.ScoreBackfill)
 {

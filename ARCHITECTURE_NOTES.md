@@ -19,6 +19,7 @@
 - **What is implemented now**
   - Cleanup logic for old predictions now uses `Prediction.CreatedAt` (a real `DateTime`) and pushes the filter into SQL via `ExecuteDeleteAsync`.
   - Cleanup for `MatchData` still parses string dates, but does so in a single, optimized pass.
+  - Prediction candidate creation now derives display date/time and UTC kickoff from `MatchLocalDate`/`MatchLocalTime`/`MatchDateTime` first, falling back to legacy strings only for old rows that have not been backfilled yet.
 
 ## Web-layer decoupling (query services)
 
@@ -43,4 +44,10 @@
 - Cleanup logic has been fixed to:
   - Use `CreatedAt` for predictions and delete old data directly in SQL.
   - Correctly remove old `MatchData` rows without duplicating deletion calls.
+
+## Architecture cleanup notes
+
+- `WebScraperService` remains the compatibility facade for existing callers, but sports-ai.dev Excel download/deletion logic now lives in `SportsAiExcelScraper` behind `ISportsAiExcelScraper`.
+- `AiAdvisorService` no longer owns distributed-cache session persistence directly; `AiChatSessionStore` now loads/saves `AiChatSessionState` behind `IAiChatSessionStore`.
+- `ScrapeTest` is included in the solution as a developer-only console tool and documents its required database environment variables in `ScrapeTest/README.md`.
 
