@@ -9,6 +9,11 @@ public class BookingSelection
     public string Prediction { get; set; } = string.Empty; // "Home Win", "BTTS", "Over 2.5", "Under 2.5", etc.
     public int? PredictionId { get; set; }
     public DateTime? MatchDateTimeUtc { get; set; }
+    /// <summary>
+    /// When automatic fixture matching is uncertain, the client can send the SportyBet
+    /// event ID the user confirmed as the correct fixture.
+    /// </summary>
+    public string? ConfirmedSportyBetEventId { get; set; }
 }
 
 public class BookingRequest
@@ -25,4 +30,20 @@ public class BookingResult
     public int BookedCount { get; set; }
     public int SkippedCount { get; set; }
     public List<string> Warnings { get; set; } = [];
+    public List<BookingUnresolvedSelection> UnresolvedSelections { get; set; } = [];
+}
+
+public class BookingUnresolvedSelection
+{
+    public string HomeTeam { get; set; } = string.Empty;
+    public string AwayTeam { get; set; } = string.Empty;
+    public string League { get; set; } = string.Empty;
+    public string Market { get; set; } = string.Empty;
+    public string Prediction { get; set; } = string.Empty;
+    public int? PredictionId { get; set; }
+    public DateTime? MatchDateTimeUtc { get; set; }
+    public string ClosestEventId { get; set; } = string.Empty;
+    public string ClosestHomeTeam { get; set; } = string.Empty;
+    public string ClosestAwayTeam { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
 }

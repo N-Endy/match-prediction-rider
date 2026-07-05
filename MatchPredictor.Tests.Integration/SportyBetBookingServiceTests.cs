@@ -338,6 +338,44 @@ public class SportyBetBookingServiceTests
         Assert.Contains(
             result.Warnings,
             warning => warning.Contains("Closest candidate was Nice vs Marseille", StringComparison.OrdinalIgnoreCase));
+        Assert.Single(result.UnresolvedSelections);
+        Assert.Equal("evt-close", result.UnresolvedSelections[0].ClosestEventId);
+    }
+
+    [Fact]
+    public async Task BookGamesAsync_UsesConfirmedEventId_WhenAutomaticMatchIsUncertain()
+    {
+        await using var context = CreateContext();
+        var cache = CreateCache();
+        var todayLocalDate = DateTimeProvider.GetLocalDate();
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(todayLocalDate.ToDateTime(new TimeOnly(20, 0), DateTimeKind.Unspecified));
+        var handler = new SportyBetTestHandler(
+            upcomingPages: new Dictionary<int, string>
+            {
+                [1] = BuildUpcomingResponse(
+                    new SportyFixtureSpec("evt-close", "Nice", "Marseille", "France - Ligue 1", kickoffUtc))
+            },
+            bookingResponse: BuildBookingShareResponse("CONFIRMED"));
+        var service = CreateService(context, cache, handler);
+
+        var result = await service.BookGamesAsync(
+        [
+            new BookingSelection
+            {
+                HomeTeam = "Nice",
+                AwayTeam = "Paris Saint-Germain",
+                League = "France - Ligue 1",
+                Market = "BTTS",
+                Prediction = "BTTS",
+                MatchDateTimeUtc = kickoffUtc,
+                ConfirmedSportyBetEventId = "evt-close"
+            }
+        ]);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, result.BookedCount);
+        Assert.Empty(result.UnresolvedSelections);
+        Assert.Equal(["evt-close"], handler.SharedEventIds);
     }
 
     private static SportyBetBookingService CreateService(

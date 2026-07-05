@@ -1,5 +1,6 @@
 // ── Cart State Management ──
 const CART_KEY = 'mp_cart';
+const fixtureConfirmations = new Map();
 
 function getMaxBookingSelections() {
     const raw = document.body?.dataset?.maxBookingSelections;
@@ -52,6 +53,7 @@ function removeFromCart(index) {
 function clearCart() {
     const count = getCart().length;
     localStorage.removeItem(CART_KEY);
+    fixtureConfirmations.clear();
     updateCartBadge();
     renderCartItems();
     if (count > 0) {
@@ -156,15 +158,7 @@ async function bookGames() {
     }
 
     try {
-        const selections = cart.map(item => ({
-            homeTeam: item.homeTeam,
-            awayTeam: item.awayTeam,
-            league: item.league,
-            market: item.market || 'Unknown',
-            prediction: item.prediction,
-            predictionId: Number.isFinite(Number(item.predictionId)) ? Number(item.predictionId) : null,
-            matchDateTimeUtc: item.matchDateTimeUtc || null
-        }));
+        const selections = buildBookingSelections(cart);
 
         const response = await fetch('/api/booking/book', {
             method: 'POST',
@@ -175,39 +169,7 @@ async function bookGames() {
         const result = await response.json();
 
         if (resultDiv) {
-            if (result.success) {
-                const urlHtml = result.bookingUrl
-                    ? `<button type="button" class="mp-booking-url-btn" onclick='openSportyBetBooking(${JSON.stringify(result.bookingUrl)})'>🔗 Open in SportyBet</button>`
-                    : '';
-                const warningHtml = renderBookingWarnings(result.warnings);
-                const summaryHtml = renderBookingSummary(result);
-
-                resultDiv.innerHTML = `
-                    <div class="mp-booking-success">
-                        <button class="mp-booking-close" onclick="this.closest('.mp-booking-success').parentElement.style.display='none'">&times;</button>
-                        <div class="mp-booking-code-label">Booking Code</div>
-                        <div class="mp-booking-code">${result.bookingCode}</div>
-                        <div class="mp-booking-actions">
-                            <button class="mp-copy-code-btn" onclick="copyBookingCode('${result.bookingCode}')">📋 Copy</button>
-                            ${urlHtml}
-                        </div>
-                        ${summaryHtml}
-                        <p class="mp-booking-msg">${escapeHtml(result.message || '')}</p>
-                        ${warningHtml}
-                    </div>
-                `;
-            } else {
-                const warningHtml = renderBookingWarnings(result.warnings);
-                const summaryHtml = renderBookingSummary(result);
-                resultDiv.innerHTML = `
-                    <div class="mp-booking-error">
-                        <button class="mp-booking-close" onclick="this.closest('.mp-booking-error').parentElement.style.display='none'">&times;</button>
-                        ${summaryHtml}
-                        <p>❌ ${escapeHtml(result.message || 'Booking failed.')}</p>
-                        ${warningHtml}
-                    </div>
-                `;
-            }
+            resultDiv.innerHTML = renderBookingResultHtml(result);
             resultDiv.style.display = 'block';
         }
     } catch (err) {
@@ -318,18 +280,169 @@ function renderBookingSummary(result) {
     `;
 }
 
-function renderBookingWarnings(warnings) {
-    const items = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
-    if (items.length === 0) {
+function buildBookingSelections(cart) {
+    return cart.map(item => ({
+        homeTeam: item.homeTeam,
+        awayTeam: item.awayTeam,
+        league: item.league,
+        market: item.market || 'Unknown',
+        prediction: item.prediction,
+        predictionId: Number.isFinite(Number(item.predictionId)) ? Number(item.predictionId) : null,
+        matchDateTimeUtc: item.matchDateTimeUtc || null,
+        confirmedSportyBetEventId: fixtureConfirmations.get(getCartIdentity(item)) || null
+    }));
+}
+
+function buildUnresolvedIdentity(unresolved) {
+    const predictionId = Number(unresolved?.predictionId);
+    if (Number.isFinite(predictionId) && predictionId > 0) {
+        return `prediction:${predictionId}`;
+    }
+
+    return [
+        unresolved?.homeTeam || '',
+        unresolved?.awayTeam || '',
+        unresolved?.league || '',
+        unresolved?.market || '',
+        unresolved?.prediction || '',
+        unresolved?.matchDateTimeUtc || ''
+    ].join('|');
+}
+
+function confirmFixtureMatch(unresolvedIndex) {
+    const resultDiv = document.getElementById('bookingResult');
+    const unresolved = window.__lastBookingUnresolved?.[unresolvedIndex];
+    if (!unresolved?.closestEventId) {
+        return;
+    }
+
+    const identity = buildUnresolvedIdentity(unresolved);
+    fixtureConfirmations.set(identity, unresolved.closestEventId);
+    showToast('Match confirmed — click Book Games again to include it');
+
+    const item = resultDiv?.querySelector(`[data-unresolved-index="${unresolvedIndex}"]`);
+    if (item) {
+        item.classList.add('mp-booking-warnings-item-confirmed');
+        const btn = item.querySelector('.mp-confirm-fixture-btn');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Confirmed';
+        }
+    }
+
+    updatePendingConfirmationsHint();
+}
+
+function updatePendingConfirmationsHint() {
+    const hint = document.getElementById('fixtureConfirmationsHint');
+    if (!hint) {
+        return;
+    }
+
+    const count = fixtureConfirmations.size;
+    if (count === 0) {
+        hint.style.display = 'none';
+        hint.textContent = '';
+        return;
+    }
+
+    hint.style.display = 'block';
+    hint.textContent = `${count} match${count === 1 ? '' : 'es'} confirmed — click Book Games again to include ${count === 1 ? 'it' : 'them'}.`;
+}
+
+function renderBookingResultHtml(result) {
+    const warningHtml = renderBookingWarnings(result.warnings, result.unresolvedSelections);
+    const summaryHtml = renderBookingSummary(result);
+    const pendingHintHtml = `<div id="fixtureConfirmationsHint" class="mp-booking-confirm-hint" style="display:none;"></div>`;
+
+    if (result.success) {
+        const urlHtml = result.bookingUrl
+            ? `<button type="button" class="mp-booking-url-btn" onclick='openSportyBetBooking(${JSON.stringify(result.bookingUrl)})'>🔗 Open in SportyBet</button>`
+            : '';
+
+        return `
+            <div class="mp-booking-success">
+                <button class="mp-booking-close" onclick="this.closest('.mp-booking-success').parentElement.style.display='none'">&times;</button>
+                <div class="mp-booking-code-label">Booking Code</div>
+                <div class="mp-booking-code">${escapeHtml(result.bookingCode || '')}</div>
+                <div class="mp-booking-actions">
+                    <button class="mp-copy-code-btn" onclick="copyBookingCode('${result.bookingCode}')">📋 Copy</button>
+                    ${urlHtml}
+                </div>
+                ${summaryHtml}
+                <p class="mp-booking-msg">${escapeHtml(result.message || '')}</p>
+                ${pendingHintHtml}
+                ${warningHtml}
+            </div>
+        `;
+    }
+
+    return `
+        <div class="mp-booking-error">
+            <button class="mp-booking-close" onclick="this.closest('.mp-booking-error').parentElement.style.display='none'">&times;</button>
+            ${summaryHtml}
+            <p>❌ ${escapeHtml(result.message || 'Booking failed.')}</p>
+            ${pendingHintHtml}
+            ${warningHtml}
+        </div>
+    `;
+}
+
+function renderBookingWarnings(warnings, unresolvedSelections) {
+    const unresolved = Array.isArray(unresolvedSelections) ? unresolvedSelections : [];
+    window.__lastBookingUnresolved = unresolved;
+
+    const unresolvedByMessage = new Map();
+    unresolved.forEach((item, index) => {
+        if (item?.message) {
+            unresolvedByMessage.set(item.message, { item, index });
+        }
+    });
+
+    const warningItems = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+    const renderedMessages = new Set();
+    const listItems = [];
+
+    warningItems.forEach(warning => {
+        renderedMessages.add(warning);
+        const match = unresolvedByMessage.get(warning);
+        listItems.push(renderUnresolvedWarningItem(warning, match?.item, match?.index));
+    });
+
+    unresolved.forEach((item, index) => {
+        if (!item?.message || renderedMessages.has(item.message)) {
+            return;
+        }
+
+        listItems.push(renderUnresolvedWarningItem(item.message, item, index));
+    });
+
+    if (listItems.length === 0) {
         return '';
     }
+
+    queueMicrotask(updatePendingConfirmationsHint);
 
     return `
         <div class="mp-booking-warnings">
             <div class="mp-booking-warnings-title">Skipped selections</div>
             <ul class="mp-booking-warnings-list">
-                ${items.map(item => `<li class="mp-booking-warnings-item">${escapeHtml(item)}</li>`).join('')}
+                ${listItems.join('')}
             </ul>
         </div>
     `;
+}
+
+function renderUnresolvedWarningItem(message, unresolved, unresolvedIndex) {
+    const identity = unresolved ? buildUnresolvedIdentity(unresolved) : '';
+    const isConfirmed = identity && fixtureConfirmations.has(identity);
+    const canConfirm = unresolved?.closestEventId && unresolvedIndex !== undefined && unresolvedIndex !== null;
+    const confirmHtml = canConfirm
+        ? `<button type="button" class="mp-confirm-fixture-btn" ${isConfirmed ? 'disabled' : ''} onclick="confirmFixtureMatch(${unresolvedIndex})">${isConfirmed ? 'Confirmed' : 'Same game'}</button>`
+        : '';
+
+    const itemClass = isConfirmed ? 'mp-booking-warnings-item mp-booking-warnings-item-confirmed' : 'mp-booking-warnings-item';
+    const dataAttr = canConfirm ? ` data-unresolved-index="${unresolvedIndex}"` : '';
+
+    return `<li class="${itemClass}"${dataAttr}>${escapeHtml(message)}${confirmHtml}</li>`;
 }

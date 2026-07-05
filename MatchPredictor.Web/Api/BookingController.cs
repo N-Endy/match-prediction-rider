@@ -63,7 +63,8 @@ public class BookingController : ControllerBase
                 selection.AwayTeam.Length > MaxFieldLength ||
                 selection.League.Length > MaxFieldLength ||
                 selection.Market.Length > MaxFieldLength ||
-                selection.Prediction.Length > MaxFieldLength))
+                selection.Prediction.Length > MaxFieldLength ||
+                (selection.ConfirmedSportyBetEventId?.Length ?? 0) > MaxFieldLength))
         {
             return BadRequest(new BookingResult { Success = false, Message = "One or more selections are invalid." });
         }

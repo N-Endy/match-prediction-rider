@@ -144,6 +144,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
 
             // Step 2: Match each selection to a SportyBet fixture and get the right outcome
             var selectedOutcomes = new List<SportyBetOutcome>();
+            var unresolvedSelections = new List<BookingUnresolvedSelection>();
 
             foreach (var selection in matchableSelections)
             {
@@ -158,6 +159,11 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                 {
                     var warning = BuildSelectionWarning(selection, resolution.Status, resolution.MatchedFixture);
                     warnings.Add(warning);
+                    var unresolved = BuildUnresolvedSelection(selection, resolution, warning);
+                    if (unresolved is not null)
+                    {
+                        unresolvedSelections.Add(unresolved);
+                    }
                     if (resolution.MatchedFixture is not null)
                     {
                         _logger.LogWarning(
@@ -185,7 +191,8 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                     "None of the selected matches could be booked on SportyBet today.",
                     bookedCount: 0,
                     totalSelections: selections.Count,
-                    warnings);
+                    warnings,
+                    unresolvedSelections);
             }
 
             // Step 3: Create booking code via API
@@ -204,7 +211,8 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                         : $"Booked {selectedOutcomes.Count}/{selections.Count} games.",
                     BookedCount = selectedOutcomes.Count,
                     SkippedCount = skippedCount,
-                    Warnings = warnings
+                    Warnings = warnings,
+                    UnresolvedSelections = unresolvedSelections
                 };
             }
 
@@ -212,7 +220,8 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                 $"Found {selectedOutcomes.Count} matches but could not generate a SportyBet booking code.",
                 bookedCount: selectedOutcomes.Count,
                 totalSelections: selections.Count,
-                warnings);
+                warnings,
+                unresolvedSelections);
         }
         catch (Exception ex)
         {
@@ -865,6 +874,21 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             return new BookingSelectionResolution(BookingSelectionMatchStatus.MarketUnavailable, null, null);
         }
 
+        var confirmedEventId = selection.OriginalSelection.ConfirmedSportyBetEventId?.Trim();
+        if (!string.IsNullOrWhiteSpace(confirmedEventId))
+        {
+            var confirmedFixture = fixtures.FirstOrDefault(fixture =>
+                string.Equals(fixture.EventId, confirmedEventId, StringComparison.OrdinalIgnoreCase));
+            if (confirmedFixture is null)
+            {
+                return new BookingSelectionResolution(BookingSelectionMatchStatus.NoFixtureFound, null, null);
+            }
+
+            return TryCreateOutcome(confirmedFixture, selection.RequestedOutcome.Value, out var confirmedOutcome)
+                ? new BookingSelectionResolution(BookingSelectionMatchStatus.Matched, confirmedOutcome, confirmedFixture)
+                : new BookingSelectionResolution(BookingSelectionMatchStatus.MarketUnavailable, null, confirmedFixture);
+        }
+
         var evaluatedCandidates = fixtures
             .Select(fixture => EvaluateFixtureCandidate(fixture, selection))
             .Where(candidate => candidate.IsCandidate)
@@ -945,7 +969,8 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         string message,
         int bookedCount,
         int totalSelections,
-        List<string> warnings)
+        List<string> warnings,
+        List<BookingUnresolvedSelection>? unresolvedSelections = null)
     {
         return new BookingResult
         {
@@ -953,7 +978,39 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             Message = message,
             BookedCount = bookedCount,
             SkippedCount = Math.Max(0, totalSelections - bookedCount),
-            Warnings = warnings
+            Warnings = warnings,
+            UnresolvedSelections = unresolvedSelections ?? []
+        };
+    }
+
+    private static BookingUnresolvedSelection? BuildUnresolvedSelection(
+        ResolvedBookingSelection selection,
+        BookingSelectionResolution resolution,
+        string warning)
+    {
+        if (resolution.MatchedFixture is null ||
+            string.IsNullOrWhiteSpace(resolution.MatchedFixture.EventId) ||
+            resolution.Status is not (
+                BookingSelectionMatchStatus.NoFixtureFound or
+                BookingSelectionMatchStatus.AmbiguousFixture))
+        {
+            return null;
+        }
+
+        var original = selection.OriginalSelection;
+        return new BookingUnresolvedSelection
+        {
+            HomeTeam = original.HomeTeam,
+            AwayTeam = original.AwayTeam,
+            League = original.League,
+            Market = original.Market,
+            Prediction = original.Prediction,
+            PredictionId = original.PredictionId,
+            MatchDateTimeUtc = original.MatchDateTimeUtc,
+            ClosestEventId = resolution.MatchedFixture.EventId,
+            ClosestHomeTeam = resolution.MatchedFixture.HomeTeam,
+            ClosestAwayTeam = resolution.MatchedFixture.AwayTeam,
+            Message = warning
         };
     }
 
@@ -969,7 +1026,9 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             BookingSelectionMatchStatus.NoFixtureFound => matchedFixture is not null
                 ? $"{label}: no confident SportyBet fixture match found for today's card. Closest candidate was {matchedFixture.HomeTeam} vs {matchedFixture.AwayTeam}."
                 : $"{label}: no confident SportyBet fixture match found for today's card.",
-            BookingSelectionMatchStatus.AmbiguousFixture => $"{label}: fixture match was ambiguous, so it was skipped.",
+            BookingSelectionMatchStatus.AmbiguousFixture => matchedFixture is not null
+                ? $"{label}: fixture match was ambiguous, so it was skipped. Closest candidate was {matchedFixture.HomeTeam} vs {matchedFixture.AwayTeam}."
+                : $"{label}: fixture match was ambiguous, so it was skipped.",
             BookingSelectionMatchStatus.MarketUnavailable => matchedFixture is not null
                 ? $"{label}: SportyBet found {matchedFixture.HomeTeam} vs {matchedFixture.AwayTeam}, but the requested market was unavailable."
                 : $"{label}: requested market unavailable on SportyBet.",
