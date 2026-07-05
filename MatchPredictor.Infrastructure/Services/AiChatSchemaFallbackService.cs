@@ -37,7 +37,7 @@ public class AiChatSchemaFallbackService : IAiChatSchemaFallbackService
             return null;
         }
 
-        var model = _configuration["GroqModel"] ?? "llama-3.3-70b-versatile";
+        var model = _configuration["GroqModel"] ?? "meta-llama/llama-4-scout-17b-16e-instruct";
         using var client = _httpClientFactory.CreateClient(nameof(AiChatSchemaFallbackService));
         client.Timeout = TimeSpan.FromSeconds(20);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);

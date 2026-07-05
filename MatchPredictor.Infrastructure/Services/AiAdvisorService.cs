@@ -2562,7 +2562,7 @@ public class AiAdvisorService : IAiAdvisorService
         double temperature = 0.5,
         int maxTokens = 4096)
     {
-        var model = _configuration["GroqModel"] ?? "llama-3.3-70b-versatile";
+        var model = _configuration["GroqModel"] ?? "meta-llama/llama-4-scout-17b-16e-instruct";
         _logger.LogInformation("Calling Groq model: {Model}", model);
 
         try
