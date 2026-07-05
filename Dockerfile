@@ -1,11 +1,13 @@
 ﻿FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
 
-# 1. Install basic tools needed to add the Google repository
+# 1. Install basic tools needed to add the Google repository, plus ML.NET LightGBM runtime deps
 RUN apt-get update && apt-get install -y \
     wget \
     curl \
     gnupg \
     ca-certificates \
+    libgomp1 \
+    libunwind8 \
     --no-install-recommends \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
