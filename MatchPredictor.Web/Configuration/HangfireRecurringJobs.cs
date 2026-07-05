@@ -70,7 +70,7 @@ internal static class HangfireRecurringJobs
         recurringJobs.AddOrUpdate<IAnalyzerService>(
             "score-update-job",
             service => service.RunScoreUpdaterAsync(1, "recent"),
-            "*/6 * * * *",
+            OperationalSchedule.ScoreUpdateCron,
             new RecurringJobOptions { TimeZone = watTimeZone });
 
         recurringJobs.AddOrUpdate<IAnalyzerService>(

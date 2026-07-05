@@ -7,7 +7,7 @@ namespace MatchPredictor.Web.Services;
 /// <summary>
 /// Short-TTL read cache over <see cref="IPredictionQueries"/> so the public
 /// prediction pages do not hit Postgres on every request. Two minutes is well
-/// inside the 6-minute score-update cadence.
+/// inside the score-update cadence (see <see cref="Configuration.OperationalSchedule"/>).
 /// </summary>
 public class CachedPredictionQueries : IPredictionQueries
 {

@@ -107,13 +107,13 @@ Each cron job: `POST`, header `X-Cron-Secret: <secret>`, expect HTTP **202**.
 | `prediction-generation-post-analysis` | `30 4 * * *` |
 | `prediction-generation-refresh` | `30 12,16 * * *` |
 | `cleanup-old-predictions` | `0 1 * * *` |
-| `score-update` | `*/6 * * * *` |
+| `score-update` | `*/30 * * * *` |
 | `score-backfill` | `17 * * * *` |
 | `closing-line-snapshot` | `*/5 * * * *` |
 
 Optional recovery: `POST /api/ops/jobs/startup-catchup` enqueues daily analysis followed by data sync (same as worker startup catch-up).
 
-**Note:** 5-minute and 6-minute jobs generate ~460 HTTP calls/day. Confirm your cron-job.org plan supports that frequency. Do not enable `USE_EXTERNAL_CRON=true` until cron-job.org jobs exist, or scheduling will gap. Enabling both internal Hangfire recurring and cron-job.org causes duplicate runs.
+**Note:** The closing-line snapshot job runs every 5 minutes. Do not enable `USE_EXTERNAL_CRON=true` until cron-job.org jobs exist, or scheduling will gap. Enabling both internal Hangfire recurring and cron-job.org causes duplicate runs.
 
 ## Tests
 

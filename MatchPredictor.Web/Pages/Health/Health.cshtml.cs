@@ -1,6 +1,7 @@
 using System.Text.Json;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Services;
+using MatchPredictor.Web.Configuration;
 using MatchPredictor.Infrastructure.Utils;
 using MatchPredictor.Web.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -16,7 +17,7 @@ public class Health : PageModel
     [
         new("Data Sync", ScrapingEventNames.DataSync, TimeSpan.FromHours(8), true),
         new("Prediction Generation", ScrapingEventNames.PredictionGeneration, TimeSpan.FromHours(8), true),
-        new("Recent Score Update", ScrapingEventNames.ScoreUpdateRecent, TimeSpan.FromMinutes(20), true),
+        new("Recent Score Update", ScrapingEventNames.ScoreUpdateRecent, OperationalSchedule.ScoreUpdateStaleAfter, true),
         new("Score Backfill", ScrapingEventNames.ScoreUpdateBackfill, TimeSpan.FromHours(2), false),
         new("Daily Analysis", ScrapingEventNames.DailyAnalysis, TimeSpan.FromHours(30), true),
         new("Source Quality", ScrapingEventNames.SourceQuality, TimeSpan.FromHours(36), false)
