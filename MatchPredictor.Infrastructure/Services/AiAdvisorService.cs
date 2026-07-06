@@ -4,6 +4,7 @@ using System.Text.Json;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Statistics;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -76,7 +77,12 @@ public class AiAdvisorService : IAiAdvisorService
 
         var predictions = await LoadPublishedPredictionsForChatAsync(ct);
         var pricingByPredictionId = await LoadCandidatePricingByPredictionIdAsync(predictions, ct);
-        var candidateCatalog = AiChatContextBuilder.BuildCandidateCatalog(predictions, DateTime.UtcNow, pricingByPredictionId);
+        var featureContributionsByPredictionId = await LoadFeatureContributionsByPredictionIdAsync(predictions, ct);
+        var candidateCatalog = AiChatContextBuilder.BuildCandidateCatalog(
+            predictions,
+            DateTime.UtcNow,
+            pricingByPredictionId,
+            featureContributionsByPredictionId);
         var workingSlipCandidates = ResolveSessionCandidates(candidateCatalog, sessionState.WorkingSlipPredictionIds, sessionState.WorkingSlipActionKeys, sessionState.LastRecommendedActionKeys);
         var contextCandidates = ResolveContextCandidates(candidateCatalog, sessionState, normalizedPrompt, workingSlipCandidates);
 
@@ -588,9 +594,19 @@ public class AiAdvisorService : IAiAdvisorService
 
             TASK:
             - Pick at most 4 ActionKeys from the supplied shortlist.
-            - Prefer fixtures where recent form, venue trends, and scoring patterns could materially change the final ranking or slip shape.
             - Stay inside the supplied shortlist only.
-            - For target-odds or safer-slip requests, prioritize legs that are near the top of the current ranking or most likely to be kept/swapped.
+
+            PREFER FIXTURES WHERE:
+            - modelEdgePoints > 0 but hasFootballInsight is false (biggest information gap)
+            - predictionCategory is StraightWin or BothTeamsScore (form-sensitive markets)
+            - signalSpreadPoints > 10 (disagreement worth investigating)
+            - user asked for safer picks and dataQuality is Low on a high-confidence candidate
+
+            DEPRIORITIZE:
+            - Draw picks
+            - fixtures where allSignalsAlign is true and signalSpreadPoints <= 5
+
+            For target-odds or safer-slip requests, prioritize legs near the top of the current ranking or most likely to be kept/swapped.
 
             OUTPUT:
             Return exactly one JSON object:
@@ -633,7 +649,13 @@ public class AiAdvisorService : IAiAdvisorService
                 candidate.MarginAboveThreshold,
                 candidate.MarketProbability,
                 candidate.EstimatedOdds,
-                candidate.EdgePoints
+                candidate.EdgePoints,
+                modelEdgePoints = candidate.EdgePoints,
+                hasFootballInsight = candidate.FootballInsight is not null,
+                footballDataQuality = candidate.FootballInsight?.DataQuality,
+                signalSpreadPoints = candidate.SignalBreakdown?.SignalAgreement.SignalSpreadPoints,
+                allSignalsAlign = candidate.SignalBreakdown?.SignalAgreement.AllSignalsAlign,
+                modelDivergesFromBookmaker = candidate.SignalBreakdown?.SignalAgreement.ModelDivergesFromBookmaker
             })
         };
 
@@ -1013,6 +1035,99 @@ public class AiAdvisorService : IAiAdvisorService
 
         return pricingByPredictionId;
     }
+
+    private async Task<IReadOnlyDictionary<int, string>> LoadFeatureContributionsByPredictionIdAsync(
+        IReadOnlyCollection<Prediction> predictions,
+        CancellationToken ct)
+    {
+        if (predictions.Count == 0)
+        {
+            return new Dictionary<int, string>();
+        }
+
+        var runIds = predictions.Select(prediction => prediction.PredictionRunId).Distinct().ToList();
+        var forecasts = await _dbContext.ForecastObservations
+            .AsNoTracking()
+            .Where(forecast => runIds.Contains(forecast.PredictionRunId) && forecast.IsCurrentRevision)
+            .ToListAsync(ct);
+
+        var forecastsByKey = forecasts.ToDictionary(
+            forecast => BuildForecastLookupKey(forecast),
+            StringComparer.OrdinalIgnoreCase);
+
+        var contributionsByPredictionId = new Dictionary<int, string>();
+        foreach (var prediction in predictions)
+        {
+            var market = ResolveForecastMarket(prediction);
+            if (market is null)
+            {
+                continue;
+            }
+
+            var key = BuildForecastLookupKey(
+                prediction.PredictionRunId,
+                market.Value,
+                prediction.MatchLocalDate,
+                prediction.League,
+                prediction.HomeTeam,
+                prediction.AwayTeam,
+                prediction.PredictedOutcome);
+
+            if (forecastsByKey.TryGetValue(key, out var forecast) &&
+                !string.IsNullOrWhiteSpace(forecast.FeatureContributionsJson) &&
+                forecast.FeatureContributionsJson != "{}")
+            {
+                contributionsByPredictionId[prediction.Id] = forecast.FeatureContributionsJson;
+            }
+        }
+
+        return contributionsByPredictionId;
+    }
+
+    private static PredictionMarket? ResolveForecastMarket(Prediction prediction)
+    {
+        if (string.Equals(prediction.PredictionCategory, "StraightWin", StringComparison.OrdinalIgnoreCase))
+        {
+            return prediction.PredictedOutcome.Contains("Away", StringComparison.OrdinalIgnoreCase)
+                ? PredictionMarket.AwayWin
+                : PredictionMarket.HomeWin;
+        }
+
+        return PredictionMarketExtensions.TryFromCategory(prediction.PredictionCategory, out var market)
+            ? market
+            : null;
+    }
+
+    private static string BuildForecastLookupKey(ForecastObservation forecast) =>
+        BuildForecastLookupKey(
+            forecast.PredictionRunId,
+            forecast.Market,
+            forecast.MatchLocalDate,
+            forecast.League,
+            forecast.HomeTeam,
+            forecast.AwayTeam,
+            forecast.PredictedOutcome);
+
+    private static string BuildForecastLookupKey(
+        Guid predictionRunId,
+        PredictionMarket market,
+        DateOnly matchLocalDate,
+        string league,
+        string homeTeam,
+        string awayTeam,
+        string predictedOutcome) =>
+        string.Join(
+            "|",
+            predictionRunId,
+            market,
+            matchLocalDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            NormalizeLookupToken(league),
+            NormalizeLookupToken(homeTeam),
+            NormalizeLookupToken(awayTeam),
+            NormalizeLookupToken(predictedOutcome));
+
+    private static string NormalizeLookupToken(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToLowerInvariant();
 
     private async Task<AiChatResponse> BuildValueBetRecommendationResponseAsync(
         string userPrompt,
@@ -1830,6 +1945,12 @@ public class AiAdvisorService : IAiAdvisorService
         return """
             IDENTITY: You are Nelson, MatchPredictor's analyst companion. Be concise, evidence-led, conversational, and practical. Sound like a sharp betting partner, not a hype man. Never say "as an AI".
 
+            GROUNDING HIERARCHY (use in this order):
+            1. modelSignals and signalAgreement — per-signal probabilities and agreement flags
+            2. calibratedConfidence, marginAboveThreshold, modelEdgePoints, thresholdSource
+            3. footballInsight — only when present and dataQuality is not Low
+            4. Never invent facts outside the payload
+
             SCOPE:
             - You may discuss only the prediction candidates supplied in the current request payload.
             - If a team, league, or fixture is not in the supplied candidates, say so plainly.
@@ -1839,8 +1960,18 @@ public class AiAdvisorService : IAiAdvisorService
             - If footballInsight is absent, do not claim form or team-performance stats.
             - If a candidate includes actualScore or actualOutcome, you may explain why it settled green/red using only those fields.
 
+            SIGNAL INTERPRETATION:
+            - When allSignalsAlign is true or signalSpreadPoints < 5: call it consensus — higher conviction.
+            - When modelEdgePoints is positive but modelDivergesFromBookmaker is true: flag as model-only edge and use lower conviction language.
+            - When footballInsight contradicts the model edge, say the model still clears threshold but form is mixed — do not override the pick ranking.
+            - When modelSignals.statistical is null or thinHistory is true: note limited historical sample for that fixture.
+            - When modelSignals.machineLearning is absent: do not mention machine learning.
+
             PICKING RULES:
+            - Rank by: (a) marginAboveThreshold, (b) positive modelEdgePoints, (c) signal agreement, (d) footballSupportScore when reliable.
             - "Best" and "safe" picks should lean on higher calibrated confidence, stronger margin above threshold, and positive modelEdgePoints when available.
+            - "Safe" requests: prefer Straight Win, confidence >= threshold + 8pp, estimatedOdds <= 1.75, and signal agreement when available.
+            - "Value" requests: require modelEdgePoints > 0 and mention edge in the explanation.
             - Prefer low-variance Straight Win setups when the user asks for safer options.
             - When footballInsight is present, blend the app edge with 1-2 concrete football signals from the supplied stats.
             - If footballInsight.dataQuality is Low or footballInsight.isLowConfidence is true, say the model edge matters more than the thin form sample.
@@ -1848,8 +1979,14 @@ public class AiAdvisorService : IAiAdvisorService
             - If you recommend a set of legs, make the message feel like you are guiding the user through the card with calm confidence.
             - If the payload includes requestedMarkets with counts, try to satisfy that market mix as closely as the supplied candidates allow.
             - When the user asks for a list of picks, recommend the supplied candidates that best fit the request instead of narrowing aggressively.
-            - If the payload includes a rolloverTargetOdds, prioritize a combination whose estimated decimal odds are close to that target without padding the slip with weak picks.
+            - If the payload includes a rolloverTargetOdds, hit it within ±8% using the fewest legs and never add a leg below threshold.
+            - If fewer than 2 strong candidates exist, say so in warnings.
             - Never mention data you were not given.
+
+            EXPLANATION RULES:
+            - Each recommendation explanation must cite at least one numeric field (confidence, edge, or a signal value).
+            - Max 1 sentence per pick. No guarantees, no hype.
+            - If canBook is false, you may discuss the candidate but must not return its actionKey.
 
             ACTION RULES:
             - The payload includes opaque ActionKeys for the currently available candidates.
@@ -1894,15 +2031,21 @@ public class AiAdvisorService : IAiAdvisorService
             1. Its calibrated model probability cleared the market threshold.
             2. Its model probability exceeded the source market probability by a positive edge.
 
+            Do NOT re-rank or drop picks.
+
+            For each pick, write one sentence using this template when data exists:
+            "Model [ModelProbabilityPct]% vs market [MarketProbabilityPct]% (+[EdgePctPoints]pp edge); [signalAgreement note]; cleared [ThresholdPct]% [ThresholdSource] threshold."
+
+            SIGNAL AGREEMENT RULES (when signalBreakdown is present):
+            - Say "All signals align" if allSignalsAlign is true or bookmaker, feed, and statistical are within 6pp of model.
+            - Say "Model diverges from bookmaker" if modelDivergesFromBookmaker is true.
+            - Say "Thin history" if thinHistory is true or statistical is null.
+
             IMPORTANT:
             - Do NOT invent injuries, lineups, motivation, derby context, form streaks, weather, or bookmaker odds unless those fields are explicitly present in the JSON.
             - Use ONLY the supplied fields.
             - Your job is to explain the pricing gap clearly, not to re-select the bets.
             - Keep each justification to one sentence and make it specific to the provided probabilities and edge.
-
-            GOOD JUSTIFICATION SHAPE:
-            - Mention the model probability, market probability, and edge.
-            - Mention whether the pick cleared a configured or tuned threshold when useful.
             - Avoid hype, guarantees, and vague phrases like "great value" without saying why.
 
             CRITICAL OUTPUT FORMAT:
@@ -1966,11 +2109,14 @@ public class AiAdvisorService : IAiAdvisorService
                 candidate.MarketProbability,
                 candidate.EstimatedOdds,
                 candidate.EdgePoints,
+                modelEdgePoints = candidate.EdgePoints,
                 candidate.ThresholdUsed,
                 candidate.ThresholdSource,
                 candidate.CalibratorUsed,
                 candidate.WasPublished,
                 footballSupportScore = candidate.FootballSupportScore,
+                modelSignals = SignalBreakdownParser.ToPayloadObject(candidate.SignalBreakdown),
+                signalAgreement = SignalBreakdownParser.ToAgreementPayloadObject(candidate.SignalBreakdown),
                 footballInsight = candidate.FootballInsight is null
                     ? null
                     : new

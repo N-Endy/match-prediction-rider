@@ -20,6 +20,8 @@ public class ThresholdTuningService : IThresholdTuningService
     private const double ThresholdStep = 0.01;
     private const double MinimumThreshold = 0.50;
     private const double MaximumThreshold = 0.90;
+    private const int MinimumLeagueSegmentSampleCount = 30;
+    private const double MaxLeagueThresholdAdjustment = 0.03;
     private static readonly PredictionMarket[] ActiveThresholdMarkets =
     [
         PredictionMarket.BothTeamsScore,
@@ -33,6 +35,7 @@ public class ThresholdTuningService : IThresholdTuningService
     private readonly ApplicationDbContext _dbContext;
     private readonly PredictionSettings _settings;
     private List<ThresholdProfile>? _profiles;
+    private Dictionary<(PredictionMarket Market, string League), double> _leagueThresholdAdjustments = new();
 
     public ThresholdTuningService(ApplicationDbContext dbContext, IOptions<PredictionSettings> options)
     {
@@ -47,28 +50,43 @@ public class ThresholdTuningService : IThresholdTuningService
         .Where(profile => ActiveThresholdMarkets.Contains(profile.Market))
         .ToList();
 
-    public double GetThreshold(PredictionMarket market, double fallbackThreshold)
+    public double GetThreshold(PredictionMarket market, double fallbackThreshold, string? league = null)
     {
-        return GetThresholdDecision(market, fallbackThreshold).Threshold;
+        return GetThresholdDecision(market, fallbackThreshold, league).Threshold;
     }
 
-    public ThresholdDecision GetThresholdDecision(PredictionMarket market, double fallbackThreshold)
+    public ThresholdDecision GetThresholdDecision(PredictionMarket market, double fallbackThreshold, string? league = null)
     {
         var profile = Profiles.FirstOrDefault(p => p.Market == market);
+        ThresholdDecision decision;
         if (profile == null || !profile.IsPromoted)
         {
-            return new ThresholdDecision
+            decision = new ThresholdDecision
             {
                 Threshold = fallbackThreshold,
                 ThresholdSource = "Configured"
             };
         }
-
-        return new ThresholdDecision
+        else
         {
-            Threshold = profile.Threshold,
-            ThresholdSource = "Tuned"
-        };
+            decision = new ThresholdDecision
+            {
+                Threshold = profile.Threshold,
+                ThresholdSource = "Tuned"
+            };
+        }
+
+        if (!string.IsNullOrWhiteSpace(league) &&
+            _leagueThresholdAdjustments.TryGetValue((market, NormalizeLeagueKey(league)), out var adjustment))
+        {
+            decision = new ThresholdDecision
+            {
+                Threshold = Math.Clamp(decision.Threshold + adjustment, MinimumThreshold, MaximumThreshold),
+                ThresholdSource = decision.ThresholdSource == "Tuned" ? "Tuned+League" : "Configured+League"
+            };
+        }
+
+        return decision;
     }
 
     public async Task RebuildProfilesAsync()
@@ -193,7 +211,62 @@ public class ThresholdTuningService : IThresholdTuningService
         await _dbContext.SaveChangesAsync();
 
         _profiles = rebuiltProfiles;
+        _leagueThresholdAdjustments = BuildLeagueThresholdAdjustments(pointInTimeForecasts, rebuiltProfiles);
     }
+
+    private Dictionary<(PredictionMarket Market, string League), double> BuildLeagueThresholdAdjustments(
+        IReadOnlyCollection<ForecastObservation> forecasts,
+        IReadOnlyCollection<ThresholdProfile> profiles)
+    {
+        var adjustments = new Dictionary<(PredictionMarket, string), double>();
+        foreach (var group in forecasts
+                     .Where(forecast => !string.IsNullOrWhiteSpace(forecast.League))
+                     .GroupBy(forecast => (forecast.Market, League: NormalizeLeagueKey(forecast.League))))
+        {
+            if (group.Count() < MinimumLeagueSegmentSampleCount)
+            {
+                continue;
+            }
+
+            var globalThreshold = profiles.FirstOrDefault(profile => profile.Market == group.Key.Market && profile.IsPromoted)?.Threshold
+                ?? ResolveFallbackThreshold(group.Key.Market);
+            var published = group
+                .Where(forecast => forecast.CalibratedProbability >= globalThreshold)
+                .ToList();
+            if (published.Count < 10)
+            {
+                continue;
+            }
+
+            var weightedHitRate = 0.0;
+            var weightedProbability = 0.0;
+            var totalWeight = 0.0;
+            foreach (var forecast in published)
+            {
+                var weight = CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt);
+                weightedHitRate += (forecast.OutcomeOccurred == true ? 1.0 : 0.0) * weight;
+                weightedProbability += forecast.CalibratedProbability * weight;
+                totalWeight += weight;
+            }
+
+            if (totalWeight <= 0)
+            {
+                continue;
+            }
+
+            var hitRate = weightedHitRate / totalWeight;
+            var averageProbability = weightedProbability / totalWeight;
+            var adjustment = Math.Clamp((averageProbability - hitRate) * 0.15, -MaxLeagueThresholdAdjustment, MaxLeagueThresholdAdjustment);
+            if (Math.Abs(adjustment) >= 0.005)
+            {
+                adjustments[group.Key] = adjustment;
+            }
+        }
+
+        return adjustments;
+    }
+
+    private static string NormalizeLeagueKey(string league) => league.Trim().ToLowerInvariant();
 
     private static bool IsSignificantThresholdPromotion(
         IReadOnlyList<ForecastObservation> validationForecasts,

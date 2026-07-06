@@ -111,6 +111,7 @@ builder.Services.AddScoped<IAiChatSchemaFallbackService, AiChatSchemaFallbackSer
 builder.Services.AddScoped<AiChatRequestParser>();
 builder.Services.AddScoped<IAiChatFootballInsightService, AiChatFootballInsightService>();
 builder.Services.AddScoped<IAiAdvisorService, AiAdvisorService>();
+builder.Services.AddScoped<IPredictionRiskAuditorService, PredictionRiskAuditorService>();
 builder.Services.AddScoped<IValueBetsService, ValueBetsService>();
 builder.Services.AddScoped<IUserTrackingService, UserTrackingService>();
 builder.Services.AddScoped<IAiChatAuthTicketService, AiChatAuthTicketService>();

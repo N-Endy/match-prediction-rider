@@ -3,6 +3,7 @@ using MatchPredictor.Application.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Statistics;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -189,7 +190,8 @@ public class ValueBetsService : IValueBetsService
                         PricingSource = marketQuote.PricingSource,
                         OddsFreshness = marketQuote.OddsFreshness,
                         OddsDerivationSource = marketQuote.OddsDerivationSource,
-                        EdgeSource = BuildEdgeSource(calibratedProbability, marketQuote.MarketProbability)
+                        EdgeSource = BuildEdgeSource(calibratedProbability, marketQuote.MarketProbability),
+                        FeatureContributionsJson = forecastCandidate.FeatureContributionsJson
                     });
                 }
 
@@ -234,24 +236,44 @@ public class ValueBetsService : IValueBetsService
         {
             var payloadToAnalyze = JsonSerializer.Serialize(new
             {
-                Picks = candidatesForAi.Select(candidate => new
+                Picks = candidatesForAi.Select(candidate =>
                 {
-                    candidate.CandidateKey,
-                    candidate.League,
-                    candidate.HomeTeam,
-                    candidate.AwayTeam,
-                    candidate.KickoffTime,
-                    candidate.PredictionCategory,
-                    candidate.PredictedOutcome,
-                    ModelProbabilityPct = Math.Round(candidate.MathematicalProbability * 100, 1),
-                    MarketProbabilityPct = Math.Round(candidate.MarketProbability * 100, 1),
-                    DecimalOdds = Math.Round(candidate.DecimalOdds, 2),
-                    ImpliedProbabilityPct = Math.Round(candidate.ImpliedProbability * 100, 1),
-                    ExpectedValuePct = Math.Round(candidate.ExpectedValuePercent * 100, 1),
-                    EdgePctPoints = Math.Round(candidate.Edge * 100, 1),
-                    ThresholdPct = Math.Round(candidate.ThresholdUsed * 100, 1),
-                    candidate.ThresholdSource,
-                    candidate.CalibratorUsed
+                    var signalBreakdown = SignalBreakdownParser.TryParse(
+                        candidate.FeatureContributionsJson,
+                        candidate.PredictionCategory,
+                        candidate.PredictedOutcome,
+                        candidate.MathematicalProbability);
+
+                    return new
+                    {
+                        candidate.CandidateKey,
+                        candidate.League,
+                        candidate.HomeTeam,
+                        candidate.AwayTeam,
+                        candidate.KickoffTime,
+                        candidate.PredictionCategory,
+                        candidate.PredictedOutcome,
+                        ModelProbabilityPct = Math.Round(candidate.MathematicalProbability * 100, 1),
+                        MarketProbabilityPct = Math.Round(candidate.MarketProbability * 100, 1),
+                        DecimalOdds = Math.Round(candidate.DecimalOdds, 2),
+                        ImpliedProbabilityPct = Math.Round(candidate.ImpliedProbability * 100, 1),
+                        ExpectedValuePct = Math.Round(candidate.ExpectedValuePercent * 100, 1),
+                        EdgePctPoints = Math.Round(candidate.Edge * 100, 1),
+                        ThresholdPct = Math.Round(candidate.ThresholdUsed * 100, 1),
+                        candidate.ThresholdSource,
+                        candidate.CalibratorUsed,
+                        signalBreakdown = signalBreakdown is null
+                            ? null
+                            : new
+                            {
+                                modelSignals = SignalBreakdownParser.ToPayloadObject(signalBreakdown),
+                                allSignalsAlign = signalBreakdown.SignalAgreement.AllSignalsAlign,
+                                modelDivergesFromBookmaker = signalBreakdown.SignalAgreement.ModelDivergesFromBookmaker,
+                                thinHistory = signalBreakdown.SignalAgreement.ThinHistory,
+                                signalSpreadPoints = signalBreakdown.SignalAgreement.SignalSpreadPoints,
+                                summary = signalBreakdown.SignalAgreement.Summary
+                            }
+                    };
                 })
             });
 
@@ -699,6 +721,7 @@ public class ValueBetsService : IValueBetsService
         public string OddsFreshness { get; init; } = "Using the latest stored sync pricing for this fixture.";
         public string OddsDerivationSource { get; init; } = MarketQuoteResolver.StoredDerivedOddsDerivationLabel;
         public string EdgeSource { get; init; } = string.Empty;
+        public string FeatureContributionsJson { get; init; } = "{}";
         public string AiJustification { get; set; } = string.Empty;
         public bool? IsSettledWin { get; set; }
         public double? RealizedReturnPercent { get; set; }

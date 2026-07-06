@@ -4,7 +4,7 @@ namespace MatchPredictor.Domain.Interfaces;
 
 public interface ICalibrationService
 {
-    double Calibrate(PredictionMarket market, double rawProbability);
-    CalibrationDecision CalibrateWithDecision(PredictionMarket market, double rawProbability);
+    double Calibrate(PredictionMarket market, double rawProbability, string? league = null);
+    CalibrationDecision CalibrateWithDecision(PredictionMarket market, double rawProbability, string? league = null);
     Task RebuildProfilesAsync();
 }

@@ -259,10 +259,10 @@ public class DataAnalyzerServiceTests
             _calibrate = calibrate;
         }
 
-        public double Calibrate(PredictionMarket market, double rawProbability) =>
+        public double Calibrate(PredictionMarket market, double rawProbability, string? league = null) =>
             _calibrate(market, rawProbability).Probability;
 
-        public CalibrationDecision CalibrateWithDecision(PredictionMarket market, double rawProbability) =>
+        public CalibrationDecision CalibrateWithDecision(PredictionMarket market, double rawProbability, string? league = null) =>
             _calibrate(market, rawProbability);
 
         public Task RebuildProfilesAsync() => Task.CompletedTask;
@@ -272,10 +272,10 @@ public class DataAnalyzerServiceTests
     {
         public Dictionary<PredictionMarket, ThresholdDecision> Decisions { get; } = new();
 
-        public double GetThreshold(PredictionMarket market, double fallbackThreshold) =>
+        public double GetThreshold(PredictionMarket market, double fallbackThreshold, string? league = null) =>
             GetThresholdDecision(market, fallbackThreshold).Threshold;
 
-        public ThresholdDecision GetThresholdDecision(PredictionMarket market, double fallbackThreshold)
+        public ThresholdDecision GetThresholdDecision(PredictionMarket market, double fallbackThreshold, string? league = null)
         {
             if (Decisions.TryGetValue(market, out var decision))
             {

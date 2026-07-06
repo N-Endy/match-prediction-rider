@@ -717,10 +717,10 @@ public class ValueBetsServiceTests
     {
         public Dictionary<PredictionMarket, ThresholdDecision> Decisions { get; } = new();
 
-        public double GetThreshold(PredictionMarket market, double fallbackThreshold) =>
-            GetThresholdDecision(market, fallbackThreshold).Threshold;
+        public double GetThreshold(PredictionMarket market, double fallbackThreshold, string? league = null) =>
+            GetThresholdDecision(market, fallbackThreshold, league).Threshold;
 
-        public ThresholdDecision GetThresholdDecision(PredictionMarket market, double fallbackThreshold)
+        public ThresholdDecision GetThresholdDecision(PredictionMarket market, double fallbackThreshold, string? league = null)
         {
             if (Decisions.TryGetValue(market, out var decision))
             {

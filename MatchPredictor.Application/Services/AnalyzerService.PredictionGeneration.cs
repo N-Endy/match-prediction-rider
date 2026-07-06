@@ -75,6 +75,11 @@ public partial class AnalyzerService
             }
             publishedCandidates = DeduplicatePublishedCandidates(publishedCandidates, targetDateString);
 
+            if (_predictionRiskAuditorService is not null)
+            {
+                await _predictionRiskAuditorService.AuditPublishedCandidatesAsync(publishedCandidates);
+            }
+
             var predictionRun = await CreatePredictionRunAsync(targetLocalDate, normalizedRunReason, forecastCandidates, publishedCandidates);
             await SaveForecastObservations(forecastCandidates, publishedCandidates, predictionRun);
             var savedPredictions = await SavePredictions(forecastCandidates, publishedCandidates, predictionRun);

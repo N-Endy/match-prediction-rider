@@ -150,7 +150,8 @@ public static partial class AiChatContextBuilder
     public static IReadOnlyList<AiChatContextCandidate> BuildCandidateCatalog(
         IEnumerable<Prediction> predictions,
         DateTime nowUtc,
-        IReadOnlyDictionary<int, AiChatCandidatePricing>? pricingByPredictionId = null)
+        IReadOnlyDictionary<int, AiChatCandidatePricing>? pricingByPredictionId = null,
+        IReadOnlyDictionary<int, string>? featureContributionsByPredictionId = null)
     {
         var todayLocalDate = DateOnly.FromDateTime(DateTimeProvider.ConvertUtcToLocal(nowUtc));
         var recentStartDate = todayLocalDate.AddDays(-7);
@@ -158,7 +159,12 @@ public static partial class AiChatContextBuilder
         return predictions
             .Where(prediction => prediction.IsCurrentRevision && prediction.WasPublished)
             .Where(prediction => prediction.MatchLocalDate >= recentStartDate && prediction.MatchLocalDate <= todayLocalDate)
-            .Select(prediction => CreateCandidate(prediction, pricingByPredictionId?.GetValueOrDefault(prediction.Id), nowUtc, todayLocalDate))
+            .Select(prediction => CreateCandidate(
+                prediction,
+                pricingByPredictionId?.GetValueOrDefault(prediction.Id),
+                featureContributionsByPredictionId?.GetValueOrDefault(prediction.Id),
+                nowUtc,
+                todayLocalDate))
             .ToList();
     }
 
@@ -297,6 +303,7 @@ public static partial class AiChatContextBuilder
     private static AiChatContextCandidate CreateCandidate(
         Prediction prediction,
         AiChatCandidatePricing? pricing,
+        string? featureContributionsJson,
         DateTime nowUtc,
         DateOnly todayLocalDate)
     {
@@ -315,6 +322,12 @@ public static partial class AiChatContextBuilder
         var hasNotStarted = !prediction.MatchDateTime.HasValue || prediction.MatchDateTime.Value >= nowUtc;
         var canBook = prediction.MatchLocalDate == todayLocalDate && isUpcoming && hasNotStarted;
         var matchState = isLive ? "Live" : isFinished ? "Finished" : "Upcoming";
+
+        var signalBreakdown = MatchPredictor.Infrastructure.Statistics.SignalBreakdownParser.TryParse(
+            featureContributionsJson,
+            prediction.PredictionCategory,
+            prediction.PredictedOutcome,
+            modelProbability);
 
         return new AiChatContextCandidate
         {
@@ -342,6 +355,8 @@ public static partial class AiChatContextBuilder
             MarketProbability = marketProbability,
             EstimatedOdds = pricing?.EstimatedDecimalOdds,
             EdgePoints = edgePoints,
+            FeatureContributionsJson = featureContributionsJson,
+            SignalBreakdown = signalBreakdown,
             FixtureKey = $"{prediction.League}|{prediction.HomeTeam}|{prediction.AwayTeam}|{prediction.Time}",
             SearchTokens = Tokenize(searchableText)
         };
@@ -1192,6 +1207,8 @@ public static partial class AiChatContextBuilder
         public double? EdgePoints { get; init; }
         public FootballMatchInsightSnapshot? FootballInsight { get; set; }
         public double? FootballSupportScore { get; set; }
+        public string? FeatureContributionsJson { get; init; }
+        public SignalBreakdownSnapshot? SignalBreakdown { get; init; }
         internal HashSet<string> SearchTokens { get; init; } = new(StringComparer.OrdinalIgnoreCase);
         internal string FixtureKey { get; init; } = string.Empty;
     }

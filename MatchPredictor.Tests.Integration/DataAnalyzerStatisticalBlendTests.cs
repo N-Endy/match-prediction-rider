@@ -100,9 +100,9 @@ public class DataAnalyzerStatisticalBlendTests
 
     private sealed class IdentityCalibrationService : ICalibrationService
     {
-        public double Calibrate(PredictionMarket market, double rawProbability) => rawProbability;
+        public double Calibrate(PredictionMarket market, double rawProbability, string? league = null) => rawProbability;
 
-        public CalibrationDecision CalibrateWithDecision(PredictionMarket market, double rawProbability) =>
+        public CalibrationDecision CalibrateWithDecision(PredictionMarket market, double rawProbability, string? league = null) =>
             new() { Probability = rawProbability, CalibratorUsed = "Bucket" };
 
         public Task RebuildProfilesAsync() => Task.CompletedTask;
@@ -110,9 +110,9 @@ public class DataAnalyzerStatisticalBlendTests
 
     private sealed class ConfiguredThresholdService : IThresholdTuningService
     {
-        public double GetThreshold(PredictionMarket market, double fallbackThreshold) => fallbackThreshold;
+        public double GetThreshold(PredictionMarket market, double fallbackThreshold, string? league = null) => fallbackThreshold;
 
-        public ThresholdDecision GetThresholdDecision(PredictionMarket market, double fallbackThreshold) =>
+        public ThresholdDecision GetThresholdDecision(PredictionMarket market, double fallbackThreshold, string? league = null) =>
             new() { Threshold = fallbackThreshold, ThresholdSource = "Configured" };
 
         public Task RebuildProfilesAsync() => Task.CompletedTask;

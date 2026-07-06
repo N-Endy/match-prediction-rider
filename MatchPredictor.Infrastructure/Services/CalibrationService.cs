@@ -12,8 +12,10 @@ public class CalibrationService : ICalibrationService
 {
     private const double BucketSize = 0.05;
     private const int MinimumBetaSampleCount = 40;
+    private const int MinimumLeagueSegmentSampleCount = 40;
     private const int RebuildWindowDays = 120;
     private const double RecencyHalfLifeDays = 30.0;
+    private const double MaxLeagueLogitAdjustment = 0.25;
     private static readonly PredictionMarket[] ActiveCalibrationMarkets =
     [
         PredictionMarket.BothTeamsScore,
@@ -27,6 +29,7 @@ public class CalibrationService : ICalibrationService
     private List<MarketCalibrationProfile>? _profiles;
     private List<BetaCalibrationProfile>? _betaProfiles;
     private List<IsotonicCalibrationProfile>? _isotonicProfiles;
+    private Dictionary<(PredictionMarket Market, string League), double> _leagueLogitAdjustments = new();
 
     public CalibrationService(ApplicationDbContext dbContext)
     {
@@ -50,41 +53,54 @@ public class CalibrationService : ICalibrationService
         .Where(profile => ActiveCalibrationMarkets.Contains(profile.Market))
         .ToList();
 
-    public double Calibrate(PredictionMarket market, double rawProbability)
+    public double Calibrate(PredictionMarket market, double rawProbability, string? league = null)
     {
-        return CalibrateWithDecision(market, rawProbability).Probability;
+        return CalibrateWithDecision(market, rawProbability, league).Probability;
     }
 
-    public CalibrationDecision CalibrateWithDecision(PredictionMarket market, double rawProbability)
+    public CalibrationDecision CalibrateWithDecision(PredictionMarket market, double rawProbability, string? league = null)
     {
         rawProbability = Math.Clamp(rawProbability, 0.0, 1.0);
 
         var isotonicProfile = IsotonicProfiles.FirstOrDefault(profile => profile.Market == market && profile.IsRecommended);
+        CalibrationDecision decision;
         if (isotonicProfile != null)
         {
             var knots = DeserializeKnots(isotonicProfile.KnotsJson);
-            return new CalibrationDecision
+            decision = new CalibrationDecision
             {
                 Probability = IsotonicRegression.Apply(rawProbability, knots),
                 CalibratorUsed = "Isotonic"
             };
         }
-
-        var betaProfile = BetaProfiles.FirstOrDefault(profile => profile.Market == market && profile.IsRecommended);
-        if (betaProfile != null)
+        else
         {
-            return new CalibrationDecision
+            var betaProfile = BetaProfiles.FirstOrDefault(profile => profile.Market == market && profile.IsRecommended);
+            if (betaProfile != null)
             {
-                Probability = ApplyBetaCalibration(rawProbability, betaProfile.Alpha, betaProfile.Beta, betaProfile.Gamma),
-                CalibratorUsed = "Beta"
-            };
+                decision = new CalibrationDecision
+                {
+                    Probability = ApplyBetaCalibration(rawProbability, betaProfile.Alpha, betaProfile.Beta, betaProfile.Gamma),
+                    CalibratorUsed = "Beta"
+                };
+            }
+            else
+            {
+                decision = new CalibrationDecision
+                {
+                    Probability = CalibrateWithBucket(rawProbability, Profiles.Where(profile => profile.Market == market)),
+                    CalibratorUsed = "Bucket"
+                };
+            }
         }
 
-        return new CalibrationDecision
+        if (!string.IsNullOrWhiteSpace(league) &&
+            _leagueLogitAdjustments.TryGetValue((market, NormalizeLeagueKey(league)), out var logitAdjustment))
         {
-            Probability = CalibrateWithBucket(rawProbability, Profiles.Where(profile => profile.Market == market)),
-            CalibratorUsed = "Bucket"
-        };
+            decision.Probability = ApplyLeagueLogitAdjustment(decision.Probability, logitAdjustment);
+        }
+
+        return decision;
     }
 
     public async Task RebuildProfilesAsync()
@@ -195,7 +211,61 @@ public class CalibrationService : ICalibrationService
         _profiles = rebuiltProfiles;
         _betaProfiles = betaProfiles;
         _isotonicProfiles = isotonicProfiles;
+        _leagueLogitAdjustments = BuildLeagueLogitAdjustments(pointInTimeForecasts);
     }
+
+    private static Dictionary<(PredictionMarket Market, string League), double> BuildLeagueLogitAdjustments(
+        IReadOnlyCollection<ForecastObservation> forecasts)
+    {
+        var adjustments = new Dictionary<(PredictionMarket, string), double>();
+        foreach (var group in forecasts
+                     .Where(forecast => !string.IsNullOrWhiteSpace(forecast.League))
+                     .GroupBy(forecast => (forecast.Market, League: NormalizeLeagueKey(forecast.League))))
+        {
+            if (group.Count() < MinimumLeagueSegmentSampleCount)
+            {
+                continue;
+            }
+
+            var weightedPredicted = 0.0;
+            var weightedOutcome = 0.0;
+            var totalWeight = 0.0;
+            foreach (var forecast in group)
+            {
+                var weight = CalculateRecencyWeight(forecast.SettledAt ?? forecast.CreatedAt);
+                var predicted = Math.Clamp(GetCalibrationInput(forecast), 0.02, 0.98);
+                weightedPredicted += predicted * weight;
+                weightedOutcome += (forecast.OutcomeOccurred == true ? 1.0 : 0.0) * weight;
+                totalWeight += weight;
+            }
+
+            if (totalWeight <= 0)
+            {
+                continue;
+            }
+
+            var meanPredicted = weightedPredicted / totalWeight;
+            var empiricalRate = weightedOutcome / totalWeight;
+            var adjustment = ToLogit(empiricalRate) - ToLogit(meanPredicted);
+            adjustments[group.Key] = Math.Clamp(adjustment, -MaxLeagueLogitAdjustment, MaxLeagueLogitAdjustment);
+        }
+
+        return adjustments;
+    }
+
+    private static double ApplyLeagueLogitAdjustment(double probability, double logitAdjustment)
+    {
+        probability = Math.Clamp(probability, 0.02, 0.98);
+        return Math.Clamp(1.0 / (1.0 + Math.Exp(-(ToLogit(probability) + logitAdjustment))), 0.0, 1.0);
+    }
+
+    private static double ToLogit(double probability)
+    {
+        probability = Math.Clamp(probability, 1e-6, 1.0 - 1e-6);
+        return Math.Log(probability / (1.0 - probability));
+    }
+
+    private static string NormalizeLeagueKey(string league) => league.Trim().ToLowerInvariant();
 
     private static List<IsotonicCalibrationProfile> BuildIsotonicCalibrationProfiles(
         IReadOnlyCollection<ForecastObservation> settledForecasts,

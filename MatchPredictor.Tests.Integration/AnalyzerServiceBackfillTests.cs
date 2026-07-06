@@ -1020,9 +1020,9 @@ public class AnalyzerServiceBackfillTests
 
     private sealed class StubCalibrationService : ICalibrationService
     {
-        public double Calibrate(PredictionMarket market, double rawProbability) => rawProbability;
+        public double Calibrate(PredictionMarket market, double rawProbability, string? league = null) => rawProbability;
 
-        public CalibrationDecision CalibrateWithDecision(PredictionMarket market, double rawProbability) =>
+        public CalibrationDecision CalibrateWithDecision(PredictionMarket market, double rawProbability, string? league = null) =>
             new()
             {
                 Probability = rawProbability,
@@ -1034,9 +1034,9 @@ public class AnalyzerServiceBackfillTests
 
     private sealed class StubThresholdTuningService : IThresholdTuningService
     {
-        public double GetThreshold(PredictionMarket market, double fallbackThreshold) => fallbackThreshold;
+        public double GetThreshold(PredictionMarket market, double fallbackThreshold, string? league = null) => fallbackThreshold;
 
-        public ThresholdDecision GetThresholdDecision(PredictionMarket market, double fallbackThreshold) =>
+        public ThresholdDecision GetThresholdDecision(PredictionMarket market, double fallbackThreshold, string? league = null) =>
             new()
             {
                 Threshold = fallbackThreshold,

@@ -33,12 +33,18 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         nameof(MarketModelInput.BookmakerProbability),
         nameof(MarketModelInput.HomeRestDays),
         nameof(MarketModelInput.AwayRestDays),
+        nameof(MarketModelInput.RestDayDifferential),
         nameof(MarketModelInput.HomeFormPoints),
         nameof(MarketModelInput.AwayFormPoints),
+        nameof(MarketModelInput.HomeGoalsForPerMatch),
+        nameof(MarketModelInput.AwayGoalsForPerMatch),
+        nameof(MarketModelInput.HomeGoalsAgainstPerMatch),
+        nameof(MarketModelInput.AwayGoalsAgainstPerMatch),
         nameof(MarketModelInput.HeadToHeadHomeWins),
         nameof(MarketModelInput.HeadToHeadDraws),
         nameof(MarketModelInput.HeadToHeadAwayWins)
     ];
+    private static readonly string ExpectedFeatureSchemaJson = JsonSerializer.Serialize(FeatureColumns);
 
     private readonly ApplicationDbContext _dbContext;
     private readonly ILogger<MarketPredictionModelService> _logger;
@@ -65,15 +71,22 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         }
 
         var features = LoadLatestFeatureSnapshot(match);
+        var homeRestDays = (float)(features?.HomeRestDays ?? 0);
+        var awayRestDays = (float)(features?.AwayRestDays ?? 0);
         var output = engine.Predict(new MarketModelInput
         {
             CalculatorProbability = (float)calculatorProbability,
             StatisticalProbability = (float)(statisticalProbability ?? calculatorProbability),
             BookmakerProbability = (float)(bookmakerProbability ?? calculatorProbability),
-            HomeRestDays = (float)(features?.HomeRestDays ?? 0),
-            AwayRestDays = (float)(features?.AwayRestDays ?? 0),
+            HomeRestDays = homeRestDays,
+            AwayRestDays = awayRestDays,
+            RestDayDifferential = homeRestDays - awayRestDays,
             HomeFormPoints = (float)(features?.HomeFormPointsPerMatch ?? 0),
             AwayFormPoints = (float)(features?.AwayFormPointsPerMatch ?? 0),
+            HomeGoalsForPerMatch = (float)(features?.HomeFormGoalsForPerMatch ?? 0),
+            AwayGoalsForPerMatch = (float)(features?.AwayFormGoalsForPerMatch ?? 0),
+            HomeGoalsAgainstPerMatch = (float)(features?.HomeFormGoalsAgainstPerMatch ?? 0),
+            AwayGoalsAgainstPerMatch = (float)(features?.AwayFormGoalsAgainstPerMatch ?? 0),
             HeadToHeadHomeWins = features?.HeadToHeadHomeWins ?? 0,
             HeadToHeadDraws = features?.HeadToHeadDraws ?? 0,
             HeadToHeadAwayWins = features?.HeadToHeadAwayWins ?? 0
@@ -187,6 +200,14 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         var engines = new Dictionary<PredictionMarket, PredictionEngine<MarketModelInput, MarketModelOutput>>();
         foreach (var profile in _dbContext.MarketMlModelProfiles.AsNoTracking().Where(profile => profile.IsPromoted))
         {
+            if (!string.Equals(profile.FeatureSchemaJson, ExpectedFeatureSchemaJson, StringComparison.Ordinal))
+            {
+                _logger.LogInformation(
+                    "Skipping promoted ML model for {Market} because feature schema changed.",
+                    profile.Market);
+                continue;
+            }
+
             using var stream = new MemoryStream(profile.ModelBytes);
             var model = _mlContext.Model.Load(stream, out _);
             engines[profile.Market] = _mlContext.Model.CreatePredictionEngine<MarketModelInput, MarketModelOutput>(model);
@@ -229,8 +250,13 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
             BookmakerProbability = (float)(signals.Bookmaker ?? signals.Calculator),
             HomeRestDays = (float)(featureSnapshot?.HomeRestDays ?? 0),
             AwayRestDays = (float)(featureSnapshot?.AwayRestDays ?? 0),
+            RestDayDifferential = (float)((featureSnapshot?.HomeRestDays ?? 0) - (featureSnapshot?.AwayRestDays ?? 0)),
             HomeFormPoints = (float)(featureSnapshot?.HomeFormPointsPerMatch ?? 0),
             AwayFormPoints = (float)(featureSnapshot?.AwayFormPointsPerMatch ?? 0),
+            HomeGoalsForPerMatch = (float)(featureSnapshot?.HomeFormGoalsForPerMatch ?? 0),
+            AwayGoalsForPerMatch = (float)(featureSnapshot?.AwayFormGoalsForPerMatch ?? 0),
+            HomeGoalsAgainstPerMatch = (float)(featureSnapshot?.HomeFormGoalsAgainstPerMatch ?? 0),
+            AwayGoalsAgainstPerMatch = (float)(featureSnapshot?.AwayFormGoalsAgainstPerMatch ?? 0),
             HeadToHeadHomeWins = featureSnapshot?.HeadToHeadHomeWins ?? 0,
             HeadToHeadDraws = featureSnapshot?.HeadToHeadDraws ?? 0,
             HeadToHeadAwayWins = featureSnapshot?.HeadToHeadAwayWins ?? 0
@@ -309,8 +335,13 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         public float BookmakerProbability { get; set; }
         public float HomeRestDays { get; set; }
         public float AwayRestDays { get; set; }
+        public float RestDayDifferential { get; set; }
         public float HomeFormPoints { get; set; }
         public float AwayFormPoints { get; set; }
+        public float HomeGoalsForPerMatch { get; set; }
+        public float AwayGoalsForPerMatch { get; set; }
+        public float HomeGoalsAgainstPerMatch { get; set; }
+        public float AwayGoalsAgainstPerMatch { get; set; }
         public float HeadToHeadHomeWins { get; set; }
         public float HeadToHeadDraws { get; set; }
         public float HeadToHeadAwayWins { get; set; }
