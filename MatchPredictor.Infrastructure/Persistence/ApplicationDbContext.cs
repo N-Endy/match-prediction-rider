@@ -92,19 +92,28 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
 
         modelBuilder.Entity<MatchScore>(entity =>
         {
-            entity.HasIndex(e => new { e.MatchTime, e.HomeTeam, e.AwayTeam });
+            entity.Property(e => e.HomeTeamKey).HasMaxLength(512);
+            entity.Property(e => e.AwayTeamKey).HasMaxLength(512);
+            entity.Property(e => e.LeagueKey).HasMaxLength(512);
+            entity.HasIndex(e => new { e.MatchLocalDate, e.HomeTeamKey, e.AwayTeamKey, e.LeagueKey });
             entity.HasIndex(e => new { e.MatchTime, e.IsLive });
         });
 
         modelBuilder.Entity<AiScoreMatchScore>(entity =>
         {
-            entity.HasIndex(e => new { e.MatchTime, e.HomeTeam, e.AwayTeam });
+            entity.Property(e => e.HomeTeamKey).HasMaxLength(512);
+            entity.Property(e => e.AwayTeamKey).HasMaxLength(512);
+            entity.Property(e => e.LeagueKey).HasMaxLength(512);
+            entity.HasIndex(e => new { e.MatchLocalDate, e.HomeTeamKey, e.AwayTeamKey, e.LeagueKey });
             entity.HasIndex(e => new { e.MatchTime, e.IsLive });
         });
 
         modelBuilder.Entity<SofaScoreMatchScore>(entity =>
         {
-            entity.HasIndex(e => new { e.MatchTime, e.HomeTeam, e.AwayTeam });
+            entity.Property(e => e.HomeTeamKey).HasMaxLength(512);
+            entity.Property(e => e.AwayTeamKey).HasMaxLength(512);
+            entity.Property(e => e.LeagueKey).HasMaxLength(512);
+            entity.HasIndex(e => new { e.MatchLocalDate, e.HomeTeamKey, e.AwayTeamKey, e.LeagueKey });
             entity.HasIndex(e => new { e.MatchTime, e.IsLive });
         });
 

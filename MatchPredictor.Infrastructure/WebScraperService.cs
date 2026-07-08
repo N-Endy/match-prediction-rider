@@ -149,86 +149,7 @@ public partial class WebScraperService : IWebScraperService
 
                     var rawHtml = container.GetAttribute("innerHTML");
 
-                    var doc = new HtmlDocument();
-                    doc.LoadHtml($"<div>{rawHtml}</div>");
-
-                    var currentLeague = "";
-
-                    // Use direct ChildNodes — NOT recursive Nodes() which flattens the tree
-                    var nodes = doc.DocumentNode.FirstChild.ChildNodes.ToList();
-
-                    var matchScores = new List<MatchScore>();
-
-                    for (var i = 0; i < nodes.Count; i++)
-                    {
-                        var node = nodes[i];
-
-                        switch (node.Name)
-                        {
-                            case "h4":
-                                currentLeague = node.InnerText.Split("Standings")[0].Trim();
-                                break;
-                            case "span":
-                            {
-                                var currentTime = node.InnerText.Trim();
-                                var isLive = node.GetAttributeValue("class", "") == "live";
-
-                                // Look ahead for teams (text node) and score (a.fin or live score link)
-                                string? teams = null;
-                                string? score = null;
-
-                                for (var j = 1; j <= 4 && i + j < nodes.Count; j++)
-                                {
-                                    var next = nodes[i + j];
-
-                                    if (next.Name == "#text" && next.InnerText.Contains(" - "))
-                                    {
-                                        teams = next.InnerText.Trim();
-                                    }
-                                    else if (next.Name == "a")
-                                    {
-                                        var cls = next.GetAttributeValue("class", "") == "live";
-                                        // Accept both finished ("fin") and live scores
-                                        if (next.GetAttributeValue("class", "") == "fin" || isLive || cls)
-                                        {
-                                            var rawString = next.InnerText.Trim();
-                                            var m = MyRegex().Match(rawString);
-                                            if (m.Success)
-                                            {
-                                                score = m.Value;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if (!string.IsNullOrWhiteSpace(score) && !string.IsNullOrWhiteSpace(teams) && teams.Contains(" - "))
-                                {
-                                    var split = teams.Split(" - ");
-                                    var home = split[0].Trim();
-                                    var away = split[1].Trim();
-
-                                    DateTime matchTime;
-                                    try { matchTime = ParseScoreMatchTime(currentTime, isLive); }
-                                    catch { matchTime = DateTime.UtcNow; } // Live matches may not expose a kickoff time in the listing
-
-                                    matchScores.Add(new MatchScore
-                                    {
-                                        League = currentLeague,
-                                        HomeTeam = home,
-                                        AwayTeam = away,
-                                        Score = score,
-                                        MatchTime = matchTime,
-                                        BTTSLabel = IsBtts(score),
-                                        IsLive = isLive
-                                    });
-                                }
-
-                                break;
-                            }
-                        }
-                    }
-
-                    return matchScores;
+                    return ParseScoreDataHtml(rawHtml);
                 },
                 configureOptions: ConfigurePrimaryScraperBrowserOptions,
                 purpose: "score scraping");
@@ -2025,6 +1946,101 @@ public partial class WebScraperService : IWebScraperService
     }
 
     
+    internal static List<MatchScore> ParseScoreDataHtml(string rawHtml)
+    {
+        var matchScores = new List<MatchScore>();
+        if (string.IsNullOrWhiteSpace(rawHtml))
+        {
+            return matchScores;
+        }
+
+        var doc = new HtmlDocument();
+        doc.LoadHtml($"<div>{rawHtml}</div>");
+
+        var currentLeague = "";
+
+        // Use direct ChildNodes — NOT recursive Nodes() which flattens the tree
+        var nodes = doc.DocumentNode.FirstChild.ChildNodes.ToList();
+
+        for (var i = 0; i < nodes.Count; i++)
+        {
+            var node = nodes[i];
+
+            switch (node.Name)
+            {
+                case "h4":
+                    currentLeague = node.InnerText.Split("Standings")[0].Trim();
+                    break;
+                case "span":
+                {
+                    var currentTime = node.InnerText.Trim();
+                    var isLive = node.GetAttributeValue("class", "") == "live";
+
+                    // Look ahead for teams (text node) and score (a.fin or live score link)
+                    string? teams = null;
+                    string? score = null;
+
+                    for (var j = 1; j <= 4 && i + j < nodes.Count; j++)
+                    {
+                        var next = nodes[i + j];
+
+                        if (next.Name == "#text" && next.InnerText.Contains(" - "))
+                        {
+                            teams = HtmlEntity.DeEntitize(next.InnerText).Trim();
+                        }
+                        else if (next.Name == "a")
+                        {
+                            var anchorClass = next.GetAttributeValue("class", "");
+                            var isLiveAnchor = anchorClass == "live";
+                            // Accept both finished ("fin") and live scores
+                            if (anchorClass == "fin" || isLive || isLiveAnchor)
+                            {
+                                var rawString = HtmlEntity.DeEntitize(next.InnerText).Trim();
+                                var m = MyRegex().Match(rawString);
+                                if (m.Success)
+                                {
+                                    // FlashScore mobile renders scores with a hyphen (e.g. "2-1");
+                                    // normalize to the colon format the rest of the pipeline expects.
+                                    score = $"{m.Groups["home"].Value}:{m.Groups["away"].Value}";
+                                    if (isLiveAnchor)
+                                    {
+                                        isLive = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(score) && !string.IsNullOrWhiteSpace(teams) && teams.Contains(" - "))
+                    {
+                        var split = teams.Split(" - ");
+                        var home = split[0].Trim();
+                        var away = split[1].Trim();
+
+                        DateTime matchTime;
+                        try { matchTime = ParseScoreMatchTime(currentTime, isLive); }
+                        catch { matchTime = DateTime.UtcNow; } // Live matches may not expose a kickoff time in the listing
+
+                        matchScores.Add(new MatchScore
+                        {
+                            League = currentLeague,
+                            HomeTeam = home,
+                            AwayTeam = away,
+                            Score = score,
+                            MatchTime = matchTime,
+                            BTTSLabel = IsBtts(score),
+                            IsLive = isLive
+                        });
+                    }
+
+                    break;
+                }
+            }
+        }
+
+        return matchScores;
+    }
+
     private static bool IsBtts(string score)
     {
         var parts = score.Split(":"); // Split "2:1" into ["2", "1"]
@@ -2034,7 +2050,7 @@ public partial class WebScraperService : IWebScraperService
                h > 0 && a > 0; // Check that both teams scored
     }
     
-    private DateTime ParseScoreMatchTime(string rawTime, bool isLive)
+    private static DateTime ParseScoreMatchTime(string rawTime, bool isLive)
     {
         if (isLive)
         {
@@ -2068,7 +2084,7 @@ public partial class WebScraperService : IWebScraperService
         return match.Value;
     }
 
-    [GeneratedRegex(@"^\d{1,2}:\d{1,2}")]
+    [GeneratedRegex(@"^(?<home>\d{1,2})\s*[-:]\s*(?<away>\d{1,2})")]
     private static partial Regex MyRegex();
 
     [GeneratedRegex(@"\d{1,2}:\d{2}")]

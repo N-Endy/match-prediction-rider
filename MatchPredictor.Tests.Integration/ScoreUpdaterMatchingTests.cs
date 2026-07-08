@@ -272,6 +272,61 @@ public class ScoreUpdaterMatchingTests
     }
 
     [Fact]
+    public async Task RunScoreUpdaterAsync_DedupesAiScoreRowsUsingNormalizedSnapshotKeys()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(18);
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoff);
+        const string league = "UEFA Champions League";
+
+        context.AiScoreMatchScores.Add(new AiScoreMatchScore
+        {
+            MatchTime = kickoffUtc,
+            League = league,
+            HomeTeam = "Manchester City",
+            AwayTeam = "Real Madrid",
+            Score = "1:0",
+            BTTSLabel = false,
+            IsLive = true
+        });
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                AiScoreMatchScores =
+                [
+                    new AiScoreMatchScore
+                    {
+                        MatchTime = kickoffUtc,
+                        League = league,
+                        HomeTeam = "Man City",
+                        AwayTeam = "Real Madrid",
+                        Score = "2:1",
+                        BTTSLabel = true,
+                        IsLive = false
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var storedScores = await context.AiScoreMatchScores.ToListAsync();
+        Assert.Single(storedScores);
+        Assert.Equal("2:1", storedScores[0].Score);
+        Assert.False(storedScores[0].IsLive);
+        Assert.False(string.IsNullOrWhiteSpace(storedScores[0].HomeTeamKey));
+        Assert.False(string.IsNullOrWhiteSpace(storedScores[0].AwayTeamKey));
+        Assert.False(string.IsNullOrWhiteSpace(storedScores[0].LeagueKey));
+        Assert.NotEqual(default(DateOnly), storedScores[0].MatchLocalDate);
+    }
+
+    [Fact]
     public async Task RunScoreUpdaterAsync_RunsSofaScoreAfterHealthyAiScoreWhenFixtureRemainsUnresolved()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()

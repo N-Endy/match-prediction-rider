@@ -34,6 +34,11 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("AwayTeamKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
                     b.Property<bool>("BTTSLabel")
                         .HasColumnType("boolean");
 
@@ -41,12 +46,25 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("HomeTeamKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
                     b.Property<bool>("IsLive")
                         .HasColumnType("boolean");
 
                     b.Property<string>("League")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<string>("LeagueKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<DateOnly>("MatchLocalDate")
+                        .HasColumnType("date");
 
                     b.Property<DateTime>("MatchTime")
                         .HasColumnType("timestamp with time zone");
@@ -59,7 +77,7 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     b.HasIndex("MatchTime", "IsLive");
 
-                    b.HasIndex("MatchTime", "HomeTeam", "AwayTeam");
+                    b.HasIndex("MatchLocalDate", "HomeTeamKey", "AwayTeamKey", "LeagueKey");
 
                     b.ToTable("AiScoreMatchScores");
                 });
@@ -771,6 +789,11 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("AwayTeamKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
                     b.Property<bool>("BTTSLabel")
                         .HasColumnType("boolean");
 
@@ -778,12 +801,25 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("HomeTeamKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
                     b.Property<bool>("IsLive")
                         .HasColumnType("boolean");
 
                     b.Property<string>("League")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<string>("LeagueKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<DateOnly>("MatchLocalDate")
+                        .HasColumnType("date");
 
                     b.Property<DateTime>("MatchTime")
                         .HasColumnType("timestamp with time zone");
@@ -796,7 +832,7 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     b.HasIndex("MatchTime", "IsLive");
 
-                    b.HasIndex("MatchTime", "HomeTeam", "AwayTeam");
+                    b.HasIndex("MatchLocalDate", "HomeTeamKey", "AwayTeamKey", "LeagueKey");
 
                     b.ToTable("MatchScores");
                 });
@@ -1257,6 +1293,11 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("AwayTeamKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
                     b.Property<bool>("BTTSLabel")
                         .HasColumnType("boolean");
 
@@ -1277,12 +1318,25 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("HomeTeamKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
                     b.Property<bool>("IsLive")
                         .HasColumnType("boolean");
 
                     b.Property<string>("League")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<string>("LeagueKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<DateOnly>("MatchLocalDate")
+                        .HasColumnType("date");
 
                     b.Property<DateTime>("MatchTime")
                         .HasColumnType("timestamp with time zone");
@@ -1301,7 +1355,7 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     b.HasIndex("MatchTime", "IsLive");
 
-                    b.HasIndex("MatchTime", "HomeTeam", "AwayTeam");
+                    b.HasIndex("MatchLocalDate", "HomeTeamKey", "AwayTeamKey", "LeagueKey");
 
                     b.ToTable("SofaScoreMatchScores");
                 });

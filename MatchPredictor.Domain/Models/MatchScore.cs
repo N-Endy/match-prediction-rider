@@ -10,6 +10,10 @@ public class MatchScore
     public string AwayTeam { get; set; } = string.Empty;
     public string Score { get; set; } = string.Empty;
     public DateTime MatchTime { get; set; }
+    public DateOnly MatchLocalDate { get; set; }
+    public string HomeTeamKey { get; set; } = string.Empty;
+    public string AwayTeamKey { get; set; } = string.Empty;
+    public string LeagueKey { get; set; } = string.Empty;
     public bool BTTSLabel { get; set; }
     public bool IsLive { get; set; }
 }

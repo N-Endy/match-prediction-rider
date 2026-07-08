@@ -1191,17 +1191,23 @@ public partial class AnalyzerService
 
         foreach (var incomingScore in scores)
         {
+            ScoreSnapshotKeyFactory.Apply(incomingScore);
             var key = GetStoredScoreSnapshotKey(incomingScore);
 
             if (existingScoresDict.TryGetValue(key, out var existingRecord))
             {
                 existingRecord.MatchTime = ResolvePreferredStoredMatchTime(existingRecord.MatchTime, incomingScore.MatchTime, existingRecord.IsLive, incomingScore.IsLive);
+                ScoreSnapshotKeyFactory.Apply(existingRecord);
 
                 if (ShouldOverwriteStoredScore(existingRecord.Score, existingRecord.BTTSLabel, existingRecord.IsLive, existingRecord.MatchTime, incomingScore))
                 {
                     existingRecord.Score = incomingScore.Score;
                     existingRecord.IsLive = incomingScore.IsLive;
                     existingRecord.BTTSLabel = incomingScore.BTTSLabel;
+                    existingRecord.HomeTeam = incomingScore.HomeTeam;
+                    existingRecord.AwayTeam = incomingScore.AwayTeam;
+                    existingRecord.League = incomingScore.League;
+                    ScoreSnapshotKeyFactory.Apply(existingRecord);
                 }
             }
             else
@@ -1226,25 +1232,38 @@ public partial class AnalyzerService
             .ToListAsync();
 
         var existingScoresDict = existingScoresList
-            .GroupBy(s => (s.HomeTeam, s.AwayTeam, s.MatchTime))
+            .GroupBy(GetStoredScoreSnapshotKey)
             .ToDictionary(g => g.Key, g => g.First());
 
         foreach (var incomingScore in scores)
         {
-            var key = (incomingScore.HomeTeam, incomingScore.AwayTeam, incomingScore.MatchTime);
+            ScoreSnapshotKeyFactory.Apply(incomingScore);
+            var key = GetStoredScoreSnapshotKey(incomingScore);
 
             if (existingScoresDict.TryGetValue(key, out var existingRecord))
             {
+                existingRecord.MatchTime = ResolvePreferredStoredMatchTime(
+                    existingRecord.MatchTime,
+                    incomingScore.MatchTime,
+                    existingRecord.IsLive,
+                    incomingScore.IsLive);
+                ScoreSnapshotKeyFactory.Apply(existingRecord);
+
                 if (ShouldOverwriteStoredScore(existingRecord.Score, existingRecord.BTTSLabel, existingRecord.IsLive, existingRecord.MatchTime, incomingScore))
                 {
                     existingRecord.Score = incomingScore.Score;
                     existingRecord.IsLive = incomingScore.IsLive;
                     existingRecord.BTTSLabel = incomingScore.BTTSLabel;
+                    existingRecord.HomeTeam = incomingScore.HomeTeam;
+                    existingRecord.AwayTeam = incomingScore.AwayTeam;
+                    existingRecord.League = incomingScore.League;
+                    ScoreSnapshotKeyFactory.Apply(existingRecord);
                 }
             }
             else
             {
                 _dbContext.AiScoreMatchScores.Add(incomingScore);
+                existingScoresDict[key] = incomingScore;
             }
         }
 
@@ -1716,6 +1735,7 @@ public partial class AnalyzerService
 
         foreach (var incomingScore in scores)
         {
+            ScoreSnapshotKeyFactory.Apply(incomingScore);
             var key = GetStoredScoreSnapshotKey(incomingScore);
 
             if (existingScoresDict.TryGetValue(key, out var existingRecord))
@@ -1725,6 +1745,7 @@ public partial class AnalyzerService
                     incomingScore.MatchTime,
                     existingRecord.IsLive,
                     incomingScore.IsLive);
+                ScoreSnapshotKeyFactory.Apply(existingRecord);
 
                 if (ShouldOverwriteStoredScore(
                         existingRecord.Score,
@@ -1742,9 +1763,12 @@ public partial class AnalyzerService
                     existingRecord.ExtraTimeScore = incomingScore.ExtraTimeScore;
                     existingRecord.StatusText = incomingScore.StatusText;
                     existingRecord.EventUrl = incomingScore.EventUrl;
+                    existingRecord.HomeTeam = incomingScore.HomeTeam;
+                    existingRecord.AwayTeam = incomingScore.AwayTeam;
                     existingRecord.League = string.IsNullOrWhiteSpace(incomingScore.League)
                         ? existingRecord.League
                         : incomingScore.League;
+                    ScoreSnapshotKeyFactory.Apply(existingRecord);
                 }
             }
             else
@@ -1754,7 +1778,16 @@ public partial class AnalyzerService
             }
         }
 
-        await _dbContext.SaveChangesAsync();
+        try
+        {
+            await _dbContext.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (IsSofaScoreIndexRowTooLarge(ex))
+        {
+            _logger.LogWarning(
+                ex,
+                "Skipping SofaScore score persistence for oversized team-name index entries on IX_SofaScoreMatchScores_MatchTime_HomeTeam_AwayTeam. Apply the latest EF migration to replace this index with bounded snapshot keys.");
+        }
     }
 
     private async Task<Dictionary<(string SourceName, string LeagueKey, string TimeBucketKey), SourceQualityProfile>> LoadSourceQualityLookupAsync()
@@ -1801,7 +1834,8 @@ public partial class AnalyzerService
         }
 
         return postgresEx.SqlState == PostgresErrorCodes.ProgramLimitExceeded &&
-               string.Equals(postgresEx.ConstraintName, "IX_SofaScoreMatchScores_MatchTime_HomeTeam_AwayTeam", StringComparison.Ordinal);
+               (string.Equals(postgresEx.ConstraintName, "IX_SofaScoreMatchScores_MatchTime_HomeTeam_AwayTeam", StringComparison.Ordinal) ||
+                string.Equals(postgresEx.ConstraintName, "IX_SofaScoreMatchScores_MatchLocalDate_HomeTeamKey_AwayTeamKey_LeagueKey", StringComparison.Ordinal));
     }
 
     private sealed record RankedExactFinishedCandidate<T>(

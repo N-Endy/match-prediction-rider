@@ -52,6 +52,39 @@ namespace MatchPredictor.Tests.Integration
         }
 
         [Fact]
+        public void ParseScoreDataHtml_ExtractsFinishedAndLiveScoresWithHyphenSeparator()
+        {
+            var parseMethod = typeof(WebScraperService).GetMethod(
+                "ParseScoreDataHtml",
+                BindingFlags.Static | BindingFlags.NonPublic);
+
+            Assert.NotNull(parseMethod);
+
+            // Mirrors flashscore.mobi's current markup: scores use a hyphen ("2-1"),
+            // scheduled rows use "sched", finished rows "fin", in-play rows "live".
+            const string rawHtml =
+                "<h4>ARGENTINA: Primera</h4>" +
+                "<span>17:00</span>Kairat Almaty (Kaz) - Sutjeska (Mne) <a href=\"/match/a/\" class=\"sched\">&nbsp;-&nbsp;</a><br />" +
+                "<span>20:45</span>Caicara U20 - Comercial PI U20 <a href=\"/match/b/\" class=\"fin\">0-3</a><br />" +
+                "<span class=\"live\">83'</span>GV San Jose - Tomayapo <a href=\"/match/c/\" class=\"live\">2-2</a><br />";
+
+            var result = (System.Collections.Generic.List<MatchScore>)parseMethod!.Invoke(null, new object[] { rawHtml })!;
+
+            Assert.Equal(2, result.Count);
+
+            var finished = result.Find(s => s.HomeTeam == "Caicara U20");
+            Assert.NotNull(finished);
+            Assert.Equal("0:3", finished!.Score);
+            Assert.False(finished.IsLive);
+
+            var live = result.Find(s => s.HomeTeam == "GV San Jose");
+            Assert.NotNull(live);
+            Assert.Equal("2:2", live!.Score);
+            Assert.True(live.IsLive);
+            Assert.True(live.BTTSLabel);
+        }
+
+        [Fact]
         public void ParseAiScoreNuxtState_SkipsOverlyLargePayload()
         {
             var scraper = CreateScraper();
