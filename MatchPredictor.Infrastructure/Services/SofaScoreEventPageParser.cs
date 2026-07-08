@@ -87,8 +87,11 @@ public static partial class SofaScoreEventPageParser
     private static DateTime ParseKickoffUtc(string day, string month, string year, string time)
     {
         var raw = $"{day} {month} {year} {time}";
-        var parsed = DateTime.ParseExact(raw, "d MMM yyyy HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
-        return DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
+        return DateTime.ParseExact(
+            raw,
+            "d MMM yyyy HH:mm",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
     }
 
     private static string? ResolveStatusText(string text)

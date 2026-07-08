@@ -117,7 +117,16 @@ public partial class AnalyzerService
         };
 
         await _dbContext.ScrapingLogs.AddAsync(log);
-        await _dbContext.SaveChangesAsync();
+        try
+        {
+            await _dbContext.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (IsSofaScoreIndexRowTooLarge(ex))
+        {
+            _logger.LogWarning(
+                ex,
+                "Skipping SofaScore score persistence for oversized team-name index entries on IX_SofaScoreMatchScores_MatchTime_HomeTeam_AwayTeam. Settlement continues, but add a migration to replace this index with a hash/shortened key index.");
+        }
     }
 
     private static bool HasMeaningfulRuntimeSnapshot(string? status, DateTime? lastAttemptUtc, DateTime? lastSuccessUtc)
@@ -1782,6 +1791,17 @@ public partial class AnalyzerService
         public DateTime? ScheduledMatchTimeUtc { get; init; }
         public List<Prediction> Predictions { get; } = [];
         public List<ForecastObservation> Forecasts { get; } = [];
+    }
+
+    private static bool IsSofaScoreIndexRowTooLarge(DbUpdateException ex)
+    {
+        if (ex.InnerException is not PostgresException postgresEx)
+        {
+            return false;
+        }
+
+        return postgresEx.SqlState == PostgresErrorCodes.ProgramLimitExceeded &&
+               string.Equals(postgresEx.ConstraintName, "IX_SofaScoreMatchScores_MatchTime_HomeTeam_AwayTeam", StringComparison.Ordinal);
     }
 
     private sealed record RankedExactFinishedCandidate<T>(

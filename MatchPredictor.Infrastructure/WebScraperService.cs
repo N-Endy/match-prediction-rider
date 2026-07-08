@@ -1755,13 +1755,26 @@ public partial class WebScraperService : IWebScraperService
     private bool SofaScoreEventMatchesFixture(SofaScoreMatchScore parsedScore, SofaScoreFixtureRequest fixture)
     {
         var parsedLocalDate = DateTimeProvider.ConvertUtcToLocal(parsedScore.MatchTime).Date;
-        if (parsedLocalDate != fixture.MatchLocalDate.ToDateTime(TimeOnly.MinValue).Date)
+        var targetLocalDate = fixture.MatchLocalDate.ToDateTime(TimeOnly.MinValue).Date;
+        var dateDeltaDays = Math.Abs((parsedLocalDate - targetLocalDate).TotalDays);
+        if (dateDeltaDays > 1)
         {
             return false;
         }
 
-        return TeamsLookEquivalent(parsedScore.HomeTeam, fixture.HomeTeam) &&
-               TeamsLookEquivalent(parsedScore.AwayTeam, fixture.AwayTeam);
+        if (!TeamsLookEquivalent(parsedScore.HomeTeam, fixture.HomeTeam) ||
+            !TeamsLookEquivalent(parsedScore.AwayTeam, fixture.AwayTeam))
+        {
+            return false;
+        }
+
+        if (!fixture.ScheduledMatchTimeUtc.HasValue)
+        {
+            return true;
+        }
+
+        var kickoffDeltaMinutes = Math.Abs((parsedScore.MatchTime - fixture.ScheduledMatchTimeUtc.Value).TotalMinutes);
+        return kickoffDeltaMinutes <= 16 * 60;
     }
 
     private static bool TeamsLookEquivalent(string left, string right)
