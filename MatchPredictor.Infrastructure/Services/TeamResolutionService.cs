@@ -55,6 +55,11 @@ public sealed class TeamResolutionService : ITeamResolutionService
         var candidates = await LoadAliasCandidatesAsync(cancellationToken);
         foreach (var candidate in candidates)
         {
+            if (!TeamNameNormalizer.IsUsableAliasCandidate(candidate.TeamName, candidate.League))
+            {
+                continue;
+            }
+
             var normalizedAlias = TeamNameNormalizer.NormalizeAlias(candidate.TeamName);
             if (string.IsNullOrWhiteSpace(normalizedAlias))
             {
@@ -62,14 +67,19 @@ public sealed class TeamResolutionService : ITeamResolutionService
             }
 
             var leagueScope = TeamNameNormalizer.NormalizeLeagueScope(candidate.League);
+            if (string.IsNullOrWhiteSpace(leagueScope))
+            {
+                leagueScope = null;
+            }
+
             var teamKey = BuildDuplicateKey(normalizedAlias, leagueScope, string.Empty);
             if (!teamsByScopedName.TryGetValue(teamKey, out var team))
             {
                 team = new Team
                 {
-                    Name = candidate.TeamName.Trim(),
+                    Name = BoundDisplayName(candidate.TeamName),
                     NormalizedName = normalizedAlias,
-                    LeagueScope = string.IsNullOrWhiteSpace(leagueScope) ? null : leagueScope,
+                    LeagueScope = leagueScope,
                     CreatedAtUtc = DateTime.UtcNow
                 };
                 _dbContext.Teams.Add(team);
@@ -85,10 +95,10 @@ public sealed class TeamResolutionService : ITeamResolutionService
             _dbContext.TeamAliases.Add(new TeamAlias
             {
                 Team = team,
-                Alias = candidate.TeamName.Trim(),
+                Alias = BoundDisplayName(candidate.TeamName),
                 NormalizedAlias = normalizedAlias,
-                LeagueScope = string.IsNullOrWhiteSpace(leagueScope) ? null : leagueScope,
-                SourceName = candidate.SourceName,
+                LeagueScope = leagueScope,
+                SourceName = BoundSourceName(candidate.SourceName),
                 CreatedAtUtc = DateTime.UtcNow
             });
             existingAliasKeys.Add(aliasKey);
@@ -125,6 +135,7 @@ public sealed class TeamResolutionService : ITeamResolutionService
             .Concat(aiScoreTeams.SelectMany(match => BuildCandidates(match.League, match.HomeTeam, match.AwayTeam, "AiScore")))
             .Concat(sofaScoreTeams.SelectMany(match => BuildCandidates(match.League, match.HomeTeam, match.AwayTeam, "SofaScore")))
             .Concat(sourceMarketTeams.SelectMany(match => BuildCandidates(match.League, match.HomeTeam, match.AwayTeam, "SportyBet")))
+            .Where(candidate => TeamNameNormalizer.IsUsableAliasCandidate(candidate.TeamName, candidate.League))
             .DistinctBy(candidate => BuildDuplicateKey(
                 TeamNameNormalizer.NormalizeAlias(candidate.TeamName),
                 TeamNameNormalizer.NormalizeLeagueScope(candidate.League),
@@ -144,6 +155,12 @@ public sealed class TeamResolutionService : ITeamResolutionService
             yield return new AliasCandidate(awayTeam, league, sourceName);
         }
     }
+
+    private static string BoundDisplayName(string teamName) =>
+        TeamNameNormalizer.BoundIndexedValue(teamName.Trim());
+
+    private static string BoundSourceName(string sourceName) =>
+        TeamNameNormalizer.BoundIndexedValue(sourceName.Trim());
 
     private static string BuildDuplicateKey(string normalizedAlias, string? leagueScope, string sourceName) =>
         $"{leagueScope ?? string.Empty}|{normalizedAlias}|{sourceName}";

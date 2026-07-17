@@ -27,4 +27,24 @@ public class TeamNameNormalizerTests
     {
         Assert.Equal(string.Empty, TeamNameNormalizer.BuildAliasKey("", "League"));
     }
+
+    [Fact]
+    public void BoundIndexedValue_TruncatesValuesAbovePostgresBtreeSafeLimit()
+    {
+        var oversized = new string('a', TeamNameNormalizer.MaxIndexedValueLength + 50);
+
+        var bounded = TeamNameNormalizer.BoundIndexedValue(oversized);
+
+        Assert.Equal(TeamNameNormalizer.MaxIndexedValueLength, bounded.Length);
+    }
+
+    [Fact]
+    public void IsUsableAliasCandidate_RejectsOversizedOrHtmlLikeValues()
+    {
+        Assert.True(TeamNameNormalizer.IsUsableAliasCandidate("PSG", "France Ligue 1"));
+        Assert.False(TeamNameNormalizer.IsUsableAliasCandidate(new string('x', 250), "League"));
+        Assert.False(TeamNameNormalizer.IsUsableAliasCandidate("Team", new string('y', 400)));
+        Assert.False(TeamNameNormalizer.IsUsableAliasCandidate("<div>Team</div>", "League"));
+        Assert.False(TeamNameNormalizer.IsUsableAliasCandidate("Team", "{\"league\":1}"));
+    }
 }

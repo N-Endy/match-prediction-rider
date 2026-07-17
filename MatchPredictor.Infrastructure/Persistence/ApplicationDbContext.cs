@@ -1,3 +1,4 @@
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Models;
 using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
@@ -164,11 +165,18 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
 
         modelBuilder.Entity<Team>(entity =>
         {
+            entity.Property(e => e.Name).HasMaxLength(TeamNameNormalizer.MaxIndexedValueLength);
+            entity.Property(e => e.NormalizedName).HasMaxLength(TeamNameNormalizer.MaxIndexedValueLength);
+            entity.Property(e => e.LeagueScope).HasMaxLength(TeamNameNormalizer.MaxIndexedValueLength);
             entity.HasIndex(e => new { e.NormalizedName, e.LeagueScope }).IsUnique();
         });
 
         modelBuilder.Entity<TeamAlias>(entity =>
         {
+            entity.Property(e => e.Alias).HasMaxLength(TeamNameNormalizer.MaxIndexedValueLength);
+            entity.Property(e => e.NormalizedAlias).HasMaxLength(TeamNameNormalizer.MaxIndexedValueLength);
+            entity.Property(e => e.LeagueScope).HasMaxLength(TeamNameNormalizer.MaxIndexedValueLength);
+            entity.Property(e => e.SourceName).HasMaxLength(TeamNameNormalizer.MaxIndexedValueLength);
             entity.HasIndex(e => new { e.NormalizedAlias, e.LeagueScope, e.SourceName }).IsUnique();
             entity.HasIndex(e => e.TeamId);
             entity.HasOne(e => e.Team)

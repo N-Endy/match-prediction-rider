@@ -158,6 +158,7 @@ public partial class AnalyzerService
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Team alias seeding failed; settlement will continue with the existing alias lookup.");
+                _dbContext.ChangeTracker.Clear();
             }
         }
 
