@@ -48,6 +48,7 @@ public partial class AnalyzerService : IAnalyzerService
     private readonly PredictionSettings _predictionSettings;
     private readonly ILearningLoopService _learningLoopService;
     private readonly IPredictionRiskAuditorService? _predictionRiskAuditorService;
+    private readonly ITeamResolutionService? _teamResolutionService;
 
     public AnalyzerService(
         IDataAnalyzerService dataAnalyzerService,
@@ -65,7 +66,8 @@ public partial class AnalyzerService : IAnalyzerService
         ILogger<AnalyzerService> logger,
         ILearningLoopService? learningLoopService = null,
         IFixtureFeatureService? fixtureFeatureService = null,
-        IPredictionRiskAuditorService? predictionRiskAuditorService = null)
+        IPredictionRiskAuditorService? predictionRiskAuditorService = null,
+        ITeamResolutionService? teamResolutionService = null)
     {
         _dataAnalyzerService = dataAnalyzerService;
         _webScraperService = webScraperService;
@@ -82,6 +84,7 @@ public partial class AnalyzerService : IAnalyzerService
         _predictionSettings = predictionOptions.Value;
         _logger = logger;
         _predictionRiskAuditorService = predictionRiskAuditorService;
+        _teamResolutionService = teamResolutionService;
         _learningLoopService = learningLoopService ?? new LearningLoopService(
             calibrationService,
             probabilityCorrectionService,

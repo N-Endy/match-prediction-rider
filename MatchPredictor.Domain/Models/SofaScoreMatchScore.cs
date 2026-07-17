@@ -13,6 +13,7 @@ public class SofaScoreMatchScore
     public string? ExtraTimeScore { get; set; }
     public string? StatusText { get; set; }
     public string EventUrl { get; set; } = string.Empty;
+    public long? EventId { get; set; }
     public DateTime MatchTime { get; set; }
     public DateOnly MatchLocalDate { get; set; }
     public string HomeTeamKey { get; set; } = string.Empty;

@@ -107,6 +107,14 @@ public sealed class TeamResolutionService : ITeamResolutionService
             .AsNoTracking()
             .Select(score => new { League = (string?)score.League, HomeTeam = (string?)score.HomeTeam, AwayTeam = (string?)score.AwayTeam })
             .ToListAsync(cancellationToken);
+        var aiScoreTeams = await _dbContext.AiScoreMatchScores
+            .AsNoTracking()
+            .Select(score => new { League = (string?)score.League, HomeTeam = (string?)score.HomeTeam, AwayTeam = (string?)score.AwayTeam })
+            .ToListAsync(cancellationToken);
+        var sofaScoreTeams = await _dbContext.SofaScoreMatchScores
+            .AsNoTracking()
+            .Select(score => new { League = (string?)score.League, HomeTeam = (string?)score.HomeTeam, AwayTeam = (string?)score.AwayTeam })
+            .ToListAsync(cancellationToken);
         var sourceMarketTeams = await _dbContext.MarketOddsSnapshots
             .AsNoTracking()
             .Select(snapshot => new { League = (string?)snapshot.League, HomeTeam = (string?)snapshot.HomeTeam, AwayTeam = (string?)snapshot.AwayTeam })
@@ -114,6 +122,8 @@ public sealed class TeamResolutionService : ITeamResolutionService
 
         return matchDataTeams.SelectMany(match => BuildCandidates(match.League, match.HomeTeam, match.AwayTeam, "sports-ai.dev"))
             .Concat(matchScoreTeams.SelectMany(match => BuildCandidates(match.League, match.HomeTeam, match.AwayTeam, "ScoreFeed")))
+            .Concat(aiScoreTeams.SelectMany(match => BuildCandidates(match.League, match.HomeTeam, match.AwayTeam, "AiScore")))
+            .Concat(sofaScoreTeams.SelectMany(match => BuildCandidates(match.League, match.HomeTeam, match.AwayTeam, "SofaScore")))
             .Concat(sourceMarketTeams.SelectMany(match => BuildCandidates(match.League, match.HomeTeam, match.AwayTeam, "SportyBet")))
             .DistinctBy(candidate => BuildDuplicateKey(
                 TeamNameNormalizer.NormalizeAlias(candidate.TeamName),

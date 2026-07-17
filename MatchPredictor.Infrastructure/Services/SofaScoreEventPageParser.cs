@@ -11,7 +11,8 @@ public static partial class SofaScoreEventPageParser
     {
         matchScore = new SofaScoreMatchScore
         {
-            EventUrl = eventUrl
+            EventUrl = eventUrl,
+            EventId = TryParseEventId(eventUrl)
         };
 
         if (string.IsNullOrWhiteSpace(html))
@@ -168,8 +169,24 @@ public static partial class SofaScoreEventPageParser
                away > 0;
     }
 
+    private static long? TryParseEventId(string? eventUrl)
+    {
+        if (string.IsNullOrWhiteSpace(eventUrl))
+        {
+            return null;
+        }
+
+        var match = EventIdRegex().Match(eventUrl);
+        return match.Success && long.TryParse(match.Groups["id"].Value, out var eventId)
+            ? eventId
+            : null;
+    }
+
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRegex();
+
+    [GeneratedRegex(@"(?:/event/|/api/v1/event/)(?<id>\d+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex EventIdRegex();
 
     [GeneratedRegex(@"(?<home>.+?)\s+is going head to head with\s+(?<away>.+?)\s+starting on\s+(?<day>\d{1,2})\s+(?<month>[A-Za-z]{3})\s+(?<year>\d{4})\s+at\s+(?<time>\d{2}:\d{2})\s+UTC", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex AboutMatchRegex();

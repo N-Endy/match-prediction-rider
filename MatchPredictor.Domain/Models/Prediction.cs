@@ -41,6 +41,8 @@ public class Prediction
     public bool WasPublished { get; set; } = true;
     public string? ActualOutcome { get; set; }
     public string? ActualScore { get; set; }
+    public string? SettledSourceName { get; set; }
+    public string? SettledSourceEventId { get; set; }
     public bool IsLive { get; set; }
     public Guid PredictionRunId { get; set; }
     public string RunLabel { get; set; } = string.Empty;

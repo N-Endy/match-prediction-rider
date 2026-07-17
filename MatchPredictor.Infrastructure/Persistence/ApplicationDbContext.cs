@@ -81,6 +81,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.HasIndex(e => new { e.PredictionRunId, e.FixtureKey, e.PredictionCategory }).IsUnique();
             // Closing-line snapshot job (every 5 min) and value-bet performance summary.
             entity.HasIndex(e => new { e.IsCurrentRevision, e.WasPublished, e.MatchDateTime });
+            entity.HasIndex(e => new { e.SettledSourceName, e.SettledSourceEventId });
         });
 
         modelBuilder.Entity<MatchData>(entity =>
@@ -106,6 +107,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.Property(e => e.LeagueKey).HasMaxLength(512);
             entity.HasIndex(e => new { e.MatchLocalDate, e.HomeTeamKey, e.AwayTeamKey, e.LeagueKey });
             entity.HasIndex(e => new { e.MatchTime, e.IsLive });
+            entity.HasIndex(e => e.SourceEventId);
         });
 
         modelBuilder.Entity<SofaScoreMatchScore>(entity =>
@@ -115,6 +117,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.Property(e => e.LeagueKey).HasMaxLength(512);
             entity.HasIndex(e => new { e.MatchLocalDate, e.HomeTeamKey, e.AwayTeamKey, e.LeagueKey });
             entity.HasIndex(e => new { e.MatchTime, e.IsLive });
+            entity.HasIndex(e => e.EventId);
         });
 
         modelBuilder.Entity<ForecastObservation>(entity =>
@@ -125,6 +128,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.HasIndex(e => new { e.PredictionRunId, e.FixtureKey, e.Market }).IsUnique();
             // Nightly calibration/threshold/meta-model rebuilds filter settled rows by window.
             entity.HasIndex(e => new { e.IsSettled, e.SettledAt });
+            entity.HasIndex(e => new { e.SettledSourceName, e.SettledSourceEventId });
         });
 
         modelBuilder.Entity<PredictionRun>(entity =>

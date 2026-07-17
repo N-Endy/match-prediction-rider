@@ -129,6 +129,7 @@ public static class SofaScoreApiParser
             EventUrl = eventId.HasValue && eventId.Value > 0
                 ? $"{baseUrl.TrimEnd('/')}/api/v1/event/{eventId.Value}"
                 : string.Empty,
+            EventId = eventId is > 0 ? eventId : null,
             MatchTime = matchTime,
             BTTSLabel = scoreBundle.SettlementScore.Split(':') is [var home, var away] &&
                         int.TryParse(home, out var homeGoals) &&

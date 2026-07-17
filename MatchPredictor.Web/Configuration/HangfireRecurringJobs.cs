@@ -16,6 +16,7 @@ internal static class HangfireRecurringJobs
         "closing-line-snapshot-job",
         "daily-analysis-job",
         "historical-backtest-job",
+        "team-alias-seed-job",
         "cleanup-old-predictions"
     ];
 
@@ -95,6 +96,12 @@ internal static class HangfireRecurringJobs
             "historical-backtest-job",
             service => service.RunNightlyBacktestAsync(CancellationToken.None),
             "25 0 * * *",
+            new RecurringJobOptions { TimeZone = watTimeZone });
+
+        recurringJobs.AddOrUpdate<ITeamResolutionService>(
+            "team-alias-seed-job",
+            service => service.SeedAliasesFromExistingDataAsync(CancellationToken.None),
+            "5 1 * * *",
             new RecurringJobOptions { TimeZone = watTimeZone });
 
         recurringJobs.AddOrUpdate<IAnalyzerService>(

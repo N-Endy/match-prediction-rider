@@ -1,10 +1,12 @@
 using MatchPredictor.Application.Services;
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Services;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -21,7 +23,7 @@ public class ScoreUpdaterMatchingTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoff = DateTimeProvider.GetLocalTime().Date.AddHours(20);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(20);
         var date = kickoff.ToString("dd-MM-yyyy");
 
         context.Predictions.AddRange(
@@ -30,6 +32,7 @@ public class ScoreUpdaterMatchingTests
 
         await context.SaveChangesAsync();
 
+        var logger = new CapturingLogger();
         var service = CreateAnalyzerService(
             context,
             new StubWebScraperService
@@ -38,7 +41,7 @@ public class ScoreUpdaterMatchingTests
                 [
                     new MatchScore
                     {
-                        MatchTime = kickoff,
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
                         League = "Spain LaLiga",
                         HomeTeam = "Madrid",
                         AwayTeam = "Athletic Bilbao",
@@ -47,12 +50,155 @@ public class ScoreUpdaterMatchingTests
                         IsLive = false
                     }
                 ]
-            });
+            },
+            logger: logger);
 
         await service.RunScoreUpdaterAsync();
 
         var predictions = await context.Predictions.OrderBy(prediction => prediction.HomeTeam).ToListAsync();
         Assert.All(predictions, prediction => Assert.Null(prediction.ActualScore));
+        Assert.Contains(
+            logger.Messages,
+            message => message.Contains("reason=", StringComparison.OrdinalIgnoreCase) &&
+                       (message.Contains("AmbiguousMargin", StringComparison.OrdinalIgnoreCase) ||
+                        message.Contains("NoTeamMatch", StringComparison.OrdinalIgnoreCase) ||
+                        message.Contains("ReciprocalMismatch", StringComparison.OrdinalIgnoreCase) ||
+                        message.Contains("BelowFuzzyFloor", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public async Task RunScoreUpdaterAsync_SettlesWhenTeamAliasesResolveSpellingDrift()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(18);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        var team = new Team
+        {
+            Name = "Paris Saint Germain",
+            NormalizedName = TeamNameNormalizer.NormalizeAlias("Paris Saint Germain"),
+            LeagueScope = TeamNameNormalizer.NormalizeLeagueScope("France Ligue 1"),
+            CreatedAtUtc = DateTime.UtcNow
+        };
+        context.Teams.Add(team);
+        await context.SaveChangesAsync();
+
+        context.TeamAliases.AddRange(
+            new TeamAlias
+            {
+                TeamId = team.Id,
+                Alias = "PSG",
+                NormalizedAlias = TeamNameNormalizer.NormalizeAlias("PSG"),
+                LeagueScope = team.LeagueScope,
+                SourceName = "sports-ai.dev",
+                CreatedAtUtc = DateTime.UtcNow
+            },
+            new TeamAlias
+            {
+                TeamId = team.Id,
+                Alias = "Paris Saint Germain",
+                NormalizedAlias = TeamNameNormalizer.NormalizeAlias("Paris Saint Germain"),
+                LeagueScope = team.LeagueScope,
+                SourceName = "AiScore",
+                CreatedAtUtc = DateTime.UtcNow
+            });
+
+        context.Predictions.Add(CreatePrediction(
+            date,
+            kickoff,
+            "PSG",
+            "Marseille",
+            "StraightWin",
+            "Home Win",
+            "France Ligue 1"));
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                AiScoreMatchScores =
+                [
+                    new AiScoreMatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+                        League = "France Ligue 1",
+                        HomeTeam = "Paris Saint Germain",
+                        AwayTeam = "Marseille",
+                        Score = "2:0",
+                        SourceEventId = "aiscore-psg-om-1",
+                        BTTSLabel = false,
+                        IsLive = false
+                    }
+                ]
+            },
+            teamResolutionService: new TeamResolutionService(context));
+
+        await service.RunScoreUpdaterAsync();
+
+        var prediction = await context.Predictions.SingleAsync();
+        Assert.Equal("2:0", prediction.ActualScore);
+        Assert.Equal("Home Win", prediction.ActualOutcome);
+        Assert.Equal("AiScore", prediction.SettledSourceName);
+        Assert.Equal("aiscore-psg-om-1", prediction.SettledSourceEventId);
+    }
+
+    [Fact]
+    public async Task RunScoreUpdaterAsync_RematchesByPersistedSourceEventIdWhenNamesDrift()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(17, 15);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        var prediction = CreatePrediction(
+            date,
+            kickoff,
+            "Alpha United",
+            "Beta City",
+            "StraightWin",
+            "Home Win",
+            "Test League");
+        prediction.ActualScore = "1:0";
+        prediction.IsLive = true;
+        prediction.SettledSourceName = "AiScore";
+        prediction.SettledSourceEventId = "evt-alpha-beta-9";
+        context.Predictions.Add(prediction);
+
+        context.AiScoreMatchScores.Add(new AiScoreMatchScore
+        {
+            MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            League = "Test League",
+            HomeTeam = "Alpha Utd Completely Different Spelling",
+            AwayTeam = "Beta Town Renamed",
+            Score = "3:1",
+            SourceEventId = "evt-alpha-beta-9",
+            BTTSLabel = true,
+            IsLive = false
+        });
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService(),
+            teamResolutionService: new TeamResolutionService(context));
+
+        await service.RunScoreUpdaterAsync();
+
+        var settled = await context.Predictions.SingleAsync();
+        Assert.Equal("3:1", settled.ActualScore);
+        Assert.False(settled.IsLive);
+        Assert.Equal("Home Win", settled.ActualOutcome);
+        Assert.Equal("evt-alpha-beta-9", settled.SettledSourceEventId);
     }
 
     [Fact]
@@ -605,7 +751,7 @@ public class ScoreUpdaterMatchingTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoffLocal = DateTimeProvider.GetLocalTime().Date.AddHours(8);
+        var kickoffLocal = GetStartedKickoffForTodayOrYesterday(8);
         var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal);
         var date = kickoffLocal.ToString("dd-MM-yyyy");
 
@@ -872,7 +1018,7 @@ public class ScoreUpdaterMatchingTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoff = DateTimeProvider.GetLocalTime().Date.AddHours(7);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(7);
         var date = kickoff.ToString("dd-MM-yyyy");
 
         context.Predictions.Add(new Prediction
@@ -1021,7 +1167,7 @@ public class ScoreUpdaterMatchingTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoffLocal = DateTimeProvider.GetLocalTime().Date.AddHours(6).AddMinutes(15);
+        var kickoffLocal = GetStartedKickoffForTodayOrYesterday(6, 15);
         var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal);
         var date = kickoffLocal.ToString("dd-MM-yyyy");
 
@@ -1090,7 +1236,7 @@ public class ScoreUpdaterMatchingTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoffLocal = DateTimeProvider.GetLocalTime().Date.AddHours(6).AddMinutes(45);
+        var kickoffLocal = GetStartedKickoffForTodayOrYesterday(6, 45);
         var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal);
         var date = kickoffLocal.ToString("dd-MM-yyyy");
 
@@ -1149,7 +1295,7 @@ public class ScoreUpdaterMatchingTests
             .Options;
 
         await using var context = new ApplicationDbContext(options);
-        var kickoffLocal = DateTimeProvider.GetLocalTime().Date.AddHours(6).AddMinutes(45);
+        var kickoffLocal = GetStartedKickoffForTodayOrYesterday(6, 45);
         var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(kickoffLocal);
         var date = kickoffLocal.ToString("dd-MM-yyyy");
 
@@ -1429,7 +1575,9 @@ public class ScoreUpdaterMatchingTests
         ApplicationDbContext context,
         StubWebScraperService scraper,
         AiScoreSourceHealthTracker? aiScoreSourceHealthTracker = null,
-        SofaScoreSourceHealthTracker? sofaScoreSourceHealthTracker = null)
+        SofaScoreSourceHealthTracker? sofaScoreSourceHealthTracker = null,
+        ITeamResolutionService? teamResolutionService = null,
+        ILogger<AnalyzerService>? logger = null)
     {
         return new AnalyzerService(
             new StubDataAnalyzerService(),
@@ -1451,7 +1599,27 @@ public class ScoreUpdaterMatchingTests
                 HomeWinStrong = 0.68,
                 AwayWinStrong = 0.70
             }),
-            NullLogger<AnalyzerService>.Instance);
+            logger ?? NullLogger<AnalyzerService>.Instance,
+            teamResolutionService: teamResolutionService);
+    }
+
+    private sealed class CapturingLogger : ILogger<AnalyzerService>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Messages.Add(formatter(state, exception));
+        }
     }
 
     private sealed class StubDataAnalyzerService : IDataAnalyzerService

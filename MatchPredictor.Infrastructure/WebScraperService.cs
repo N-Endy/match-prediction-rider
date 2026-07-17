@@ -533,6 +533,16 @@ public partial class WebScraperService : IWebScraperService
                         ? DateTimeOffset.FromUnixTimeSeconds(matchTimeUnix).UtcDateTime
                         : DateTime.UtcNow;
 
+                    var matchId = m.TryGetProperty("id", out var midProp)
+                        ? midProp.ValueKind == System.Text.Json.JsonValueKind.Number
+                            ? midProp.GetRawText()
+                            : midProp.GetString()
+                        : m.TryGetProperty("matchId", out var matchIdProp)
+                            ? matchIdProp.ValueKind == System.Text.Json.JsonValueKind.Number
+                                ? matchIdProp.GetRawText()
+                                : matchIdProp.GetString()
+                            : null;
+
                     var score = $"{homeGoals}:{awayGoals}";
                     matchScores.Add(new AiScoreMatchScore
                     {
@@ -541,6 +551,9 @@ public partial class WebScraperService : IWebScraperService
                         AwayTeam = awayName,
                         Score = score,
                         MatchTime = matchTime,
+                        SourceEventId = string.IsNullOrWhiteSpace(matchId) ? null : matchId,
+                        HomeTeamId = string.IsNullOrWhiteSpace(htId) ? null : htId,
+                        AwayTeamId = string.IsNullOrWhiteSpace(atId) ? null : atId,
                         BTTSLabel = IsBtts(score),
                         IsLive = isLive
                     });
@@ -658,6 +671,16 @@ public partial class WebScraperService : IWebScraperService
 
                     var score = $"{homeGoals}:{awayGoals}";
 
+                    var matchId = m.TryGetProperty("id", out var midProp)
+                        ? midProp.ValueKind == System.Text.Json.JsonValueKind.Number
+                            ? midProp.GetRawText()
+                            : midProp.GetString()
+                        : m.TryGetProperty("matchId", out var matchIdProp)
+                            ? matchIdProp.ValueKind == System.Text.Json.JsonValueKind.Number
+                                ? matchIdProp.GetRawText()
+                                : matchIdProp.GetString()
+                            : null;
+
                     matchScores.Add(new AiScoreMatchScore
                     {
                         League = leagueName,
@@ -665,6 +688,9 @@ public partial class WebScraperService : IWebScraperService
                         AwayTeam = awayName,
                         Score = score,
                         MatchTime = matchTime,
+                        SourceEventId = string.IsNullOrWhiteSpace(matchId) ? null : matchId,
+                        HomeTeamId = string.IsNullOrWhiteSpace(htId) ? null : htId,
+                        AwayTeamId = string.IsNullOrWhiteSpace(atId) ? null : atId,
                         BTTSLabel = IsBtts(score),
                         IsLive = isLive
                     });
@@ -766,6 +792,17 @@ public partial class WebScraperService : IWebScraperService
                 var score = $"{homeGoals.GetInt32()}:{awayGoals.GetInt32()}";
                 var dateStr = fixtureInfo.GetProperty("date").GetString();
                 var matchTime = DateTime.TryParse(dateStr, out var parsed) ? parsed.ToUniversalTime() : DateTime.UtcNow;
+                var fixtureId = fixtureInfo.TryGetProperty("id", out var fixtureIdProp)
+                    ? fixtureIdProp.ValueKind == System.Text.Json.JsonValueKind.Number
+                        ? fixtureIdProp.GetRawText()
+                        : fixtureIdProp.GetString()
+                    : null;
+                var homeTeamId = teams.GetProperty("home").TryGetProperty("id", out var homeIdProp)
+                    ? homeIdProp.GetRawText()
+                    : null;
+                var awayTeamId = teams.GetProperty("away").TryGetProperty("id", out var awayIdProp)
+                    ? awayIdProp.GetRawText()
+                    : null;
 
                 matchScores.Add(new AiScoreMatchScore
                 {
@@ -774,6 +811,9 @@ public partial class WebScraperService : IWebScraperService
                     AwayTeam = teams.GetProperty("away").GetProperty("name").GetString() ?? "",
                     Score = score,
                     MatchTime = matchTime,
+                    SourceEventId = string.IsNullOrWhiteSpace(fixtureId) ? null : fixtureId,
+                    HomeTeamId = string.IsNullOrWhiteSpace(homeTeamId) ? null : homeTeamId,
+                    AwayTeamId = string.IsNullOrWhiteSpace(awayTeamId) ? null : awayTeamId,
                     BTTSLabel = IsBtts(score),
                     IsLive = liveStatuses.Contains(statusShort)
                 });
@@ -1335,6 +1375,7 @@ public partial class WebScraperService : IWebScraperService
                 RegularTimeScore = bestCandidate.IsLive ? null : bestCandidate.Score,
                 StatusText = bestCandidate.StatusText,
                 EventUrl = bestCandidate.EventUrl,
+                EventId = TryParseSofaScoreEventId(bestCandidate.EventUrl),
                 MatchTime = ResolveSofaScoreListingMatchTimeUtc(fixture, bestCandidate),
                 BTTSLabel = IsBtts(bestCandidate.Score),
                 IsLive = bestCandidate.IsLive
@@ -1344,6 +1385,19 @@ public partial class WebScraperService : IWebScraperService
         }
 
         return resolvedScores;
+    }
+
+    private static long? TryParseSofaScoreEventId(string? eventUrl)
+    {
+        if (string.IsNullOrWhiteSpace(eventUrl))
+        {
+            return null;
+        }
+
+        var match = Regex.Match(eventUrl, @"/(?:event|api/v1/event)/(?<id>\d+)");
+        return match.Success && long.TryParse(match.Groups["id"].Value, out var eventId)
+            ? eventId
+            : null;
     }
 
     private int ScoreSofaScoreListingCandidate(

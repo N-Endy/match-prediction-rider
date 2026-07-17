@@ -42,6 +42,8 @@ public class ForecastObservation
     public bool? OutcomeOccurred { get; set; }
     public string? ActualOutcome { get; set; }
     public string? ActualScore { get; set; }
+    public string? SettledSourceName { get; set; }
+    public string? SettledSourceEventId { get; set; }
     public bool IsPublished { get; set; }
     public bool IsLive { get; set; }
     public bool IsSettled { get; set; }

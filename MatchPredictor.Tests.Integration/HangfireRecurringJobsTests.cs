@@ -8,7 +8,7 @@ public class HangfireRecurringJobsTests
     [Fact]
     public void RegisteredRecurringJobIds_MatchJobsScheduledByRegister()
     {
-        Assert.Equal(10, HangfireRecurringJobs.RegisteredRecurringJobIds.Length);
+        Assert.Equal(11, HangfireRecurringJobs.RegisteredRecurringJobIds.Length);
         Assert.Contains("prediction-prewarm-job", HangfireRecurringJobs.RegisteredRecurringJobIds);
         Assert.Contains("prediction-generation-job", HangfireRecurringJobs.RegisteredRecurringJobIds);
         Assert.Contains("prediction-generation-post-analysis-job", HangfireRecurringJobs.RegisteredRecurringJobIds);
@@ -18,6 +18,7 @@ public class HangfireRecurringJobsTests
         Assert.Contains("closing-line-snapshot-job", HangfireRecurringJobs.RegisteredRecurringJobIds);
         Assert.Contains("daily-analysis-job", HangfireRecurringJobs.RegisteredRecurringJobIds);
         Assert.Contains("historical-backtest-job", HangfireRecurringJobs.RegisteredRecurringJobIds);
+        Assert.Contains("team-alias-seed-job", HangfireRecurringJobs.RegisteredRecurringJobIds);
         Assert.Contains("cleanup-old-predictions", HangfireRecurringJobs.RegisteredRecurringJobIds);
     }
 
