@@ -1,10 +1,8 @@
-using System.Net.Http.Headers;
-using System.Text;
 using System.Text.Json;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Services.Llm;
 using MatchPredictor.Infrastructure.Statistics;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace MatchPredictor.Infrastructure.Services;
@@ -13,17 +11,14 @@ public sealed class PredictionRiskAuditorService : IPredictionRiskAuditorService
 {
     private const int MaxCandidatesPerRun = 12;
 
-    private readonly IHttpClientFactory _httpClientFactory;
-    private readonly IConfiguration _configuration;
+    private readonly IChatCompletionsClient _chatClient;
     private readonly ILogger<PredictionRiskAuditorService> _logger;
 
     public PredictionRiskAuditorService(
-        IHttpClientFactory httpClientFactory,
-        IConfiguration configuration,
+        IChatCompletionsClient chatClient,
         ILogger<PredictionRiskAuditorService> logger)
     {
-        _httpClientFactory = httpClientFactory;
-        _configuration = configuration;
+        _chatClient = chatClient;
         _logger = logger;
     }
 
@@ -36,10 +31,9 @@ public sealed class PredictionRiskAuditorService : IPredictionRiskAuditorService
             return;
         }
 
-        var apiKey = _configuration["GroqApiKey"];
-        if (string.IsNullOrWhiteSpace(apiKey))
+        if (!_chatClient.IsConfigured)
         {
-            _logger.LogDebug("Skipping prediction risk audit because GroqApiKey is not configured.");
+            _logger.LogDebug("Skipping prediction risk audit because AI API key is not configured.");
             return;
         }
 
@@ -72,7 +66,7 @@ public sealed class PredictionRiskAuditorService : IPredictionRiskAuditorService
 
         try
         {
-            var response = await CallGroqAsync(apiKey, payload, cancellationToken);
+            var response = await CallRiskAuditAsync(payload, cancellationToken);
             LogAuditResults(response, publishedCandidates.Count);
         }
         catch (Exception ex)
@@ -144,40 +138,29 @@ public sealed class PredictionRiskAuditorService : IPredictionRiskAuditorService
         return false;
     }
 
-    private async Task<string> CallGroqAsync(string apiKey, string userPayload, CancellationToken cancellationToken)
+    private async Task<string> CallRiskAuditAsync(string userPayload, CancellationToken cancellationToken)
     {
-        var model = _configuration["GroqModel"] ?? "meta-llama/llama-4-scout-17b-16e-instruct";
-        var requestBody = new
-        {
-            model,
-            temperature = 0.1,
-            max_tokens = 1200,
-            response_format = new { type = "json_object" },
-            messages = new object[]
+        var result = await _chatClient.CompleteAsync(
+            new ChatCompletionsRequest
             {
-                new { role = "system", content = BuildRiskAuditorSystemPrompt() },
-                new { role = "user", content = userPayload }
-            }
-        };
+                Temperature = 0.1,
+                MaxTokens = 1200,
+                JsonMode = true,
+                Messages =
+                [
+                    new ChatCompletionsMessage { Role = "system", Content = BuildRiskAuditorSystemPrompt() },
+                    new ChatCompletionsMessage { Role = "user", Content = userPayload }
+                ]
+            },
+            cancellationToken);
 
-        using var client = _httpClientFactory.CreateClient("Groq");
-        using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.groq.com/openai/v1/chat/completions");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        request.Content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
-
-        using var response = await client.SendAsync(request, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (!response.IsSuccessStatusCode)
+        if (!result.Success)
         {
-            throw new InvalidOperationException($"Groq risk audit failed with status {(int)response.StatusCode}: {body}");
+            throw new InvalidOperationException(
+                $"AI risk audit failed with status {result.StatusCode}: {result.ErrorBody ?? result.ExceptionMessage}");
         }
 
-        using var document = JsonDocument.Parse(body);
-        return document.RootElement
-            .GetProperty("choices")[0]
-            .GetProperty("message")
-            .GetProperty("content")
-            .GetString() ?? string.Empty;
+        return result.Content;
     }
 
     private static string BuildRiskAuditorSystemPrompt()

@@ -1,20 +1,19 @@
 using System.Globalization;
-using System.Text;
 using System.Text.Json;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Services.Llm;
 using MatchPredictor.Infrastructure.Statistics;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MatchPredictor.Infrastructure.Services;
 
 /// <summary>
-/// AI advisor using Groq via the OpenAI-compatible chat completions API.
+/// AI advisor using an OpenAI-compatible chat completions API (Gemini by default, Groq selectable).
 /// The AI Chat path is grounded to the recent published prediction window and returns
 /// a structured response so the UI never has to parse actions from prose.
 /// </summary>
@@ -25,9 +24,8 @@ public class AiAdvisorService : IAiAdvisorService
     private const int MaxRecommendedActions = 60;
 
     private readonly ApplicationDbContext _dbContext;
-    private readonly IConfiguration _configuration;
     private readonly ILogger<AiAdvisorService> _logger;
-    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IChatCompletionsClient _chatClient;
     private readonly IAiChatSessionStore _sessionStore;
     private readonly AiChatKnowledgeService _knowledgeService;
     private readonly AiChatRequestParser _requestParser;
@@ -36,9 +34,8 @@ public class AiAdvisorService : IAiAdvisorService
 
     public AiAdvisorService(
         ApplicationDbContext dbContext,
-        IConfiguration configuration,
         ILogger<AiAdvisorService> logger,
-        IHttpClientFactory httpClientFactory,
+        IChatCompletionsClient chatClient,
         IAiChatSessionStore sessionStore,
         AiChatKnowledgeService knowledgeService,
         AiChatRequestParser requestParser,
@@ -46,9 +43,8 @@ public class AiAdvisorService : IAiAdvisorService
         IAiChatFootballInsightService footballInsightService)
     {
         _dbContext = dbContext;
-        _configuration = configuration;
         _logger = logger;
-        _httpClientFactory = httpClientFactory;
+        _chatClient = chatClient;
         _sessionStore = sessionStore;
         _knowledgeService = knowledgeService;
         _requestParser = requestParser;
@@ -137,12 +133,12 @@ public class AiAdvisorService : IAiAdvisorService
 
         var selection = AiChatContextBuilder.BuildSelection(predictionsForSelection, normalizedRequest, DateTime.UtcNow, pricingByPredictionId);
         var relevantCandidates = selection.Candidates.Count > 0 ? selection.Candidates : contextCandidates;
-        var groqApiKey = ResolveGroqApiKey();
+        var llmConfigured = _chatClient.IsConfigured;
 
         if (normalizedRequest.Intent == AiChatIntent.WorkingSlipRefinement)
         {
             await EnrichCandidatePoolWithFootballInsightsAsync(
-                groqApiKey,
+                llmConfigured,
                 normalizedPrompt,
                 normalizedRequest,
                 workingSlipCandidates,
@@ -151,7 +147,7 @@ public class AiAdvisorService : IAiAdvisorService
             if (NeedsCatalogInsightEnrichment(normalizedRequest, normalizedPrompt))
             {
                 await EnrichCandidatePoolWithFootballInsightsAsync(
-                    groqApiKey,
+                    llmConfigured,
                     normalizedPrompt,
                     normalizedRequest,
                     candidateCatalog.Where(candidate => candidate.CanBook).ToList(),
@@ -161,7 +157,7 @@ public class AiAdvisorService : IAiAdvisorService
         else if (normalizedRequest.Intent == AiChatIntent.MatchDiscussion)
         {
             await EnrichCandidatePoolWithFootballInsightsAsync(
-                groqApiKey,
+                llmConfigured,
                 normalizedPrompt,
                 normalizedRequest,
                 relevantCandidates.ToList(),
@@ -171,7 +167,7 @@ public class AiAdvisorService : IAiAdvisorService
                  normalizedRequest.Intent is AiChatIntent.RecommendPicks or AiChatIntent.MixedMarketRecommendation)
         {
             await EnrichCandidatePoolWithFootballInsightsAsync(
-                groqApiKey,
+                llmConfigured,
                 normalizedPrompt,
                 normalizedRequest,
                 selection.Candidates.ToList(),
@@ -321,11 +317,11 @@ public class AiAdvisorService : IAiAdvisorService
             return rolloverResponse;
         }
 
-        if (string.IsNullOrEmpty(groqApiKey))
+        if (!_chatClient.IsConfigured)
         {
             var missingKey = new AiChatResponse
             {
-                Message = "⚠️ Groq API key is not configured. Please add 'GroqApiKey' to your configuration via user-secrets or environment variables."
+                Message = "⚠️ AI API key is not configured. Please add 'AiLlm:ApiKey' (or GEMINI_API_KEY) via user-secrets or environment variables. Legacy GroqApiKey is still supported."
             };
 
             MergeSelectionWarnings(missingKey, selection, normalizedRequest, parseResult);
@@ -336,8 +332,7 @@ public class AiAdvisorService : IAiAdvisorService
 
         var systemPrompt = BuildChatSystemPrompt();
         var userPayload = BuildChatPayload(normalizedPrompt, selection, normalizedRequest);
-        var rawResponse = await CallGroqAsync(
-            groqApiKey,
+        var rawResponse = await CompleteChatAsync(
             systemPrompt,
             userPayload,
             sessionState.History,
@@ -363,26 +358,12 @@ public class AiAdvisorService : IAiAdvisorService
 
     public async Task<string> AnalyzeValueBetsAsync(string payload, CancellationToken ct = default)
     {
-        var apiKey = ResolveGroqApiKey();
-        if (string.IsNullOrEmpty(apiKey))
-            throw new InvalidOperationException("Groq API key is not configured or is using a placeholder dummy value.");
+        if (!_chatClient.IsConfigured)
+            throw new InvalidOperationException("AI API key is not configured or is using a placeholder dummy value.");
 
         var systemPrompt = BuildValueBetsSystemPrompt();
 
-        return await CallGroqAsync(apiKey, systemPrompt, payload, null, ct, jsonMode: true);
-    }
-
-    private string ResolveGroqApiKey()
-    {
-        var apiKey = _configuration["GroqApiKey"];
-        if (string.IsNullOrWhiteSpace(apiKey) ||
-            apiKey.Contains("stored in user-secrets", StringComparison.OrdinalIgnoreCase) ||
-            apiKey.Contains("set via environment variable", StringComparison.OrdinalIgnoreCase))
-        {
-            return string.Empty;
-        }
-
-        return apiKey;
+        return await CompleteChatAsync(systemPrompt, payload, null, ct, jsonMode: true);
     }
 
     private static bool NeedsCatalogInsightEnrichment(AiChatNormalizedRequest normalizedRequest, string userPrompt)
@@ -423,7 +404,7 @@ public class AiAdvisorService : IAiAdvisorService
     }
 
     private async Task EnrichCandidatePoolWithFootballInsightsAsync(
-        string groqApiKey,
+        bool llmConfigured,
         string userPrompt,
         AiChatNormalizedRequest normalizedRequest,
         IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidatePool,
@@ -446,7 +427,7 @@ public class AiAdvisorService : IAiAdvisorService
         }
 
         var actionKeysToInspect = await DetermineFootballLookupActionKeysAsync(
-            groqApiKey,
+            llmConfigured,
             userPrompt,
             normalizedRequest,
             footballCandidates,
@@ -479,7 +460,7 @@ public class AiAdvisorService : IAiAdvisorService
     }
 
     private async Task<List<string>> DetermineFootballLookupActionKeysAsync(
-        string groqApiKey,
+        bool llmConfigured,
         string userPrompt,
         AiChatNormalizedRequest normalizedRequest,
         IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> shortlist,
@@ -490,15 +471,14 @@ public class AiAdvisorService : IAiAdvisorService
             .Select(candidate => candidate.ActionKey)
             .ToList();
 
-        if (shortlist.Count <= 4 || !ShouldUseLookupPlan(normalizedRequest, shortlist.Count) || string.IsNullOrWhiteSpace(groqApiKey))
+        if (shortlist.Count <= 4 || !ShouldUseLookupPlan(normalizedRequest, shortlist.Count) || !llmConfigured)
         {
             return deterministicTopKeys;
         }
 
         try
         {
-            var rawPlan = await CallGroqAsync(
-                groqApiKey,
+            var rawPlan = await CompleteChatAsync(
                 BuildLookupPlanSystemPrompt(),
                 BuildLookupPlanPayload(userPrompt, normalizedRequest, shortlist),
                 null,
@@ -2696,10 +2676,9 @@ public class AiAdvisorService : IAiAdvisorService
     }
 
     /// <summary>
-    /// Calls Groq API using the OpenAI-compatible chat completions format.
+    /// Calls the configured OpenAI-compatible chat completions provider (Gemini by default).
     /// </summary>
-    private async Task<string> CallGroqAsync(
-        string apiKey,
+    private async Task<string> CompleteChatAsync(
         string systemPrompt,
         string userPrompt,
         List<ChatHistoryItem>? history,
@@ -2708,84 +2687,56 @@ public class AiAdvisorService : IAiAdvisorService
         double temperature = 0.5,
         int maxTokens = 4096)
     {
-        var model = _configuration["GroqModel"] ?? "meta-llama/llama-4-scout-17b-16e-instruct";
-        _logger.LogInformation("Calling Groq model: {Model}", model);
-
-        try
+        var messages = new List<ChatCompletionsMessage>
         {
-            using var httpClient = _httpClientFactory.CreateClient("Groq");
+            new() { Role = "system", Content = systemPrompt }
+        };
 
-            var messages = new List<object>
+        if (history is { Count: > 0 })
+        {
+            foreach (var item in history.TakeLast(MaxHistoryItems))
             {
-                new { role = "system", content = systemPrompt }
-            };
-
-            if (history is { Count: > 0 })
-            {
-                foreach (var item in history.TakeLast(MaxHistoryItems))
+                messages.Add(new ChatCompletionsMessage
                 {
-                    messages.Add(new { role = item.Role, content = NormalizeHistoryContent(item.Content) });
-                }
+                    Role = item.Role,
+                    Content = NormalizeHistoryContent(item.Content)
+                });
             }
-
-            messages.Add(new { role = "user", content = userPrompt });
-
-            var requestBody = new
-            {
-                model,
-                messages,
-                temperature,
-                max_tokens = maxTokens,
-                response_format = jsonMode ? new { type = "json_object" } : null
-            };
-
-            var json = JsonSerializer.Serialize(requestBody);
-            using var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            httpClient.DefaultRequestHeaders.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
-
-            var response = await httpClient.PostAsync(
-                "https://api.groq.com/openai/v1/chat/completions",
-                content,
-                ct);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                var errorBody = await response.Content.ReadAsStringAsync(ct);
-                _logger.LogError(
-                    "Groq API error: {Status} {Body}",
-                    response.StatusCode,
-                    errorBody[..Math.Min(300, errorBody.Length)]);
-
-                if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
-                {
-                    return "⏳ The AI service is currently busy (rate limit). Please wait a moment and try again.";
-                }
-
-                return $"❌ AI service error ({response.StatusCode}). Please try again later.";
-            }
-
-            var responseJson = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(responseJson);
-
-            var text = doc.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString();
-
-            return text ?? "No response generated.";
         }
-        catch (TaskCanceledException)
+
+        messages.Add(new ChatCompletionsMessage { Role = "user", Content = userPrompt });
+
+        var result = await _chatClient.CompleteAsync(
+            new ChatCompletionsRequest
+            {
+                Messages = messages,
+                JsonMode = jsonMode,
+                Temperature = temperature,
+                MaxTokens = maxTokens
+            },
+            ct);
+
+        if (result.IsTimeout)
         {
             return "⏳ Request timed out. Please try again.";
         }
-        catch (Exception ex)
+
+        if (result.IsRateLimited)
         {
-            _logger.LogError(ex, "Error calling Groq API");
+            return "⏳ The AI service is currently busy (rate limit). Please wait a moment and try again.";
+        }
+
+        if (!result.Success)
+        {
+            if (result.StatusCode is { } statusCode)
+            {
+                return $"❌ AI service error ({statusCode}). Please try again later.";
+            }
+
             return "❌ Error communicating with AI. Please try again.";
         }
+
+        return string.IsNullOrWhiteSpace(result.Content) ? "No response generated." : result.Content;
     }
 
     private sealed class ChatModelResponse

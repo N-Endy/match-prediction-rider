@@ -1,26 +1,21 @@
-using System.Net.Http.Headers;
-using System.Text;
 using System.Text.Json;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
-using Microsoft.Extensions.Configuration;
+using MatchPredictor.Infrastructure.Services.Llm;
 using Microsoft.Extensions.Logging;
 
 namespace MatchPredictor.Infrastructure.Services;
 
 public class AiChatSchemaFallbackService : IAiChatSchemaFallbackService
 {
-    private readonly IConfiguration _configuration;
-    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IChatCompletionsClient _chatClient;
     private readonly ILogger<AiChatSchemaFallbackService> _logger;
 
     public AiChatSchemaFallbackService(
-        IConfiguration configuration,
-        IHttpClientFactory httpClientFactory,
+        IChatCompletionsClient chatClient,
         ILogger<AiChatSchemaFallbackService> logger)
     {
-        _configuration = configuration;
-        _httpClientFactory = httpClientFactory;
+        _chatClient = chatClient;
         _logger = logger;
     }
 
@@ -29,96 +24,76 @@ public class AiChatSchemaFallbackService : IAiChatSchemaFallbackService
         AiChatNormalizedRequest deterministicRequest,
         CancellationToken ct = default)
     {
-        var apiKey = _configuration["GroqApiKey"];
-        if (string.IsNullOrWhiteSpace(apiKey) ||
-            apiKey.Contains("stored in user-secrets", StringComparison.OrdinalIgnoreCase) ||
-            apiKey.Contains("set via environment variable", StringComparison.OrdinalIgnoreCase))
+        if (!_chatClient.IsConfigured)
         {
             return null;
         }
 
-        var model = _configuration["GroqModel"] ?? "meta-llama/llama-4-scout-17b-16e-instruct";
-        using var client = _httpClientFactory.CreateClient(nameof(AiChatSchemaFallbackService));
-        client.Timeout = TimeSpan.FromSeconds(20);
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-
-        var requestPayload = new
-        {
-            model,
-            temperature = 0.0,
-            response_format = new { type = "json_object" },
-            messages = new object[]
+        var result = await _chatClient.CompleteAsync(
+            new ChatCompletionsRequest
             {
-                new
-                {
-                    role = "system",
-                    content = """
-                        You convert MatchPredictor chat prompts into a strict request schema.
-                        Only map requests the app can actually support.
-                        Supported intents: RecommendPicks, MixedMarketRecommendation, WorkingSlipRefinement, MatchDiscussion, SettlementExplanation, AppHelp, ValueBetRequest.
-                        Supported markets: BothTeamsScore, Over2.5Goals, Under2.5Goals, StraightWin.
-                        Return exactly one JSON object with keys:
-                        intent, requestedMarkets, requestedTotalCount, scope, bookableOnly, wantsBooking, targetCombinedOdds, safetyBias, valueBias, referencedContextMode, actionDirective, entityTerms, interpretationNotes, needsSemanticFallback, flexibleMix, randomSelection.
-                        requestedMarkets must be an array of objects with predictionCategory, count, explicitCount.
-                        If unsupported or unclear, return an object that keeps the likely intent but leaves unsupported fields empty.
-                        Never invent fixtures or bookmaker data.
-                        """,
-                },
-                new
-                {
-                    role = "user",
-                    content = JsonSerializer.Serialize(new
+                Temperature = 0.0,
+                JsonMode = true,
+                ReasoningEffort = "none",
+                MaxTokens = 800,
+                Messages =
+                [
+                    new ChatCompletionsMessage
                     {
-                        prompt = userPrompt,
-                        deterministicRequest = new
+                        Role = "system",
+                        Content = """
+                            You convert MatchPredictor chat prompts into a strict request schema.
+                            Only map requests the app can actually support.
+                            Supported intents: RecommendPicks, MixedMarketRecommendation, WorkingSlipRefinement, MatchDiscussion, SettlementExplanation, AppHelp, ValueBetRequest.
+                            Supported markets: BothTeamsScore, Over2.5Goals, Under2.5Goals, StraightWin.
+                            Return exactly one JSON object with keys:
+                            intent, requestedMarkets, requestedTotalCount, scope, bookableOnly, wantsBooking, targetCombinedOdds, safetyBias, valueBias, referencedContextMode, actionDirective, entityTerms, interpretationNotes, needsSemanticFallback, flexibleMix, randomSelection.
+                            requestedMarkets must be an array of objects with predictionCategory, count, explicitCount.
+                            If unsupported or unclear, return an object that keeps the likely intent but leaves unsupported fields empty.
+                            Never invent fixtures or bookmaker data.
+                            """
+                    },
+                    new ChatCompletionsMessage
+                    {
+                        Role = "user",
+                        Content = JsonSerializer.Serialize(new
                         {
-                            intent = deterministicRequest.Intent.ToString(),
-                            deterministicRequest.RequestedMarkets,
-                            deterministicRequest.RequestedTotalCount,
-                            deterministicRequest.Scope,
-                            deterministicRequest.BookableOnly,
-                            deterministicRequest.WantsBooking,
-                            deterministicRequest.TargetCombinedOdds,
-                            deterministicRequest.SafetyBias,
-                            deterministicRequest.ValueBias,
-                            deterministicRequest.ReferencedContextMode,
-                            deterministicRequest.ActionDirective,
-                            deterministicRequest.EntityTerms,
-                            deterministicRequest.InterpretationNotes,
-                            deterministicRequest.RandomSelection
-                        }
-                    })
-                }
-            }
-        };
-
-        using var response = await client.PostAsync(
-            "https://api.groq.com/openai/v1/chat/completions",
-            new StringContent(JsonSerializer.Serialize(requestPayload), Encoding.UTF8, "application/json"),
+                            prompt = userPrompt,
+                            deterministicRequest = new
+                            {
+                                intent = deterministicRequest.Intent.ToString(),
+                                deterministicRequest.RequestedMarkets,
+                                deterministicRequest.RequestedTotalCount,
+                                deterministicRequest.Scope,
+                                deterministicRequest.BookableOnly,
+                                deterministicRequest.WantsBooking,
+                                deterministicRequest.TargetCombinedOdds,
+                                deterministicRequest.SafetyBias,
+                                deterministicRequest.ValueBias,
+                                deterministicRequest.ReferencedContextMode,
+                                deterministicRequest.ActionDirective,
+                                deterministicRequest.EntityTerms,
+                                deterministicRequest.InterpretationNotes,
+                                deterministicRequest.RandomSelection
+                            }
+                        })
+                    }
+                ]
+            },
             ct);
 
-        if (!response.IsSuccessStatusCode)
+        if (!result.Success || string.IsNullOrWhiteSpace(result.Content))
         {
-            _logger.LogDebug("AI chat schema fallback returned status code {StatusCode}.", response.StatusCode);
+            _logger.LogDebug(
+                "AI chat schema fallback failed. Success={Success} Status={StatusCode}",
+                result.Success,
+                result.StatusCode);
             return null;
         }
 
-        var raw = await response.Content.ReadAsStringAsync(ct);
         try
         {
-            using var doc = JsonDocument.Parse(raw);
-            var content = doc.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString();
-
-            if (string.IsNullOrWhiteSpace(content))
-            {
-                return null;
-            }
-
-            return JsonSerializer.Deserialize<AiChatNormalizedRequest>(content, JsonOptions());
+            return JsonSerializer.Deserialize<AiChatNormalizedRequest>(result.Content, JsonOptions());
         }
         catch (Exception ex)
         {

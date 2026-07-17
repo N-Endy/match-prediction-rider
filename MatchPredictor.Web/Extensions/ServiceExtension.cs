@@ -1,3 +1,4 @@
+using MatchPredictor.Infrastructure.Services.Llm;
 using Polly;
 using Polly.Extensions.Http;
 
@@ -8,7 +9,20 @@ public static class ServiceExtension
     // Add your extension methods here
     public static void AddHttpClientServices(this IServiceCollection services)
     {
-        services.AddHttpClient("Groq", client => 
+        services.AddHttpClient(OpenAiCompatibleChatCompletionsClient.HttpClientName, client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(60);
+            })
+            .AddPolicyHandler(HttpPolicyExtensions
+                .HandleTransientHttpError()
+                .OrResult(msg => msg.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                .WaitAndRetryAsync(2, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))))
+            .AddPolicyHandler(HttpPolicyExtensions
+                .HandleTransientHttpError()
+                .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+
+        // Legacy alias — same policies as AiLlm for any remaining CreateClient("Groq") callers.
+        services.AddHttpClient("Groq", client =>
             {
                 client.Timeout = TimeSpan.FromSeconds(60);
             })

@@ -30,7 +30,9 @@ services:
       - PORT=10000
       - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=matchpredictor;Username=matchpredictor;Password=${POSTGRES_PASSWORD:-matchpredictor-dev}
       # Required secrets — set these in a .env file next to this compose file:
-      # - GroqApiKey=...                      (AI chat / advisor)
+      # - AiLlm__ApiKey=...                   (Gemini AI Studio key for AI chat / advisor; or GEMINI_API_KEY)
+      # - AiLlm__Provider=gemini              (optional; use "groq" to roll back to Groq)
+      # - GroqApiKey=...                      (legacy fallback if AiLlm__ApiKey is unset)
       # - ApiFootball__ApiKey=...             (fixture enrichment)
       # - Hangfire__Username=... / Hangfire__Password=...      (job dashboard + admin pages)
       # - UsageDashboard__Username=... / UsageDashboard__Password=...  (optional override)

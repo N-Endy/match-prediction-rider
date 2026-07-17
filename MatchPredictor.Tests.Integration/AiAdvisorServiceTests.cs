@@ -5,6 +5,7 @@ using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Services;
+using MatchPredictor.Infrastructure.Services.Llm;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -892,16 +893,22 @@ public class AiAdvisorServiceTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["GroqApiKey"] = "test-api-key",
-                ["GroqModel"] = "test-model"
+                ["AiLlm:Provider"] = "gemini",
+                ["AiLlm:ApiKey"] = "test-api-key",
+                ["AiLlm:Model"] = "test-model",
+                ["AiLlm:BaseUrl"] = "https://example.test/v1beta/openai/"
             })
             .Build();
 
+        var chatClient = new OpenAiCompatibleChatCompletionsClient(
+            new StubHttpClientFactory(handler),
+            new AiLlmSettingsResolver(configuration),
+            NullLogger<OpenAiCompatibleChatCompletionsClient>.Instance);
+
         return new AiAdvisorService(
             context,
-            configuration,
             NullLogger<AiAdvisorService>.Instance,
-            new StubHttpClientFactory(handler),
+            chatClient,
             new AiChatSessionStore(cache ?? new TestDistributedCache(), NullLogger<AiChatSessionStore>.Instance),
             new AiChatKnowledgeService(),
             new AiChatRequestParser(new StubSchemaFallbackService(), NullLogger<AiChatRequestParser>.Instance),

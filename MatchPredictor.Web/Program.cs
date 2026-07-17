@@ -7,6 +7,7 @@ using MatchPredictor.Infrastructure;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Repositories;
 using MatchPredictor.Infrastructure.Services;
+using MatchPredictor.Infrastructure.Services.Llm;
 using MatchPredictor.Infrastructure.Utils;
 using MatchPredictor.Web.Configuration;
 using MatchPredictor.Web.Extensions;
@@ -107,6 +108,8 @@ builder.Services.AddScoped<ISportyBetBookingService>(provider => provider.GetReq
 builder.Services.AddScoped<ISourceMarketPricingService>(provider => provider.GetRequiredService<SportyBetBookingService>());
 builder.Services.AddScoped<AiChatKnowledgeService>();
 builder.Services.AddScoped<IAiChatSessionStore, AiChatSessionStore>();
+builder.Services.AddSingleton<IAiLlmSettingsResolver, AiLlmSettingsResolver>();
+builder.Services.AddSingleton<IChatCompletionsClient, OpenAiCompatibleChatCompletionsClient>();
 builder.Services.AddScoped<IAiChatSchemaFallbackService, AiChatSchemaFallbackService>();
 builder.Services.AddScoped<AiChatRequestParser>();
 builder.Services.AddScoped<IAiChatFootballInsightService, AiChatFootballInsightService>();
