@@ -28,7 +28,7 @@ public sealed class AiLlmSettingsResolver : IAiLlmSettingsResolver
     public const string GroqProvider = "groq";
 
     public const string DefaultGeminiBaseUrl = "https://generativelanguage.googleapis.com/v1beta/openai/";
-    public const string DefaultGeminiModel = "gemini-2.5-flash";
+    public const string DefaultGeminiModel = "gemini-3.5-flash";
     public const string DefaultGroqBaseUrl = "https://api.groq.com/openai/v1";
     public const string DefaultGroqModel = "openai/gpt-oss-120b";
 

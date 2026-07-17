@@ -51,13 +51,13 @@ public class AiLlmSettingsResolverTests
         {
             ["AiLlm:Provider"] = "gemini",
             ["GEMINI_API_KEY"] = "alias-key",
-            ["AiLlm:Model"] = "gemini-2.5-flash",
+            ["AiLlm:Model"] = "gemini-3.5-flash",
             ["AiLlm:BaseUrl"] = "https://custom.example/openai",
             ["AiLlm:TimeoutSeconds"] = "90"
         }).Resolve();
 
         Assert.Equal("alias-key", settings.ApiKey);
-        Assert.Equal("gemini-2.5-flash", settings.Model);
+        Assert.Equal("gemini-3.5-flash", settings.Model);
         Assert.Equal("https://custom.example/openai/", settings.BaseUrl);
         Assert.Equal(90, settings.TimeoutSeconds);
     }
@@ -102,7 +102,7 @@ public class OpenAiCompatibleChatCompletionsClientTests
         {
             ["AiLlm:Provider"] = "gemini",
             ["AiLlm:ApiKey"] = "gemini-key",
-            ["AiLlm:Model"] = "gemini-2.5-flash"
+            ["AiLlm:Model"] = "gemini-3.5-flash"
         });
 
         var result = await client.CompleteAsync(new ChatCompletionsRequest
@@ -124,9 +124,9 @@ public class OpenAiCompatibleChatCompletionsClientTests
         Assert.Contains("generativelanguage.googleapis.com", requestUri.Host, StringComparison.Ordinal);
 
         using var doc = JsonDocument.Parse(requestBody!);
-        Assert.Equal("gemini-2.5-flash", doc.RootElement.GetProperty("model").GetString());
+        Assert.Equal("gemini-3.5-flash", doc.RootElement.GetProperty("model").GetString());
         Assert.Equal("json_object", doc.RootElement.GetProperty("response_format").GetProperty("type").GetString());
-        Assert.Equal(0.2, doc.RootElement.GetProperty("temperature").GetDouble());
+        Assert.False(doc.RootElement.TryGetProperty("temperature", out _));
         Assert.Equal(100, doc.RootElement.GetProperty("max_tokens").GetInt32());
         Assert.Equal("none", doc.RootElement.GetProperty("reasoning_effort").GetString());
     }

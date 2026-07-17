@@ -65,7 +65,7 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
             httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
             _logger.LogInformation(
-                "Calling {Provider} model {Model} at {Url}",
+                "Calling LLM provider {LlmProvider} model {LlmModel} at {LlmUrl}",
                 settings.Provider,
                 settings.Model,
                 url);
@@ -76,7 +76,7 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogError(
-                    "{Provider} API error: {Status} {Body}",
+                    "LLM provider {LlmProvider} API error: {Status} {Body}",
                     settings.Provider,
                     response.StatusCode,
                     responseBody[..Math.Min(300, responseBody.Length)]);
@@ -141,8 +141,10 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
             body["response_format"] = new { type = "json_object" };
         }
 
-        if (request.Temperature is { } temperature)
+        if (request.Temperature is { } temperature &&
+            !string.Equals(settings.Provider, AiLlmSettingsResolver.GeminiProvider, StringComparison.Ordinal))
         {
+            // Gemini 3.x ignores/rejects custom sampling params on the OpenAI-compat API.
             body["temperature"] = temperature;
         }
 

@@ -46,7 +46,7 @@ dotnet run --project MatchPredictor.Web
 
 Migrations apply automatically at startup. Secrets (Gemini/`AiLlm__ApiKey`, ApiFootball, Hangfire credentials) are supplied via environment variables — see the comments in `docker-compose.yml`. Legacy `GroqApiKey` still works as a fallback. Never commit secrets.
 
-AI chat / advisor defaults to **Gemini 2.5 Flash** (`AiLlm:Provider=gemini`). Create a free key at https://aistudio.google.com/apikey. To use Groq instead, set `AiLlm__Provider=groq` and `GroqApiKey` (or `AiLlm__ApiKey` with a Groq key and Groq base URL/model).
+AI chat / advisor defaults to **Gemini 3.5 Flash** (`AiLlm:Provider=gemini`). Create a free key at https://aistudio.google.com/apikey. To use Groq instead, set `AiLlm__Provider=groq` and `GroqApiKey` (or `AiLlm__ApiKey` with a Groq key and Groq base URL/model).
 
 ### Runtime toggles
 
