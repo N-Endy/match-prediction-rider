@@ -99,13 +99,27 @@ public partial class AiChatRequestParser
             ? parsedTargetOdds
             : null;
         var isRolloverIntent = AiChatContextBuilder.MentionsRolloverIntent(prompt);
-        var scope = DetermineScope(promptLower, tokens, intent, isRolloverIntent);
-        var bookableOnly = DetermineBookableOnly(intent, scope);
+        var isCatalogListing = DetectCatalogListing(
+            promptLower,
+            tokens,
+            wantsBooking,
+            isRolloverIntent,
+            marketMentions.Count + requestedMarkets.Count);
+        var requireSameFixtureMarkets = DetectRequireSameFixtureMarkets(
+            promptLower,
+            requestedMarkets,
+            marketMentions,
+            hasExplicitMarketCounts,
+            isCatalogListing);
+        var scope = DetermineScope(promptLower, tokens, intent, isRolloverIntent, isCatalogListing);
+        var bookableOnly = DetermineBookableOnly(intent, scope, isCatalogListing, wantsBooking);
         var actionDirective = DetectActionDirective(promptLower, wantsBooking, isRolloverIntent, targetCombinedOdds);
         if (!hasExplicitMarketCounts &&
             requestedMarkets.Count == 0 &&
             marketMentions.Count > 0 &&
-            intent is AiChatIntent.MixedMarketRecommendation or AiChatIntent.RecommendPicks)
+            (intent is AiChatIntent.MixedMarketRecommendation or AiChatIntent.RecommendPicks ||
+             requireSameFixtureMarkets ||
+             isCatalogListing))
         {
             requestedMarkets = marketMentions
                 .Select(category => new AiChatRequestedMarket
@@ -124,10 +138,18 @@ public partial class AiChatRequestParser
                 .Sum(market => market.Count!.Value);
         }
 
+        var flexibleMix = !requireSameFixtureMarkets && DetectFlexibleMix(promptLower, requestedMarkets);
         var requestedFilters = BuildRequestedFilters(scope, bookableOnly, safetyBias, valueBias, wantsBooking);
-        var interpretationNotes = BuildInterpretationNotes(promptLower, requestedMarkets, requestedTotalCount, targetCombinedOdds, scope, randomSelection);
+        var interpretationNotes = BuildInterpretationNotes(
+            promptLower,
+            requestedMarkets,
+            requestedTotalCount,
+            targetCombinedOdds,
+            scope,
+            randomSelection,
+            requireSameFixtureMarkets,
+            isCatalogListing);
         var entityTerms = ExtractEntityTerms(prompt, requestedMarkets, intent);
-        var flexibleMix = DetectFlexibleMix(promptLower, requestedMarkets);
         var needsSemanticFallback = DetermineNeedsSemanticFallback(
             promptLower,
             intent,
@@ -136,7 +158,9 @@ public partial class AiChatRequestParser
             entityTerms,
             targetCombinedOdds,
             hasWorkingSlip,
-            hasContextCandidates);
+            hasContextCandidates,
+            requireSameFixtureMarkets,
+            isCatalogListing);
 
         var request = new AiChatNormalizedRequest
         {
@@ -157,7 +181,9 @@ public partial class AiChatRequestParser
             InterpretationNotes = interpretationNotes,
             NeedsSemanticFallback = needsSemanticFallback,
             FlexibleMix = flexibleMix,
-            RandomSelection = randomSelection
+            RandomSelection = randomSelection,
+            RequireSameFixtureMarkets = requireSameFixtureMarkets,
+            IsCatalogListing = isCatalogListing
         };
 
         return new AiChatParseResult
@@ -195,7 +221,9 @@ public partial class AiChatRequestParser
             NeedsSemanticFallback = request.NeedsSemanticFallback,
             FlexibleMix = request.FlexibleMix,
             RandomSelection = request.RandomSelection,
-            UsedSemanticFallback = request.UsedSemanticFallback
+            UsedSemanticFallback = request.UsedSemanticFallback,
+            RequireSameFixtureMarkets = request.RequireSameFixtureMarkets,
+            IsCatalogListing = request.IsCatalogListing
         };
 
         normalized.RequestedMarkets = request.RequestedMarkets
@@ -238,13 +266,29 @@ public partial class AiChatRequestParser
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        if (normalized.RequireSameFixtureMarkets && normalized.RequestedMarkets.Count < 2)
+        {
+            normalized.RequireSameFixtureMarkets = false;
+        }
+
+        if (normalized.RequireSameFixtureMarkets)
+        {
+            normalized.FlexibleMix = false;
+            foreach (var market in normalized.RequestedMarkets)
+            {
+                market.Count = null;
+                market.ExplicitCount = false;
+            }
+        }
+
         if (normalized.Intent == AiChatIntent.RecommendPicks &&
             normalized.RequestedMarkets.Count > 1)
         {
             normalized.Intent = AiChatIntent.MixedMarketRecommendation;
         }
 
-        if (normalized.Intent == AiChatIntent.MixedMarketRecommendation)
+        if (normalized.Intent == AiChatIntent.MixedMarketRecommendation &&
+            !normalized.RequireSameFixtureMarkets)
         {
             normalized.FlexibleMix = true;
         }
@@ -254,11 +298,27 @@ public partial class AiChatRequestParser
             normalized.ValueBias = true;
         }
 
+        if (normalized.WantsBooking)
+        {
+            normalized.BookableOnly = true;
+        }
+
         if (normalized.Intent is AiChatIntent.RecommendPicks or AiChatIntent.MixedMarketRecommendation &&
             string.Equals(normalized.Scope, "today", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.IsCatalogListing &&
             !request.RequestedFilters.Any(filter => filter.Name.Equals("bookableOnly", StringComparison.OrdinalIgnoreCase)))
         {
             normalized.BookableOnly = true;
+        }
+
+        if (normalized.IsCatalogListing &&
+            !normalized.WantsBooking &&
+            !request.RequestedFilters.Any(filter => filter.Name.Equals("bookableOnly", StringComparison.OrdinalIgnoreCase)))
+        {
+            normalized.BookableOnly = false;
+            normalized.RequestedFilters = normalized.RequestedFilters
+                .Where(filter => !filter.Name.Equals("bookableOnly", StringComparison.OrdinalIgnoreCase))
+                .ToList();
         }
 
         return normalized;
@@ -425,7 +485,12 @@ public partial class AiChatRequestParser
                promptLower.Contains("value-positive", StringComparison.Ordinal);
     }
 
-    private static string DetermineScope(string promptLower, HashSet<string> tokens, AiChatIntent intent, bool isRolloverIntent)
+    private static string DetermineScope(
+        string promptLower,
+        HashSet<string> tokens,
+        AiChatIntent intent,
+        bool isRolloverIntent,
+        bool isCatalogListing)
     {
         if (promptLower.Contains("yesterday", StringComparison.Ordinal))
         {
@@ -437,7 +502,9 @@ public partial class AiChatRequestParser
             return "recent_finished";
         }
 
-        if (intent is AiChatIntent.RecommendPicks or AiChatIntent.MixedMarketRecommendation or AiChatIntent.ValueBetRequest || isRolloverIntent)
+        if (intent is AiChatIntent.RecommendPicks or AiChatIntent.MixedMarketRecommendation or AiChatIntent.ValueBetRequest ||
+            isRolloverIntent ||
+            isCatalogListing)
         {
             return "today";
         }
@@ -450,8 +517,22 @@ public partial class AiChatRequestParser
         return "recent_window";
     }
 
-    private static bool DetermineBookableOnly(AiChatIntent intent, string scope)
+    private static bool DetermineBookableOnly(
+        AiChatIntent intent,
+        string scope,
+        bool isCatalogListing,
+        bool wantsBooking)
     {
+        if (wantsBooking)
+        {
+            return true;
+        }
+
+        if (isCatalogListing)
+        {
+            return false;
+        }
+
         return intent is AiChatIntent.RecommendPicks or AiChatIntent.MixedMarketRecommendation or AiChatIntent.ValueBetRequest &&
                string.Equals(scope, "today", StringComparison.OrdinalIgnoreCase);
     }
@@ -532,7 +613,9 @@ public partial class AiChatRequestParser
         int? requestedTotalCount,
         double? targetCombinedOdds,
         string scope,
-        bool randomSelection)
+        bool randomSelection,
+        bool requireSameFixtureMarkets,
+        bool isCatalogListing)
     {
         var notes = new List<string>();
 
@@ -544,9 +627,19 @@ public partial class AiChatRequestParser
             }
         }
 
-        if (requestedMarkets.Count > 1 && requestedTotalCount.HasValue && !requestedMarkets.Any(market => market.ExplicitCount))
+        if (requireSameFixtureMarkets && requestedMarkets.Count > 1)
+        {
+            var marketNames = string.Join(" + ", requestedMarkets.Select(market => market.DisplayName));
+            notes.Add($"Interpreted this as same-fixture doubles: fixtures published under {marketNames}.");
+        }
+        else if (requestedMarkets.Count > 1 && requestedTotalCount.HasValue && !requestedMarkets.Any(market => market.ExplicitCount))
         {
             notes.Add($"Interpreted this as a mixed-market request for {requestedTotalCount.Value} total picks across the named markets.");
+        }
+
+        if (isCatalogListing)
+        {
+            notes.Add("Interpreted this as a catalog listing question about published predictions.");
         }
 
         if (targetCombinedOdds.HasValue)
@@ -559,7 +652,7 @@ public partial class AiChatRequestParser
             notes.Add("Interpreted this as a random pick request, so selections should come from the eligible pool instead of only the top-ranked picks.");
         }
 
-        if (requestedMarkets.Count > 0)
+        if (requestedMarkets.Count > 0 && !requireSameFixtureMarkets)
         {
             var scopeLabel = string.Equals(scope, "today", StringComparison.OrdinalIgnoreCase)
                 ? "today's published card"
@@ -630,7 +723,9 @@ public partial class AiChatRequestParser
         IReadOnlyList<string> entityTerms,
         double? targetCombinedOdds,
         bool hasWorkingSlip,
-        bool hasContextCandidates)
+        bool hasContextCandidates,
+        bool requireSameFixtureMarkets,
+        bool isCatalogListing)
     {
         if (intent is AiChatIntent.SecurityRefusal or AiChatIntent.AppHelp or AiChatIntent.SettlementExplanation)
         {
@@ -647,15 +742,32 @@ public partial class AiChatRequestParser
             return false;
         }
 
+        if (requireSameFixtureMarkets && requestedMarkets.Count >= 2)
+        {
+            return false;
+        }
+
         var ambiguousCapabilityWording =
             promptLower.Contains("across", StringComparison.Ordinal) ||
             promptLower.Contains("banker", StringComparison.Ordinal) ||
             promptLower.Contains("coupon", StringComparison.Ordinal) ||
             promptLower.Contains("sort me", StringComparison.Ordinal) ||
-            promptLower.Contains("line me up", StringComparison.Ordinal);
+            promptLower.Contains("line me up", StringComparison.Ordinal) ||
+            promptLower.Contains("marked as", StringComparison.Ordinal) ||
+            promptLower.Contains("also listed", StringComparison.Ordinal) ||
+            promptLower.Contains("under both", StringComparison.Ordinal);
 
         if (ambiguousCapabilityWording &&
             intent is AiChatIntent.RecommendPicks or AiChatIntent.MixedMarketRecommendation or AiChatIntent.ValueBetRequest)
+        {
+            // Same-fixture cues without resolved markets still need semantic help.
+            if (requestedMarkets.Count < 2)
+            {
+                return true;
+            }
+        }
+
+        if (isCatalogListing && requestedMarkets.Count == 0 && !requestedTotalCount.HasValue)
         {
             return true;
         }
@@ -667,6 +779,114 @@ public partial class AiChatRequestParser
 
         return ambiguousCapabilityWording ||
                QuantityWords.Any(quantityWord => promptLower.Contains(quantityWord, StringComparison.Ordinal));
+    }
+
+    private static bool DetectCatalogListing(
+        string promptLower,
+        HashSet<string> tokens,
+        bool wantsBooking,
+        bool isRolloverIntent,
+        int mentionedMarketCount)
+    {
+        if (isRolloverIntent)
+        {
+            return false;
+        }
+
+        var recommendAdvice =
+            promptLower.Contains("should i pick", StringComparison.Ordinal) ||
+            promptLower.Contains("i should pick", StringComparison.Ordinal) ||
+            promptLower.Contains("should i go", StringComparison.Ordinal) ||
+            promptLower.Contains("what do you think", StringComparison.Ordinal) ||
+            promptLower.Contains("do you think i should", StringComparison.Ordinal) ||
+            promptLower.Contains("recommend", StringComparison.Ordinal) ||
+            promptLower.Contains("suggest", StringComparison.Ordinal) ||
+            (promptLower.Contains("give me", StringComparison.Ordinal) &&
+             (tokens.Contains("pick") || tokens.Contains("picks") || tokens.Contains("strong")));
+
+        if (recommendAdvice && !promptLower.Contains("marked as", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (promptLower.Contains("marked as", StringComparison.Ordinal) ||
+            promptLower.Contains("which predictions", StringComparison.Ordinal) ||
+            promptLower.Contains("which matches", StringComparison.Ordinal) ||
+            promptLower.Contains("which fixtures", StringComparison.Ordinal) ||
+            promptLower.Contains("are there", StringComparison.Ordinal) ||
+            promptLower.Contains("also listed", StringComparison.Ordinal) ||
+            promptLower.Contains("under both", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var hasListingVerb =
+            promptLower.Contains("show me", StringComparison.Ordinal) ||
+            promptLower.Contains("list ", StringComparison.Ordinal) ||
+            promptLower.StartsWith("list", StringComparison.Ordinal) ||
+            promptLower.Contains("find ", StringComparison.Ordinal) ||
+            promptLower.Contains("any ", StringComparison.Ordinal) ||
+            promptLower.StartsWith("any ", StringComparison.Ordinal);
+
+        if (hasListingVerb && mentionedMarketCount > 0)
+        {
+            return true;
+        }
+
+        return wantsBooking &&
+               (promptLower.Contains("both", StringComparison.Ordinal) ||
+                promptLower.Contains("marked", StringComparison.Ordinal));
+    }
+
+    private static bool DetectRequireSameFixtureMarkets(
+        string promptLower,
+        IReadOnlyList<AiChatRequestedMarket> requestedMarkets,
+        IReadOnlyList<string> marketMentions,
+        bool hasExplicitMarketCounts,
+        bool isCatalogListing)
+    {
+        var marketCount = requestedMarkets
+            .Select(market => market.PredictionCategory)
+            .Concat(marketMentions)
+            .Where(category => !string.IsNullOrWhiteSpace(category))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+
+        if (marketCount < 2)
+        {
+            return false;
+        }
+
+        if (hasExplicitMarketCounts)
+        {
+            return false;
+        }
+
+        if (promptLower.Contains("mixture", StringComparison.Ordinal) ||
+            promptLower.Contains("mix of", StringComparison.Ordinal) ||
+            promptLower.Contains("across", StringComparison.Ordinal) ||
+            promptLower.Contains("combination", StringComparison.Ordinal) ||
+            promptLower.Contains("combo", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var hasIntersectionCue =
+            promptLower.Contains("marked as", StringComparison.Ordinal) ||
+            promptLower.Contains("both", StringComparison.Ordinal) ||
+            promptLower.Contains("also listed", StringComparison.Ordinal) ||
+            promptLower.Contains("under both", StringComparison.Ordinal) ||
+            promptLower.Contains("as well", StringComparison.Ordinal) ||
+            promptLower.Contains("same match", StringComparison.Ordinal) ||
+            promptLower.Contains("same fixture", StringComparison.Ordinal) ||
+            promptLower.Contains("same game", StringComparison.Ordinal);
+
+        if (hasIntersectionCue)
+        {
+            return true;
+        }
+
+        return isCatalogListing && SameFixtureMarketPairRegex().IsMatch(promptLower);
     }
 
     private static List<string> DetectMarketMentions(string promptLower)
@@ -736,7 +956,12 @@ public partial class AiChatRequestParser
         return promptLower.Contains("book", StringComparison.Ordinal) ||
                promptLower.Contains("add all", StringComparison.Ordinal) ||
                promptLower.Contains("open slip", StringComparison.Ordinal) ||
-               promptLower.Contains("add to slip", StringComparison.Ordinal);
+               promptLower.Contains("add to slip", StringComparison.Ordinal) ||
+               promptLower.Contains("add them", StringComparison.Ordinal) ||
+               promptLower.Contains("add these", StringComparison.Ordinal) ||
+               promptLower.Contains("book them", StringComparison.Ordinal) ||
+               promptLower.Contains("book these", StringComparison.Ordinal) ||
+               promptLower.Contains("book it", StringComparison.Ordinal);
     }
 
     private static string NormalizeScope(string scope)
@@ -797,12 +1022,12 @@ public partial class AiChatRequestParser
             return "BothTeamsScore";
         }
 
-        if (normalized.Contains("over2.5") || normalized == "overs" || normalized == "over")
+        if (normalized.Contains("over2") || normalized == "overs" || normalized == "over")
         {
             return "Over2.5Goals";
         }
 
-        if (normalized.Contains("under2.5") || normalized == "unders" || normalized == "under")
+        if (normalized.Contains("under2") || normalized == "unders" || normalized == "under")
         {
             return "Under2.5Goals";
         }
@@ -878,4 +1103,9 @@ public partial class AiChatRequestParser
 
     [GeneratedRegex(@"\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|draws?|draw|straight wins?|straightwins?|straightwin|straights|1x2|wins?|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex MarketMentionRegex();
+
+    [GeneratedRegex(
+        @"\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b\s*(?:and|&|/|\+|plus)\s*\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex SameFixtureMarketPairRegex();
 }

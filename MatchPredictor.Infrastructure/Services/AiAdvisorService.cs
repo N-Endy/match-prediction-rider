@@ -264,9 +264,14 @@ public class AiAdvisorService : IAiAdvisorService
 
         if (selection.NoRelevantMatchesFound)
         {
+            var noMatchMessage = normalizedRequest.RequireSameFixtureMarkets &&
+                                 selection.ShortfallWarnings.Count > 0
+                ? selection.ShortfallWarnings[0]
+                : AiChatContextBuilder.BuildNoRelevantMatchesMessage(normalizedPrompt);
+
             var noMatchResponse = new AiChatResponse
             {
-                Message = AiChatContextBuilder.BuildNoRelevantMatchesMessage(normalizedPrompt)
+                Message = noMatchMessage
             };
 
             MergeSelectionWarnings(noMatchResponse, selection, normalizedRequest, parseResult);
@@ -277,6 +282,19 @@ public class AiAdvisorService : IAiAdvisorService
 
         if (selection.Candidates.Count == 0)
         {
+            if (normalizedRequest.RequireSameFixtureMarkets && selection.ShortfallWarnings.Count > 0)
+            {
+                var noDoubles = new AiChatResponse
+                {
+                    Message = selection.ShortfallWarnings[0]
+                };
+
+                MergeSelectionWarnings(noDoubles, selection, normalizedRequest, parseResult);
+                FinalizeResponse(noDoubles, GetResponseContextMode(normalizedRequest.Intent));
+                await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, noDoubles, selection, [], normalizedRequest, ct);
+                return noDoubles;
+            }
+
             if (string.Equals(selection.DateScopeLabel, "Today's bookable card", StringComparison.OrdinalIgnoreCase))
             {
                 var noTodayCard = new AiChatResponse
@@ -317,6 +335,24 @@ public class AiAdvisorService : IAiAdvisorService
             return rolloverResponse;
         }
 
+        if (normalizedRequest.IsCatalogListing ||
+            (normalizedRequest.RequireSameFixtureMarkets && !IsRecommendAdvicePrompt(normalizedPrompt)))
+        {
+            var catalogResponse = BuildCatalogListingResponse(normalizedPrompt, selection, normalizedRequest);
+            MergeSelectionWarnings(catalogResponse, selection, normalizedRequest, parseResult);
+            FinalizeResponse(catalogResponse, "catalog_listing");
+            await SaveSessionTurnAsync(
+                sessionId,
+                sessionState,
+                normalizedPrompt,
+                catalogResponse,
+                selection,
+                catalogResponse.Actions.Select(action => action.PredictionId).ToList(),
+                normalizedRequest,
+                ct);
+            return catalogResponse;
+        }
+
         if (!_chatClient.IsConfigured)
         {
             var missingKey = new AiChatResponse
@@ -342,6 +378,12 @@ public class AiAdvisorService : IAiAdvisorService
             maxTokens: 1400);
 
         var parsed = ParseAiChatResponse(rawResponse, selection, normalizedPrompt);
+        if (normalizedRequest.WantsBooking && parsed.Actions.Count > 0)
+        {
+            parsed.AutoBook = true;
+            parsed.ShowBookAll = true;
+        }
+
         MergeSelectionWarnings(parsed, selection, normalizedRequest, parseResult);
         FinalizeResponse(parsed, GetResponseContextMode(normalizedRequest.Intent));
         await SaveSessionTurnAsync(
@@ -1350,6 +1392,176 @@ public class AiAdvisorService : IAiAdvisorService
                prompt.Contains("previous", StringComparison.Ordinal);
     }
 
+    private static bool IsRecommendAdvicePrompt(string userPrompt)
+    {
+        var prompt = userPrompt.ToLowerInvariant();
+        return prompt.Contains("should i pick", StringComparison.Ordinal) ||
+               prompt.Contains("i should pick", StringComparison.Ordinal) ||
+               prompt.Contains("should i go", StringComparison.Ordinal) ||
+               prompt.Contains("what do you think", StringComparison.Ordinal) ||
+               prompt.Contains("do you think i should", StringComparison.Ordinal) ||
+               prompt.Contains("recommend", StringComparison.Ordinal) ||
+               prompt.Contains("suggest", StringComparison.Ordinal) ||
+               prompt.Contains("best picks", StringComparison.Ordinal) ||
+               prompt.Contains("give me", StringComparison.Ordinal);
+    }
+
+    private AiChatResponse BuildCatalogListingResponse(
+        string userPrompt,
+        AiChatContextBuilder.AiChatContextSelection selection,
+        AiChatNormalizedRequest normalizedRequest)
+    {
+        var candidates = selection.Candidates;
+        var bookableCandidates = candidates.Where(candidate => candidate.CanBook).ToList();
+        var actions = bookableCandidates
+            .Select(candidate => CreateAction(candidate, BuildCatalogActionExplanation(candidate, normalizedRequest)))
+            .ToList();
+
+        var message = normalizedRequest.RequireSameFixtureMarkets
+            ? BuildSameFixtureCatalogMessage(candidates, normalizedRequest, actions.Count)
+            : BuildGenericCatalogMessage(candidates, normalizedRequest, actions.Count);
+
+        if (normalizedRequest.WantsBooking && actions.Count > 0)
+        {
+            message += actions.Count == 1
+                ? " I've attached the bookable leg so it can go straight onto your slip."
+                : $" I've attached the {actions.Count} bookable legs so they can go straight onto your slip.";
+        }
+
+        return new AiChatResponse
+        {
+            Message = message,
+            Actions = actions,
+            ShowBookAll = actions.Count > 1 || (normalizedRequest.WantsBooking && actions.Count > 0),
+            AutoBook = normalizedRequest.WantsBooking && actions.Count > 0
+        };
+    }
+
+    private static string BuildSameFixtureCatalogMessage(
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidates,
+        AiChatNormalizedRequest normalizedRequest,
+        int bookableActionCount)
+    {
+        var marketNames = normalizedRequest.RequestedMarkets
+            .Select(market => market.DisplayName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var marketLabel = marketNames.Count > 0
+            ? string.Join(" + ", marketNames)
+            : "the requested markets";
+
+        var fixtureGroups = candidates
+            .GroupBy(
+                candidate => $"{candidate.MatchLocalDate:yyyy-MM-dd}|{candidate.HomeTeam}|{candidate.AwayTeam}|{candidate.League}",
+                StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var lines = new List<string>
+        {
+            fixtureGroups.Count == 1
+                ? $"I found **1 fixture** published under both {marketLabel}:"
+                : $"I found **{fixtureGroups.Count} fixtures** published under both {marketLabel}:"
+        };
+
+        foreach (var group in fixtureGroups.Take(12))
+        {
+            var sample = group.First();
+            var legs = string.Join(
+                ", ",
+                group.Select(candidate =>
+                {
+                    var confidence = candidate.ConfidenceScore.HasValue
+                        ? $" ({candidate.ConfidenceScore.Value * 100m:0.0}%)"
+                        : string.Empty;
+                    return $"{GetMarketDisplayName(candidate.PredictionCategory)}{confidence}";
+                }));
+            lines.Add($"• **{sample.HomeTeam} vs {sample.AwayTeam}** ({sample.League}) — {legs}");
+        }
+
+        if (fixtureGroups.Count > 12)
+        {
+            lines.Add($"• …and {fixtureGroups.Count - 12} more.");
+        }
+
+        if (bookableActionCount == 0)
+        {
+            lines.Add("None of those legs are bookable right now (already started or settled).");
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    private static string BuildGenericCatalogMessage(
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidates,
+        AiChatNormalizedRequest normalizedRequest,
+        int bookableActionCount)
+    {
+        var marketSummary = candidates
+            .GroupBy(candidate => candidate.PredictionCategory, StringComparer.OrdinalIgnoreCase)
+            .Select(group => $"{group.Count()} {GetMarketDisplayName(group.Key)}")
+            .ToList();
+        var marketText = marketSummary.Count > 0
+            ? string.Join(", ", marketSummary)
+            : $"{candidates.Count} published picks";
+
+        var scopeLabel = string.Equals(normalizedRequest.Scope, "today", StringComparison.OrdinalIgnoreCase)
+            ? "today's published card"
+            : "the recent published card";
+
+        var lines = new List<string>
+        {
+            $"Here is what matches on {scopeLabel}: **{marketText}**."
+        };
+
+        foreach (var candidate in candidates.Take(12))
+        {
+            var confidence = candidate.ConfidenceScore.HasValue
+                ? $"{candidate.ConfidenceScore.Value * 100m:0.0}% conf"
+                : "n/a";
+            lines.Add(
+                $"• **{candidate.HomeTeam} vs {candidate.AwayTeam}** — {GetMarketDisplayName(candidate.PredictionCategory)} / {candidate.PredictedOutcome} ({confidence})");
+        }
+
+        if (candidates.Count > 12)
+        {
+            lines.Add($"• …and {candidates.Count - 12} more.");
+        }
+
+        if (bookableActionCount == 0)
+        {
+            lines.Add("None of those legs are bookable right now.");
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    private static string BuildCatalogActionExplanation(
+        AiChatContextBuilder.AiChatContextCandidate candidate,
+        AiChatNormalizedRequest normalizedRequest)
+    {
+        if (normalizedRequest.RequireSameFixtureMarkets)
+        {
+            return $"{candidate.HomeTeam} vs {candidate.AwayTeam} is published under the requested markets, including {GetMarketDisplayName(candidate.PredictionCategory)}.";
+        }
+
+        var confidence = candidate.ConfidenceScore.HasValue
+            ? $"{candidate.ConfidenceScore.Value * 100m:0.0}%"
+            : "n/a";
+        return $"{GetMarketDisplayName(candidate.PredictionCategory)} at {confidence} calibrated confidence.";
+    }
+
+    private static string GetMarketDisplayName(string predictionCategory) =>
+        predictionCategory switch
+        {
+            "BothTeamsScore" => "BTTS",
+            "Over2.5Goals" => "Over 2.5",
+            "Under2.5Goals" => "Under 2.5",
+            "Draw" => "Draw",
+            "StraightWin" => "Straight Win",
+            _ => predictionCategory
+        };
+
     private AiChatResponse BuildMatchDiscussionResponse(
         string userPrompt,
         IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> discussionCandidates)
@@ -2239,6 +2451,7 @@ public class AiAdvisorService : IAiAdvisorService
                 : parsed.Message.Trim(),
             Actions = actions,
             ShowBookAll = ShouldShowBookAll(userPrompt, actions.Count, parsed.ShowBookAll),
+            AutoBook = MentionsBookingIntent(userPrompt) && actions.Count > 0,
             Warnings = parsed.Warnings ?? []
         };
     }
@@ -2252,7 +2465,8 @@ public class AiAdvisorService : IAiAdvisorService
             (contextMode == "recommend_picks" ||
              contextMode == "mixed_market_recommendation" ||
              contextMode == "working_slip_refinement" ||
-             contextMode == "match_discussion"))
+             contextMode == "match_discussion" ||
+             contextMode == "catalog_listing"))
         {
             response.WorkingSlipSummary = BuildWorkingSlipSummary(response.Actions);
         }
@@ -2323,6 +2537,14 @@ public class AiAdvisorService : IAiAdvisorService
 
         switch (contextMode)
         {
+            case "catalog_listing":
+                if (actions.Count > 0)
+                {
+                    prompts.Add("Book these");
+                    prompts.Add("Which of these is strongest?");
+                }
+                prompts.Add("Which predictions do you think I should pick?");
+                break;
             case "mixed_market_recommendation":
             case "recommend_picks":
                 prompts.Add("Which is riskiest?");
@@ -2485,12 +2707,31 @@ public class AiAdvisorService : IAiAdvisorService
 
     private static bool ShouldShowBookAll(string userPrompt, int actionCount, bool modelRequestedBookAll)
     {
-        if (actionCount <= 1)
+        if (actionCount <= 0)
         {
             return false;
         }
 
+        if (actionCount == 1)
+        {
+            return MentionsBookingIntent(userPrompt);
+        }
+
         return modelRequestedBookAll || MentionsBookingIntent(userPrompt);
+    }
+
+    private static bool MentionsBookingIntent(string userPrompt)
+    {
+        var prompt = userPrompt.ToLowerInvariant();
+        return prompt.Contains("book", StringComparison.Ordinal) ||
+               prompt.Contains("add all", StringComparison.Ordinal) ||
+               prompt.Contains("open slip", StringComparison.Ordinal) ||
+               prompt.Contains("add to slip", StringComparison.Ordinal) ||
+               prompt.Contains("add them", StringComparison.Ordinal) ||
+               prompt.Contains("add these", StringComparison.Ordinal) ||
+               prompt.Contains("book them", StringComparison.Ordinal) ||
+               prompt.Contains("book these", StringComparison.Ordinal) ||
+               prompt.Contains("book it", StringComparison.Ordinal);
     }
 
     private static bool TryParseChatModelResponse(string rawResponse, out ChatModelResponse response)
@@ -2630,7 +2871,13 @@ public class AiAdvisorService : IAiAdvisorService
 
         var prompt = request.RawPrompt.ToLowerInvariant();
         var mentionsBookingIntent = request.WantsBooking || MentionsBookingIntent(prompt);
-        var mentionsPriorPicks = prompt.Contains("them") || prompt.Contains("those") || prompt.Contains("these") || prompt.Contains("last") || prompt.Contains("recommended") || prompt.Contains("all");
+        var mentionsPriorPicks = prompt.Contains("them", StringComparison.Ordinal) ||
+                                 prompt.Contains("those", StringComparison.Ordinal) ||
+                                 prompt.Contains("these", StringComparison.Ordinal) ||
+                                 prompt.Contains("last", StringComparison.Ordinal) ||
+                                 prompt.Contains("recommended", StringComparison.Ordinal) ||
+                                 prompt.Contains("add all", StringComparison.Ordinal) ||
+                                 prompt.Contains("book all", StringComparison.Ordinal);
 
         var plainBookingFollowUp =
             mentionsBookingIntent &&
@@ -2641,12 +2888,6 @@ public class AiAdvisorService : IAiAdvisorService
 
         return plainBookingFollowUp ||
                string.Equals(request.ActionDirective, "book", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool MentionsBookingIntent(string userPrompt)
-    {
-        var prompt = userPrompt.ToLowerInvariant();
-        return prompt.Contains("book") || prompt.Contains("add") || prompt.Contains("slip") || prompt.Contains("open");
     }
 
     private AiChatResponse BuildBookingFollowUpResponse(IEnumerable<Prediction> predictions, IReadOnlyCollection<string> actionKeys)
@@ -2671,7 +2912,8 @@ public class AiAdvisorService : IAiAdvisorService
                 ? "I've lined up the last recommended pick for your bet slip."
                 : "I've lined up the last recommended picks for your bet slip.",
             Actions = actions,
-            ShowBookAll = actions.Count > 1
+            ShowBookAll = actions.Count > 1,
+            AutoBook = actions.Count > 0
         };
     }
 

@@ -21,4 +21,6 @@ public class AiChatNormalizedRequest
     public bool FlexibleMix { get; set; }
     public bool RandomSelection { get; set; }
     public bool UsedSemanticFallback { get; set; }
+    public bool RequireSameFixtureMarkets { get; set; }
+    public bool IsCatalogListing { get; set; }
 }

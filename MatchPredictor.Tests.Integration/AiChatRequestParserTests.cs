@@ -225,6 +225,74 @@ public class AiChatRequestParserTests
     }
 
     [Fact]
+    public void ParseDeterministic_ParsesSameFixtureDoublesListing()
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            "Which predictions are marked as both gg and over2.5",
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.Equal(AiChatIntent.MixedMarketRecommendation, result.Request.Intent);
+        Assert.True(result.Request.RequireSameFixtureMarkets);
+        Assert.True(result.Request.IsCatalogListing);
+        Assert.False(result.Request.FlexibleMix);
+        Assert.False(result.Request.BookableOnly);
+        Assert.Equal(2, result.Request.RequestedMarkets.Count);
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "BothTeamsScore");
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "Over2.5Goals");
+        Assert.Contains(result.Request.InterpretationNotes, note => note.Contains("same-fixture", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ParseDeterministic_KeepsExplicitMixCounts_WithoutSameFixtureRequirement()
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            "Give me 3 gg and 2 over 2.5",
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.Equal(AiChatIntent.MixedMarketRecommendation, result.Request.Intent);
+        Assert.False(result.Request.RequireSameFixtureMarkets);
+        Assert.False(result.Request.IsCatalogListing);
+        Assert.True(result.Request.FlexibleMix);
+        Assert.Equal(5, result.Request.RequestedTotalCount);
+    }
+
+    [Fact]
+    public void ParseDeterministic_TreatsPickAdviceAsRecommend_NotCatalogListing()
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            "Which predictions do you think I should pick",
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.Equal(AiChatIntent.RecommendPicks, result.Request.Intent);
+        Assert.False(result.Request.IsCatalogListing);
+        Assert.False(result.Request.RequireSameFixtureMarkets);
+        Assert.True(result.Request.BookableOnly);
+    }
+
+    [Fact]
+    public void ParseDeterministic_ParsesBookSameFixtureDoubles()
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            "Book fixtures marked as both gg and over 2.5",
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.True(result.Request.RequireSameFixtureMarkets);
+        Assert.True(result.Request.WantsBooking);
+        Assert.True(result.Request.BookableOnly);
+        Assert.Equal("book", result.Request.ActionDirective);
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "BothTeamsScore");
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "Over2.5Goals");
+    }
+
+    [Fact]
     public async Task ParseAsync_UsesSemanticFallback_WhenDeterministicParsingNeedsHelp()
     {
         var parser = new AiChatRequestParser(

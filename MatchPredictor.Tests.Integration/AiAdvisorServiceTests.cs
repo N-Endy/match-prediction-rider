@@ -178,6 +178,78 @@ public class AiAdvisorServiceTests
     }
 
     [Fact]
+    public async Task GetAdviceAsync_ListsSameFixtureDoubles_WithoutCallingLlm()
+    {
+        await using var context = CreateContext();
+        await SeedPredictionsAsync(
+            context,
+            [
+                ("BothTeamsScore", "BTTS", 0.78m, 0.55d, "Arsenal", "Chelsea", "England - Premier League"),
+                ("Over2.5Goals", "Over 2.5", 0.74m, 0.58d, "Arsenal", "Chelsea", "England - Premier League"),
+                ("BothTeamsScore", "BTTS", 0.80m, 0.55d, "Inter", "Milan", "Italy - Serie A"),
+                ("Over2.5Goals", "Over 2.5", 0.76m, 0.58d, "Roma", "Lazio", "Italy - Serie A")
+            ]);
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse("""
+                {
+                  "message": "This should not be used.",
+                  "recommendedActionKeys": [],
+                  "showBookAll": false
+                }
+                """));
+        var service = CreateService(context, handler);
+
+        var response = await service.GetAdviceAsync(
+            "Which predictions are marked as both gg and over2.5",
+            "session-doubles");
+
+        Assert.Equal("catalog_listing", response.ContextMode);
+        Assert.Equal(0, handler.CallCount);
+        Assert.Equal(2, response.Actions.Count);
+        Assert.Contains(response.Actions, action => action.Market == "BTTS" && action.HomeTeam == "Arsenal");
+        Assert.Contains(response.Actions, action => action.Market == "Over2.5" && action.HomeTeam == "Arsenal");
+        Assert.Contains("Arsenal", response.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Chelsea", response.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(response.AutoBook);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_AutoBooksSameFixtureDoubles_WhenUserAsksToBook()
+    {
+        await using var context = CreateContext();
+        await SeedPredictionsAsync(
+            context,
+            [
+                ("BothTeamsScore", "BTTS", 0.78m, 0.55d, "Arsenal", "Chelsea", "England - Premier League"),
+                ("Over2.5Goals", "Over 2.5", 0.74m, 0.58d, "Arsenal", "Chelsea", "England - Premier League")
+            ]);
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse("""
+                {
+                  "message": "This should not be used.",
+                  "recommendedActionKeys": [],
+                  "showBookAll": false
+                }
+                """));
+        var service = CreateService(context, handler);
+
+        var response = await service.GetAdviceAsync(
+            "Book fixtures marked as both gg and over 2.5",
+            "session-book-doubles");
+
+        Assert.True(
+            response.ContextMode == "catalog_listing",
+            $"Expected catalog_listing but got {response.ContextMode}. Message: {response.Message}");
+        Assert.Equal(0, handler.CallCount);
+        Assert.Equal(2, response.Actions.Count);
+        Assert.True(response.ShowBookAll);
+        Assert.True(response.AutoBook);
+        Assert.Contains("slip", response.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task GetAdviceAsync_FillsRequestedMarketSlices_AndEnablesBookAll_ForLargeMixedBookingRequest()
     {
         await using var context = CreateContext();

@@ -16,12 +16,12 @@ public static partial class AiChatContextBuilder
         "a", "about", "acca", "accumulator", "add", "all", "analysis", "analyse", "analyze", "any", "another", "are",
         "and", "away", "banker", "bankers", "best", "bet", "bets", "book", "booking", "both", "btts", "can", "chat",
         "combo", "combination", "day", "days", "doing", "draw", "for", "game", "games", "give", "goals", "good", "help", "home", "i", "in", "into", "is",
-        "it", "leg", "legs", "list", "match", "matches", "me", "need", "odd", "odds", "of", "on", "open", "over", "pick", "picks",
+        "it", "leg", "legs", "list", "listed", "marked", "match", "matches", "me", "need", "odd", "odds", "of", "on", "ones", "open", "over", "pick", "picks",
         "prediction", "predictions", "recent", "recommend", "recommended", "recommending", "recommendation", "recommendations", "result", "results", "safe", "safer", "score", "settle", "settled", "show", "slip", "some", "straight", "strong",
         "straightwin", "straightwins", "stronger", "rollover", "teams", "the", "them", "these", "this", "those", "ticket", "to",
-        "today", "top", "total", "totals", "altogether", "value", "why", "won", "yesterday",
+        "today", "top", "total", "totals", "altogether", "under", "value", "why", "won", "yesterday",
         "want", "what", "which", "win", "wins", "with", "would", "you", "your", "red", "green", "finished", "lost", "landed", "did", "mix", "mixture", "suggest", "suggested", "random", "randomly",
-        "explain", "explained", "discuss", "discussion", "talk", "riskiest", "weakest", "remove", "swap", "replace", "fits"
+        "explain", "explained", "discuss", "discussion", "talk", "riskiest", "weakest", "remove", "swap", "replace", "fits", "left", "also", "well", "same", "fixture", "fixtures"
     };
 
     private static readonly HashSet<string> RecommendationTokens = new(StringComparer.OrdinalIgnoreCase)
@@ -125,13 +125,16 @@ public static partial class AiChatContextBuilder
 
         var orderedRanked = OrderRankedCandidates(ranked, request, nowUtc);
 
-        var selectionOutcome = SelectRequestedCandidates(orderedRanked, request, limit);
+        var selectionOutcome = request.RequireSameFixtureMarkets
+            ? SelectSameFixtureMarketCandidates(orderedRanked, request, limit)
+            : SelectRequestedCandidates(orderedRanked, request, limit);
 
         return new AiChatContextSelection
         {
             Candidates = selectionOutcome.Candidates,
             TotalAvailableCount = candidates.Count,
-            NoRelevantMatchesFound = selectionOutcome.Candidates.Count == 0 && entityTerms.Count > 0,
+            NoRelevantMatchesFound = selectionOutcome.Candidates.Count == 0 &&
+                                     (entityTerms.Count > 0 || request.RequireSameFixtureMarkets),
             RequestedMarketSlices = selectionOutcome.RequestedSlices,
             RequestedCandidateCount = requestedCandidateCount,
             IsRolloverRequest = request.ActionDirective == "target_odds",
@@ -979,6 +982,115 @@ public static partial class AiChatContextBuilder
         return new SelectionOutcome(selected, requestedSlices, resolvedMarketMix, shortfallWarnings);
     }
 
+    private static SelectionOutcome SelectSameFixtureMarketCandidates(
+        IReadOnlyList<RankedCandidate> orderedRanked,
+        AiChatNormalizedRequest request,
+        int limit)
+    {
+        var requiredMarkets = request.RequestedMarkets
+            .Select(market => market.PredictionCategory)
+            .Where(category => !string.IsNullOrWhiteSpace(category))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (requiredMarkets.Count < 2)
+        {
+            return SelectRequestedCandidates(orderedRanked, request, limit);
+        }
+
+        var requiredMarketSet = requiredMarkets.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var maxFixtures = ResolveSelectionLimit(
+            Math.Max(1, limit / requiredMarkets.Count),
+            request.RequestedTotalCount ?? Math.Min(10, MaxRequestedCandidates / requiredMarkets.Count));
+
+        var fixtureGroups = orderedRanked
+            .Select(item => item.Candidate)
+            .Where(candidate => requiredMarketSet.Contains(candidate.PredictionCategory))
+            .GroupBy(candidate => BuildSameFixtureGroupKey(candidate), StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var legsByMarket = group
+                    .GroupBy(candidate => candidate.PredictionCategory, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(
+                        marketGroup => marketGroup.Key,
+                        marketGroup => marketGroup
+                            .OrderByDescending(candidate => candidate.ConfidenceScore ?? decimal.Zero)
+                            .ThenByDescending(candidate => candidate.MarginAboveThreshold)
+                            .First(),
+                        StringComparer.OrdinalIgnoreCase);
+
+                if (requiredMarkets.Any(market => !legsByMarket.ContainsKey(market)))
+                {
+                    return null;
+                }
+
+                var selectedLegs = requiredMarkets
+                    .Select(market => legsByMarket[market])
+                    .ToList();
+                var fixtureScore = selectedLegs.Average(candidate =>
+                    (double)(candidate.ConfidenceScore ?? decimal.Zero) * 0.7d +
+                    candidate.MarginAboveThreshold * 0.3d);
+
+                return new SameFixtureSelection(selectedLegs, fixtureScore);
+            })
+            .Where(group => group is not null)
+            .Select(group => group!)
+            .OrderByDescending(group => group.Score)
+            .Take(maxFixtures)
+            .ToList();
+
+        var selected = fixtureGroups
+            .SelectMany(group => group.Legs)
+            .ToList();
+
+        var marketNames = string.Join(" + ", requiredMarkets.Select(GetMarketDisplayName));
+        var shortfallWarnings = selected.Count == 0
+            ?
+            [
+                $"No fixtures in the current card are published under both {marketNames}."
+            ]
+            : new List<string>();
+
+        var requestedSlices = requiredMarkets
+            .Select(market => new RequestedMarketSlice(
+                market,
+                fixtureGroups.Count))
+            .ToList();
+
+        return new SelectionOutcome(
+            selected,
+            requestedSlices,
+            BuildResolvedMarketMix(selected),
+            shortfallWarnings);
+    }
+
+    private static string BuildSameFixtureGroupKey(AiChatContextCandidate candidate)
+    {
+        if (!string.IsNullOrWhiteSpace(candidate.FixtureKey))
+        {
+            return $"{candidate.MatchLocalDate:yyyy-MM-dd}|{candidate.FixtureKey}";
+        }
+
+        return string.Join(
+            "|",
+            candidate.MatchLocalDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            candidate.League.Trim().ToLowerInvariant(),
+            candidate.HomeTeam.Trim().ToLowerInvariant(),
+            candidate.AwayTeam.Trim().ToLowerInvariant(),
+            candidate.KickoffTime.Trim().ToLowerInvariant());
+    }
+
+    private static string GetMarketDisplayName(string predictionCategory) =>
+        predictionCategory switch
+        {
+            "BothTeamsScore" => "BTTS",
+            "Over2.5Goals" => "Over 2.5",
+            "Under2.5Goals" => "Under 2.5",
+            "Draw" => "Draw",
+            "StraightWin" => "Straight Win",
+            _ => predictionCategory
+        };
+
     private static List<RankedCandidate> OrderRankedCandidates(
         IReadOnlyList<RankedCandidate> ranked,
         AiChatNormalizedRequest request,
@@ -1235,6 +1347,8 @@ public static partial class AiChatContextBuilder
     private sealed record RankedCandidate(AiChatContextCandidate Candidate, double Score, int EntityMatchCount)
     {
     }
+
+    private sealed record SameFixtureSelection(List<AiChatContextCandidate> Legs, double Score);
 
     private sealed record SelectionOutcome(
         List<AiChatContextCandidate> Candidates,

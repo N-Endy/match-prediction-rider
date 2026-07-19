@@ -6,6 +6,7 @@ public class AiChatResponse
     public string ContextMode { get; set; } = string.Empty;
     public List<AiChatAction> Actions { get; set; } = [];
     public bool ShowBookAll { get; set; }
+    public bool AutoBook { get; set; }
     public List<string> Warnings { get; set; } = [];
     public List<string> SuggestedPrompts { get; set; } = [];
     public AiChatWorkingSlipSummary? WorkingSlipSummary { get; set; }

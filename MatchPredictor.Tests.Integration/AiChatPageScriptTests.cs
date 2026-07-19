@@ -9,8 +9,7 @@ public class AiChatPageScriptTests
     [Fact]
     public void ChatScript_EscapesHtmlBeforeApplyingFormatting()
     {
-        var script = ExtractScript(
-            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/Pages/AiChat.cshtml");
+        var script = ExtractScript(ResolveAiChatPagePath());
 
         var engine = new Engine();
         engine.Execute("""
@@ -46,8 +45,7 @@ public class AiChatPageScriptTests
     [Fact]
     public void ChatScript_RendersPerActionExplanationsThroughEscapedFormatter()
     {
-        var script = ExtractScript(
-            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/Pages/AiChat.cshtml");
+        var script = ExtractScript(ResolveAiChatPagePath());
 
         Assert.Contains("action.explanation", script);
         Assert.Contains("formatMessageHtml(action.explanation)", script);
@@ -56,8 +54,7 @@ public class AiChatPageScriptTests
     [Fact]
     public void ChatScript_RendersOddsAndStrengthMetadata_ForReturnedActions()
     {
-        var script = ExtractScript(
-            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/Pages/AiChat.cshtml");
+        var script = ExtractScript(ResolveAiChatPagePath());
 
         Assert.Contains("action.estimatedOdds", script);
         Assert.Contains("action.modelProbability", script);
@@ -68,8 +65,7 @@ public class AiChatPageScriptTests
     [Fact]
     public void ChatScript_RendersFootballInsightMetadata_ForReturnedActions()
     {
-        var script = ExtractScript(
-            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/Pages/AiChat.cshtml");
+        var script = ExtractScript(ResolveAiChatPagePath());
 
         Assert.Contains("action.analysisSummary", script);
         Assert.Contains("action.analysisConfidence", script);
@@ -80,8 +76,7 @@ public class AiChatPageScriptTests
     [Fact]
     public void ChatScript_RendersWorkingSlipSummary_AndSuggestedPrompts()
     {
-        var script = ExtractScript(
-            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/Pages/AiChat.cshtml");
+        var script = ExtractScript(ResolveAiChatPagePath());
 
         Assert.Contains("response.workingSlipSummary", script);
         Assert.Contains("buildWorkingSlipSummary", script);
@@ -92,12 +87,33 @@ public class AiChatPageScriptTests
     [Fact]
     public void ChatScript_RendersKnowledgeCards_ThroughEscapedFormatter()
     {
-        var script = ExtractScript(
-            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/Pages/AiChat.cshtml");
+        var script = ExtractScript(ResolveAiChatPagePath());
 
         Assert.Contains("response.knowledgeCards", script);
         Assert.Contains("buildKnowledgeCards", script);
         Assert.Contains("formatMessageHtml(card.body", script);
+    }
+
+    [Fact]
+    public void ChatScript_AutoBooksWhenResponseRequestsIt()
+    {
+        var script = ExtractScript(ResolveAiChatPagePath());
+
+        Assert.Contains("response.autoBook", script);
+        Assert.Contains("addAllAndBookFromBubble", script);
+        Assert.Contains("addAllAndBook(bookBtn)", script);
+    }
+
+    private static string ResolveAiChatPagePath()
+    {
+        var candidates = new[]
+        {
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "MatchPredictor.Web", "Pages", "AiChat.cshtml")),
+            "/Users/nnamdi/Desktop/Okafor Nelson/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/Pages/AiChat.cshtml",
+            "/Users/nnamdi/Desktop/Projects/MatchPredictor/MatchPredictor/MatchPredictor.Web/Pages/AiChat.cshtml"
+        };
+
+        return candidates.First(File.Exists);
     }
 
     private static string ExtractScript(string path)

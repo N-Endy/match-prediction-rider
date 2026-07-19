@@ -331,7 +331,7 @@ else
             bubble.appendChild(actions);
         }
 
-        if (response.showBookAll && Array.isArray(response.actions) && response.actions.length > 1) {
+        if (response.showBookAll && Array.isArray(response.actions) && response.actions.length > 0) {
             const footer = document.createElement('div');
             footer.style.marginTop = '12px';
             footer.style.paddingTop = '12px';
@@ -343,7 +343,9 @@ else
             btn.style.padding = '8px 16px';
             btn.style.width = 'auto';
             btn.style.borderRadius = '8px';
-            btn.textContent = '🎫 Add All & Open Slip';
+            btn.textContent = response.actions.length === 1
+                ? '🎫 Add & Open Slip'
+                : '🎫 Add All & Open Slip';
             btn.addEventListener('click', () => addAllAndBook(btn));
 
             footer.appendChild(btn);
@@ -358,6 +360,15 @@ else
         div.appendChild(bubble);
         chatMessages.appendChild(div);
         chatMessages.scrollTop = chatMessages.scrollHeight;
+
+        if (response.autoBook) {
+            const bookBtn = bubble.querySelector('.mp-book-btn');
+            if (bookBtn) {
+                addAllAndBook(bookBtn);
+            } else {
+                addAllAndBookFromBubble(bubble);
+            }
+        }
     }
 
     function buildWorkingSlipSummary(summary) {
@@ -494,10 +505,19 @@ else
     function addAllAndBook(btn) {
         const bubble = btn.closest('.mp-chat-bubble');
         if (!bubble) return;
-        
+
+        const addedCount = addAllAndBookFromBubble(bubble);
+        if (addedCount <= 0) return;
+
+        btn.textContent = `Added ${addedCount} picks!`;
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+    }
+
+    function addAllAndBookFromBubble(bubble) {
         const betBtns = bubble.querySelectorAll('.mp-add-cart-btn');
-        if (betBtns.length === 0) return;
-        
+        if (betBtns.length === 0) return 0;
+
         let addedCount = 0;
         betBtns.forEach(b => {
             if (typeof addToCart === 'function') {
@@ -513,14 +533,12 @@ else
                 addedCount++;
             }
         });
-        
-        if (typeof openCartModal === 'function') {
+
+        if (addedCount > 0 && typeof openCartModal === 'function') {
             openCartModal();
         }
-        
-        btn.textContent = `Added ${addedCount} picks!`;
-        btn.disabled = true;
-        btn.style.opacity = '0.7';
+
+        return addedCount;
     }
 
     function showTypingIndicator() {
