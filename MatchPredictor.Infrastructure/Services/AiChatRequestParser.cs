@@ -111,6 +111,14 @@ public partial class AiChatRequestParser
             marketMentions,
             hasExplicitMarketCounts,
             isCatalogListing);
+        ApplyCountFollowUpFromSession(
+            promptLower,
+            sessionState,
+            ref requestedTotalCount,
+            ref requestedMarkets,
+            ref intent,
+            ref isCatalogListing,
+            ref requireSameFixtureMarkets);
         var scope = DetermineScope(promptLower, tokens, intent, isRolloverIntent, isCatalogListing);
         var bookableOnly = DetermineBookableOnly(intent, scope, isCatalogListing, wantsBooking);
         var actionDirective = DetectActionDirective(promptLower, wantsBooking, isRolloverIntent, targetCombinedOdds);
@@ -149,7 +157,12 @@ public partial class AiChatRequestParser
             randomSelection,
             requireSameFixtureMarkets,
             isCatalogListing);
-        var entityTerms = ExtractEntityTerms(prompt, requestedMarkets, intent);
+        var entityTerms = ExtractEntityTerms(
+            prompt,
+            requestedMarkets,
+            intent,
+            requireSameFixtureMarkets,
+            isCatalogListing);
         var needsSemanticFallback = DetermineNeedsSemanticFallback(
             promptLower,
             intent,
@@ -263,8 +276,15 @@ public partial class AiChatRequestParser
         normalized.EntityTerms = request.EntityTerms
             .Where(term => !string.IsNullOrWhiteSpace(term))
             .Select(term => term.Trim().ToLowerInvariant())
+            .Where(term => !AiChatContextBuilder.IsGenericOrNearGenericToken(term))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        if (normalized.RequireSameFixtureMarkets || normalized.IsCatalogListing)
+        {
+            // Catalog / same-fixture prompts are market filters, not team lookups.
+            normalized.EntityTerms = [];
+        }
 
         if (normalized.RequireSameFixtureMarkets && normalized.RequestedMarkets.Count < 2)
         {
@@ -391,12 +411,83 @@ public partial class AiChatRequestParser
             return ClampCount(ResolveCount(pickMatch.Groups["count"].Value));
         }
 
+        var ofTheBestMatch = OfTheBestCountRegex().Match(userPrompt);
+        if (ofTheBestMatch.Success)
+        {
+            return ClampCount(ResolveCount(ofTheBestMatch.Groups["count"].Value));
+        }
+
+        var followUpMatch = CountFollowUpRegex().Match(userPrompt);
+        if (followUpMatch.Success)
+        {
+            return ClampCount(ResolveCount(followUpMatch.Groups["count"].Value));
+        }
+
         if (tokens.SetEquals(["give", "strong", "picks"]) || tokens.SetEquals(["strong", "picks"]))
         {
             return 5;
         }
 
         return null;
+    }
+
+    private static void ApplyCountFollowUpFromSession(
+        string promptLower,
+        AiChatSessionState? sessionState,
+        ref int? requestedTotalCount,
+        ref List<AiChatRequestedMarket> requestedMarkets,
+        ref AiChatIntent intent,
+        ref bool isCatalogListing,
+        ref bool requireSameFixtureMarkets)
+    {
+        var lastRequest = sessionState?.LastNormalizedRequest;
+        if (lastRequest is null)
+        {
+            return;
+        }
+
+        if (!CountFollowUpRegex().IsMatch(promptLower))
+        {
+            return;
+        }
+
+        // Pure count pushback ("I asked for 10") should refine the last market ask, not search teams.
+        if (DetectMarketMentions(promptLower).Count > 0 || ExtractRequestedMarkets(promptLower).Count > 0)
+        {
+            return;
+        }
+
+        if (!requestedTotalCount.HasValue)
+        {
+            var match = CountFollowUpRegex().Match(promptLower);
+            if (match.Success)
+            {
+                requestedTotalCount = ClampCount(ResolveCount(match.Groups["count"].Value));
+            }
+        }
+
+        if (requestedMarkets.Count == 0 && lastRequest.RequestedMarkets.Count > 0)
+        {
+            requestedMarkets = lastRequest.RequestedMarkets
+                .Select(market => new AiChatRequestedMarket
+                {
+                    PredictionCategory = market.PredictionCategory,
+                    Count = null,
+                    ExplicitCount = false
+                })
+                .ToList();
+        }
+
+        if (intent is AiChatIntent.RecommendPicks or AiChatIntent.MixedMarketRecommendation)
+        {
+            intent = lastRequest.Intent is AiChatIntent.MixedMarketRecommendation or AiChatIntent.RecommendPicks
+                ? lastRequest.Intent
+                : AiChatIntent.RecommendPicks;
+        }
+
+        // Count follow-ups want more selections from the last ask, not a fresh catalog listing.
+        isCatalogListing = false;
+        requireSameFixtureMarkets = lastRequest.RequireSameFixtureMarkets && requestedMarkets.Count >= 2;
     }
 
     private static AiChatIntent DetectIntent(
@@ -681,15 +772,23 @@ public partial class AiChatRequestParser
     private static List<string> ExtractEntityTerms(
         string prompt,
         IReadOnlyList<AiChatRequestedMarket> requestedMarkets,
-        AiChatIntent intent)
+        AiChatIntent intent,
+        bool requireSameFixtureMarkets,
+        bool isCatalogListing)
     {
         if (intent is AiChatIntent.SecurityRefusal or AiChatIntent.AppHelp or AiChatIntent.SettlementExplanation or AiChatIntent.ValueBetRequest)
         {
             return [];
         }
 
+        if (requireSameFixtureMarkets || isCatalogListing)
+        {
+            return [];
+        }
+
         var tokens = AiChatContextBuilder.ExtractSpecificTokens(prompt)
             .Where(token => !QuantityWords.Contains(token))
+            .Where(token => !AiChatContextBuilder.IsGenericOrNearGenericToken(token))
             .Where(token => !requestedMarkets.Any(market =>
                 string.Equals(market.PredictionCategory, NormalizeMarketCategory(token), StringComparison.OrdinalIgnoreCase)))
             .ToList();
@@ -754,6 +853,7 @@ public partial class AiChatRequestParser
             promptLower.Contains("sort me", StringComparison.Ordinal) ||
             promptLower.Contains("line me up", StringComparison.Ordinal) ||
             promptLower.Contains("marked as", StringComparison.Ordinal) ||
+            promptLower.Contains("listed as", StringComparison.Ordinal) ||
             promptLower.Contains("also listed", StringComparison.Ordinal) ||
             promptLower.Contains("under both", StringComparison.Ordinal);
 
@@ -804,18 +904,27 @@ public partial class AiChatRequestParser
             (promptLower.Contains("give me", StringComparison.Ordinal) &&
              (tokens.Contains("pick") || tokens.Contains("picks") || tokens.Contains("strong")));
 
-        if (recommendAdvice && !promptLower.Contains("marked as", StringComparison.Ordinal))
+        if (recommendAdvice &&
+            !promptLower.Contains("marked as", StringComparison.Ordinal) &&
+            !promptLower.Contains("listed as", StringComparison.Ordinal))
         {
             return false;
         }
 
         if (promptLower.Contains("marked as", StringComparison.Ordinal) ||
+            promptLower.Contains("listed as", StringComparison.Ordinal) ||
+            promptLower.Contains("are listed", StringComparison.Ordinal) ||
             promptLower.Contains("which predictions", StringComparison.Ordinal) ||
             promptLower.Contains("which matches", StringComparison.Ordinal) ||
             promptLower.Contains("which fixtures", StringComparison.Ordinal) ||
             promptLower.Contains("are there", StringComparison.Ordinal) ||
             promptLower.Contains("also listed", StringComparison.Ordinal) ||
-            promptLower.Contains("under both", StringComparison.Ordinal))
+            promptLower.Contains("under both", StringComparison.Ordinal) ||
+            (promptLower.Contains("which ", StringComparison.Ordinal) &&
+             mentionedMarketCount >= 2 &&
+             (promptLower.Contains("both", StringComparison.Ordinal) ||
+              promptLower.Contains("listed", StringComparison.Ordinal) ||
+              promptLower.Contains("marked", StringComparison.Ordinal))))
         {
             return true;
         }
@@ -823,6 +932,7 @@ public partial class AiChatRequestParser
         var hasListingVerb =
             promptLower.Contains("show me", StringComparison.Ordinal) ||
             promptLower.Contains("list ", StringComparison.Ordinal) ||
+            promptLower.Contains("listed ", StringComparison.Ordinal) ||
             promptLower.StartsWith("list", StringComparison.Ordinal) ||
             promptLower.Contains("find ", StringComparison.Ordinal) ||
             promptLower.Contains("any ", StringComparison.Ordinal) ||
@@ -873,6 +983,8 @@ public partial class AiChatRequestParser
 
         var hasIntersectionCue =
             promptLower.Contains("marked as", StringComparison.Ordinal) ||
+            promptLower.Contains("listed as", StringComparison.Ordinal) ||
+            promptLower.Contains("are listed", StringComparison.Ordinal) ||
             promptLower.Contains("both", StringComparison.Ordinal) ||
             promptLower.Contains("also listed", StringComparison.Ordinal) ||
             promptLower.Contains("under both", StringComparison.Ordinal) ||
@@ -1098,8 +1210,14 @@ public partial class AiChatRequestParser
     [GeneratedRegex(@"\b(?:total(?:\s+of)?\s*(?<count>\d{1,3}|couple|few|several|handful)|(?<count>\d{1,3}|couple|few|several|handful)\s*total)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex TotalCountRegex();
 
-    [GeneratedRegex(@"\b(?<count>\d{1,3}|couple|few|several|handful)\s*(?:random(?:ly)?|strong|safe|safer|best|top)?\s*(?:pick|picks|prediction|predictions|tip|tips|game|games|match|matches|leg|legs)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    [GeneratedRegex(@"\b(?<count>\d{1,3}|couple|few|several|handful)\s*(?:of\s+(?:the\s+)?)?(?:random(?:ly)?|strong|safe|safer|best|top)?\s*(?:pick|picks|prediction|predictions|tip|tips|game|games|match|matches|leg|legs)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex GenericPickCountRegex();
+
+    [GeneratedRegex(@"\b(?<count>\d{1,3}|couple|few|several|handful)\s+of\s+the\s+best\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex OfTheBestCountRegex();
+
+    [GeneratedRegex(@"\b(?:(?:i\s+)?(?:asked|wanted|needed|said)\s+for|(?:make\s+it)|(?:give\s+me)|(?:need))\s+(?<count>\d{1,3}|couple|few|several|handful)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex CountFollowUpRegex();
 
     [GeneratedRegex(@"\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|draws?|draw|straight wins?|straightwins?|straightwin|straights|1x2|wins?|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex MarketMentionRegex();

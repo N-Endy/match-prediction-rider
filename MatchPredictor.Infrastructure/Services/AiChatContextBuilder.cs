@@ -14,15 +14,24 @@ public static partial class AiChatContextBuilder
     private static readonly HashSet<string> GenericPromptTokens = new(StringComparer.OrdinalIgnoreCase)
     {
         "a", "about", "acca", "accumulator", "add", "all", "analysis", "analyse", "analyze", "any", "another", "are",
-        "and", "away", "banker", "bankers", "best", "bet", "bets", "book", "booking", "both", "btts", "can", "chat",
-        "combo", "combination", "day", "days", "doing", "draw", "for", "game", "games", "give", "goals", "good", "help", "home", "i", "in", "into", "is",
-        "it", "leg", "legs", "list", "listed", "marked", "match", "matches", "me", "need", "odd", "odds", "of", "on", "ones", "open", "over", "pick", "picks",
-        "prediction", "predictions", "recent", "recommend", "recommended", "recommending", "recommendation", "recommendations", "result", "results", "safe", "safer", "score", "settle", "settled", "show", "slip", "some", "straight", "strong",
-        "straightwin", "straightwins", "stronger", "rollover", "teams", "the", "them", "these", "this", "those", "ticket", "to",
+        "and", "asked", "asking", "away", "banker", "bankers", "best", "bet", "bets", "book", "booking", "both", "btts", "can", "card", "chat",
+        "clear", "clears", "combo", "combination", "currently", "day", "days", "doing", "draw", "for", "from", "game", "games", "give", "goals", "good", "help", "home", "i", "in", "into", "is",
+        "it", "just", "leg", "legs", "list", "listed", "make", "marked", "match", "matches", "me", "more", "need", "needed", "odd", "odds", "of", "on", "ones", "only", "open", "over", "pick", "picks", "please",
+        "prediction", "predictions", "rather", "recent", "recommend", "recommended", "recommending", "recommendation", "recommendations", "result", "results", "safe", "safer", "said", "score", "settle", "settled", "show", "slip", "some", "still", "straight", "strong",
+        "straightwin", "straightwins", "stronger", "rollover", "supplied", "teams", "than", "the", "them", "these", "this", "those", "ticket", "to",
         "today", "top", "total", "totals", "altogether", "under", "value", "why", "won", "yesterday",
-        "want", "what", "which", "win", "wins", "with", "would", "you", "your", "red", "green", "finished", "lost", "landed", "did", "mix", "mixture", "suggest", "suggested", "random", "randomly",
-        "explain", "explained", "discuss", "discussion", "talk", "riskiest", "weakest", "remove", "swap", "replace", "fits", "left", "also", "well", "same", "fixture", "fixtures"
+        "want", "wanted", "wanting", "what", "which", "win", "wins", "with", "would", "you", "your", "red", "green", "finished", "lost", "landed", "did", "mix", "mixture", "suggest", "suggested", "random", "randomly",
+        "explain", "explained", "discuss", "discussion", "talk", "riskiest", "weakest", "remove", "swap", "replace", "fits", "left", "also", "well", "same", "fixture", "fixtures", "available"
     };
+
+    /// <summary>
+    /// Long generic words that users often misspell; near-misses must not become team/league entity filters.
+    /// </summary>
+    private static readonly string[] TypoProneGenericTokens =
+    [
+        "prediction", "predictions", "recommendation", "recommendations",
+        "fixture", "fixtures", "matches", "listed", "marked", "available", "currently"
+    ];
 
     private static readonly HashSet<string> RecommendationTokens = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -1235,8 +1244,78 @@ public static partial class AiChatContextBuilder
     internal static List<string> ExtractSpecificTokens(string value)
     {
         return Tokenize(value)
-            .Where(token => !GenericPromptTokens.Contains(token))
+            .Where(token => !IsGenericOrNearGenericToken(token))
             .ToList();
+    }
+
+    internal static bool IsGenericOrNearGenericToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return true;
+        }
+
+        if (GenericPromptTokens.Contains(token))
+        {
+            return true;
+        }
+
+        // Only fuzzy-match longer stems so short team names (e.g. Inter) stay as entities.
+        if (token.Length < 6)
+        {
+            return false;
+        }
+
+        foreach (var generic in TypoProneGenericTokens)
+        {
+            if (Math.Abs(generic.Length - token.Length) > 1)
+            {
+                continue;
+            }
+
+            if (LevenshteinDistance(token, generic) <= 1)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static int LevenshteinDistance(string left, string right)
+    {
+        if (left.Length == 0)
+        {
+            return right.Length;
+        }
+
+        if (right.Length == 0)
+        {
+            return left.Length;
+        }
+
+        var previous = new int[right.Length + 1];
+        var current = new int[right.Length + 1];
+        for (var j = 0; j <= right.Length; j++)
+        {
+            previous[j] = j;
+        }
+
+        for (var i = 1; i <= left.Length; i++)
+        {
+            current[0] = i;
+            for (var j = 1; j <= right.Length; j++)
+            {
+                var cost = left[i - 1] == right[j - 1] ? 0 : 1;
+                current[j] = Math.Min(
+                    Math.Min(current[j - 1] + 1, previous[j] + 1),
+                    previous[j - 1] + cost);
+            }
+
+            (previous, current) = (current, previous);
+        }
+
+        return previous[right.Length];
     }
 
     private static HashSet<string> Tokenize(string value)

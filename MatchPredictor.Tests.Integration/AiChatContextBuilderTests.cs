@@ -512,6 +512,33 @@ public class AiChatContextBuilderTests
     }
 
     [Fact]
+    public void BuildSelection_ReturnsSameFixtureDoubles_WhenPromptHasPredictionTypo()
+    {
+        var kickoff = DateTime.UtcNow.AddHours(3);
+        var predictions = new[]
+        {
+            CreatePrediction(1, "BothTeamsScore", "BTTS", "Arsenal", "Chelsea", "England - Premier League", 0.78m, matchDateTimeUtc: kickoff),
+            CreatePrediction(2, "Over2.5Goals", "Over 2.5", "Arsenal", "Chelsea", "England - Premier League", 0.74m, matchDateTimeUtc: kickoff),
+            CreatePrediction(3, "BothTeamsScore", "BTTS", "Inter", "Milan", "Italy - Serie A", 0.80m, matchDateTimeUtc: kickoff)
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Which pedictions are listed as both btts and over 2.5",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(2, selection.Candidates.Count);
+        Assert.All(selection.Candidates, candidate =>
+        {
+            Assert.Equal("Arsenal", candidate.HomeTeam);
+            Assert.Equal("Chelsea", candidate.AwayTeam);
+        });
+        Assert.True(selection.NormalizedRequest?.RequireSameFixtureMarkets);
+        Assert.Empty(selection.NormalizedRequest?.EntityTerms ?? []);
+    }
+
+    [Fact]
     public void BuildSelection_WarnsWhenNoSameFixtureDoublesExist()
     {
         var kickoff = DateTime.UtcNow.AddHours(3);

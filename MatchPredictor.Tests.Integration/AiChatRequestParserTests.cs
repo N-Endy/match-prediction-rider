@@ -293,6 +293,68 @@ public class AiChatRequestParserTests
     }
 
     [Fact]
+    public void ParseDeterministic_ParsesListedAsBoth_WithPredictionTypo()
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            "Which pedictions are listed as both btts and over 2.5",
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.True(result.Request.RequireSameFixtureMarkets);
+        Assert.True(result.Request.IsCatalogListing);
+        Assert.Empty(result.Request.EntityTerms);
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "BothTeamsScore");
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "Over2.5Goals");
+        Assert.DoesNotContain(result.Request.EntityTerms, term => term.Contains("pedict", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ParseDeterministic_CountFollowUp_ReusesLastMarketsFromSession()
+    {
+        var session = new AiChatSessionState
+        {
+            LastIntent = nameof(AiChatIntent.RecommendPicks),
+            LastNormalizedRequest = new AiChatNormalizedRequest
+            {
+                Intent = AiChatIntent.RecommendPicks,
+                Scope = "today",
+                RequestedTotalCount = 10,
+                RequestedMarkets =
+                [
+                    new AiChatRequestedMarket { PredictionCategory = "BothTeamsScore" }
+                ]
+            }
+        };
+
+        var result = AiChatRequestParser.ParseDeterministic(
+            "I asked for 10",
+            session,
+            hasWorkingSlip: false,
+            hasContextCandidates: true);
+
+        Assert.Equal(10, result.Request.RequestedTotalCount);
+        Assert.Empty(result.Request.EntityTerms);
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "BothTeamsScore");
+        Assert.False(result.Request.IsCatalogListing);
+    }
+
+    [Fact]
+    public void ParseDeterministic_ParsesTenOfTheBestBtts()
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            "Give me 10 of the best btts predictions",
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.Equal(AiChatIntent.RecommendPicks, result.Request.Intent);
+        Assert.Equal(10, result.Request.RequestedTotalCount);
+        Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "BothTeamsScore");
+        Assert.Empty(result.Request.EntityTerms);
+    }
+
+    [Fact]
     public async Task ParseAsync_UsesSemanticFallback_WhenDeterministicParsingNeedsHelp()
     {
         var parser = new AiChatRequestParser(
