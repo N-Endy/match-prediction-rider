@@ -205,17 +205,26 @@ function openSportyBetBooking(url) {
     closeCartModal();
     showToast('Betslip cleared');
 
+    // Do not pass noopener/noreferrer in window.open features: modern browsers still open
+    // the tab but return null, which previously made us also navigate the current app page.
     try {
-        const popup = window.open(url, '_blank', 'noopener,noreferrer');
+        const popup = window.open(url, '_blank');
         if (popup) {
             popup.opener = null;
             return;
         }
     } catch {
-        // Fall back to same-tab navigation below.
+        // Fall through to the anchor fallback below.
     }
 
-    window.location.href = url;
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.target = '_blank';
+    anchor.rel = 'noopener noreferrer';
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
 }
 
 // ── Init ──
