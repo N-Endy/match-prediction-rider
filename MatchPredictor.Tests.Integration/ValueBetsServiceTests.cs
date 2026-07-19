@@ -112,6 +112,12 @@ public class ValueBetsServiceTests
         Assert.Equal(0.48, under.MarketProbability, 3);
         Assert.Equal(0.16, under.Edge, 3);
         Assert.Equal(Math.Round(1d / 0.48d, 4), under.DecimalOdds, 4);
+        Assert.Equal(BetPricingMath.DefaultKellyFraction, under.KellyFraction, 6);
+        Assert.Equal(
+            BetPricingMath.CalculateFractionalKellyStakeFraction(under.MathematicalProbability, under.DecimalOdds),
+            under.KellyStakeFraction,
+            6);
+        Assert.True(under.KellyStakeFraction > 0);
         Assert.Equal("Calibrated under-goals probability still sits clearly above the market.", under.AiJustification);
 
         Assert.DoesNotContain(results, result => result.PredictionCategory == "Over2.5Goals");

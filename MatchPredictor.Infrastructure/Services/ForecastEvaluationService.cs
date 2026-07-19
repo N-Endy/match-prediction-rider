@@ -9,7 +9,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
     private const double BucketSize = 0.05;
     private const double ConfidenceBandSize = 0.10;
     // Quarter-Kelly is the staking convention used for the staking-adjusted return KPI.
-    private const double KellyFraction = 0.25;
+    private const double KellyFraction = BetPricingMath.DefaultKellyFraction;
     // Cap on the number of per-forecast explainability rows surfaced per window.
     private const int MaxFeatureDiagnostics = 40;
     private static readonly TimeSpan PredictionLiveGrace = TimeSpan.FromMinutes(200);
@@ -341,20 +341,8 @@ public class ForecastEvaluationService : IForecastEvaluationService
     {
         public double FlatProfit => Won ? DecimalOdds - 1.0 : -1.0;
 
-        public double KellyStake
-        {
-            get
-            {
-                var b = DecimalOdds - 1.0;
-                if (b <= 0)
-                {
-                    return 0.0;
-                }
-
-                var rawFraction = ((b * ModelProbability) - (1.0 - ModelProbability)) / b;
-                return rawFraction <= 0 ? 0.0 : Math.Clamp(rawFraction * KellyFraction, 0.0, 1.0);
-            }
-        }
+        public double KellyStake =>
+            BetPricingMath.CalculateFractionalKellyStakeFraction(ModelProbability, DecimalOdds, KellyFraction);
 
         public double KellyProfit => Won ? KellyStake * (DecimalOdds - 1.0) : -KellyStake;
     }

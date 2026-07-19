@@ -710,6 +710,11 @@ public class ValueBetsService : IValueBetsService
                 ImpliedProbability = ImpliedProbability,
                 ExpectedValuePercent = ExpectedValuePercent,
                 Edge = Edge,
+                KellyFraction = BetPricingMath.DefaultKellyFraction,
+                KellyStakeFraction = BetPricingMath.CalculateFractionalKellyStakeFraction(
+                    MathematicalProbability,
+                    DecimalOdds,
+                    BetPricingMath.DefaultKellyFraction),
                 ThresholdUsed = ThresholdUsed,
                 ThresholdSource = ThresholdSource,
                 CalibratorUsed = CalibratorUsed,

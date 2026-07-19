@@ -35,6 +35,10 @@
                     <span>The worst bankroll drop from a previous peak. It shows how rough the ride can get.</span>
                 </article>
                 <article class="mp-valuebets-term-card">
+                    <strong>¼-Kelly</strong>
+                    <span>Suggested stake as a share of your bankroll when the model has an edge. Same formula as Analytics quarter-Kelly ROI. Enter your bankroll below to see units.</span>
+                </article>
+                <article class="mp-valuebets-term-card">
                     <strong>Threshold</strong>
                     <span>The minimum model probability needed before a pick can be published.</span>
                 </article>
@@ -64,6 +68,17 @@
     <div id="valueBetsSummary" style="display: none; margin-bottom: 1.5rem;"></div>
     <div id="valueBetsWarnings" style="display: none; margin-bottom: 1rem;"></div>
 
+    <div id="valueBetsBankrollBar" class="mp-valuebets-bankroll" style="display: none; margin-bottom: 1.25rem; padding: 1rem 1.15rem; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 10px;">
+        <label for="valueBetsBankrollInput" style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; font-weight: 600; color: var(--text-primary);">
+            Bankroll (units)
+            <input id="valueBetsBankrollInput" type="number" min="1" step="1" value="100" inputmode="decimal"
+                   style="width: 7rem; padding: 0.4rem 0.55rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-primary, #0f172a); color: var(--text-primary);" />
+        </label>
+        <p class="mp-switch-caption" style="margin: 0.4rem 0 0;">
+            Suggested stakes use the same quarter-Kelly formula as Analytics. This number stays in your browser — it is not your bookmaker balance.
+        </p>
+    </div>
+
     <!-- Error State -->
     <div id="errorState" style="display: none; text-align: center; padding: 4rem 1rem; background: #fff3f3; color: #dc3545; border-radius: 12px; border: 1px solid #ffdcdc;">
         <h3 id="errorMessage" style="margin-bottom: 0.5rem; color: #dc3545;">Failed to load Value Bets</h3>
@@ -79,6 +94,9 @@
 @section Scripts {
     <script>
         document.addEventListener('DOMContentLoaded', async () => {
+            const BANKROLL_STORAGE_KEY = 'mp.valueBets.bankrollUnits';
+            const DEFAULT_BANKROLL = 100;
+
             const loadingState = document.getElementById('aiLoadingState');
             const noBetsState = document.getElementById('noBetsState');
             const errorState = document.getElementById('errorState');
@@ -86,38 +104,38 @@
             const errorDescription = document.getElementById('errorDescription');
             const grid = document.getElementById('valueBetsGrid');
             const warnings = document.getElementById('valueBetsWarnings');
+            const bankrollBar = document.getElementById('valueBetsBankrollBar');
+            const bankrollInput = document.getElementById('valueBetsBankrollInput');
 
-            try {
-                const response = await fetch('/api/valuebets');
-                
-                if (!response.ok) {
-                    let serverMessage = 'Failed to load Value Bets data from the server.';
-                    try {
-                        const errorPayload = await response.json();
-                        if (errorPayload?.message) {
-                            serverMessage = errorPayload.message;
-                        }
-                    } catch {
-                        // ignore JSON parse failures and use the fallback message
-                    }
+            let cachedValueBets = [];
 
-                    throw new Error(serverMessage);
+            function readStoredBankroll() {
+                const raw = localStorage.getItem(BANKROLL_STORAGE_KEY);
+                const parsed = Number(raw);
+                return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BANKROLL;
+            }
+
+            function writeStoredBankroll(value) {
+                localStorage.setItem(BANKROLL_STORAGE_KEY, String(value));
+            }
+
+            function getBankrollUnits() {
+                const parsed = Number(bankrollInput?.value);
+                return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BANKROLL;
+            }
+
+            function formatKellyStake(bet, bankroll) {
+                const fraction = Number(bet.kellyStakeFraction);
+                if (!Number.isFinite(fraction) || fraction <= 0) {
+                    return { percent: '0.0%', units: '0.00u', color: 'var(--text-muted)' };
                 }
 
-                const report = await response.json();
-                const valueBets = Array.isArray(report?.bets) ? report.bets : [];
-                
-                loadingState.style.display = 'none';
-                renderSummary(report);
-                renderWarnings(report);
+                const percent = (fraction * 100).toFixed(1) + '%';
+                const units = (fraction * bankroll).toFixed(2) + 'u';
+                return { percent, units, color: '#10b981' };
+            }
 
-                if (!valueBets || valueBets.length === 0) {
-                    noBetsState.style.display = 'block';
-                    return;
-                }
-
-                grid.style.display = 'grid';
-                grid.style.gap = '1.5rem';
+            function renderValueBetCards(valueBets, bankroll) {
                 grid.innerHTML = valueBets.map(bet => {
                     const modelProbString = formatRate(bet.mathematicalProbability);
                     const marketProbString = formatRate(bet.marketProbability);
@@ -125,6 +143,7 @@
                     const decimalOddsString = Number(bet.decimalOdds || 0).toFixed(2);
                     const expectedValueString = formatSignedPercent(bet.expectedValuePercent);
                     const edgeString = formatSignedPoints(bet.edge);
+                    const kelly = formatKellyStake(bet, bankroll);
                     const thresholdString = formatRate(bet.thresholdUsed);
                     const thresholdSource = (bet.thresholdSource || 'Configured').toLowerCase();
                     const calibratorUsed = bet.calibratorUsed || 'Bucket';
@@ -140,8 +159,8 @@
                         bet.predictionCategory === 'Over2.5Goals' ? 'Over2.5' :
                         bet.predictionCategory === 'Under2.5Goals' ? 'Under2.5' :
                         'StraightWin';
-                    
-                    let badgeClass = 'mp-badge-combined'; 
+
+                    let badgeClass = 'mp-badge-combined';
                     if (bet.predictionCategory === 'BothTeamsScore') badgeClass = 'mp-badge-btts';
                     else if (bet.predictionCategory === 'Over2.5Goals') badgeClass = 'mp-badge-over';
                     else if (bet.predictionCategory === 'Under2.5Goals') badgeClass = 'mp-badge-under';
@@ -165,7 +184,7 @@
 
                     return `
                         <div class="mp-prediction-card" style="flex-direction: column; align-items: stretch; gap: 1rem; position: relative; overflow: hidden; border-top: 4px solid var(--accent-blue);">
-                            
+
                             <!-- Top Row: Standard Match Info -->
                             <div style="display: flex; justify-content: space-between; align-items: flex-start; width: 100%; gap: 1rem;">
                                 <div class="mp-match-info">
@@ -179,7 +198,7 @@
                                         ${escapeHtml(bet.awayTeam)}
                                     </div>
                                 </div>
-                                
+
                                 <div class="mp-card-badges" style="display: flex; flex-direction: column; align-items: flex-end; gap: 10px;">
                                     <span class="mp-prediction-badge ${badgeClass}">${escapeHtml(badgeLabel)}</span>
                                     <button class="mp-add-cart-btn" title="Add Bet"
@@ -198,7 +217,7 @@
                             <!-- Bottom Row: AI Insights -->
                             <div style="background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.15); border-radius: 8px; padding: 1.25rem; margin-top: 0.5rem;">
                                 ${insightChips ? `<div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">${insightChips}</div>` : ''}
-                                
+
                                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 1rem; gap: 0.75rem;">
                                     <div>
                                         <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Pick</div>
@@ -207,6 +226,11 @@
                                     <div>
                                         <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">EV</div>
                                         <div style="color: #10b981; font-weight: 800; font-size: 1.1rem;">${expectedValueString}</div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">¼-Kelly</div>
+                                        <div style="color: ${kelly.color}; font-weight: 800; font-size: 1.1rem;">${kelly.percent}</div>
+                                        <div style="font-size: 0.8rem; color: var(--text-muted);">${kelly.units} suggested</div>
                                     </div>
                                     <div>
                                         <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Odds</div>
@@ -263,6 +287,55 @@
                         </div>
                     `;
                 }).join('');
+            }
+
+            if (bankrollInput) {
+                bankrollInput.value = String(readStoredBankroll());
+                bankrollInput.addEventListener('input', () => {
+                    const bankroll = getBankrollUnits();
+                    writeStoredBankroll(bankroll);
+                    if (cachedValueBets.length > 0) {
+                        renderValueBetCards(cachedValueBets, bankroll);
+                    }
+                });
+            }
+
+            try {
+                const response = await fetch('/api/valuebets');
+
+                if (!response.ok) {
+                    let serverMessage = 'Failed to load Value Bets data from the server.';
+                    try {
+                        const errorPayload = await response.json();
+                        if (errorPayload?.message) {
+                            serverMessage = errorPayload.message;
+                        }
+                    } catch {
+                        // ignore JSON parse failures and use the fallback message
+                    }
+
+                    throw new Error(serverMessage);
+                }
+
+                const report = await response.json();
+                const valueBets = Array.isArray(report?.bets) ? report.bets : [];
+
+                loadingState.style.display = 'none';
+                renderSummary(report);
+                renderWarnings(report);
+
+                if (!valueBets || valueBets.length === 0) {
+                    noBetsState.style.display = 'block';
+                    return;
+                }
+
+                cachedValueBets = valueBets;
+                if (bankrollBar) {
+                    bankrollBar.style.display = 'block';
+                }
+                grid.style.display = 'grid';
+                grid.style.gap = '1.5rem';
+                renderValueBetCards(valueBets, getBankrollUnits());
 
             } catch (error) {
                 console.error('Value Bets Error:', error);

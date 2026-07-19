@@ -16,6 +16,10 @@ public class ValueBetDto
     public double ImpliedProbability { get; set; }
     public double ExpectedValuePercent { get; set; }
     public double Edge { get; set; }
+    /// <summary>Fractional Kelly multiplier (Analytics uses 0.25 = quarter-Kelly).</summary>
+    public double KellyFraction { get; set; } = BetPricingMath.DefaultKellyFraction;
+    /// <summary>Suggested stake as a fraction of bankroll (e.g. 0.05 = 5%).</summary>
+    public double KellyStakeFraction { get; set; }
     public double ThresholdUsed { get; set; }
     public string ThresholdSource { get; set; } = "Configured";
     public string CalibratorUsed { get; set; } = "Bucket";
