@@ -405,7 +405,14 @@ public class AiAdvisorService : IAiAdvisorService
 
         var systemPrompt = BuildValueBetsSystemPrompt();
 
-        return await CompleteChatAsync(systemPrompt, payload, null, ct, jsonMode: true);
+        return await CompleteChatAsync(
+            systemPrompt,
+            payload,
+            null,
+            ct,
+            jsonMode: true,
+            temperature: 0.1,
+            maxTokens: 2500);
     }
 
     private static bool NeedsCatalogInsightEnrichment(AiChatNormalizedRequest normalizedRequest, string userPrompt)
@@ -2225,7 +2232,7 @@ public class AiAdvisorService : IAiAdvisorService
 
             Do NOT re-rank or drop picks.
 
-            For each pick, write one sentence using this template when data exists:
+            For each pick, write one concise sentence (max 28 words) using this template when data exists:
             "Model [ModelProbabilityPct]% vs market [MarketProbabilityPct]% (+[EdgePctPoints]pp edge); [signalAgreement note]; cleared [ThresholdPct]% [ThresholdSource] threshold."
 
             SIGNAL AGREEMENT RULES (when signalBreakdown is present):
@@ -2237,8 +2244,9 @@ public class AiAdvisorService : IAiAdvisorService
             - Do NOT invent injuries, lineups, motivation, derby context, form streaks, weather, or bookmaker odds unless those fields are explicitly present in the JSON.
             - Use ONLY the supplied fields.
             - Your job is to explain the pricing gap clearly, not to re-select the bets.
-            - Keep each justification to one sentence and make it specific to the provided probabilities and edge.
+            - Keep each justification to one short sentence and make it specific to the provided probabilities and edge.
             - Avoid hype, guarantees, and vague phrases like "great value" without saying why.
+            - Prefer brevity so the JSON response can finish completely.
 
             CRITICAL OUTPUT FORMAT:
             You MUST return exactly one JSON object with this shape:
@@ -2253,6 +2261,7 @@ public class AiAdvisorService : IAiAdvisorService
 
             Return one item for every input pick.
             Do not wrap the JSON in markdown fences.
+            Do not truncate mid-string; if near the limit, finish the current object cleanly.
             """;
     }
 

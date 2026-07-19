@@ -13,7 +13,7 @@ namespace MatchPredictor.Application.Services;
 
 public class ValueBetsService : IValueBetsService
 {
-    private const int MaxAiExplanationCount = 20;
+    private const int MaxAiExplanationCount = 12;
 
     private readonly ApplicationDbContext _dbContext;
     private readonly IDataAnalyzerService _dataAnalyzerService;
@@ -478,43 +478,8 @@ public class ValueBetsService : IValueBetsService
         report.Warnings.Add(message);
     }
 
-    private static Dictionary<string, string> ParseAiJustifications(string aiResponseJson)
-    {
-        using var document = JsonDocument.Parse(aiResponseJson);
-        var picksElement = document.RootElement;
-
-        if (document.RootElement.ValueKind == JsonValueKind.Object &&
-            document.RootElement.TryGetProperty("picks", out var wrappedPicks))
-        {
-            picksElement = wrappedPicks;
-        }
-
-        if (picksElement.ValueKind != JsonValueKind.Array)
-        {
-            throw new JsonException("AI Value Bets response did not contain a picks array.");
-        }
-
-        var justifications = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var pickElement in picksElement.EnumerateArray())
-        {
-            if (!pickElement.TryGetProperty("CandidateKey", out var keyElement) ||
-                !pickElement.TryGetProperty("AiJustification", out var justificationElement))
-            {
-                continue;
-            }
-
-            var candidateKey = keyElement.GetString();
-            var justification = justificationElement.GetString();
-            if (string.IsNullOrWhiteSpace(candidateKey) || string.IsNullOrWhiteSpace(justification))
-            {
-                continue;
-            }
-
-            justifications[candidateKey] = justification;
-        }
-
-        return justifications;
-    }
+    private static Dictionary<string, string> ParseAiJustifications(string aiResponseJson) =>
+        ValueBetJustificationParser.Parse(aiResponseJson);
 
     private async Task<ValueBetPerformanceSummary> BuildPerformanceSummaryAsync(CancellationToken ct)
     {
