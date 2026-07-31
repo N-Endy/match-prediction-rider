@@ -6,9 +6,9 @@ namespace MatchPredictor.Tests.Integration;
 public class OperationalScheduleTests
 {
     [Fact]
-    public void ScoreUpdateCron_Uses30MinuteInterval()
+    public void ScoreUpdateCron_Uses12MinuteInterval()
     {
-        Assert.Equal(30, OperationalSchedule.ScoreUpdateIntervalMinutes);
-        Assert.Equal("*/30 * * * *", OperationalSchedule.ScoreUpdateCron);
+        Assert.Equal(12, OperationalSchedule.ScoreUpdateIntervalMinutes);
+        Assert.Equal("*/12 * * * *", OperationalSchedule.ScoreUpdateCron);
     }
 }

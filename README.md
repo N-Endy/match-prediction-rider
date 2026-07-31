@@ -109,7 +109,7 @@ Each cron job: `POST`, header `X-Cron-Secret: <secret>`, expect HTTP **202**.
 | `prediction-generation-post-analysis` | `30 4 * * *` |
 | `prediction-generation-refresh` | `30 12,16 * * *` |
 | `cleanup-old-predictions` | `0 1 * * *` |
-| `score-update` | `*/30 * * * *` |
+| `score-update` | `*/12 * * * *` |
 | `score-backfill` | `17 * * * *` |
 | `closing-line-snapshot` | `*/5 * * * *` |
 
