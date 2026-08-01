@@ -1,0 +1,203 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace MatchPredictor.Domain.Helpers;
+
+public static partial class BetslipDrawPickParser
+{
+    public static IReadOnlyList<int> ParsePredictionIds(string aiResponseJson, int maxCount)
+    {
+        if (maxCount <= 0 || string.IsNullOrWhiteSpace(aiResponseJson))
+        {
+            return [];
+        }
+
+        var normalized = NormalizeAiJson(aiResponseJson);
+        if (TryParseIds(normalized, out var ids) && ids.Count > 0)
+        {
+            return ids.Distinct().Take(maxCount).ToList();
+        }
+
+        if (TrySalvageIds(normalized, out var salvaged) && salvaged.Count > 0)
+        {
+            return salvaged.Distinct().Take(maxCount).ToList();
+        }
+
+        return [];
+    }
+
+    public static Dictionary<int, string> ParseReasons(string aiResponseJson)
+    {
+        var reasons = new Dictionary<int, string>();
+        if (string.IsNullOrWhiteSpace(aiResponseJson))
+        {
+            return reasons;
+        }
+
+        var normalized = NormalizeAiJson(aiResponseJson);
+        try
+        {
+            using var document = JsonDocument.Parse(normalized);
+            foreach (var element in EnumeratePickElements(document.RootElement))
+            {
+                if (!TryReadPredictionId(element, out var predictionId))
+                {
+                    continue;
+                }
+
+                var reason = ReadReason(element);
+                if (!string.IsNullOrWhiteSpace(reason))
+                {
+                    reasons[predictionId] = reason.Trim();
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Ignore — caller falls back to confidence ranking.
+        }
+
+        return reasons;
+    }
+
+    private static string NormalizeAiJson(string aiResponseJson)
+    {
+        var trimmed = aiResponseJson.Trim();
+        if (trimmed.StartsWith("```", StringComparison.Ordinal))
+        {
+            var firstNewline = trimmed.IndexOf('\n');
+            if (firstNewline >= 0)
+            {
+                trimmed = trimmed[(firstNewline + 1)..];
+            }
+
+            var fenceEnd = trimmed.LastIndexOf("```", StringComparison.Ordinal);
+            if (fenceEnd >= 0)
+            {
+                trimmed = trimmed[..fenceEnd];
+            }
+
+            trimmed = trimmed.Trim();
+        }
+
+        var objectStart = trimmed.IndexOf('{');
+        var arrayStart = trimmed.IndexOf('[');
+        if (objectStart < 0 && arrayStart < 0)
+        {
+            return trimmed;
+        }
+
+        if (objectStart >= 0 && (arrayStart < 0 || objectStart < arrayStart))
+        {
+            return trimmed[objectStart..].Trim();
+        }
+
+        return trimmed[arrayStart..].Trim();
+    }
+
+    private static bool TryParseIds(string json, out List<int> ids)
+    {
+        ids = [];
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            foreach (var element in EnumeratePickElements(document.RootElement))
+            {
+                if (TryReadPredictionId(element, out var predictionId))
+                {
+                    ids.Add(predictionId);
+                }
+            }
+
+            return ids.Count > 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TrySalvageIds(string json, out List<int> ids)
+    {
+        ids = [];
+        foreach (Match match in PredictionIdRegex().Matches(json))
+        {
+            if (int.TryParse(match.Groups[1].Value, out var id) && id > 0)
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids.Count > 0;
+    }
+
+    private static IEnumerable<JsonElement> EnumeratePickElements(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var element in root.EnumerateArray())
+            {
+                yield return element;
+            }
+
+            yield break;
+        }
+
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            yield break;
+        }
+
+        foreach (var propertyName in new[] { "picks", "selections", "draws", "bestDraws" })
+        {
+            if (root.TryGetProperty(propertyName, out var picks) && picks.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var element in picks.EnumerateArray())
+                {
+                    yield return element;
+                }
+
+                yield break;
+            }
+        }
+    }
+
+    private static bool TryReadPredictionId(JsonElement element, out int predictionId)
+    {
+        predictionId = 0;
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        foreach (var propertyName in new[] { "predictionId", "PredictionId", "id", "Id" })
+        {
+            if (element.TryGetProperty(propertyName, out var idElement) &&
+                idElement.ValueKind == JsonValueKind.Number &&
+                idElement.TryGetInt32(out predictionId) &&
+                predictionId > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string ReadReason(JsonElement element)
+    {
+        foreach (var propertyName in new[] { "reason", "Reason", "note", "Note", "justification" })
+        {
+            if (element.TryGetProperty(propertyName, out var reasonElement) &&
+                reasonElement.ValueKind == JsonValueKind.String)
+            {
+                return reasonElement.GetString() ?? string.Empty;
+            }
+        }
+
+        return string.Empty;
+    }
+
+    [GeneratedRegex("\"(?:predictionId|PredictionId|id|Id)\"\\s*:\\s*(\\d+)", RegexOptions.CultureInvariant)]
+    private static partial Regex PredictionIdRegex();
+}

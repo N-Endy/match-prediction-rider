@@ -17,7 +17,8 @@ internal static class HangfireRecurringJobs
         "daily-analysis-job",
         "historical-backtest-job",
         "team-alias-seed-job",
-        "cleanup-old-predictions"
+        "cleanup-old-predictions",
+        "betslip-generation-job"
     ];
 
     /// <summary>
@@ -108,6 +109,12 @@ internal static class HangfireRecurringJobs
             "cleanup-old-predictions",
             service => service.CleanupOldPredictionsAndMatchDataAsync(),
             "0 1 * * *",
+            new RecurringJobOptions { TimeZone = watTimeZone });
+
+        recurringJobs.AddOrUpdate<IBetslipGenerationService>(
+            "betslip-generation-job",
+            service => service.GenerateDailyBetslipsAsync(null),
+            "0 5,13 * * *",
             new RecurringJobOptions { TimeZone = watTimeZone });
     }
 }

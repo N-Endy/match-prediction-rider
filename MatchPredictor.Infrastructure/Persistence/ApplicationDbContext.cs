@@ -37,6 +37,9 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<TeamAlias> TeamAliases => Set<TeamAlias>();
     public DbSet<VisitorSession> VisitorSessions => Set<VisitorSession>();
     public DbSet<UserActivityEvent> UserActivityEvents => Set<UserActivityEvent>();
+    public DbSet<BetslipSet> BetslipSets => Set<BetslipSet>();
+    public DbSet<Betslip> Betslips => Set<Betslip>();
+    public DbSet<BetslipSelection> BetslipSelections => Set<BetslipSelection>();
     // Required by IDataProtectionKeyContext
     public DbSet<DataProtectionKey> DataProtectionKeys { get; set; }
 
@@ -246,6 +249,45 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
                 .HasDefaultValue("general");
             entity.HasIndex(e => new { e.EventName, e.Timestamp });
             entity.HasIndex(e => e.Timestamp);
+        });
+
+        modelBuilder.Entity<BetslipSet>(entity =>
+        {
+            entity.Property(e => e.RunLabel).HasMaxLength(32);
+            entity.Property(e => e.DayKind).HasMaxLength(16);
+            entity.HasIndex(e => new { e.SlipLocalDate, e.IsCurrent });
+            entity.HasIndex(e => e.GeneratedAtUtc);
+            entity.HasMany(e => e.Slips)
+                .WithOne(e => e.BetslipSet)
+                .HasForeignKey(e => e.BetslipSetId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Betslip>(entity =>
+        {
+            entity.Property(e => e.Title).HasMaxLength(120);
+            entity.Property(e => e.TierLabel).HasMaxLength(64);
+            entity.Property(e => e.BookingCode).HasMaxLength(64);
+            entity.Property(e => e.BookingUrl).HasMaxLength(512);
+            entity.Property(e => e.BookingStatus).HasMaxLength(32);
+            entity.Property(e => e.StatusMessage).HasMaxLength(512);
+            entity.HasIndex(e => new { e.BetslipSetId, e.SlipNumber }).IsUnique();
+            entity.HasMany(e => e.Selections)
+                .WithOne(e => e.Betslip)
+                .HasForeignKey(e => e.BetslipId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<BetslipSelection>(entity =>
+        {
+            entity.Property(e => e.League).HasMaxLength(120);
+            entity.Property(e => e.HomeTeam).HasMaxLength(120);
+            entity.Property(e => e.AwayTeam).HasMaxLength(120);
+            entity.Property(e => e.Market).HasMaxLength(32);
+            entity.Property(e => e.PredictedOutcome).HasMaxLength(64);
+            entity.Property(e => e.AiNote).HasMaxLength(512);
+            entity.HasIndex(e => e.BetslipId);
+            entity.HasIndex(e => e.PredictionId);
         });
     }
 }

@@ -757,6 +757,13 @@ public class ValueBetsServiceTests
 
         public Task<string> AnalyzeValueBetsAsync(string payload, CancellationToken ct = default) =>
             Task.FromResult(_responseFactory(payload));
+
+        public Task<IReadOnlyList<BetslipDrawPickSelection>> SelectBestDrawPicksAsync(
+            IReadOnlyList<BetslipDrawPickRequest> candidates,
+            int count = 5,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<BetslipDrawPickSelection>>(
+                candidates.Take(count).Select(c => new BetslipDrawPickSelection { PredictionId = c.PredictionId }).ToList());
     }
 
     private sealed class FakeSourceMarketPricingService : ISourceMarketPricingService

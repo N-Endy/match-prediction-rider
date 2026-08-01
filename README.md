@@ -8,7 +8,7 @@ Football match prediction system: scrapes fixture and market data, computes mark
 |---|---|
 | `MatchPredictor.Domain` | Entities, domain models, service interfaces. No dependencies. |
 | `MatchPredictor.Infrastructure` | EF Core (PostgreSQL) persistence, scrapers (Selenium/HTTP), the prediction math (`ProbabilityCalculator`), and the learning loop (`ProbabilityCorrectionService`, `CalibrationService`, `ThresholdTuningService`). |
-| `MatchPredictor.Application` | Orchestration: `AnalyzerService` (sync, generation, settlement), `ValueBetsService`, AI chat/advisor services. |
+| `MatchPredictor.Application` | Orchestration: `AnalyzerService` (sync, generation, settlement), `ValueBetsService`, `BetslipGenerationService`, AI chat/advisor services. |
 | `MatchPredictor.Web` | Razor Pages UI, API controllers, Hangfire dashboard and recurring jobs. |
 | `MatchPredictor.Tests.Integration` | xUnit tests (in-memory EF). `*InvestigateTests` drive a real browser and are excluded from CI. |
 | `ScrapeTest` | Console harness for scraper/backtest experiments. |
@@ -112,6 +112,7 @@ Each cron job: `POST`, header `X-Cron-Secret: <secret>`, expect HTTP **202**.
 | `score-update` | `*/12 * * * *` |
 | `score-backfill` | `17 * * * *` |
 | `closing-line-snapshot` | `*/5 * * * *` |
+| `betslip-generation` | `0 5,13 * * *` |
 
 Optional recovery: `POST /api/ops/jobs/startup-catchup` enqueues daily analysis followed by data sync (same as worker startup catch-up).
 

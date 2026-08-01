@@ -52,6 +52,8 @@ public class OpsJobsController : ControllerBase
                 service => service.RunDailyAnalysisAsync()),
             "cleanup-old-predictions" => _backgroundJobs.Enqueue<IAnalyzerService>(
                 service => service.CleanupOldPredictionsAndMatchDataAsync()),
+            "betslip-generation" => _backgroundJobs.Enqueue<IBetslipGenerationService>(
+                service => service.GenerateDailyBetslipsAsync(null)),
             "startup-catchup" => EnqueueStartupCatchup(),
             _ => null
         };

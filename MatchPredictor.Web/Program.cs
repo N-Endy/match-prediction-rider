@@ -76,6 +76,10 @@ builder.Services.AddScoped<PredictionQueries>();
 builder.Services.AddScoped<IPredictionQueries>(provider => new CachedPredictionQueries(
     provider.GetRequiredService<PredictionQueries>(),
     provider.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>()));
+builder.Services.AddScoped<BetslipQueries>();
+builder.Services.AddScoped<IBetslipQueries>(provider => new CachedBetslipQueries(
+    provider.GetRequiredService<BetslipQueries>(),
+    provider.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>()));
 builder.Services.AddScoped<IHealthQueryService, HealthQueryService>();
 builder.Services.AddScoped<IScrapeStatusQueries, ScrapeStatusQueries>();
 builder.Services.AddScoped<IAnalyticsQueries, AnalyticsQueries>();
@@ -116,6 +120,7 @@ builder.Services.AddScoped<IAiChatFootballInsightService, AiChatFootballInsightS
 builder.Services.AddScoped<IAiAdvisorService, AiAdvisorService>();
 builder.Services.AddScoped<IPredictionRiskAuditorService, PredictionRiskAuditorService>();
 builder.Services.AddScoped<IValueBetsService, ValueBetsService>();
+builder.Services.AddScoped<IBetslipGenerationService, BetslipGenerationService>();
 builder.Services.AddScoped<IUserTrackingService, UserTrackingService>();
 builder.Services.AddScoped<IAiChatAuthTicketService, AiChatAuthTicketService>();
 
@@ -150,6 +155,8 @@ builder.Host.UseSerilog((context, services, configuration) =>
 // Register configuration settings
 builder.Services.Configure<MatchPredictor.Domain.Models.PredictionSettings>(
     builder.Configuration.GetSection("PredictionSettings"));
+builder.Services.Configure<MatchPredictor.Domain.Models.BetslipSettings>(
+    builder.Configuration.GetSection(MatchPredictor.Domain.Models.BetslipSettings.SectionName));
 builder.Services.Configure<MatchPredictor.Domain.Models.ProbabilityCalculatorSettings>(
     builder.Configuration.GetSection("ProbabilityCalculator"));
 

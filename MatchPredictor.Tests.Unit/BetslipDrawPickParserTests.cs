@@ -1,0 +1,37 @@
+using MatchPredictor.Domain.Helpers;
+using Xunit;
+
+namespace MatchPredictor.Tests.Unit;
+
+public class BetslipDrawPickParserTests
+{
+    [Fact]
+    public void ParsePredictionIds_ReadsValidJsonPicks()
+    {
+        const string json = """
+            {"picks":[{"predictionId":11,"reason":"Strong draw signals"},{"predictionId":22,"reason":"Balanced xG"}]}
+            """;
+
+        var ids = BetslipDrawPickParser.ParsePredictionIds(json, 5);
+        Assert.Equal([11, 22], ids);
+
+        var reasons = BetslipDrawPickParser.ParseReasons(json);
+        Assert.Equal("Strong draw signals", reasons[11]);
+    }
+
+    [Fact]
+    public void ParsePredictionIds_ReturnsEmpty_OnJunk()
+    {
+        var ids = BetslipDrawPickParser.ParsePredictionIds("not-json-at-all", 5);
+        Assert.Empty(ids);
+    }
+
+    [Fact]
+    public void ParsePredictionIds_SalvagesIdsFromTruncatedPayload()
+    {
+        const string truncated = """{"picks":[{"predictionId":7,"reason":"ok"},{"predictionId":9,"reason":"cut""";
+        var ids = BetslipDrawPickParser.ParsePredictionIds(truncated, 5);
+        Assert.Contains(7, ids);
+        Assert.Contains(9, ids);
+    }
+}

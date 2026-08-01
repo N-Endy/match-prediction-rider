@@ -20,7 +20,8 @@ public class Health : PageModel
         new("Recent Score Update", ScrapingEventNames.ScoreUpdateRecent, OperationalSchedule.ScoreUpdateStaleAfter, true),
         new("Score Backfill", ScrapingEventNames.ScoreUpdateBackfill, TimeSpan.FromHours(2), false),
         new("Daily Analysis", ScrapingEventNames.DailyAnalysis, TimeSpan.FromHours(30), true),
-        new("Source Quality", ScrapingEventNames.SourceQuality, TimeSpan.FromHours(36), false)
+        new("Source Quality", ScrapingEventNames.SourceQuality, TimeSpan.FromHours(36), false),
+        new("Betslip Generation", ScrapingEventNames.BetslipGeneration, TimeSpan.FromHours(17), false)
     ];
 
     private readonly IHealthQueryService _healthQueryService;

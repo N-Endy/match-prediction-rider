@@ -415,6 +415,102 @@ public class AiAdvisorService : IAiAdvisorService
             maxTokens: 2500);
     }
 
+    public async Task<IReadOnlyList<BetslipDrawPickSelection>> SelectBestDrawPicksAsync(
+        IReadOnlyList<BetslipDrawPickRequest> candidates,
+        int count = 5,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        count = Math.Max(1, count);
+
+        var fallback = candidates
+            .OrderByDescending(c => c.Confidence)
+            .ThenBy(c => c.PredictionId)
+            .Take(count)
+            .Select(c => new BetslipDrawPickSelection
+            {
+                PredictionId = c.PredictionId,
+                Reason = string.Empty
+            })
+            .ToList();
+
+        if (candidates.Count == 0 || !_chatClient.IsConfigured)
+        {
+            return fallback;
+        }
+
+        try
+        {
+            var payload = JsonSerializer.Serialize(new
+            {
+                requestedCount = count,
+                candidates = candidates.Select(c => new
+                {
+                    c.PredictionId,
+                    c.League,
+                    c.HomeTeam,
+                    c.AwayTeam,
+                    ConfidencePct = Math.Round((double)c.Confidence * 100d, 1),
+                    KickoffUtc = c.MatchDateTimeUtc
+                })
+            });
+
+            var systemPrompt =
+                "You are a football betting analyst. From the candidate draw predictions, select the best ones " +
+                "for a short draw accumulator. Prefer higher calibrated confidence, but diversify leagues when " +
+                "quality is similar. Respond with JSON only: {\"picks\":[{\"predictionId\":123,\"reason\":\"one short sentence\"}]}.";
+
+            var userPrompt =
+                $"Select exactly {count} draw picks (or fewer only if fewer candidates exist).\n{payload}";
+
+            var raw = await CompleteChatAsync(
+                systemPrompt,
+                userPrompt,
+                null,
+                ct,
+                jsonMode: true,
+                temperature: 0.2,
+                maxTokens: 1200);
+
+            if (raw.StartsWith("❌", StringComparison.Ordinal) ||
+                raw.StartsWith("⏳", StringComparison.Ordinal) ||
+                raw.StartsWith("⚠️", StringComparison.Ordinal))
+            {
+                return fallback;
+            }
+
+            var selectedIds = Domain.Helpers.BetslipDrawPickParser.ParsePredictionIds(raw, count);
+            if (selectedIds.Count == 0)
+            {
+                return fallback;
+            }
+
+            var allowed = candidates.Select(c => c.PredictionId).ToHashSet();
+            var reasons = Domain.Helpers.BetslipDrawPickParser.ParseReasons(raw);
+            var selected = new List<BetslipDrawPickSelection>();
+            foreach (var predictionId in selectedIds)
+            {
+                if (!allowed.Contains(predictionId))
+                {
+                    continue;
+                }
+
+                selected.Add(new BetslipDrawPickSelection
+                {
+                    PredictionId = predictionId,
+                    Reason = reasons.GetValueOrDefault(predictionId, string.Empty)
+                });
+            }
+
+            return selected.Count > 0 ? selected : fallback;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Falling back to confidence-ranked draw picks after AI selection failed.");
+            return fallback;
+        }
+    }
+
     private static bool NeedsCatalogInsightEnrichment(AiChatNormalizedRequest normalizedRequest, string userPrompt)
     {
         if (normalizedRequest.Intent != AiChatIntent.WorkingSlipRefinement)

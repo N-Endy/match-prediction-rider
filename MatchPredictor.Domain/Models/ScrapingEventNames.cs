@@ -16,6 +16,7 @@ public static class ScrapingEventNames
     public const string SofaScoreRuntime = "source_runtime_sofascore";
     public const string ScoreUpdateRecent = "score_update_recent";
     public const string ScoreUpdateBackfill = "score_update_backfill";
+    public const string BetslipGeneration = "betslip_generation";
 
     public static string ScoreUpdate(string? runLabel) =>
         $"score_update_{(string.IsNullOrWhiteSpace(runLabel) ? "recent" : runLabel.Trim().ToLowerInvariant())}";
