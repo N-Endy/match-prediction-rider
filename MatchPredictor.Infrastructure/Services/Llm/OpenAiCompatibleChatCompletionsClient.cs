@@ -275,9 +275,9 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
         var isGemini = string.Equals(settings.Provider, AiLlmSettingsResolver.GeminiProvider, StringComparison.Ordinal);
         var isOpenAi = string.Equals(settings.Provider, AiLlmSettingsResolver.OpenAiProvider, StringComparison.Ordinal);
 
-        if (request.Temperature is { } temperature && !isGemini)
+        // Gemini rejects custom sampling; GPT-5.x Luna only accepts the default temperature.
+        if (request.Temperature is { } temperature && !isGemini && !isOpenAi)
         {
-            // Gemini 3.x ignores/rejects custom sampling params on the OpenAI-compat API.
             body["temperature"] = temperature;
         }
 

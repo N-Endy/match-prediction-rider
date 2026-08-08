@@ -285,7 +285,7 @@ public class OpenAiCompatibleChatCompletionsClientTests
         using var doc = JsonDocument.Parse(requestBody!);
         Assert.Equal(50, doc.RootElement.GetProperty("max_completion_tokens").GetInt32());
         Assert.False(doc.RootElement.TryGetProperty("max_tokens", out _));
-        Assert.Equal(0.3, doc.RootElement.GetProperty("temperature").GetDouble());
+        Assert.False(doc.RootElement.TryGetProperty("temperature", out _));
     }
 
     [Fact]
