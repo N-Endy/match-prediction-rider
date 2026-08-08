@@ -36,6 +36,11 @@ public sealed class ComposedBetslip
     public int TargetMaxSelections { get; init; }
     public IReadOnlyList<BetslipComposerCandidate> Selections { get; init; } = [];
     public string? ShortfallNote { get; init; }
+    public string? AiSummary { get; init; }
+    public double? TargetCombinedOdds { get; init; }
+    public bool IsBanker { get; init; }
+    public double? ActiveMinOdds { get; init; }
+    public double? ActiveMaxOdds { get; init; }
 }
 
 public static class BetslipComposer

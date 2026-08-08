@@ -108,6 +108,13 @@ public class AiChatControllerTests
             CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<BetslipDrawPickSelection>>(
                 candidates.Take(count).Select(c => new BetslipDrawPickSelection { PredictionId = c.PredictionId }).ToList());
+
+        public Task<BankerPickResult> SelectBankerPicksAsync(
+            IReadOnlyList<BankerPickRequest> candidates,
+            double minOdds,
+            double maxOdds,
+            CancellationToken ct = default) =>
+            Task.FromResult(new BankerPickResult());
     }
 
     private sealed class FakeUserTrackingService : IUserTrackingService

@@ -1,6 +1,5 @@
 @page "/betslips"
 @model MatchPredictor.Web.Pages.BetslipsModel
-@using MatchPredictor.Domain.Models
 @{
     ViewData["Title"] = "Pre-booked Betslips";
 }
@@ -11,7 +10,7 @@
             <h1 class="mp-page-title">🎫 Pre-booked Betslips</h1>
             <p class="mp-page-subtext">
                 Ready-to-play SportyBet slips built from today's Straight Win, BTTS, Over 2.5, and Under 2.5 picks.
-                Generated twice daily at 5:00 AM and 1:00 PM WAT.
+                Generated twice daily at 5:00 AM and 1:00 PM WAT. The Banker is the high-stakes slip of the day.
             </p>
         </div>
         @if (Model.CurrentSet is not null)
@@ -36,125 +35,28 @@
             <span>@Model.CurrentSet.SlipLocalDate.ToString("dddd d MMMM")</span>
         </div>
 
-        <div class="mp-betslip-grid">
-            @foreach (var slip in Model.CurrentSet.Slips.OrderBy(s => s.SlipNumber))
-            {
-                var isDrawSlip = string.Equals(slip.TierLabel, "AI Draws (5)", StringComparison.Ordinal);
-                var statusClass = slip.BookingStatus switch
+        @if (Model.BankerSlip is null)
+        {
+            <div class="mp-betslip-no-banker">
+                No banker today — no combination met the quality and odds bar.
+            </div>
+        }
+        else
+        {
+            <div class="mp-betslip-banker-wrap">
+                <partial name="_BetslipCard" model="Model.BankerSlip" />
+            </div>
+        }
+
+        @if (Model.OtherSlips.Count > 0)
+        {
+            <div class="mp-betslip-grid">
+                @foreach (var slip in Model.OtherSlips)
                 {
-                    BetslipBookingStatuses.Booked => "mp-betslip-status-booked",
-                    BetslipBookingStatuses.Partial => "mp-betslip-status-partial",
-                    _ => "mp-betslip-status-failed"
-                };
-                var bookedCount = slip.Selections.Count(s => s.WasBooked);
-                <article class="mp-betslip-card @(isDrawSlip ? "mp-betslip-card-ai" : "")">
-                    <header class="mp-betslip-card-header">
-                        <div>
-                            <span class="mp-betslip-tier">@slip.TierLabel</span>
-                            <h2 class="mp-betslip-title">@slip.Title</h2>
-                        </div>
-                        <span class="mp-betslip-status @statusClass">@slip.BookingStatus</span>
-                    </header>
-
-                    <div class="mp-betslip-metrics">
-                        <div>
-                            <span class="mp-betslip-metric-label">Picks</span>
-                            <strong>@slip.SelectionCount</strong>
-                            <span class="mp-betslip-metric-hint">target @slip.TargetMinSelections–@slip.TargetMaxSelections</span>
-                        </div>
-                        <div>
-                            <span class="mp-betslip-metric-label">Booked</span>
-                            <strong>@bookedCount</strong>
-                        </div>
-                        @if (slip.CombinedDecimalOdds is > 1)
-                        {
-                            <div>
-                                <span class="mp-betslip-metric-label">Est. odds</span>
-                                <strong>@slip.CombinedDecimalOdds.Value.ToString("0.00")</strong>
-                            </div>
-                        }
-                    </div>
-
-                    @if (!string.IsNullOrWhiteSpace(slip.AiSummary))
-                    {
-                        <p class="mp-betslip-ai-summary">@slip.AiSummary</p>
-                    }
-
-                    @if (!string.IsNullOrWhiteSpace(slip.BookingCode))
-                    {
-                        <div class="mp-betslip-code-row">
-                            <code class="mp-betslip-code" id="betslip-code-@slip.Id">@slip.BookingCode</code>
-                            <button type="button"
-                                    class="mp-betslip-copy-btn"
-                                    data-copy-target="betslip-code-@slip.Id">
-                                Copy
-                            </button>
-                            @if (!string.IsNullOrWhiteSpace(slip.BookingUrl))
-                            {
-                                <a class="mp-book-btn"
-                                   href="@slip.BookingUrl"
-                                   target="_blank"
-                                   rel="noopener noreferrer">
-                                    Open in SportyBet
-                                </a>
-                            }
-                        </div>
-                    }
-                    else
-                    {
-                        <p class="mp-betslip-warning">Booking code unavailable; retrying next run.</p>
-                    }
-
-                    @if (!string.IsNullOrWhiteSpace(slip.StatusMessage))
-                    {
-                        <p class="mp-betslip-status-message">@slip.StatusMessage</p>
-                    }
-
-                    <details class="mp-betslip-details">
-                        <summary>View @slip.SelectionCount selections</summary>
-                        <ul class="mp-betslip-selection-list">
-                            @foreach (var selection in slip.Selections
-                                .OrderBy(s => s.MatchDateTimeUtc ?? DateTime.MaxValue)
-                                .ThenBy(s => s.League)
-                                .ThenBy(s => s.HomeTeam))
-                            {
-                                <li class="@(selection.WasBooked ? "" : "mp-betslip-selection-skipped")">
-                                    <div class="mp-betslip-selection-main">
-                                        <span class="mp-betslip-selection-fixture">@selection.HomeTeam vs @selection.AwayTeam</span>
-                                        <span class="mp-prediction-badge mp-badge-@(selection.Market.ToLowerInvariant() switch {
-                                            "btts" => "btts",
-                                            "over2.5" => "over",
-                                            "under2.5" => "under",
-                                            "1x2" => "draw",
-                                            _ => "win"
-                                        })">@selection.PredictedOutcome</span>
-                                    </div>
-                                    <div class="mp-betslip-selection-meta">
-                                        <span>@selection.League</span>
-                                        @if (selection.ConfidenceScore.HasValue)
-                                        {
-                                            <span>@((selection.ConfidenceScore.Value * 100m).ToString("0.0"))%</span>
-                                        }
-                                        @if (selection.DecimalOdds is > 1)
-                                        {
-                                            <span>@selection.DecimalOdds.Value.ToString("0.00")</span>
-                                        }
-                                        @if (!selection.WasBooked)
-                                        {
-                                            <span>not booked</span>
-                                        }
-                                    </div>
-                                    @if (!string.IsNullOrWhiteSpace(selection.AiNote))
-                                    {
-                                        <p class="mp-betslip-selection-note">@selection.AiNote</p>
-                                    }
-                                </li>
-                            }
-                        </ul>
-                    </details>
-                </article>
-            }
-        </div>
+                    <partial name="_BetslipCard" model="slip" />
+                }
+            </div>
+        }
     }
 </div>
 

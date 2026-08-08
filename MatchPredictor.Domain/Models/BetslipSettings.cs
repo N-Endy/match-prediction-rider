@@ -13,4 +13,12 @@ public class BetslipSettings
     public double OverlapPenalty { get; set; } = 0.08;
     public int DrawCandidatePoolSize { get; set; } = 12;
     public int DrawSlipSize { get; set; } = 5;
+
+    public double BankerMinOdds { get; set; } = 5.0;
+    public double BankerMaxOdds { get; set; } = 10.0;
+    public double BankerFallbackMinOdds { get; set; } = 4.0;
+    public double BankerFallbackMaxOdds { get; set; } = 12.0;
+    public double BankerMinConfidence { get; set; } = 0.65;
+    public int BankerShortlistSize { get; set; } = 20;
+    public int BankerMaxPicks { get; set; } = 8;
 }

@@ -30,9 +30,23 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
 
     public bool IsConfigured => _settingsResolver.Resolve().IsConfigured;
 
-    public string Provider => _settingsResolver.Resolve().Provider;
+    public string Provider
+    {
+        get
+        {
+            var settings = _settingsResolver.Resolve();
+            return EffectivePrimary(settings).Provider;
+        }
+    }
 
-    public string Model => _settingsResolver.Resolve().Model;
+    public string Model
+    {
+        get
+        {
+            var settings = _settingsResolver.Resolve();
+            return EffectivePrimary(settings).Model;
+        }
+    }
 
     public async Task<ChatCompletionsResult> CompleteAsync(
         ChatCompletionsRequest request,
@@ -48,6 +62,62 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
             };
         }
 
+        var primary = settings.HasValidKey ? settings : null;
+        var fallback = settings.Fallback is { HasValidKey: true } ? settings.Fallback : null;
+
+        if (primary is null && fallback is null)
+        {
+            return new ChatCompletionsResult
+            {
+                Success = false,
+                ExceptionMessage = "AI API key is not configured."
+            };
+        }
+
+        if (primary is null)
+        {
+            return await CompleteWithSettingsAsync(fallback!, request, ct);
+        }
+
+        var primaryResult = await CompleteWithSettingsAsync(primary, request, ct);
+        if (IsUsableSuccess(primaryResult) || ct.IsCancellationRequested || fallback is null)
+        {
+            return primaryResult;
+        }
+
+        if (!ShouldFailover(primaryResult))
+        {
+            return primaryResult;
+        }
+
+        _logger.LogWarning(
+            "Primary LLM provider {PrimaryProvider}/{PrimaryModel} failed (status={Status}, timeout={IsTimeout}, rateLimited={IsRateLimited}, error={Error}). Falling back to {FallbackProvider}/{FallbackModel}.",
+            primary.Provider,
+            primary.Model,
+            primaryResult.StatusCode,
+            primaryResult.IsTimeout,
+            primaryResult.IsRateLimited,
+            SummarizeFailure(primaryResult),
+            fallback.Provider,
+            fallback.Model);
+
+        var fallbackResult = await CompleteWithSettingsAsync(fallback, request, ct);
+        if (IsUsableSuccess(fallbackResult))
+        {
+            _logger.LogInformation(
+                "Fallback LLM provider {FallbackProvider}/{FallbackModel} succeeded after primary failure.",
+                fallback.Provider,
+                fallback.Model);
+        }
+
+        return fallbackResult;
+    }
+
+    private async Task<ChatCompletionsResult> CompleteWithSettingsAsync(
+        ResolvedAiLlmSettings settings,
+        ChatCompletionsRequest request,
+        CancellationToken ct)
+    {
         try
         {
             using var httpClient = _httpClientFactory.CreateClient(HttpClientName);
@@ -90,21 +160,54 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
                 };
             }
 
-            using var doc = JsonDocument.Parse(responseBody);
-            var content = doc.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString();
+            string? content = null;
+            try
+            {
+                using var doc = JsonDocument.Parse(responseBody);
+                if (doc.RootElement.TryGetProperty("choices", out var choices) &&
+                    choices.ValueKind == JsonValueKind.Array &&
+                    choices.GetArrayLength() > 0 &&
+                    choices[0].TryGetProperty("message", out var message) &&
+                    message.TryGetProperty("content", out var contentElement))
+                {
+                    content = contentElement.GetString();
+                }
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex, "LLM provider {LlmProvider} returned invalid JSON", settings.Provider);
+                return new ChatCompletionsResult
+                {
+                    Success = false,
+                    StatusCode = (int)response.StatusCode,
+                    ExceptionMessage = "Invalid JSON response from LLM provider.",
+                    ErrorBody = responseBody
+                };
+            }
+
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                return new ChatCompletionsResult
+                {
+                    Success = false,
+                    StatusCode = (int)response.StatusCode,
+                    ExceptionMessage = "Empty content from LLM provider.",
+                    ErrorBody = responseBody
+                };
+            }
 
             return new ChatCompletionsResult
             {
                 Success = true,
                 StatusCode = (int)response.StatusCode,
-                Content = content ?? string.Empty
+                Content = content
             };
         }
-        catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (TaskCanceledException)
         {
             return new ChatCompletionsResult
             {
@@ -124,6 +227,34 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
         }
     }
 
+    private static ResolvedAiLlmSettings EffectivePrimary(ResolvedAiLlmSettings settings) =>
+        settings.HasValidKey
+            ? settings
+            : settings.Fallback is { HasValidKey: true } fallback
+                ? fallback
+                : settings;
+
+    private static bool IsUsableSuccess(ChatCompletionsResult result) =>
+        result.Success && !string.IsNullOrWhiteSpace(result.Content);
+
+    private static bool ShouldFailover(ChatCompletionsResult result) =>
+        !IsUsableSuccess(result);
+
+    private static string SummarizeFailure(ChatCompletionsResult result)
+    {
+        if (!string.IsNullOrWhiteSpace(result.ExceptionMessage))
+        {
+            return result.ExceptionMessage;
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.ErrorBody))
+        {
+            return result.ErrorBody[..Math.Min(120, result.ErrorBody.Length)];
+        }
+
+        return "unknown";
+    }
+
     private static Dictionary<string, object?> BuildRequestBody(
         ResolvedAiLlmSettings settings,
         ChatCompletionsRequest request)
@@ -141,8 +272,10 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
             body["response_format"] = new { type = "json_object" };
         }
 
-        if (request.Temperature is { } temperature &&
-            !string.Equals(settings.Provider, AiLlmSettingsResolver.GeminiProvider, StringComparison.Ordinal))
+        var isGemini = string.Equals(settings.Provider, AiLlmSettingsResolver.GeminiProvider, StringComparison.Ordinal);
+        var isOpenAi = string.Equals(settings.Provider, AiLlmSettingsResolver.OpenAiProvider, StringComparison.Ordinal);
+
+        if (request.Temperature is { } temperature && !isGemini)
         {
             // Gemini 3.x ignores/rejects custom sampling params on the OpenAI-compat API.
             body["temperature"] = temperature;
@@ -150,13 +283,19 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
 
         if (request.MaxTokens is { } maxTokens)
         {
-            body["max_tokens"] = maxTokens;
+            // GPT-5.x OpenAI models prefer max_completion_tokens.
+            if (isOpenAi)
+            {
+                body["max_completion_tokens"] = maxTokens;
+            }
+            else
+            {
+                body["max_tokens"] = maxTokens;
+            }
         }
 
         var reasoningEffort = request.ReasoningEffort;
-        if (string.IsNullOrWhiteSpace(reasoningEffort) &&
-            string.Equals(settings.Provider, AiLlmSettingsResolver.GeminiProvider, StringComparison.Ordinal) &&
-            request.JsonMode)
+        if (string.IsNullOrWhiteSpace(reasoningEffort) && isGemini && request.JsonMode)
         {
             // Prefer low-latency JSON for structured MatchPredictor calls.
             reasoningEffort = "none";

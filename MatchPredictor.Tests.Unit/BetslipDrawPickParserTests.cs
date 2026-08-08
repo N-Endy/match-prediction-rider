@@ -34,4 +34,21 @@ public class BetslipDrawPickParserTests
         Assert.Contains(7, ids);
         Assert.Contains(9, ids);
     }
+
+    [Fact]
+    public void ParseRiskNote_ReadsRiskNoteFromPayload()
+    {
+        const string json = """
+            {"picks":[{"predictionId":11,"reason":"Strong home"}],"riskNote":"Heavy stake — verify XI at kickoff."}
+            """;
+
+        var note = BetslipDrawPickParser.ParseRiskNote(json);
+        Assert.Equal("Heavy stake — verify XI at kickoff.", note);
+    }
+
+    [Fact]
+    public void ParseRiskNote_ReturnsNull_OnJunk()
+    {
+        Assert.Null(BetslipDrawPickParser.ParseRiskNote("not-json"));
+    }
 }

@@ -3,6 +3,7 @@ using MatchPredictor.Application.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Statistics;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -13,6 +14,8 @@ namespace MatchPredictor.Application.Services;
 public sealed class BetslipGenerationService : IBetslipGenerationService
 {
     private const string JobResource = "matchpredictor-betslips";
+    public const int BankerSlipNumber = 0;
+    public const string BankerTierLabel = "Banker (5-10x)";
 
     private static readonly string[] MainCategories =
     [
@@ -24,6 +27,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
     private readonly ApplicationDbContext _dbContext;
     private readonly ISportyBetBookingService _bookingService;
+    private readonly ISourceMarketPricingService _pricingService;
     private readonly IAiAdvisorService _aiAdvisorService;
     private readonly BetslipSettings _settings;
     private readonly ILogger<BetslipGenerationService> _logger;
@@ -31,12 +35,14 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
     public BetslipGenerationService(
         ApplicationDbContext dbContext,
         ISportyBetBookingService bookingService,
+        ISourceMarketPricingService pricingService,
         IAiAdvisorService aiAdvisorService,
         IOptions<BetslipSettings> options,
         ILogger<BetslipGenerationService> logger)
     {
         _dbContext = dbContext;
         _bookingService = bookingService;
+        _pricingService = pricingService;
         _aiAdvisorService = aiAdvisorService;
         _settings = options.Value;
         _logger = logger;
@@ -67,17 +73,25 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 .ThenBy(c => c.PredictionId)
                 .ToList();
 
+            var composed = new List<ComposedBetslip>();
+
+            var banker = await ComposeBankerSlipAsync(predictions, settings);
+            if (banker is not null)
+            {
+                composed.Add(banker);
+            }
+
             var tiers = dayKind == BetslipDayKinds.Weekend
                 ? BetslipComposer.WeekendTierPlan(settings.MaxSelectionsPerSlip)
                 : BetslipComposer.WeekdayTierPlan(settings.MaxSelectionsPerSlip);
 
-            var composed = BetslipComposer.Compose(
+            composed.AddRange(BetslipComposer.Compose(
                 mainPool,
                 tiers,
                 settings.MaxSlipsPerPrediction,
                 settings.MaxSingleMarketShare,
                 settings.OverlapPenalty,
-                settings.OverProvisionFactor).ToList();
+                settings.OverProvisionFactor));
 
             if (dayKind == BetslipDayKinds.Weekend)
             {
@@ -163,6 +177,318 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             .ToDictionary(g => g.Key, g => g.First().DecimalOdds);
     }
 
+    private async Task<ComposedBetslip?> ComposeBankerSlipAsync(
+        IReadOnlyList<Prediction> predictions,
+        BetslipSettings settings)
+    {
+        IReadOnlyList<SourceMarketFixture> fixtures;
+        try
+        {
+            fixtures = await _pricingService.GetTodaySourceMarketFixturesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Banker slip skipped: live SportyBet pricing unavailable.");
+            return null;
+        }
+
+        if (fixtures.Count == 0)
+        {
+            _logger.LogInformation("Banker slip skipped: no live SportyBet fixtures for today.");
+            return null;
+        }
+
+        var livePriced = new List<(Prediction Prediction, BetslipComposerCandidate Candidate)>();
+        foreach (var prediction in predictions.Where(p => MainCategories.Contains(p.PredictionCategory)))
+        {
+            var confidence = prediction.ConfidenceScore ?? prediction.RawConfidenceScore ?? 0m;
+            if ((double)confidence < settings.BankerMinConfidence)
+            {
+                continue;
+            }
+
+            var fixture = SourceMarketFixtureMatcher.FindBestFixture(
+                fixtures,
+                prediction.HomeTeam,
+                prediction.AwayTeam,
+                prediction.League,
+                prediction.MatchDateTime);
+
+            if (!MarketQuoteResolver.TryResolveLiveDecimalOdds(prediction, fixture, out var liveOdds))
+            {
+                continue;
+            }
+
+            var baseCandidate = ToCandidate(prediction, new Dictionary<int, double>());
+            livePriced.Add((prediction, new BetslipComposerCandidate
+            {
+                PredictionId = baseCandidate.PredictionId,
+                FixtureKey = baseCandidate.FixtureKey,
+                League = baseCandidate.League,
+                HomeTeam = baseCandidate.HomeTeam,
+                AwayTeam = baseCandidate.AwayTeam,
+                Market = baseCandidate.Market,
+                PredictedOutcome = baseCandidate.PredictedOutcome,
+                PredictionCategory = baseCandidate.PredictionCategory,
+                Confidence = confidence,
+                MatchDateTimeUtc = baseCandidate.MatchDateTimeUtc,
+                DecimalOdds = liveOdds
+            }));
+        }
+
+        // One pick per fixture in the shortlist — keep highest confidence.
+        var shortlist = livePriced
+            .GroupBy(x => x.Candidate.FixtureKey, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(x => x.Candidate.Confidence).ThenBy(x => x.Candidate.PredictionId).First())
+            .OrderByDescending(x => x.Candidate.Confidence)
+            .ThenBy(x => x.Candidate.PredictionId)
+            .Take(Math.Max(1, settings.BankerShortlistSize))
+            .ToList();
+
+        if (shortlist.Count == 0)
+        {
+            return null;
+        }
+
+        var deterministic = BankerSlipComposer.Compose(
+            shortlist.Select(x => x.Candidate).ToList(),
+            settings.BankerMinOdds,
+            settings.BankerMaxOdds,
+            settings.BankerFallbackMinOdds,
+            settings.BankerFallbackMaxOdds,
+            settings.BankerMaxPicks);
+
+        if (deterministic.IsEmpty)
+        {
+            return null;
+        }
+
+        var signalByPredictionId = await LoadSignalSummariesAsync(shortlist.Select(x => x.Prediction).ToList());
+        var aiRequests = shortlist.Select(x =>
+        {
+            signalByPredictionId.TryGetValue(x.Prediction.Id, out var signal);
+            return new BankerPickRequest
+            {
+                PredictionId = x.Candidate.PredictionId,
+                League = x.Candidate.League,
+                HomeTeam = x.Candidate.HomeTeam,
+                AwayTeam = x.Candidate.AwayTeam,
+                Market = x.Candidate.Market,
+                PredictedOutcome = x.Candidate.PredictedOutcome,
+                Confidence = x.Candidate.Confidence,
+                DecimalOdds = x.Candidate.DecimalOdds ?? 0d,
+                MatchDateTimeUtc = x.Candidate.MatchDateTimeUtc,
+                SignalSummary = signal?.Summary,
+                AllSignalsAlign = signal?.AllSignalsAlign,
+                ModelDivergesFromBookmaker = signal?.ModelDivergesFromBookmaker
+            };
+        }).ToList();
+
+        var activeMin = deterministic.ActiveMinOdds;
+        var activeMax = deterministic.ActiveMaxOdds;
+        var aiVetted = false;
+        var riskNote = string.Empty;
+        var selected = deterministic.Selections.ToList();
+        var shortfallNotes = new List<string>();
+
+        if (deterministic.UsedFallbackRange)
+        {
+            shortfallNotes.Add($"Widened banker odds range to {activeMin:0.##}-{activeMax:0.##}x.");
+        }
+
+        try
+        {
+            var aiResult = await _aiAdvisorService.SelectBankerPicksAsync(aiRequests, activeMin, activeMax);
+            var validated = TryValidateBankerAiPicks(
+                aiResult,
+                shortlist.Select(x => x.Candidate).ToList(),
+                activeMin,
+                activeMax,
+                settings.BankerMaxPicks);
+
+            if (validated is not null)
+            {
+                selected = validated.Value.Selections.ToList();
+                riskNote = validated.Value.RiskNote;
+                aiVetted = true;
+            }
+            else
+            {
+                shortfallNotes.Add("AI banker selection invalid or unavailable; using deterministic composer (not AI-vetted).");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Banker AI selection failed; using deterministic composer.");
+            shortfallNotes.Add("AI banker selection failed; using deterministic composer (not AI-vetted).");
+        }
+
+        if (!aiVetted && string.IsNullOrWhiteSpace(riskNote))
+        {
+            riskNote = "Deterministic high-confidence banker. Not AI-vetted.";
+        }
+
+        var combined = BankerSlipComposer.CalculateCombinedOdds(selected);
+        return new ComposedBetslip
+        {
+            SlipNumber = BankerSlipNumber,
+            Title = "Banker of the Day",
+            TierLabel = BankerTierLabel,
+            TargetMinSelections = 1,
+            TargetMaxSelections = settings.BankerMaxPicks,
+            Selections = selected,
+            ShortfallNote = shortfallNotes.Count > 0 ? string.Join(" ", shortfallNotes) : null,
+            AiSummary = string.IsNullOrWhiteSpace(riskNote)
+                ? "High-stakes banker verified against live SportyBet odds."
+                : riskNote,
+            TargetCombinedOdds = combined,
+            IsBanker = true,
+            ActiveMinOdds = activeMin,
+            ActiveMaxOdds = activeMax
+        };
+    }
+
+    private static (IReadOnlyList<BetslipComposerCandidate> Selections, string RiskNote)? TryValidateBankerAiPicks(
+        BankerPickResult aiResult,
+        IReadOnlyList<BetslipComposerCandidate> shortlist,
+        double minOdds,
+        double maxOdds,
+        int maxPicks)
+    {
+        if (aiResult.Picks.Count == 0)
+        {
+            return null;
+        }
+
+        var byId = shortlist.ToDictionary(c => c.PredictionId);
+        var selected = new List<BetslipComposerCandidate>();
+        var usedFixtures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var pick in aiResult.Picks.Take(Math.Max(1, maxPicks)))
+        {
+            if (!byId.TryGetValue(pick.PredictionId, out var candidate))
+            {
+                return null;
+            }
+
+            var fixtureKey = string.IsNullOrWhiteSpace(candidate.FixtureKey)
+                ? $"{candidate.League}|{candidate.HomeTeam}|{candidate.AwayTeam}"
+                : candidate.FixtureKey;
+
+            if (!usedFixtures.Add(fixtureKey))
+            {
+                return null;
+            }
+
+            selected.Add(new BetslipComposerCandidate
+            {
+                PredictionId = candidate.PredictionId,
+                FixtureKey = candidate.FixtureKey,
+                League = candidate.League,
+                HomeTeam = candidate.HomeTeam,
+                AwayTeam = candidate.AwayTeam,
+                Market = candidate.Market,
+                PredictedOutcome = candidate.PredictedOutcome,
+                PredictionCategory = candidate.PredictionCategory,
+                Confidence = candidate.Confidence,
+                MatchDateTimeUtc = candidate.MatchDateTimeUtc,
+                DecimalOdds = candidate.DecimalOdds,
+                AiNote = string.IsNullOrWhiteSpace(pick.Reason) ? null : pick.Reason.Trim()
+            });
+        }
+
+        var combined = BankerSlipComposer.CalculateCombinedOdds(selected);
+        if (!BankerSlipComposer.IsWithinOddsRange(combined, minOdds, maxOdds))
+        {
+            return null;
+        }
+
+        return (selected, aiResult.RiskNote?.Trim() ?? string.Empty);
+    }
+
+    private async Task<Dictionary<int, SignalPayload>> LoadSignalSummariesAsync(IReadOnlyList<Prediction> predictions)
+    {
+        var result = new Dictionary<int, SignalPayload>();
+        if (predictions.Count == 0)
+        {
+            return result;
+        }
+
+        var fixtureKeys = predictions
+            .Select(p => p.FixtureKey)
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (fixtureKeys.Count == 0)
+        {
+            return result;
+        }
+
+        var observations = await _dbContext.ForecastObservations
+            .AsNoTracking()
+            .Where(o => o.IsCurrentRevision && fixtureKeys.Contains(o.FixtureKey))
+            .ToListAsync();
+
+        foreach (var prediction in predictions)
+        {
+            if (!PredictionMarketExtensions.TryFromCategory(prediction.PredictionCategory, out var market))
+            {
+                continue;
+            }
+
+            // StraightWin stores Home/Away as separate enum values on observations.
+            var observation = observations.FirstOrDefault(o =>
+                string.Equals(o.FixtureKey, prediction.FixtureKey, StringComparison.OrdinalIgnoreCase) &&
+                MarketsAlign(o.Market, market, prediction.PredictedOutcome) &&
+                string.Equals(o.PredictedOutcome, prediction.PredictedOutcome, StringComparison.OrdinalIgnoreCase));
+
+            if (observation is null)
+            {
+                continue;
+            }
+
+            var breakdown = SignalBreakdownParser.TryParse(
+                observation.FeatureContributionsJson,
+                prediction.PredictionCategory,
+                prediction.PredictedOutcome,
+                observation.CalibratedProbability);
+
+            if (breakdown is null)
+            {
+                continue;
+            }
+
+            result[prediction.Id] = new SignalPayload(
+                breakdown.SignalAgreement.Summary,
+                breakdown.SignalAgreement.AllSignalsAlign,
+                breakdown.SignalAgreement.ModelDivergesFromBookmaker);
+        }
+
+        return result;
+    }
+
+    private static bool MarketsAlign(PredictionMarket observed, PredictionMarket predictedCategory, string predictedOutcome)
+    {
+        if (observed == predictedCategory)
+        {
+            return true;
+        }
+
+        if (predictedCategory != PredictionMarket.StraightWin)
+        {
+            return false;
+        }
+
+        return observed switch
+        {
+            PredictionMarket.HomeWin => predictedOutcome.Contains("Home", StringComparison.OrdinalIgnoreCase),
+            PredictionMarket.AwayWin => predictedOutcome.Contains("Away", StringComparison.OrdinalIgnoreCase),
+            PredictionMarket.StraightWin => true,
+            _ => false
+        };
+    }
+
     private async Task<ComposedBetslip?> ComposeDrawSlipAsync(
         IReadOnlyList<Prediction> predictions,
         IReadOnlyDictionary<int, double> oddsByPredictionId,
@@ -246,7 +572,8 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             Selections = picks,
             ShortfallNote = picks.Count < settings.DrawSlipSize
                 ? $"Only {picks.Count} draw picks available (target {settings.DrawSlipSize})."
-                : null
+                : null,
+            AiSummary = "AI-selected best draw games for today."
         };
     }
 
@@ -318,7 +645,6 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             }
             else
             {
-                // Share code exists; without per-pick unresolved IDs, show selections as included.
                 selection.WasBooked = true;
             }
         }
@@ -352,11 +678,26 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             statusParts.Add("Booking code unavailable; retrying next run.");
         }
 
-        double? combinedOdds = null;
+        double? combinedOdds = composed.TargetCombinedOdds;
         var oddsValues = selections.Where(s => s.WasBooked && s.DecimalOdds is > 1).Select(s => s.DecimalOdds!.Value).ToList();
         if (oddsValues.Count > 0 && oddsValues.Count == bookedCount)
         {
             combinedOdds = oddsValues.Aggregate(1d, (acc, odds) => acc * odds);
+        }
+        else if (oddsValues.Count > 0)
+        {
+            // Partial booking: recompute from booked picks only.
+            combinedOdds = oddsValues.Aggregate(1d, (acc, odds) => acc * odds);
+        }
+
+        if (composed.IsBanker &&
+            combinedOdds is > 1 &&
+            composed.ActiveMinOdds is double min &&
+            composed.ActiveMaxOdds is double max &&
+            !BankerSlipComposer.IsWithinOddsRange(combinedOdds.Value, min, max))
+        {
+            statusParts.Add(
+                $"After booking skips, total odds {combinedOdds.Value:0.00}x fell outside the {min:0.##}-{max:0.##}x banker range.");
         }
 
         return new Betslip
@@ -377,9 +718,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 .DefaultIfEmpty(null)
                 .Min(),
             CombinedDecimalOdds = combinedOdds,
-            AiSummary = string.Equals(composed.TierLabel, "AI Draws (5)", StringComparison.Ordinal)
-                ? "AI-selected best draw games for today."
-                : null,
+            AiSummary = composed.AiSummary,
             Selections = selections
         };
     }
@@ -443,4 +782,6 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         });
         await _dbContext.SaveChangesAsync();
     }
+
+    private sealed record SignalPayload(string? Summary, bool AllSignalsAlign, bool ModelDivergesFromBookmaker);
 }

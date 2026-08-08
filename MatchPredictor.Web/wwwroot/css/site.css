@@ -2082,3 +2082,53 @@ a:hover {
   font-size: 0.85rem;
   color: var(--text-secondary);
 }
+
+.mp-betslip-banker-wrap {
+  margin: 1.25rem 0 1.75rem;
+}
+
+.mp-betslip-card-banker {
+  border-color: rgba(234, 179, 8, 0.55);
+  box-shadow: 0 0 0 1px rgba(234, 179, 8, 0.2), 0 12px 40px rgba(234, 179, 8, 0.08);
+  background: linear-gradient(180deg, rgba(234, 179, 8, 0.08), rgba(255, 255, 255, 0.02));
+}
+
+.mp-betslip-banker-odds {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--radius-sm, 8px);
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid rgba(234, 179, 8, 0.35);
+}
+
+.mp-betslip-banker-odds-value {
+  font-size: 1.75rem;
+  font-weight: 800;
+  color: #fbbf24;
+  letter-spacing: -0.02em;
+}
+
+.mp-betslip-banker-odds-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mp-betslip-banker-disclaimer {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #fbbf24;
+  line-height: 1.45;
+}
+
+.mp-betslip-no-banker {
+  margin: 1.25rem 0;
+  padding: 0.9rem 1.1rem;
+  border-radius: var(--radius-md);
+  border: 1px dashed rgba(234, 179, 8, 0.35);
+  color: var(--text-secondary);
+  background: rgba(234, 179, 8, 0.05);
+}

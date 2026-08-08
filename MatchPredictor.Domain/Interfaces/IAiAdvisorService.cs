@@ -10,4 +10,10 @@ public interface IAiAdvisorService
         IReadOnlyList<BetslipDrawPickRequest> candidates,
         int count = 5,
         CancellationToken ct = default);
+
+    Task<BankerPickResult> SelectBankerPicksAsync(
+        IReadOnlyList<BankerPickRequest> candidates,
+        double minOdds,
+        double maxOdds,
+        CancellationToken ct = default);
 }

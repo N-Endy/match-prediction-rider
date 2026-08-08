@@ -91,6 +91,38 @@ public static class MarketQuoteResolver
         return TryResolve(match, sourceFixture, market, out quote);
     }
 
+    /// <summary>
+    /// Resolves live SportyBet decimal odds for a prediction from a matched source fixture.
+    /// Prefers raw book odds; falls back to probability-derived odds.
+    /// </summary>
+    public static bool TryResolveLiveDecimalOdds(
+        Prediction prediction,
+        SourceMarketFixture? sourceFixture,
+        out double decimalOdds)
+    {
+        decimalOdds = 0d;
+        if (sourceFixture is null || !TryResolvePredictionMarket(prediction, out var market))
+        {
+            return false;
+        }
+
+        var rawOdds = GetLiveRawOdds(sourceFixture, market);
+        if (rawOdds is > 1d)
+        {
+            decimalOdds = rawOdds.Value;
+            return true;
+        }
+
+        var derived = BetPricingMath.ConvertProbabilityToDecimalOdds(GetLiveProbability(sourceFixture, market));
+        if (derived is > 1d)
+        {
+            decimalOdds = derived.Value;
+            return true;
+        }
+
+        return false;
+    }
+
     private static bool TryResolvePredictionMarket(Prediction prediction, out PredictionMarket market)
     {
         market = prediction.PredictionCategory switch

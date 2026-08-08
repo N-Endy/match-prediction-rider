@@ -511,6 +511,109 @@ public class AiAdvisorService : IAiAdvisorService
         }
     }
 
+    public async Task<BankerPickResult> SelectBankerPicksAsync(
+        IReadOnlyList<BankerPickRequest> candidates,
+        double minOdds,
+        double maxOdds,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+
+        var empty = new BankerPickResult();
+        if (candidates.Count == 0 || !_chatClient.IsConfigured)
+        {
+            return empty;
+        }
+
+        try
+        {
+            var payload = JsonSerializer.Serialize(new
+            {
+                minOdds,
+                maxOdds,
+                candidates = candidates.Select(c => new
+                {
+                    c.PredictionId,
+                    c.League,
+                    c.HomeTeam,
+                    c.AwayTeam,
+                    c.Market,
+                    c.PredictedOutcome,
+                    ConfidencePct = Math.Round((double)c.Confidence * 100d, 1),
+                    DecimalOdds = Math.Round(c.DecimalOdds, 2),
+                    KickoffUtc = c.MatchDateTimeUtc,
+                    c.SignalSummary,
+                    c.AllSignalsAlign,
+                    c.ModelDivergesFromBookmaker
+                })
+            });
+
+            var systemPrompt =
+                "You are selecting the single high-stakes banker slip of the day. Users put large stakes on it. " +
+                "Prefer picks where calibrated confidence is high and model/bookmaker signals agree. " +
+                "Do not include draws. The decimal-odds product of your picks MUST land between the provided min and max. " +
+                "Respond with JSON only: {\"picks\":[{\"predictionId\":123,\"reason\":\"one short sentence\"}],\"riskNote\":\"one short risk caution\"}.";
+
+            var userPrompt =
+                $"Select a banker combination from the candidates only. Odds product must be between {minOdds:0.##} and {maxOdds:0.##}.\n{payload}";
+
+            var raw = await CompleteChatAsync(
+                systemPrompt,
+                userPrompt,
+                null,
+                ct,
+                jsonMode: true,
+                temperature: 0.15,
+                maxTokens: 1500);
+
+            if (raw.StartsWith("❌", StringComparison.Ordinal) ||
+                raw.StartsWith("⏳", StringComparison.Ordinal) ||
+                raw.StartsWith("⚠️", StringComparison.Ordinal))
+            {
+                return empty;
+            }
+
+            var selectedIds = Domain.Helpers.BetslipDrawPickParser.ParsePredictionIds(raw, candidates.Count);
+            if (selectedIds.Count == 0)
+            {
+                return empty;
+            }
+
+            var allowed = candidates.Select(c => c.PredictionId).ToHashSet();
+            var reasons = Domain.Helpers.BetslipDrawPickParser.ParseReasons(raw);
+            var picks = new List<BetslipDrawPickSelection>();
+            foreach (var predictionId in selectedIds)
+            {
+                if (!allowed.Contains(predictionId))
+                {
+                    continue;
+                }
+
+                picks.Add(new BetslipDrawPickSelection
+                {
+                    PredictionId = predictionId,
+                    Reason = reasons.GetValueOrDefault(predictionId, string.Empty)
+                });
+            }
+
+            if (picks.Count == 0)
+            {
+                return empty;
+            }
+
+            return new BankerPickResult
+            {
+                Picks = picks,
+                RiskNote = Domain.Helpers.BetslipDrawPickParser.ParseRiskNote(raw) ?? string.Empty
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Banker AI selection failed; caller will use deterministic composer.");
+            return empty;
+        }
+    }
+
     private static bool NeedsCatalogInsightEnrichment(AiChatNormalizedRequest normalizedRequest, string userPrompt)
     {
         if (normalizedRequest.Intent != AiChatIntent.WorkingSlipRefinement)

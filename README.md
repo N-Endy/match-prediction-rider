@@ -44,9 +44,9 @@ export ConnectionStrings__DefaultConnection="Host=localhost;Database=matchpredic
 dotnet run --project MatchPredictor.Web
 ```
 
-Migrations apply automatically at startup. Secrets (Gemini/`AiLlm__ApiKey`, ApiFootball, Hangfire credentials) are supplied via environment variables — see the comments in `docker-compose.yml`. Legacy `GroqApiKey` still works as a fallback. Never commit secrets.
+Migrations apply automatically at startup. Secrets (OpenAI/`AiLlm__ApiKey`, Gemini/`AiLlm__Fallback__ApiKey` or `GEMINI_API_KEY`, ApiFootball, Hangfire credentials) are supplied via environment variables — see the comments in `docker-compose.yml`. Legacy `GroqApiKey` still works. Never commit secrets.
 
-AI chat / advisor defaults to **Gemini 3.5 Flash** (`AiLlm:Provider=gemini`). Create a free key at https://aistudio.google.com/apikey. To use Groq instead, set `AiLlm__Provider=groq` and `GroqApiKey` (or `AiLlm__ApiKey` with a Groq key and Groq base URL/model).
+AI chat / advisor defaults to **GPT-5.6 Luna** (`AiLlm:Provider=openai`) with automatic failover to **Gemini 3.5 Flash**. Set an OpenAI Platform key (`AiLlm__ApiKey`) and a Gemini key (`AiLlm__Fallback__ApiKey` or `GEMINI_API_KEY`). Either key alone still works (OpenAI-only or Gemini-only via `AiLlm__Provider=gemini`). For Groq, set `AiLlm__Provider=groq` and `GroqApiKey`.
 
 ### Runtime toggles
 

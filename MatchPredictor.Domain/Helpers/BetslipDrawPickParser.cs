@@ -60,6 +60,43 @@ public static partial class BetslipDrawPickParser
         return reasons;
     }
 
+    public static string? ParseRiskNote(string aiResponseJson)
+    {
+        if (string.IsNullOrWhiteSpace(aiResponseJson))
+        {
+            return null;
+        }
+
+        var normalized = NormalizeAiJson(aiResponseJson);
+        try
+        {
+            using var document = JsonDocument.Parse(normalized);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            foreach (var propertyName in new[] { "riskNote", "RiskNote", "risk", "Risk", "summary" })
+            {
+                if (document.RootElement.TryGetProperty(propertyName, out var noteElement) &&
+                    noteElement.ValueKind == JsonValueKind.String)
+                {
+                    var note = noteElement.GetString()?.Trim();
+                    if (!string.IsNullOrWhiteSpace(note))
+                    {
+                        return note;
+                    }
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Ignore — caller falls back without a risk note.
+        }
+
+        return null;
+    }
+
     private static string NormalizeAiJson(string aiResponseJson)
     {
         var trimmed = aiResponseJson.Trim();
