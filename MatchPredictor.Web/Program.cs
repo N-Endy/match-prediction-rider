@@ -280,23 +280,26 @@ if (runtimeMode.RunBackgroundJobs)
 
     try
     {
-        HangfireRecurringJobs.RemoveAll(recurringJobs);
-
         if (runtimeMode.UseExternalCron)
         {
+            HangfireRecurringJobs.RemoveAll(recurringJobs, logger);
             startupState.MarkExternalCronEnabled();
             logger.LogInformation(
                 "External cron mode enabled (USE_EXTERNAL_CRON=true). Hangfire recurring jobs cleared; schedule jobs via cron-job.org HTTP triggers.");
         }
         else
         {
-            HangfireRecurringJobs.Register(recurringJobs);
+            // Do not RemoveIfExists every active job first: that fights the previous
+            // Railway/Render instance for hangfire.lock rows and can crash deploys.
+            HangfireRecurringJobs.RemoveLegacy(recurringJobs, logger);
+            HangfireRecurringJobs.Register(recurringJobs, logger);
             startupState.MarkRecurringJobsRegistered();
             logger.LogInformation("Recurring jobs registered successfully (WAT timezone).");
         }
     }
     catch (Exception ex)
     {
+        // Lock contention is soft-failed inside HangfireRecurringJobs; other failures still abort.
         startupState.MarkInitializationFailed(ex.Message);
         logger.LogCritical(ex, "Startup aborted because recurring Hangfire job registration failed.");
         throw;
