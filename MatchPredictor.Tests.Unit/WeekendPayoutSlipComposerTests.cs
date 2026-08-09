@@ -18,7 +18,8 @@ public class WeekendPayoutSlipComposerTests
         Assert.Equal(1, plan.Count(b => b.BandKey == "mega"));
         Assert.Contains(plan, b => b.Title == "Small Acca A");
         Assert.Contains(plan, b => b.Title == "Mega Acca");
-        Assert.DoesNotContain(plan, b => b.MaxPicks >= 40);
+        Assert.Equal(18, plan.First(b => b.BandKey == "small").MaxPicks);
+        Assert.Equal(45, plan.First(b => b.BandKey == "mega").MaxPicks);
     }
 
     [Fact]
@@ -29,7 +30,7 @@ public class WeekendPayoutSlipComposerTests
         Assert.Equal("daily", daily.BandKey);
         Assert.Equal(30, daily.MinOdds);
         Assert.Equal(100, daily.MaxOdds);
-        Assert.Equal(12, daily.MaxPicks);
+        Assert.Equal(18, daily.MaxPicks);
     }
 
     [Fact]
@@ -51,7 +52,7 @@ public class WeekendPayoutSlipComposerTests
         var slip = Assert.Single(slips);
         Assert.True(slip.IsPayoutBand);
         Assert.InRange(slip.TargetCombinedOdds!.Value, 30, 100);
-        Assert.True(slip.Selections.Count <= 8);
+        Assert.True(slip.Selections.Count <= 18);
         Assert.Equal(
             slip.Selections.Count,
             slip.Selections.Select(s => s.FixtureKey).Distinct(StringComparer.OrdinalIgnoreCase).Count());
@@ -76,7 +77,7 @@ public class WeekendPayoutSlipComposerTests
         var slip = Assert.Single(slips);
         Assert.True(slip.IsMega);
         Assert.InRange(slip.TargetCombinedOdds!.Value, 5000, 50000);
-        Assert.True(slip.Selections.Count <= 30);
+        Assert.True(slip.Selections.Count <= 45);
     }
 
     [Fact]

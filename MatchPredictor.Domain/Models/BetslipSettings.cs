@@ -34,26 +34,26 @@ public class BetslipSettings
     public double SmallMaxOdds { get; set; } = 100;
     public double SmallFallbackMinOdds { get; set; } = 20;
     public double SmallFallbackMaxOdds { get; set; } = 120;
-    public int SmallMaxPicks { get; set; } = 8;
+    public int SmallMaxPicks { get; set; } = 18;
 
     public double MediumMinOdds { get; set; } = 100;
     public double MediumMaxOdds { get; set; } = 500;
     public double MediumFallbackMinOdds { get; set; } = 80;
     public double MediumFallbackMaxOdds { get; set; } = 600;
-    public int MediumMaxPicks { get; set; } = 12;
+    public int MediumMaxPicks { get; set; } = 25;
 
     public double BigMinOdds { get; set; } = 1000;
     public double BigMaxOdds { get; set; } = 5000;
     public double BigFallbackMinOdds { get; set; } = 700;
     public double BigFallbackMaxOdds { get; set; } = 6000;
-    public int BigMaxPicks { get; set; } = 20;
+    public int BigMaxPicks { get; set; } = 35;
 
     public double MegaMinOdds { get; set; } = 5000;
     public double MegaMaxOdds { get; set; } = 50000;
     public double MegaFallbackMinOdds { get; set; } = 3000;
     public double MegaFallbackMaxOdds { get; set; } = 80000;
-    public int MegaMaxPicks { get; set; } = 30;
+    public int MegaMaxPicks { get; set; } = 45;
 
     /// <summary>Weekday single ladder slip uses the Small odds band with this pick cap.</summary>
-    public int DailyMaxPicks { get; set; } = 12;
+    public int DailyMaxPicks { get; set; } = 18;
 }
