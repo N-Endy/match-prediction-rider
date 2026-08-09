@@ -181,7 +181,7 @@ public class AnalyticsModel : PageModel
         DateTime generatedAtLocal)
     {
         var markets = Enum.GetValues<PredictionMarket>()
-            .Where(market => market != PredictionMarket.Draw)
+            .Where(market => market is not (PredictionMarket.Draw or PredictionMarket.StraightWin))
             .OrderBy(market => market)
             .Select(market =>
             {
@@ -238,7 +238,7 @@ public class AnalyticsModel : PageModel
     {
         return promotionHistory
             .Where(history =>
-                history.Market != PredictionMarket.Draw &&
+                history.Market != PredictionMarket.StraightWin &&
                 localDates.Contains(DateOnly.FromDateTime(DateTimeProvider.ConvertUtcToLocal(history.EffectiveAt))))
             .OrderByDescending(history => history.EffectiveAt)
             .Select(history =>
