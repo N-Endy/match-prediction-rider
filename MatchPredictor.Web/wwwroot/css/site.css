@@ -2124,6 +2124,33 @@ a:hover {
   line-height: 1.45;
 }
 
+.mp-betslip-payout-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  margin: 0.35rem 0;
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--radius-md);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.mp-betslip-payout-strip strong {
+  display: block;
+  font-size: 1.1rem;
+  margin-top: 0.15rem;
+}
+
+.mp-betslip-mega-disclaimer {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #fbbf24;
+  line-height: 1.45;
+}
+
+.mp-betslip-card-mega {
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
 .mp-betslip-no-banker {
   margin: 1.25rem 0;
   padding: 0.9rem 1.1rem;

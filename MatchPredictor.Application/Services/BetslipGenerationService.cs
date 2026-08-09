@@ -66,13 +66,6 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             var predictions = await LoadTodayPredictionsAsync(today, kickoffCutoff);
             var oddsByPredictionId = await LoadPublishOddsAsync(predictions.Select(p => p.Id).ToList());
 
-            var mainPool = predictions
-                .Where(p => MainCategories.Contains(p.PredictionCategory))
-                .Select(p => ToCandidate(p, oddsByPredictionId))
-                .OrderByDescending(c => c.Confidence)
-                .ThenBy(c => c.PredictionId)
-                .ToList();
-
             var composed = new List<ComposedBetslip>();
 
             var banker = await ComposeBankerSlipAsync(predictions, settings);
@@ -81,17 +74,17 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 composed.Add(banker);
             }
 
-            var tiers = dayKind == BetslipDayKinds.Weekend
-                ? BetslipComposer.WeekendTierPlan(settings.MaxSelectionsPerSlip)
-                : BetslipComposer.WeekdayTierPlan(settings.MaxSelectionsPerSlip);
+            var ladderPool = await BuildLivePricedLadderPoolAsync(predictions, settings);
+            var bands = dayKind == BetslipDayKinds.Weekend
+                ? WeekendPayoutSlipComposer.BuildWeekendPlan(settings)
+                : WeekendPayoutSlipComposer.BuildWeekdayPlan(settings);
 
-            composed.AddRange(BetslipComposer.Compose(
-                mainPool,
-                tiers,
+            composed.AddRange(WeekendPayoutSlipComposer.Compose(
+                ladderPool,
+                bands,
                 settings.MaxSlipsPerPrediction,
                 settings.MaxSingleMarketShare,
-                settings.OverlapPenalty,
-                settings.OverProvisionFactor));
+                settings.OverlapPenalty));
 
             if (dayKind == BetslipDayKinds.Weekend)
             {
@@ -692,12 +685,22 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
         if (composed.IsBanker &&
             combinedOdds is > 1 &&
-            composed.ActiveMinOdds is double min &&
-            composed.ActiveMaxOdds is double max &&
-            !BankerSlipComposer.IsWithinOddsRange(combinedOdds.Value, min, max))
+            composed.ActiveMinOdds is double bankerMin &&
+            composed.ActiveMaxOdds is double bankerMax &&
+            !BankerSlipComposer.IsWithinOddsRange(combinedOdds.Value, bankerMin, bankerMax))
         {
             statusParts.Add(
-                $"After booking skips, total odds {combinedOdds.Value:0.00}x fell outside the {min:0.##}-{max:0.##}x banker range.");
+                $"After booking skips, total odds {combinedOdds.Value:0.00}x fell outside the {bankerMin:0.##}-{bankerMax:0.##}x banker range.");
+        }
+
+        if (composed.IsPayoutBand &&
+            combinedOdds is > 1 &&
+            composed.ActiveMinOdds is double bandMin &&
+            composed.ActiveMaxOdds is double bandMax &&
+            !BankerSlipComposer.IsWithinOddsRange(combinedOdds.Value, bandMin, bandMax))
+        {
+            statusParts.Add(
+                $"After booking skips, total odds {combinedOdds.Value:0.00}x fell outside the {bandMin:0.##}-{bandMax:0.##}x payout band.");
         }
 
         return new Betslip
@@ -721,6 +724,68 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             AiSummary = composed.AiSummary,
             Selections = selections
         };
+    }
+
+    private async Task<List<BetslipComposerCandidate>> BuildLivePricedLadderPoolAsync(
+        IReadOnlyList<Prediction> predictions,
+        BetslipSettings settings)
+    {
+        IReadOnlyList<SourceMarketFixture> fixtures;
+        try
+        {
+            fixtures = await _pricingService.GetTodaySourceMarketFixturesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ladder slips: live SportyBet pricing unavailable; no payout-band tickets will be built.");
+            return [];
+        }
+
+        if (fixtures.Count == 0)
+        {
+            _logger.LogInformation("Ladder slips: no live SportyBet fixtures for today.");
+            return [];
+        }
+
+        var livePriced = new List<BetslipComposerCandidate>();
+        foreach (var prediction in predictions.Where(p => MainCategories.Contains(p.PredictionCategory)))
+        {
+            var fixture = SourceMarketFixtureMatcher.FindBestFixture(
+                fixtures,
+                prediction.HomeTeam,
+                prediction.AwayTeam,
+                prediction.League,
+                prediction.MatchDateTime);
+
+            if (!MarketQuoteResolver.TryResolveLiveDecimalOdds(prediction, fixture, out var liveOdds))
+            {
+                continue;
+            }
+
+            var baseCandidate = ToCandidate(prediction, new Dictionary<int, double>());
+            livePriced.Add(new BetslipComposerCandidate
+            {
+                PredictionId = baseCandidate.PredictionId,
+                FixtureKey = baseCandidate.FixtureKey,
+                League = baseCandidate.League,
+                HomeTeam = baseCandidate.HomeTeam,
+                AwayTeam = baseCandidate.AwayTeam,
+                Market = baseCandidate.Market,
+                PredictedOutcome = baseCandidate.PredictedOutcome,
+                PredictionCategory = baseCandidate.PredictionCategory,
+                Confidence = baseCandidate.Confidence,
+                MatchDateTimeUtc = baseCandidate.MatchDateTimeUtc,
+                DecimalOdds = liveOdds
+            });
+        }
+
+        // One pick per fixture — keep highest confidence.
+        return livePriced
+            .GroupBy(c => c.FixtureKey, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(c => c.Confidence).ThenBy(c => c.PredictionId).First())
+            .OrderByDescending(c => c.Confidence)
+            .ThenBy(c => c.PredictionId)
+            .ToList();
     }
 
     private static BetslipComposerCandidate ToCandidate(

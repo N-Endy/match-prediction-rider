@@ -39,37 +39,41 @@ public sealed class ComposedBetslip
     public string? AiSummary { get; init; }
     public double? TargetCombinedOdds { get; init; }
     public bool IsBanker { get; init; }
+    public bool IsPayoutBand { get; init; }
+    public bool IsMega { get; init; }
     public double? ActiveMinOdds { get; init; }
     public double? ActiveMaxOdds { get; init; }
 }
 
 public static class BetslipComposer
 {
+    /// <summary>Legacy leg-count weekend plan — prefer <see cref="WeekendPayoutSlipComposer"/>.</summary>
+    [Obsolete("Use WeekendPayoutSlipComposer.BuildWeekendPlan for payout-band slips.")]
     public static IReadOnlyList<BetslipTierSpec> WeekendTierPlan(int maxSelectionsPerSlip = 50) =>
-    [
-        new() { SlipNumber = 1, Title = "Mega Acca A", TierLabel = "Mega (40-50)", MinSelections = 40, MaxSelections = Math.Min(50, maxSelectionsPerSlip) },
-        new() { SlipNumber = 2, Title = "Mega Acca B", TierLabel = "Mega (40-50)", MinSelections = 40, MaxSelections = Math.Min(50, maxSelectionsPerSlip) },
-        new() { SlipNumber = 3, Title = "Mega Acca C", TierLabel = "Mega (40-50)", MinSelections = 40, MaxSelections = Math.Min(50, maxSelectionsPerSlip) },
-        new() { SlipNumber = 4, Title = "Mega Acca D", TierLabel = "Mega (40-50)", MinSelections = 40, MaxSelections = Math.Min(50, maxSelectionsPerSlip) },
-        new() { SlipNumber = 5, Title = "Large Acca A", TierLabel = "Large (25-40)", MinSelections = 25, MaxSelections = 40 },
-        new() { SlipNumber = 6, Title = "Large Acca B", TierLabel = "Large (25-40)", MinSelections = 25, MaxSelections = 40 },
-        new() { SlipNumber = 7, Title = "Medium Acca A", TierLabel = "Medium (15-25)", MinSelections = 15, MaxSelections = 25 },
-        new() { SlipNumber = 8, Title = "Medium Acca B", TierLabel = "Medium (15-25)", MinSelections = 15, MaxSelections = 25 },
-        new() { SlipNumber = 9, Title = "Short Acca A", TierLabel = "Short (10)", MinSelections = 10, MaxSelections = 10 },
-        new() { SlipNumber = 10, Title = "Short Acca B", TierLabel = "Short (10)", MinSelections = 10, MaxSelections = 10 }
-    ];
+        WeekendPayoutSlipComposer.BuildWeekendPlan(new BetslipSettings { MaxSelectionsPerSlip = maxSelectionsPerSlip })
+            .Select(b => new BetslipTierSpec
+            {
+                SlipNumber = b.SlipNumber,
+                Title = b.Title,
+                TierLabel = b.TierLabel,
+                MinSelections = 1,
+                MaxSelections = b.MaxPicks
+            })
+            .ToList();
 
+    /// <summary>Legacy weekday plan — prefer <see cref="WeekendPayoutSlipComposer"/>.</summary>
+    [Obsolete("Use WeekendPayoutSlipComposer.BuildWeekdayPlan for payout-band slips.")]
     public static IReadOnlyList<BetslipTierSpec> WeekdayTierPlan(int maxSelectionsPerSlip = 50) =>
-    [
-        new()
-        {
-            SlipNumber = 1,
-            Title = "Daily Acca",
-            TierLabel = "Daily (10+)",
-            MinSelections = 10,
-            MaxSelections = Math.Min(20, maxSelectionsPerSlip)
-        }
-    ];
+        WeekendPayoutSlipComposer.BuildWeekdayPlan(new BetslipSettings { MaxSelectionsPerSlip = maxSelectionsPerSlip })
+            .Select(b => new BetslipTierSpec
+            {
+                SlipNumber = b.SlipNumber,
+                Title = b.Title,
+                TierLabel = b.TierLabel,
+                MinSelections = 1,
+                MaxSelections = b.MaxPicks
+            })
+            .ToList();
 
     public static IReadOnlyList<ComposedBetslip> Compose(
         IReadOnlyList<BetslipComposerCandidate> candidates,

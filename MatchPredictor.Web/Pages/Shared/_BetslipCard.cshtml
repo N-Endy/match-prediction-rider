@@ -5,6 +5,12 @@
     var isBanker = Model.SlipNumber == BetslipGenerationService.BankerSlipNumber
                    || Model.TierLabel.StartsWith("Banker", StringComparison.OrdinalIgnoreCase);
     var isDrawSlip = string.Equals(Model.TierLabel, "AI Draws (5)", StringComparison.Ordinal);
+    var isMega = Model.TierLabel.StartsWith("Mega", StringComparison.OrdinalIgnoreCase);
+    var isPayoutBand = !isBanker && !isDrawSlip && Model.CombinedDecimalOdds is > 1;
+    var referenceStake = ViewData["ReferenceStakeNaira"] as decimal? ?? 100m;
+    var estimatedReturn = isPayoutBand
+        ? referenceStake * (decimal)Model.CombinedDecimalOdds!.Value
+        : (decimal?)null;
     var statusClass = Model.BookingStatus switch
     {
         BetslipBookingStatuses.Booked => "mp-betslip-status-booked",
@@ -16,7 +22,24 @@
         ? "mp-betslip-card mp-betslip-card-banker"
         : isDrawSlip
             ? "mp-betslip-card mp-betslip-card-ai"
-            : "mp-betslip-card";
+            : isMega
+                ? "mp-betslip-card mp-betslip-card-mega"
+                : "mp-betslip-card";
+
+    static string FormatNaira(decimal amount)
+    {
+        if (amount >= 1_000_000m)
+        {
+            return $"₦{(amount / 1_000_000m):0.##}M";
+        }
+
+        if (amount >= 1000m)
+        {
+            return $"₦{(amount / 1000m):0.##}k";
+        }
+
+        return $"₦{amount:0.##}";
+    }
 }
 
 <article class="@cardClass">
@@ -36,20 +59,38 @@
         </div>
     }
 
+    @if (isPayoutBand)
+    {
+        <div class="mp-betslip-payout-strip">
+            <div>
+                <span class="mp-betslip-metric-label">Combined odds</span>
+                <strong>@Model.CombinedDecimalOdds!.Value.ToString("0.00")x</strong>
+            </div>
+            <div>
+                <span class="mp-betslip-metric-label">Est. return @FormatNaira(referenceStake)</span>
+                <strong>@FormatNaira(estimatedReturn!.Value)</strong>
+            </div>
+        </div>
+    }
+
     <div class="mp-betslip-metrics">
         <div>
             <span class="mp-betslip-metric-label">Picks</span>
             <strong>@Model.SelectionCount</strong>
-            @if (!isBanker)
+            @if (!isBanker && !isPayoutBand)
             {
                 <span class="mp-betslip-metric-hint">target @Model.TargetMinSelections–@Model.TargetMaxSelections</span>
+            }
+            else if (isPayoutBand)
+            {
+                <span class="mp-betslip-metric-hint">max @Model.TargetMaxSelections</span>
             }
         </div>
         <div>
             <span class="mp-betslip-metric-label">Booked</span>
             <strong>@bookedCount</strong>
         </div>
-        @if (!isBanker && Model.CombinedDecimalOdds is > 1)
+        @if (!isBanker && !isPayoutBand && Model.CombinedDecimalOdds is > 1)
         {
             <div>
                 <span class="mp-betslip-metric-label">Est. odds</span>
@@ -62,6 +103,13 @@
     {
         <p class="mp-betslip-banker-disclaimer">
             High-stakes banker. Odds verified against live SportyBet at generation time; lines may drift before kickoff.
+        </p>
+    }
+
+    @if (isMega)
+    {
+        <p class="mp-betslip-mega-disclaimer">
+            Long-shot / lottery-tier ticket. Built from analysed picks, but hit rate is low by design.
         </p>
     }
 
