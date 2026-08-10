@@ -720,6 +720,11 @@ a:hover {
   font-size: 0.9rem;
 }
 
+.mp-score-confirm-flip {
+  color: #a16207;
+  font-size: 0.85rem;
+}
+
 .mp-score-confirm-actions {
   display: flex;
   gap: 0.5rem;

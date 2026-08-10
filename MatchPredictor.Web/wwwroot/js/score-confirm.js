@@ -16,6 +16,7 @@
       '<p id="mpScoreConfirmPrediction"></p>' +
       '<p id="mpScoreConfirmScraped"></p>' +
       '<p id="mpScoreConfirmMeta"></p>' +
+      '<p id="mpScoreConfirmFlipNote" class="mp-score-confirm-flip" hidden></p>' +
       '<div class="mp-score-confirm-actions">' +
       '<button type="button" id="mpScoreConfirmCancel">Cancel</button>' +
       '<button type="button" class="mp-score-confirm-yes" id="mpScoreConfirmYes">Confirm match</button>' +
@@ -56,6 +57,7 @@
       scrapedScore: button.getAttribute('data-scraped-score') || '',
       scrapedLeague: button.getAttribute('data-scraped-league') || '',
       isLive: button.getAttribute('data-is-live') === 'true',
+      isFlipped: button.getAttribute('data-is-flipped') === 'true',
       button: button
     };
 
@@ -67,6 +69,15 @@
     dialog.querySelector('#mpScoreConfirmMeta').textContent =
       'Source: ' + pendingPayload.sourceName +
       (pendingPayload.scrapedLeague ? ' · ' + pendingPayload.scrapedLeague : '');
+
+    var flipNote = dialog.querySelector('#mpScoreConfirmFlipNote');
+    if (pendingPayload.isFlipped) {
+      flipNote.hidden = false;
+      flipNote.textContent = 'Teams appear swapped on source; score will be mirrored to match prediction home/away.';
+    } else {
+      flipNote.hidden = true;
+      flipNote.textContent = '';
+    }
 
     var yesBtn = dialog.querySelector('#mpScoreConfirmYes');
     yesBtn.onclick = confirmMatch;
@@ -112,7 +123,7 @@
         return;
       }
 
-      applyScoreToCards(payload.updatedPredictionIds || [pendingPayload.predictionId], payload.actualScore, payload.isLive);
+      applyScoreToCards(payload);
       closeDialog();
     } catch (error) {
       window.alert('Could not confirm score link.');
@@ -124,25 +135,41 @@
     }
   }
 
-  function applyScoreToCards(predictionIds, actualScore, isLive) {
-    var idSet = {};
-    (predictionIds || []).forEach(function (id) {
-      idSet[String(id)] = true;
+  function applyScoreToCards(payload) {
+    var updatesById = {};
+    (payload.updates || []).forEach(function (update) {
+      updatesById[String(update.predictionId)] = update;
     });
+
+    var fallbackIds = payload.updatedPredictionIds || [];
+    fallbackIds.forEach(function (id) {
+      if (!updatesById[String(id)]) {
+        updatesById[String(id)] = {
+          predictionId: id,
+          scoreClass: 'mp-score-incorrect',
+          isLive: !!payload.isLive
+        };
+      }
+    });
+
+    var actualScore = payload.actualScore || '';
 
     document.querySelectorAll('.mp-score-near-miss').forEach(function (button) {
       var id = button.getAttribute('data-prediction-id');
-      if (!idSet[id]) {
+      var update = updatesById[id];
+      if (!update) {
         return;
       }
 
+      var scoreClass = update.scoreClass || 'mp-score-incorrect';
+      var isLive = !!update.isLive;
       var score = document.createElement('span');
-      score.className = 'mp-score ' + (isLive ? 'mp-score-live' : 'mp-score-correct') + ' mp-score-value';
+      score.className = 'mp-score ' + scoreClass + ' mp-score-value';
       score.setAttribute('data-prediction-id', id);
       if (isLive) {
-        score.innerHTML = '<span class="mp-live-indicator"></span>' + (actualScore || '');
+        score.innerHTML = '<span class="mp-live-indicator"></span>' + actualScore;
       } else {
-        score.textContent = actualScore || '';
+        score.textContent = actualScore;
       }
       button.replaceWith(score);
     });

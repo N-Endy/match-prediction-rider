@@ -11,6 +11,7 @@ public sealed record ScoreNearMissHint
     public string ScrapedLeague { get; init; } = string.Empty;
     public string Score { get; init; } = string.Empty;
     public bool IsLive { get; init; }
+    public bool IsFlipped { get; init; }
     public double Similarity { get; init; }
     public string RejectionHint { get; init; } = string.Empty;
 }
@@ -22,6 +23,13 @@ public sealed class ManualScoreConfirmRequest
     public int SourceRowId { get; init; }
 }
 
+public sealed class ManualScoreConfirmPredictionUpdate
+{
+    public int PredictionId { get; init; }
+    public string ScoreClass { get; init; } = "mp-score-incorrect";
+    public bool IsLive { get; init; }
+}
+
 public sealed class ManualScoreConfirmResult
 {
     public bool Success { get; init; }
@@ -30,4 +38,5 @@ public sealed class ManualScoreConfirmResult
     public bool IsLive { get; init; }
     public int UpdatedPredictionCount { get; init; }
     public IReadOnlyList<int> UpdatedPredictionIds { get; init; } = [];
+    public IReadOnlyList<ManualScoreConfirmPredictionUpdate> Updates { get; init; } = [];
 }

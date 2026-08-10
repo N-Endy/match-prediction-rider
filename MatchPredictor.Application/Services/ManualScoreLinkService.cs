@@ -11,7 +11,9 @@ namespace MatchPredictor.Application.Services;
 public sealed class ManualScoreLinkService : IManualScoreLinkService
 {
     public const double HintSimilarityFloor = 0.50;
+    private const double OrientationPreferenceEpsilon = 0.05;
     private static readonly TimeSpan FutureFixtureSettlementTolerance = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan HintKickoffProximity = TimeSpan.FromHours(36);
 
     private readonly ApplicationDbContext _dbContext;
     private readonly ITeamResolutionService _teamResolutionService;
@@ -53,36 +55,55 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
         }
 
         var aliasLookup = await _teamResolutionService.LoadAliasLookupAsync(cancellationToken);
-        var localDates = unscoredEligible
-            .Select(ResolveLocalDate)
-            .Where(date => date != default)
-            .Distinct()
-            .ToList();
-
-        var minDate = localDates.Count == 0 ? DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-2)) : localDates.Min().AddDays(-1);
-        var maxDate = localDates.Count == 0 ? DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)) : localDates.Max().AddDays(1);
+        var (startOfWindowUtc, endOfWindowUtc, minDate, maxDate) = BuildCandidateWindows(unscoredEligible);
 
         var flashScores = await _dbContext.MatchScores
             .AsNoTracking()
-            .Where(score => score.MatchLocalDate >= minDate && score.MatchLocalDate <= maxDate)
             .Where(score => !string.IsNullOrWhiteSpace(score.Score))
+            .Where(score =>
+                (score.MatchTime >= startOfWindowUtc && score.MatchTime < endOfWindowUtc) ||
+                (score.MatchLocalDate != default && score.MatchLocalDate >= minDate && score.MatchLocalDate <= maxDate))
             .ToListAsync(cancellationToken);
 
         var aiScores = await _dbContext.AiScoreMatchScores
             .AsNoTracking()
-            .Where(score => score.MatchLocalDate >= minDate && score.MatchLocalDate <= maxDate)
             .Where(score => !string.IsNullOrWhiteSpace(score.Score))
+            .Where(score =>
+                (score.MatchTime >= startOfWindowUtc && score.MatchTime < endOfWindowUtc) ||
+                (score.MatchLocalDate != default && score.MatchLocalDate >= minDate && score.MatchLocalDate <= maxDate))
             .ToListAsync(cancellationToken);
 
         var sofaScores = await _dbContext.SofaScoreMatchScores
             .AsNoTracking()
-            .Where(score => score.MatchLocalDate >= minDate && score.MatchLocalDate <= maxDate)
-            .Where(score => !string.IsNullOrWhiteSpace(score.Score))
+            .Where(score => !string.IsNullOrWhiteSpace(score.Score) || !string.IsNullOrWhiteSpace(score.DisplayedScore))
+            .Where(score =>
+                (score.MatchTime >= startOfWindowUtc && score.MatchTime < endOfWindowUtc) ||
+                (score.MatchLocalDate != default && score.MatchLocalDate >= minDate && score.MatchLocalDate <= maxDate))
             .ToListAsync(cancellationToken);
 
         var candidates = flashScores
-            .Select(score => ToCandidate("FlashScore", score.Id, null, score.HomeTeam, score.AwayTeam, score.League, score.Score, score.IsLive, score.MatchLocalDate, score.MatchTime))
-            .Concat(aiScores.Select(score => ToCandidate("AiScore", score.Id, score.SourceEventId, score.HomeTeam, score.AwayTeam, score.League, score.Score, score.IsLive, score.MatchLocalDate, score.MatchTime)))
+            .Select(score => ToCandidate(
+                "FlashScore",
+                score.Id,
+                null,
+                score.HomeTeam,
+                score.AwayTeam,
+                score.League,
+                score.Score,
+                score.IsLive,
+                ResolveStoredLocalDate(score.MatchLocalDate, score.MatchTime),
+                score.MatchTime))
+            .Concat(aiScores.Select(score => ToCandidate(
+                "AiScore",
+                score.Id,
+                score.SourceEventId,
+                score.HomeTeam,
+                score.AwayTeam,
+                score.League,
+                score.Score,
+                score.IsLive,
+                ResolveStoredLocalDate(score.MatchLocalDate, score.MatchTime),
+                score.MatchTime)))
             .Concat(sofaScores.Select(score => ToCandidate(
                 "SofaScore",
                 score.Id,
@@ -90,14 +111,13 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
                 score.HomeTeam,
                 score.AwayTeam,
                 score.League,
-                string.IsNullOrWhiteSpace(score.DisplayedScore) ? score.Score : score.DisplayedScore,
+                string.IsNullOrWhiteSpace(score.DisplayedScore) ? score.Score : score.DisplayedScore!,
                 score.IsLive,
-                score.MatchLocalDate,
+                ResolveStoredLocalDate(score.MatchLocalDate, score.MatchTime),
                 score.MatchTime)))
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Score))
             .ToList();
 
-        // One hint per fixture key — share across markets on the same match.
         var hintsByFixture = new Dictionary<string, ScoreNearMissHint>(StringComparer.OrdinalIgnoreCase);
         var result = new Dictionary<int, ScoreNearMissHint>();
 
@@ -158,6 +178,12 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
             return new ManualScoreConfirmResult { Success = false, Error = "Scraped score is empty." };
         }
 
+        var aliasLookup = await _teamResolutionService.LoadAliasLookupAsync(cancellationToken);
+        var orientation = ResolveOrientation(seedPrediction, scraped.HomeTeam, scraped.AwayTeam, scraped.League, aliasLookup);
+        var appliedScore = orientation.IsFlipped ? ReverseScore(scraped.Score) : scraped.Score;
+        var aliasScrapedHome = orientation.IsFlipped ? scraped.AwayTeam : scraped.HomeTeam;
+        var aliasScrapedAway = orientation.IsFlipped ? scraped.HomeTeam : scraped.AwayTeam;
+
         var fixtureKey = string.IsNullOrWhiteSpace(seedPrediction.FixtureKey)
             ? FixtureIdentityFactory.FromPrediction(seedPrediction).FixtureKey
             : seedPrediction.FixtureKey;
@@ -190,40 +216,91 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
 
         foreach (var prediction in fixturePredictions)
         {
-            ApplyPredictionSettlement(prediction, scraped.Score, scraped.BttsLabel, scraped.IsLive, scraped.SourceName, scraped.SourceEventId);
+            ApplyPredictionSettlement(prediction, appliedScore, scraped.BttsLabel, scraped.IsLive, scraped.SourceName, scraped.SourceEventId);
         }
 
         foreach (var forecast in fixtureForecasts)
         {
-            ApplyForecastSettlement(forecast, scraped.Score, scraped.BttsLabel, scraped.IsLive, scraped.SourceName, scraped.SourceEventId);
+            ApplyForecastSettlement(forecast, appliedScore, scraped.BttsLabel, scraped.IsLive, scraped.SourceName, scraped.SourceEventId);
         }
 
         await _teamResolutionService.EnsureManualConfirmAliasesAsync(
             seedPrediction.HomeTeam,
             seedPrediction.AwayTeam,
-            scraped.HomeTeam,
-            scraped.AwayTeam,
+            aliasScrapedHome,
+            aliasScrapedAway,
             seedPrediction.League,
             cancellationToken);
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
+        var nowUtc = DateTime.UtcNow;
+        var updates = fixturePredictions
+            .Select(prediction => new ManualScoreConfirmPredictionUpdate
+            {
+                PredictionId = prediction.Id,
+                ScoreClass = PredictionScoreClassHelper.GetScoreClass(prediction, nowUtc),
+                IsLive = PredictionScoreClassHelper.IsActuallyLive(prediction, nowUtc)
+            })
+            .ToList();
+
         _logger.LogInformation(
-            "Manual score confirm: prediction {PredictionId} linked to {SourceName}#{SourceRowId} score {Score}; updated {Count} prediction(s).",
+            "Manual score confirm: prediction {PredictionId} linked to {SourceName}#{SourceRowId} score {Score} (flipped={Flipped}); updated {Count} prediction(s).",
             request.PredictionId,
             scraped.SourceName,
             request.SourceRowId,
-            scraped.Score,
+            appliedScore,
+            orientation.IsFlipped,
             fixturePredictions.Count);
 
         return new ManualScoreConfirmResult
         {
             Success = true,
-            ActualScore = scraped.Score,
-            IsLive = scraped.IsLive,
+            ActualScore = appliedScore,
+            IsLive = updates.Any(update => update.IsLive),
             UpdatedPredictionCount = fixturePredictions.Count,
-            UpdatedPredictionIds = fixturePredictions.Select(prediction => prediction.Id).ToList()
+            UpdatedPredictionIds = fixturePredictions.Select(prediction => prediction.Id).ToList(),
+            Updates = updates
         };
+    }
+
+    private static (DateTime StartUtc, DateTime EndUtc, DateOnly MinDate, DateOnly MaxDate) BuildCandidateWindows(
+        IReadOnlyList<Prediction> predictions)
+    {
+        var localDates = predictions
+            .Select(ResolveLocalDate)
+            .Where(date => date != default)
+            .Distinct()
+            .ToList();
+
+        var minDate = localDates.Count == 0
+            ? DateTimeProvider.GetLocalDate().AddDays(-2)
+            : localDates.Min().AddDays(-1);
+        var maxDate = localDates.Count == 0
+            ? DateTimeProvider.GetLocalDate().AddDays(1)
+            : localDates.Max().AddDays(1);
+
+        var kickoffs = predictions
+            .Where(prediction => prediction.MatchDateTime.HasValue)
+            .Select(prediction => prediction.MatchDateTime!.Value)
+            .ToList();
+
+        DateTime startUtc;
+        DateTime endUtc;
+        if (kickoffs.Count > 0)
+        {
+            startUtc = kickoffs.Min().AddDays(-2);
+            endUtc = kickoffs.Max().AddDays(2);
+        }
+        else
+        {
+            startUtc = DateTimeProvider.ConvertLocalToUtc(
+                minDate.AddDays(-1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified));
+            endUtc = DateTimeProvider.ConvertLocalToUtc(
+                maxDate.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified));
+        }
+
+        return (startUtc, endUtc, minDate, maxDate);
     }
 
     private static ScoreCandidate ToCandidate(
@@ -244,52 +321,33 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
         IReadOnlyList<ScoreCandidate> candidates,
         IReadOnlyDictionary<string, int> aliasLookup)
     {
-        var targetDate = ResolveLocalDate(prediction);
-        var scored = new List<(ScoreCandidate Candidate, double Similarity, string RejectionHint)>();
+        var scored = new List<(ScoreCandidate Candidate, double Similarity, bool IsFlipped, string RejectionHint)>();
 
         foreach (var candidate in candidates)
         {
-            if (targetDate != default &&
-                Math.Abs(candidate.MatchLocalDate.DayNumber - targetDate.DayNumber) > 1)
+            if (!IsWithinHintWindow(prediction, candidate))
             {
                 continue;
             }
 
-            var homeMatch = TeamAliasMatchHelper.GetTeamMatchResult(
-                prediction.HomeTeam,
+            var orientation = ResolveOrientation(
+                prediction,
                 candidate.HomeTeam,
-                prediction.League,
-                candidate.League,
-                aliasLookup);
-            var awayMatch = TeamAliasMatchHelper.GetTeamMatchResult(
-                prediction.AwayTeam,
                 candidate.AwayTeam,
-                prediction.League,
                 candidate.League,
                 aliasLookup);
 
-            if (homeMatch.HasQualifierMismatch || awayMatch.HasQualifierMismatch)
+            if (!orientation.Accepted)
             {
                 continue;
             }
 
-            var similarity = (homeMatch.Score + awayMatch.Score) / 2.0;
-            if (similarity < HintSimilarityFloor)
-            {
-                continue;
-            }
-
-            var rejectionHint = !homeMatch.IsMatch || !awayMatch.IsMatch
-                ? "NearMiss"
-                : similarity < 0.84
-                    ? "BelowFuzzyFloor"
-                    : "AmbiguousOrNearMiss";
-
-            scored.Add((candidate, similarity, rejectionHint));
+            scored.Add((candidate, orientation.Similarity, orientation.IsFlipped, orientation.RejectionHint));
         }
 
         var best = scored
             .OrderByDescending(item => item.Similarity)
+            .ThenBy(item => item.IsFlipped)
             .ThenBy(item => item.Candidate.IsLive)
             .FirstOrDefault();
 
@@ -309,9 +367,134 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
             ScrapedLeague = best.Candidate.League,
             Score = best.Candidate.Score,
             IsLive = best.Candidate.IsLive,
+            IsFlipped = best.IsFlipped,
             Similarity = best.Similarity,
             RejectionHint = best.RejectionHint
         };
+    }
+
+    private static OrientationScore ResolveOrientation(
+        Prediction prediction,
+        string scrapedHome,
+        string scrapedAway,
+        string? scrapedLeague,
+        IReadOnlyDictionary<string, int> aliasLookup)
+    {
+        var normal = ScorePair(
+            prediction.HomeTeam,
+            prediction.AwayTeam,
+            scrapedHome,
+            scrapedAway,
+            prediction.League,
+            scrapedLeague,
+            aliasLookup,
+            flipped: false);
+
+        var flipped = ScorePair(
+            prediction.HomeTeam,
+            prediction.AwayTeam,
+            scrapedAway,
+            scrapedHome,
+            prediction.League,
+            scrapedLeague,
+            aliasLookup,
+            flipped: true);
+
+        if (!normal.Accepted && !flipped.Accepted)
+        {
+            return OrientationScore.Rejected;
+        }
+
+        if (normal.Accepted && flipped.Accepted)
+        {
+            if (flipped.Similarity > normal.Similarity + OrientationPreferenceEpsilon)
+            {
+                return flipped;
+            }
+
+            return normal;
+        }
+
+        return normal.Accepted ? normal : flipped;
+    }
+
+    private static OrientationScore ScorePair(
+        string predictionHome,
+        string predictionAway,
+        string scrapedHome,
+        string scrapedAway,
+        string? predictionLeague,
+        string? scrapedLeague,
+        IReadOnlyDictionary<string, int> aliasLookup,
+        bool flipped)
+    {
+        var homeMatch = TeamAliasMatchHelper.GetTeamMatchResult(
+            predictionHome,
+            scrapedHome,
+            predictionLeague,
+            scrapedLeague,
+            aliasLookup);
+        var awayMatch = TeamAliasMatchHelper.GetTeamMatchResult(
+            predictionAway,
+            scrapedAway,
+            predictionLeague,
+            scrapedLeague,
+            aliasLookup);
+
+        if (homeMatch.HasQualifierMismatch || awayMatch.HasQualifierMismatch)
+        {
+            return OrientationScore.Rejected;
+        }
+
+        var similarity = (homeMatch.Score + awayMatch.Score) / 2.0;
+        if (similarity < HintSimilarityFloor)
+        {
+            return OrientationScore.Rejected;
+        }
+
+        var rejectionHint = !homeMatch.IsMatch || !awayMatch.IsMatch
+            ? "NearMiss"
+            : similarity < 0.84
+                ? "BelowFuzzyFloor"
+                : flipped
+                    ? "FlippedOrientation"
+                    : "AmbiguousOrNearMiss";
+
+        return new OrientationScore(true, flipped, similarity, rejectionHint);
+    }
+
+    private static bool IsWithinHintWindow(Prediction prediction, ScoreCandidate candidate)
+    {
+        if (prediction.MatchDateTime.HasValue)
+        {
+            var hoursApart = Math.Abs((candidate.MatchTime - prediction.MatchDateTime.Value).TotalHours);
+            if (hoursApart <= HintKickoffProximity.TotalHours)
+            {
+                return true;
+            }
+        }
+
+        var targetDate = ResolveLocalDate(prediction);
+        var candidateDate = candidate.MatchLocalDate != default
+            ? candidate.MatchLocalDate
+            : DateTimeProvider.ConvertUtcToLocalDate(candidate.MatchTime);
+
+        if (targetDate != default && candidateDate != default)
+        {
+            return Math.Abs(candidateDate.DayNumber - targetDate.DayNumber) <= 1;
+        }
+
+        return false;
+    }
+
+    private static DateOnly ResolveStoredLocalDate(DateOnly matchLocalDate, DateTime matchTime)
+    {
+        if (matchLocalDate != default)
+        {
+            return matchLocalDate;
+        }
+
+        return DateTimeProvider.ConvertUtcToLocalDate(matchTime);
     }
 
     private async Task<ScrapedScoreRow?> LoadScrapedScoreAsync(
@@ -379,6 +562,17 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
         }
 
         return DateTimeProvider.ParseLocalDateOrNull(prediction.Date) ?? default;
+    }
+
+    private static string ReverseScore(string score)
+    {
+        if (!TryParseScore(score, out var home, out var away))
+        {
+            return score;
+        }
+
+        var separator = score.Contains(':', StringComparison.Ordinal) ? ":" : "-";
+        return $"{away}{separator}{home}";
     }
 
     private static void ApplyPredictionSettlement(
@@ -599,4 +793,9 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
         bool BttsLabel,
         bool IsLive,
         string? SourceEventId);
+
+    private readonly record struct OrientationScore(bool Accepted, bool IsFlipped, double Similarity, string RejectionHint)
+    {
+        public static OrientationScore Rejected => new(false, false, 0, string.Empty);
+    }
 }
