@@ -665,6 +665,82 @@ a:hover {
   border: 1px solid rgba(245, 158, 11, 0.25);
 }
 
+.mp-score-near-miss {
+  flex-shrink: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(234, 179, 8, 0.55);
+  background: rgba(234, 179, 8, 0.18);
+  color: #ca8a04;
+  font-size: 0.95rem;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mp-score-near-miss:hover,
+.mp-score-near-miss:focus-visible {
+  background: rgba(234, 179, 8, 0.32);
+  outline: none;
+}
+
+.mp-score-confirm-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.mp-score-confirm-dialog.is-open {
+  display: flex;
+}
+
+.mp-score-confirm-panel {
+  width: min(28rem, 100%);
+  background: var(--surface, #fff);
+  color: var(--text, #0f172a);
+  border-radius: 12px;
+  padding: 1.25rem;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.25);
+}
+
+.mp-score-confirm-panel h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1.05rem;
+}
+
+.mp-score-confirm-panel p {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.mp-score-confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+.mp-score-confirm-actions button {
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.15);
+  padding: 0.45rem 0.85rem;
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.mp-score-confirm-actions .mp-score-confirm-yes {
+  background: rgba(234, 179, 8, 0.25);
+  border-color: rgba(234, 179, 8, 0.55);
+  font-weight: 650;
+}
+
 .mp-live-indicator {
   display: inline-block;
   width: 8px;

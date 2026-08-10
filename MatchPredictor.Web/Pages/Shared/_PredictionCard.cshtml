@@ -7,9 +7,17 @@
     var cartMarket = MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetCartMarket(Model);
     var isActuallyLive = MatchPredictor.Web.Helpers.PredictionDisplayHelper.IsActuallyLive(Model, nowUtc);
     var statusLabel = MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetStatusLabel(Model, nowUtc);
+    var isAdminOperator = ViewData["IsAdminOperator"] as bool? == true;
+    MatchPredictor.Domain.Models.ScoreNearMissHint? scoreHint = null;
+    if (isAdminOperator &&
+        string.IsNullOrEmpty(Model.ActualScore) &&
+        ViewData["ScoreNearMissHints"] is System.Collections.Generic.IReadOnlyDictionary<int, MatchPredictor.Domain.Models.ScoreNearMissHint> hints)
+    {
+        hints.TryGetValue(Model.Id, out scoreHint);
+    }
 }
 
-<div class="mp-prediction-card mp-prediction-card-rich">
+<div class="mp-prediction-card mp-prediction-card-rich" data-prediction-id="@Model.Id">
     <div class="mp-match-info">
         <div class="mp-match-league">
             @Model.League
@@ -36,14 +44,32 @@
 
             if (isActuallyLive)
             {
-                <span class="mp-score @scoreClass"><span class="mp-live-indicator"></span>@Model.ActualScore</span>
+                <span class="mp-score @scoreClass mp-score-value" data-prediction-id="@Model.Id"><span class="mp-live-indicator"></span>@Model.ActualScore</span>
             }
             else
             {
-                <span class="mp-score @scoreClass">
+                <span class="mp-score @scoreClass mp-score-value" data-prediction-id="@Model.Id">
                     @Model.ActualScore
                 </span>
             }
+        }
+        else if (scoreHint is not null)
+        {
+            <button type="button"
+                    class="mp-score-near-miss"
+                    title="Possible scraped score — click to confirm team names"
+                    data-prediction-id="@Model.Id"
+                    data-home="@Model.HomeTeam"
+                    data-away="@Model.AwayTeam"
+                    data-source-name="@scoreHint.SourceName"
+                    data-source-row-id="@scoreHint.SourceRowId"
+                    data-scraped-home="@scoreHint.ScrapedHomeTeam"
+                    data-scraped-away="@scoreHint.ScrapedAwayTeam"
+                    data-scraped-score="@scoreHint.Score"
+                    data-scraped-league="@scoreHint.ScrapedLeague"
+                    data-is-live="@scoreHint.IsLive.ToString().ToLowerInvariant()">
+                !
+            </button>
         }
 
         <span class="mp-prediction-badge @badgeClass">@badgeText</span>

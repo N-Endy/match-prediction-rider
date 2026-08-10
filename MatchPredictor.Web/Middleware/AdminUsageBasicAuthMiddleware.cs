@@ -1,18 +1,20 @@
 using System.Security.Cryptography;
 using System.Text;
+using MatchPredictor.Web.Services;
 
 namespace MatchPredictor.Web.Middleware;
 
 /// <summary>
 /// HTTP Basic Auth gate for operator-only surfaces: the usage dashboard,
-/// the scrape status page, and the ops health page. These expose internal
-/// state (errors, job health, calibration internals) and must never be public.
+/// scrape status, ops health, analytics, and admin APIs. Also soft-detects
+/// admin presence (Basic Auth header or AdminUi cookie) on public pages so
+/// prediction cards can show operator-only controls.
 /// </summary>
 public class AdminUsageBasicAuthMiddleware
 {
     private static readonly string[] ProtectedPathPrefixes =
     [
-        "/admin/usage",
+        "/admin",
         "/analytics",
         "/ScrapeStatus",
         "/ops/health"
@@ -20,20 +22,39 @@ public class AdminUsageBasicAuthMiddleware
 
     private readonly RequestDelegate _next;
     private readonly IConfiguration _configuration;
+    private readonly IAdminUiTicketService _adminUiTicketService;
     private readonly ILogger<AdminUsageBasicAuthMiddleware> _logger;
 
     public AdminUsageBasicAuthMiddleware(
         RequestDelegate next,
         IConfiguration configuration,
+        IAdminUiTicketService adminUiTicketService,
         ILogger<AdminUsageBasicAuthMiddleware> logger)
     {
         _next = next;
         _configuration = configuration;
+        _adminUiTicketService = adminUiTicketService;
         _logger = logger;
     }
 
     public async Task InvokeAsync(HttpContext context)
     {
+        var username = _configuration["UsageDashboard:Username"]
+                       ?? _configuration["Hangfire:Username"];
+        var password = _configuration["UsageDashboard:Password"]
+                       ?? _configuration["Hangfire:Password"];
+
+        var authHeader = context.Request.Headers.Authorization.ToString();
+        var hasValidBasicAuth = !string.IsNullOrWhiteSpace(username) &&
+                                !string.IsNullOrWhiteSpace(password) &&
+                                TryValidateBasicAuth(authHeader, username, password);
+        var hasValidTicket = _adminUiTicketService.IsAuthenticated(context);
+
+        if (hasValidBasicAuth || hasValidTicket)
+        {
+            context.Items[AdminOperatorKeys.HttpContextItem] = true;
+        }
+
         var isProtected = ProtectedPathPrefixes.Any(prefix =>
             context.Request.Path.StartsWithSegments(prefix, StringComparison.OrdinalIgnoreCase));
         if (!isProtected)
@@ -41,11 +62,6 @@ public class AdminUsageBasicAuthMiddleware
             await _next(context);
             return;
         }
-
-        var username = _configuration["UsageDashboard:Username"]
-                       ?? _configuration["Hangfire:Username"];
-        var password = _configuration["UsageDashboard:Password"]
-                       ?? _configuration["Hangfire:Password"];
 
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
         {
@@ -55,12 +71,16 @@ public class AdminUsageBasicAuthMiddleware
             return;
         }
 
-        var authHeader = context.Request.Headers.Authorization.ToString();
-        if (!TryValidateBasicAuth(authHeader, username, password))
+        if (!hasValidBasicAuth)
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             context.Response.Headers.WWWAuthenticate = "Basic realm=\"Admin Dashboard\"";
             return;
+        }
+
+        if (!hasValidTicket)
+        {
+            _adminUiTicketService.SignIn(context);
         }
 
         await _next(context);

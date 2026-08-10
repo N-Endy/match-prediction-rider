@@ -107,6 +107,126 @@ public sealed class TeamResolutionService : ITeamResolutionService
         await _dbContext.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task EnsureManualConfirmAliasesAsync(
+        string predictionHomeTeam,
+        string predictionAwayTeam,
+        string scrapedHomeTeam,
+        string scrapedAwayTeam,
+        string? league,
+        CancellationToken cancellationToken = default)
+    {
+        await EnsureAliasLinkAsync(predictionHomeTeam, scrapedHomeTeam, league, cancellationToken);
+        await EnsureAliasLinkAsync(predictionAwayTeam, scrapedAwayTeam, league, cancellationToken);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task EnsureAliasLinkAsync(
+        string predictionTeamName,
+        string scrapedTeamName,
+        string? league,
+        CancellationToken cancellationToken)
+    {
+        if (!TeamNameNormalizer.IsUsableAliasCandidate(predictionTeamName, league) ||
+            !TeamNameNormalizer.IsUsableAliasCandidate(scrapedTeamName, league))
+        {
+            return;
+        }
+
+        var leagueScope = TeamNameNormalizer.NormalizeLeagueScope(league);
+        if (string.IsNullOrWhiteSpace(leagueScope))
+        {
+            leagueScope = null;
+        }
+
+        var predictionNormalized = TeamNameNormalizer.NormalizeAlias(predictionTeamName);
+        var scrapedNormalized = TeamNameNormalizer.NormalizeAlias(scrapedTeamName);
+        if (string.IsNullOrWhiteSpace(predictionNormalized) || string.IsNullOrWhiteSpace(scrapedNormalized))
+        {
+            return;
+        }
+
+        if (string.Equals(predictionNormalized, scrapedNormalized, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var team = await FindOrCreateTeamAsync(predictionTeamName, predictionNormalized, leagueScope, cancellationToken);
+
+        await EnsureAliasRowAsync(team, predictionTeamName, predictionNormalized, leagueScope, "ManualConfirm", cancellationToken);
+        await EnsureAliasRowAsync(team, scrapedTeamName, scrapedNormalized, leagueScope, "ManualConfirm", cancellationToken);
+    }
+
+    private async Task<Team> FindOrCreateTeamAsync(
+        string displayName,
+        string normalizedName,
+        string? leagueScope,
+        CancellationToken cancellationToken)
+    {
+        var team = await _dbContext.Teams.FirstOrDefaultAsync(
+            candidate =>
+                candidate.NormalizedName == normalizedName &&
+                candidate.LeagueScope == leagueScope,
+            cancellationToken);
+
+        if (team is not null)
+        {
+            return team;
+        }
+
+        team = await _dbContext.Teams.FirstOrDefaultAsync(
+            candidate => candidate.NormalizedName == normalizedName,
+            cancellationToken);
+
+        if (team is not null)
+        {
+            return team;
+        }
+
+        team = new Team
+        {
+            Name = BoundDisplayName(displayName),
+            NormalizedName = normalizedName,
+            LeagueScope = leagueScope,
+            CreatedAtUtc = DateTime.UtcNow
+        };
+        _dbContext.Teams.Add(team);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        return team;
+    }
+
+    private async Task EnsureAliasRowAsync(
+        Team team,
+        string aliasDisplay,
+        string normalizedAlias,
+        string? leagueScope,
+        string sourceName,
+        CancellationToken cancellationToken)
+    {
+        var boundSource = BoundSourceName(sourceName);
+        var exists = await _dbContext.TeamAliases.AnyAsync(
+            alias =>
+                alias.NormalizedAlias == normalizedAlias &&
+                alias.LeagueScope == leagueScope &&
+                alias.SourceName == boundSource,
+            cancellationToken);
+
+        if (exists)
+        {
+            return;
+        }
+
+        _dbContext.TeamAliases.Add(new TeamAlias
+        {
+            TeamId = team.Id,
+            Team = team,
+            Alias = BoundDisplayName(aliasDisplay),
+            NormalizedAlias = normalizedAlias,
+            LeagueScope = leagueScope,
+            SourceName = boundSource,
+            CreatedAtUtc = DateTime.UtcNow
+        });
+    }
+
     private async Task<IReadOnlyList<AliasCandidate>> LoadAliasCandidatesAsync(CancellationToken cancellationToken)
     {
         var matchDataTeams = await _dbContext.MatchDatas

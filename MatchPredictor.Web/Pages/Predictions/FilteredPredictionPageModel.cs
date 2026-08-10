@@ -2,6 +2,7 @@ using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Utils;
 using MatchPredictor.Web.Helpers;
+using MatchPredictor.Web.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 
@@ -15,6 +16,9 @@ public abstract class FilteredPredictionPageModel : PageModel
     {
         PredictionQueries = predictionQueries;
     }
+
+    public IReadOnlyDictionary<int, ScoreNearMissHint> ScoreNearMissHints { get; private set; } =
+        new Dictionary<int, ScoreNearMissHint>();
 
     [BindProperty(SupportsGet = true)]
     public string Search { get; set; } = string.Empty;
@@ -64,7 +68,41 @@ public abstract class FilteredPredictionPageModel : PageModel
             LatestRunReason = latestPrediction.RunReason;
         }
 
+        await LoadScoreNearMissHintsAsync();
+        ViewData["ScoreNearMissHints"] = ScoreNearMissHints;
+        ViewData["IsAdminOperator"] = HttpContext.IsAdminOperator();
+
         return Page();
+    }
+
+    private async Task LoadScoreNearMissHintsAsync()
+    {
+        if (!HttpContext.IsAdminOperator() || FilteredMatches.Count == 0)
+        {
+            ScoreNearMissHints = new Dictionary<int, ScoreNearMissHint>();
+            return;
+        }
+
+        var scoreLinkService = HttpContext.RequestServices.GetService<IManualScoreLinkService>();
+        if (scoreLinkService is null)
+        {
+            ScoreNearMissHints = new Dictionary<int, ScoreNearMissHint>();
+            return;
+        }
+
+        var predictionIds = FilteredMatches
+            .Where(match => string.IsNullOrWhiteSpace(match.ActualScore))
+            .Select(match => match.Id)
+            .Distinct()
+            .ToList();
+
+        if (predictionIds.Count == 0)
+        {
+            ScoreNearMissHints = new Dictionary<int, ScoreNearMissHint>();
+            return;
+        }
+
+        ScoreNearMissHints = await scoreLinkService.GetHintsAsync(predictionIds);
     }
 
     private IEnumerable<Prediction> ApplyFilters(IEnumerable<Prediction> predictions)

@@ -121,8 +121,10 @@ builder.Services.AddScoped<IAiAdvisorService, AiAdvisorService>();
 builder.Services.AddScoped<IPredictionRiskAuditorService, PredictionRiskAuditorService>();
 builder.Services.AddScoped<IValueBetsService, ValueBetsService>();
 builder.Services.AddScoped<IBetslipGenerationService, BetslipGenerationService>();
+builder.Services.AddScoped<IManualScoreLinkService, ManualScoreLinkService>();
 builder.Services.AddScoped<IUserTrackingService, UserTrackingService>();
 builder.Services.AddScoped<IAiChatAuthTicketService, AiChatAuthTicketService>();
+builder.Services.AddScoped<IAdminUiTicketService, AdminUiTicketService>();
 
 // Controllers for API endpoints (booking, AI chat)
 builder.Services.AddControllers();
