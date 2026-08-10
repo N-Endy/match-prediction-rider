@@ -66,6 +66,14 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             var predictions = await LoadTodayPredictionsAsync(today, kickoffCutoff);
             var oddsByPredictionId = await LoadPublishOddsAsync(predictions.Select(p => p.Id).ToList());
 
+            _logger.LogInformation(
+                "Betslip generation started for {Date} ({DayKind}/{RunLabel}): {PredictionCount} published predictions past kickoff cutoff ({CutoffMinutes} min).",
+                today,
+                dayKind,
+                normalizedRunLabel,
+                predictions.Count,
+                settings.MinMinutesBeforeKickoff);
+
             var composed = new List<ComposedBetslip>();
 
             var banker = await ComposeBankerSlipAsync(predictions, settings);
@@ -79,16 +87,47 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 ? WeekendPayoutSlipComposer.BuildWeekendPlan(settings)
                 : WeekendPayoutSlipComposer.BuildWeekdayPlan(settings);
 
-            composed.AddRange(WeekendPayoutSlipComposer.Compose(
+            _logger.LogInformation(
+                "Ladder pool ready: {PoolCount} live-priced candidates for {BandCount} band(s).",
+                ladderPool.Count,
+                bands.Count);
+
+            var ladderSlips = WeekendPayoutSlipComposer.Compose(
                 ladderPool,
                 bands,
                 settings.MaxSlipsPerPrediction,
                 settings.MaxSingleMarketShare,
-                settings.OverlapPenalty));
+                settings.OverlapPenalty);
+            composed.AddRange(ladderSlips);
 
+            var omittedBands = bands
+                .Where(b => ladderSlips.All(s => s.SlipNumber != b.SlipNumber))
+                .Select(b => b.Title)
+                .ToList();
+            if (ladderSlips.Count > 0)
+            {
+                var builtSummary = string.Join(
+                    "; ",
+                    ladderSlips.Select(s =>
+                        $"{s.Title} {s.Selections.Count} legs {(s.TargetCombinedOdds is double odds ? $"{odds:0.##}x" : "n/a")}"));
+                _logger.LogInformation("Ladder bands composed: {BuiltSummary}.", builtSummary);
+            }
+
+            if (omittedBands.Count > 0)
+            {
+                _logger.LogInformation(
+                    "Ladder bands omitted (could not hit odds band): {Omitted}.",
+                    string.Join(", ", omittedBands));
+            }
+            else if (bands.Count > 0 && ladderSlips.Count == 0)
+            {
+                _logger.LogInformation("Ladder bands omitted: none of the {BandCount} band(s) could be packed.", bands.Count);
+            }
+
+            var drawSlip = (ComposedBetslip?)null;
             if (dayKind == BetslipDayKinds.Weekend)
             {
-                var drawSlip = await ComposeDrawSlipAsync(predictions, oddsByPredictionId, settings);
+                drawSlip = await ComposeDrawSlipAsync(predictions, oddsByPredictionId, settings);
                 if (drawSlip is not null)
                 {
                     composed.Add(drawSlip);
@@ -110,6 +149,16 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             {
                 var entity = await BookAndBuildSlipAsync(slip, settings);
                 betslipSet.Slips.Add(entity);
+
+                var bookedCount = entity.Selections.Count(s => s.WasBooked);
+                _logger.LogInformation(
+                    "Booked slip {SlipNumber} '{Title}': {Status} ({BookedCount}/{SelectionCount}), code={CodePresent}.",
+                    entity.SlipNumber,
+                    entity.Title,
+                    entity.BookingStatus,
+                    bookedCount,
+                    entity.SelectionCount,
+                    string.IsNullOrWhiteSpace(entity.BookingCode) ? "absent" : "present");
             }
 
             betslipSet.SlipCount = betslipSet.Slips.Count;
@@ -124,6 +173,20 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
             await _dbContext.BetslipSets.AddAsync(betslipSet);
             await _dbContext.SaveChangesAsync();
+
+            var hasBanker = betslipSet.Slips.Any(s => s.SlipNumber == BankerSlipNumber);
+            var ladderPersisted = betslipSet.Slips.Count(s =>
+                s.SlipNumber != BankerSlipNumber &&
+                !string.Equals(s.TierLabel, "AI Draws (5)", StringComparison.Ordinal));
+            var hasDraws = betslipSet.Slips.Any(s =>
+                string.Equals(s.TierLabel, "AI Draws (5)", StringComparison.Ordinal));
+
+            _logger.LogInformation(
+                "Betslip generation finished: {SlipCount} slips persisted (banker={HasBanker}, ladder={LadderCount}, draws={HasDraws}).",
+                betslipSet.SlipCount,
+                hasBanker ? "yes" : "no",
+                ladderPersisted,
+                hasDraws ? "yes" : "no");
 
             await LogStatusAsync(
                 "Success",
@@ -229,6 +292,12 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             }));
         }
 
+        _logger.LogInformation(
+            "Banker pricing: {LivePricedCount} live-priced candidates from {FixtureCount} SportyBet fixtures (min confidence {MinConfidence:0.##}).",
+            livePriced.Count,
+            fixtures.Count,
+            settings.BankerMinConfidence);
+
         // One pick per fixture in the shortlist — keep highest confidence.
         var shortlist = livePriced
             .GroupBy(x => x.Candidate.FixtureKey, StringComparer.OrdinalIgnoreCase)
@@ -240,6 +309,9 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
         if (shortlist.Count == 0)
         {
+            _logger.LogInformation(
+                "Banker skipped: no live-priced candidates at/above min confidence {MinConfidence:0.##}.",
+                settings.BankerMinConfidence);
             return null;
         }
 
@@ -253,6 +325,13 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
         if (deterministic.IsEmpty)
         {
+            _logger.LogInformation(
+                "Banker skipped: no combination in {MinOdds:0.##}-{MaxOdds:0.##}x (fallback {FallbackMin:0.##}-{FallbackMax:0.##}x) from {ShortlistCount} shortlist picks.",
+                settings.BankerMinOdds,
+                settings.BankerMaxOdds,
+                settings.BankerFallbackMinOdds,
+                settings.BankerFallbackMaxOdds,
+                shortlist.Count);
             return null;
         }
 
@@ -322,6 +401,15 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         }
 
         var combined = BankerSlipComposer.CalculateCombinedOdds(selected);
+        _logger.LogInformation(
+            "Banker composed: {Legs} legs, {CombinedOdds:0.##}x ({RangeKind} range {MinOdds:0.##}-{MaxOdds:0.##}x), AI vetted={AiVetted}.",
+            selected.Count,
+            combined,
+            deterministic.UsedFallbackRange ? "fallback" : "primary",
+            activeMin,
+            activeMax,
+            aiVetted);
+
         return new ComposedBetslip
         {
             SlipNumber = BankerSlipNumber,
@@ -496,8 +584,14 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
         if (drawCandidates.Count == 0)
         {
+            _logger.LogInformation("AI Draws skipped: no published Draw candidates for today.");
             return null;
         }
+
+        _logger.LogInformation(
+            "AI Draws pool: {CandidateCount} draw candidate(s); targeting {DrawSlipSize} pick(s).",
+            drawCandidates.Count,
+            settings.DrawSlipSize);
 
         var requests = drawCandidates.Select(p => new BetslipDrawPickRequest
         {
@@ -554,6 +648,8 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         {
             picks = drawCandidates.Take(settings.DrawSlipSize).Select(p => ToCandidate(p, oddsByPredictionId)).ToList();
         }
+
+        _logger.LogInformation("AI Draws composed: {PickCount} pick(s).", picks.Count);
 
         return new ComposedBetslip
         {
