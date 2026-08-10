@@ -10,7 +10,9 @@ namespace MatchPredictor.Application.Services;
 
 public sealed class ManualScoreLinkService : IManualScoreLinkService
 {
-    public const double HintSimilarityFloor = 0.50;
+    public const double HintSimilarityFloor = 0.70;
+    public const double HintMinSideScore = 0.62;
+    public const double HintMinLeagueScore = 0.40;
     private const double OrientationPreferenceEpsilon = 0.05;
     private static readonly TimeSpan FutureFixtureSettlementTolerance = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan HintKickoffProximity = TimeSpan.FromHours(36);
@@ -428,13 +430,19 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
         IReadOnlyDictionary<string, int> aliasLookup,
         bool flipped)
     {
-        var homeMatch = TeamAliasMatchHelper.GetTeamMatchResult(
+        var leagueScore = ScoreMatchingHelper.GetLeagueMatchScore(predictionLeague, scrapedLeague);
+        if (leagueScore < HintMinLeagueScore)
+        {
+            return OrientationScore.Rejected;
+        }
+
+        var homeMatch = TeamAliasMatchHelper.GetHintTeamMatchResult(
             predictionHome,
             scrapedHome,
             predictionLeague,
             scrapedLeague,
             aliasLookup);
-        var awayMatch = TeamAliasMatchHelper.GetTeamMatchResult(
+        var awayMatch = TeamAliasMatchHelper.GetHintTeamMatchResult(
             predictionAway,
             scrapedAway,
             predictionLeague,
@@ -442,6 +450,11 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
             aliasLookup);
 
         if (homeMatch.HasQualifierMismatch || awayMatch.HasQualifierMismatch)
+        {
+            return OrientationScore.Rejected;
+        }
+
+        if (homeMatch.Score < HintMinSideScore || awayMatch.Score < HintMinSideScore)
         {
             return OrientationScore.Rejected;
         }

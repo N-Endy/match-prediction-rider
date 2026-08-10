@@ -68,6 +68,31 @@ public static class TeamAliasMatchHelper
         return ScoreMatchingHelper.GetTeamMatchResult(nameA, nameB, leagueA, leagueB);
     }
 
+    /// <summary>
+    /// Alias-aware team match for admin score hints (soft Reserve/U19–U21 gates).
+    /// </summary>
+    public static ScoreMatchingHelper.TeamMatchResult GetHintTeamMatchResult(
+        string nameA,
+        string nameB,
+        string? leagueA,
+        string? leagueB,
+        IReadOnlyDictionary<string, int>? aliasLookup)
+    {
+        var teamIdA = ResolveTeamId(nameA, leagueA, aliasLookup);
+        var teamIdB = ResolveTeamId(nameB, leagueB, aliasLookup);
+        if (teamIdA.HasValue && teamIdB.HasValue && teamIdA.Value == teamIdB.Value)
+        {
+            return new ScoreMatchingHelper.TeamMatchResult(true, 1.0, true, false);
+        }
+
+        if (AreCanonicalAliasesEqual(nameA, nameB, leagueA, leagueB))
+        {
+            return new ScoreMatchingHelper.TeamMatchResult(true, 1.0, true, false);
+        }
+
+        return ScoreMatchingHelper.GetTeamMatchResultForAdminHint(nameA, nameB, leagueA, leagueB);
+    }
+
     public static string FormatRejectionReason(
         FixtureMatchRejectionReason reason,
         string? detail = null)

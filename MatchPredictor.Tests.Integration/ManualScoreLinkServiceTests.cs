@@ -162,6 +162,162 @@ public class ManualScoreLinkServiceTests
     }
 
     [Fact]
+    public async Task GetHintsAsync_RejectsOneSidedPenarolMatchFromWrongLeague()
+    {
+        await using var context = CreateContext();
+        var kickoff = GetStartedKickoff(11);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        var prediction = CreatePrediction(
+            date,
+            kickoff,
+            "Penarol",
+            "Cerro Largo",
+            "StraightWin",
+            "Home Win",
+            "Uruguay Reserve League");
+        context.Predictions.Add(prediction);
+
+        var wrongScore = new MatchScore
+        {
+            MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            League = "BRAZIL: Amazonense 2",
+            HomeTeam = "Operario Esporte Clube",
+            AwayTeam = "Penarol",
+            Score = "4:0",
+            BTTSLabel = false,
+            IsLive = false
+        };
+        ScoreSnapshotKeyFactory.Apply(wrongScore);
+        context.MatchScores.Add(wrongScore);
+        await context.SaveChangesAsync();
+
+        var service = CreateService(context);
+        var hints = await service.GetHintsAsync([prediction.Id]);
+
+        Assert.False(hints.ContainsKey(prediction.Id));
+    }
+
+    [Fact]
+    public async Task GetHintsAsync_RejectsOneSidedDefensorVsWanderers()
+    {
+        await using var context = CreateContext();
+        var kickoff = GetStartedKickoff(10);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        var prediction = CreatePrediction(
+            date,
+            kickoff,
+            "Juventud",
+            "Defensor Sporting",
+            "StraightWin",
+            "Home Win",
+            "Uruguay Reserve League");
+        context.Predictions.Add(prediction);
+
+        var wrongScore = new MatchScore
+        {
+            MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            League = "URUGUAY: Liga AUF Uruguaya - Clausura",
+            HomeTeam = "Defensor Sp.",
+            AwayTeam = "Wanderers",
+            Score = "0:1",
+            BTTSLabel = false,
+            IsLive = false
+        };
+        ScoreSnapshotKeyFactory.Apply(wrongScore);
+        context.MatchScores.Add(wrongScore);
+        await context.SaveChangesAsync();
+
+        var service = CreateService(context);
+        var hints = await service.GetHintsAsync([prediction.Id]);
+
+        Assert.False(hints.ContainsKey(prediction.Id));
+    }
+
+    [Fact]
+    public async Task GetHintsAsync_AcceptsReserveSidesWhenLeagueIsReserve()
+    {
+        await using var context = CreateContext();
+        var kickoff = GetStartedKickoff(9);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        var prediction = CreatePrediction(
+            date,
+            kickoff,
+            "Juventud",
+            "Defensor Sporting",
+            "StraightWin",
+            "Home Win",
+            "Uruguay Reserve League");
+        context.Predictions.Add(prediction);
+
+        var score = new AiScoreMatchScore
+        {
+            MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            League = "Uruguay: Reserve League",
+            HomeTeam = "Juventud De Las Piedras Reserves",
+            AwayTeam = "Defensor Sporting Reserve",
+            Score = "2:1",
+            SourceEventId = "aiscore-juventud-defensor-res",
+            BTTSLabel = true,
+            IsLive = false
+        };
+        ScoreSnapshotKeyFactory.Apply(score);
+        context.AiScoreMatchScores.Add(score);
+        await context.SaveChangesAsync();
+
+        var service = CreateService(context);
+        var hints = await service.GetHintsAsync([prediction.Id]);
+
+        Assert.True(hints.TryGetValue(prediction.Id, out var hint));
+        Assert.Equal(score.Id, hint!.SourceRowId);
+        Assert.Equal("2:1", hint.Score);
+        Assert.False(hint.IsFlipped);
+    }
+
+    [Fact]
+    public async Task GetHintsAsync_AcceptsU19PredictionAgainstU19U20AiScoreSides()
+    {
+        await using var context = CreateContext();
+        var kickoff = GetStartedKickoff(19);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        var prediction = CreatePrediction(
+            date,
+            kickoff,
+            "NK Brezice",
+            "Maribor",
+            "StraightWin",
+            "Away Win",
+            "SLOVENIA - U19 LEAGUE");
+        context.Predictions.Add(prediction);
+
+        var score = new AiScoreMatchScore
+        {
+            MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            League = "Slovenia: U19",
+            HomeTeam = "NK Brezice U19",
+            AwayTeam = "NK Maribor U20",
+            Score = "0:2",
+            SourceEventId = "aiscore-brezice-u19-maribor-u20",
+            BTTSLabel = false,
+            IsLive = false
+        };
+        ScoreSnapshotKeyFactory.Apply(score);
+        context.AiScoreMatchScores.Add(score);
+        await context.SaveChangesAsync();
+
+        var service = CreateService(context);
+        var hints = await service.GetHintsAsync([prediction.Id]);
+
+        Assert.True(hints.TryGetValue(prediction.Id, out var hint));
+        Assert.Equal(score.Id, hint!.SourceRowId);
+        Assert.Equal("0:2", hint.Score);
+        Assert.False(hint.IsFlipped);
+    }
+
+    [Fact]
     public async Task ConfirmAsync_AppliesScoreToFixtureMarketsAndSeedsAliases()
     {
         await using var context = CreateContext();

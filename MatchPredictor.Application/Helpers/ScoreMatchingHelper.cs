@@ -199,6 +199,37 @@ public static class ScoreMatchingHelper
             return new TeamMatchResult(false, 0, false, true);
         }
 
+        return ComputeCoreTeamMatch(teamA, teamB);
+    }
+
+    /// <summary>
+    /// Admin score-hint matching: same token scoring as settlement, but softens Reserve / U19–U21
+    /// mismatches when the leagues suggest youth or reserve context. Does not change settlement.
+    /// </summary>
+    public static TeamMatchResult GetTeamMatchResultForAdminHint(
+        string nameA,
+        string nameB,
+        string? leagueA,
+        string? leagueB)
+    {
+        var teamA = ParseTeamIdentity(nameA, leagueA);
+        var teamB = ParseTeamIdentity(nameB, leagueB);
+
+        if (teamA.CoreTokens.Count == 0 || teamB.CoreTokens.Count == 0)
+        {
+            return new TeamMatchResult(false, 0, false, false);
+        }
+
+        if (!HintQualifiersCompatible(teamA, teamB, leagueA, leagueB))
+        {
+            return new TeamMatchResult(false, 0, false, true);
+        }
+
+        return ComputeCoreTeamMatch(teamA, teamB);
+    }
+
+    private static TeamMatchResult ComputeCoreTeamMatch(TeamIdentity teamA, TeamIdentity teamB)
+    {
         if (string.Equals(teamA.LookupKey, teamB.LookupKey, StringComparison.Ordinal))
         {
             return new TeamMatchResult(true, 1.0, true, false);
@@ -493,6 +524,99 @@ public static class ScoreMatchingHelper
         var youthA = teamA.Qualifiers.Contains("youth");
         var youthB = teamB.Qualifiers.Contains("youth");
         return youthA == youthB;
+    }
+
+    /// <summary>
+    /// Softer qualifier gate used only for admin near-miss score hints.
+    /// </summary>
+    private static bool HintQualifiersCompatible(
+        TeamIdentity teamA,
+        TeamIdentity teamB,
+        string? leagueA,
+        string? leagueB)
+    {
+        var womenA = teamA.Qualifiers.Contains("women");
+        var womenB = teamB.Qualifiers.Contains("women");
+        if (womenA != womenB)
+        {
+            return false;
+        }
+
+        var reserveA = teamA.Qualifiers.Contains("reserve") || teamA.Qualifiers.Contains("reserve3");
+        var reserveB = teamB.Qualifiers.Contains("reserve") || teamB.Qualifiers.Contains("reserve3");
+        if (reserveA != reserveB &&
+            !LeagueSuggestsReserve(leagueA) &&
+            !LeagueSuggestsReserve(leagueB))
+        {
+            return false;
+        }
+
+        var ageA = teamA.Qualifiers.FirstOrDefault(q => q.StartsWith("u", StringComparison.OrdinalIgnoreCase));
+        var ageB = teamB.Qualifiers.FirstOrDefault(q => q.StartsWith("u", StringComparison.OrdinalIgnoreCase));
+        if (!AgesHintCompatible(ageA, ageB, leagueA, leagueB))
+        {
+            return false;
+        }
+
+        var youthA = teamA.Qualifiers.Contains("youth") || IsSoftYouthAge(ageA) || LeagueSuggestsYouth(leagueA);
+        var youthB = teamB.Qualifiers.Contains("youth") || IsSoftYouthAge(ageB) || LeagueSuggestsYouth(leagueB);
+        if (youthA != youthB &&
+            !LeagueSuggestsYouth(leagueA) &&
+            !LeagueSuggestsYouth(leagueB))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool AgesHintCompatible(string? ageA, string? ageB, string? leagueA, string? leagueB)
+    {
+        if (string.Equals(ageA, ageB, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(ageA) && !string.IsNullOrEmpty(ageB))
+        {
+            return IsSoftYouthAge(ageA) && IsSoftYouthAge(ageB);
+        }
+
+        if (string.IsNullOrEmpty(ageA) && IsSoftYouthAge(ageB))
+        {
+            return LeagueSuggestsYouth(leagueA) || LeagueSuggestsYouth(leagueB);
+        }
+
+        if (string.IsNullOrEmpty(ageB) && IsSoftYouthAge(ageA))
+        {
+            return LeagueSuggestsYouth(leagueA) || LeagueSuggestsYouth(leagueB);
+        }
+
+        return string.IsNullOrEmpty(ageA) && string.IsNullOrEmpty(ageB);
+    }
+
+    private static bool IsSoftYouthAge(string? age) =>
+        string.Equals(age, "u19", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(age, "u20", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(age, "u21", StringComparison.OrdinalIgnoreCase);
+
+    private static bool LeagueSuggestsReserve(string? league)
+    {
+        var normalized = PreNormalizeTeamName(league);
+        return !string.IsNullOrWhiteSpace(normalized) &&
+               normalized.Contains("reserve", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LeagueSuggestsYouth(string? league)
+    {
+        var normalized = PreNormalizeTeamName(league);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return false;
+        }
+
+        return normalized.Contains("youth", StringComparison.OrdinalIgnoreCase) ||
+               AgeQualifierRegex.IsMatch(normalized);
     }
 
     private static double GetTokenWeight(string token)
