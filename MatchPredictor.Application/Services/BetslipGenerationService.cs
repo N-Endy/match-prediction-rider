@@ -82,10 +82,19 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 composed.Add(banker);
             }
 
+            var usedFixtureKeys = CollectFixtureKeys(composed);
             var ladderPool = await BuildLivePricedLadderPoolAsync(predictions, settings);
+            var ladderBeforeExclusion = ladderPool.Count;
+            ladderPool = ExcludeUsedFixtures(ladderPool, usedFixtureKeys);
+            var ladderRemoved = ladderBeforeExclusion - ladderPool.Count;
             var bands = dayKind == BetslipDayKinds.Weekend
                 ? WeekendPayoutSlipComposer.BuildWeekendPlan(settings)
                 : WeekendPayoutSlipComposer.BuildWeekdayPlan(settings);
+
+            _logger.LogInformation(
+                "Ladder pool after banker exclusion: {PoolCount} candidates ({RemovedCount} removed).",
+                ladderPool.Count,
+                ladderRemoved);
 
             _logger.LogInformation(
                 "Ladder pool ready: {PoolCount} live-priced candidates for {BandCount} band(s).",
@@ -99,6 +108,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 settings.MaxSingleMarketShare,
                 settings.OverlapPenalty);
             composed.AddRange(ladderSlips);
+            AddFixtureKeys(usedFixtureKeys, ladderSlips);
 
             var omittedBands = bands
                 .Where(b => ladderSlips.All(s => s.SlipNumber != b.SlipNumber))
@@ -127,7 +137,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             var drawSlip = (ComposedBetslip?)null;
             if (dayKind == BetslipDayKinds.Weekend)
             {
-                drawSlip = await ComposeDrawSlipAsync(predictions, oddsByPredictionId, settings);
+                drawSlip = await ComposeDrawSlipAsync(predictions, oddsByPredictionId, settings, usedFixtureKeys);
                 if (drawSlip is not null)
                 {
                     composed.Add(drawSlip);
@@ -573,24 +583,37 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
     private async Task<ComposedBetslip?> ComposeDrawSlipAsync(
         IReadOnlyList<Prediction> predictions,
         IReadOnlyDictionary<int, double> oddsByPredictionId,
-        BetslipSettings settings)
+        BetslipSettings settings,
+        IReadOnlySet<string> usedFixtureKeys)
     {
-        var drawCandidates = predictions
+        var drawPool = predictions
             .Where(p => p.PredictionCategory == "Draw")
             .OrderByDescending(p => p.ConfidenceScore ?? p.RawConfidenceScore ?? 0m)
             .ThenBy(p => p.Id)
+            .ToList();
+
+        var drawBeforeExclusion = drawPool.Count;
+        drawPool = drawPool
+            .Where(p => !IsFixtureUsed(ResolveFixtureKey(p), usedFixtureKeys))
+            .ToList();
+        var drawRemoved = drawBeforeExclusion - drawPool.Count;
+
+        var drawCandidates = drawPool
             .Take(Math.Max(settings.DrawCandidatePoolSize, settings.DrawSlipSize))
             .ToList();
 
         if (drawCandidates.Count == 0)
         {
-            _logger.LogInformation("AI Draws skipped: no published Draw candidates for today.");
+            _logger.LogInformation(
+                "AI Draws skipped: no published Draw candidates for today ({RemovedCount} excluded as already used).",
+                drawRemoved);
             return null;
         }
 
         _logger.LogInformation(
-            "AI Draws pool: {CandidateCount} draw candidate(s); targeting {DrawSlipSize} pick(s).",
+            "AI Draws pool: {CandidateCount} draw candidate(s) after excluding {RemovedCount} used fixture(s); targeting {DrawSlipSize} pick(s).",
             drawCandidates.Count,
+            drawRemoved,
             settings.DrawSlipSize);
 
         var requests = drawCandidates.Select(p => new BetslipDrawPickRequest
@@ -884,6 +907,49 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             .ToList();
     }
 
+    private static HashSet<string> CollectFixtureKeys(IEnumerable<ComposedBetslip> slips)
+    {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddFixtureKeys(keys, slips);
+        return keys;
+    }
+
+    private static void AddFixtureKeys(HashSet<string> keys, IEnumerable<ComposedBetslip> slips)
+    {
+        foreach (var slip in slips)
+        {
+            foreach (var selection in slip.Selections)
+            {
+                if (!string.IsNullOrWhiteSpace(selection.FixtureKey))
+                {
+                    keys.Add(selection.FixtureKey);
+                }
+            }
+        }
+    }
+
+    private static List<BetslipComposerCandidate> ExcludeUsedFixtures(
+        IReadOnlyList<BetslipComposerCandidate> candidates,
+        IReadOnlySet<string> usedFixtureKeys)
+    {
+        if (usedFixtureKeys.Count == 0)
+        {
+            return candidates.ToList();
+        }
+
+        return candidates
+            .Where(c => !IsFixtureUsed(c.FixtureKey, usedFixtureKeys))
+            .ToList();
+    }
+
+    private static bool IsFixtureUsed(string? fixtureKey, IReadOnlySet<string> usedFixtureKeys) =>
+        !string.IsNullOrWhiteSpace(fixtureKey) && usedFixtureKeys.Contains(fixtureKey);
+
+    private static string ResolveFixtureKey(Prediction prediction) =>
+        string.IsNullOrWhiteSpace(prediction.FixtureKey)
+            ? $"{prediction.League}|{prediction.HomeTeam}|{prediction.AwayTeam}|{prediction.MatchLocalDate}"
+            : prediction.FixtureKey;
+
     private static BetslipComposerCandidate ToCandidate(
         Prediction prediction,
         IReadOnlyDictionary<int, double> oddsByPredictionId)
@@ -892,9 +958,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         return new BetslipComposerCandidate
         {
             PredictionId = prediction.Id,
-            FixtureKey = string.IsNullOrWhiteSpace(prediction.FixtureKey)
-                ? $"{prediction.League}|{prediction.HomeTeam}|{prediction.AwayTeam}|{prediction.MatchLocalDate}"
-                : prediction.FixtureKey,
+            FixtureKey = ResolveFixtureKey(prediction),
             League = prediction.League,
             HomeTeam = prediction.HomeTeam,
             AwayTeam = prediction.AwayTeam,

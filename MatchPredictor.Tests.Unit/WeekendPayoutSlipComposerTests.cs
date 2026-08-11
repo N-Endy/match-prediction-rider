@@ -154,6 +154,17 @@ public class WeekendPayoutSlipComposerTests
             .Intersect(slips[1].Selections.Select(s => s.PredictionId))
             .ToList();
         Assert.Empty(shared);
+
+        var sharedFixtures = slips[0].Selections.Select(s => s.FixtureKey)
+            .Intersect(slips[1].Selections.Select(s => s.FixtureKey), StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        Assert.Empty(sharedFixtures);
+    }
+
+    [Fact]
+    public void BetslipSettings_DefaultsMaxSlipsPerPredictionToOne()
+    {
+        Assert.Equal(1, new BetslipSettings().MaxSlipsPerPrediction);
     }
 
     private static List<BetslipComposerCandidate> BuildLadder(int count, double odds)
