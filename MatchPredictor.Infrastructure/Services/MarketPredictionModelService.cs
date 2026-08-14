@@ -42,7 +42,11 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         nameof(MarketModelInput.AwayGoalsAgainstPerMatch),
         nameof(MarketModelInput.HeadToHeadHomeWins),
         nameof(MarketModelInput.HeadToHeadDraws),
-        nameof(MarketModelInput.HeadToHeadAwayWins)
+        nameof(MarketModelInput.HeadToHeadAwayWins),
+        nameof(MarketModelInput.HasSnapshot),
+        nameof(MarketModelInput.HasStatistical),
+        nameof(MarketModelInput.HasBookmaker),
+        nameof(MarketModelInput.HasRestDays)
     ];
     private static readonly string ExpectedFeatureSchemaJson = JsonSerializer.Serialize(FeatureColumns);
 
@@ -71,26 +75,11 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         }
 
         var features = LoadLatestFeatureSnapshot(match);
-        var homeRestDays = (float)(features?.HomeRestDays ?? 0);
-        var awayRestDays = (float)(features?.AwayRestDays ?? 0);
-        var output = engine.Predict(new MarketModelInput
-        {
-            CalculatorProbability = (float)calculatorProbability,
-            StatisticalProbability = (float)(statisticalProbability ?? calculatorProbability),
-            BookmakerProbability = (float)(bookmakerProbability ?? calculatorProbability),
-            HomeRestDays = homeRestDays,
-            AwayRestDays = awayRestDays,
-            RestDayDifferential = homeRestDays - awayRestDays,
-            HomeFormPoints = (float)(features?.HomeFormPointsPerMatch ?? 0),
-            AwayFormPoints = (float)(features?.AwayFormPointsPerMatch ?? 0),
-            HomeGoalsForPerMatch = (float)(features?.HomeFormGoalsForPerMatch ?? 0),
-            AwayGoalsForPerMatch = (float)(features?.AwayFormGoalsForPerMatch ?? 0),
-            HomeGoalsAgainstPerMatch = (float)(features?.HomeFormGoalsAgainstPerMatch ?? 0),
-            AwayGoalsAgainstPerMatch = (float)(features?.AwayFormGoalsAgainstPerMatch ?? 0),
-            HeadToHeadHomeWins = features?.HeadToHeadHomeWins ?? 0,
-            HeadToHeadDraws = features?.HeadToHeadDraws ?? 0,
-            HeadToHeadAwayWins = features?.HeadToHeadAwayWins ?? 0
-        });
+        var output = engine.Predict(MapFeatures(
+            calculatorProbability,
+            statisticalProbability,
+            bookmakerProbability,
+            features));
 
         return Math.Clamp(output.Probability, 0.0f, 1.0f);
     }
@@ -138,7 +127,8 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
             var pipeline = _mlContext.Transforms.Concatenate("Features", FeatureColumns)
                 .Append(_mlContext.BinaryClassification.Trainers.LightGbm(
                     labelColumnName: nameof(MarketModelInput.Label),
-                    featureColumnName: "Features"));
+                    featureColumnName: "Features",
+                    exampleWeightColumnName: nameof(MarketModelInput.Weight)));
             var model = pipeline.Fit(_mlContext.Data.LoadFromEnumerable(training));
             var predictions = model.Transform(_mlContext.Data.LoadFromEnumerable(holdout));
             var scored = _mlContext.Data.CreateEnumerable<MarketModelOutput>(predictions, reuseRowObject: false).ToList();
@@ -230,7 +220,7 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
             .FirstOrDefault();
     }
 
-    private static MarketModelInput? BuildTrainingRow(
+    internal static MarketModelInput? BuildTrainingRow(
         ForecastObservation forecast,
         IReadOnlyCollection<FixtureFeatureSnapshot> featureSnapshots)
     {
@@ -241,29 +231,57 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
             .OrderByDescending(snapshot => snapshot.CapturedAtUtc)
             .FirstOrDefault();
 
+        return MapFeatures(
+            signals.Calculator,
+            signals.Statistical,
+            signals.Bookmaker,
+            featureSnapshot,
+            forecast.OutcomeOccurred == true,
+            (float)RecencyWeighting.CalculateWeight(forecast.SettledAt ?? forecast.CreatedAt, RecencyHalfLifeDays));
+    }
+
+    internal static MarketModelInput MapFeatures(
+        double calculatorProbability,
+        double? statisticalProbability,
+        double? bookmakerProbability,
+        FixtureFeatureSnapshot? featureSnapshot,
+        bool label = false,
+        float weight = 1f)
+    {
+        var hasSnapshot = featureSnapshot is not null;
+        var hasRestDays = featureSnapshot?.HomeRestDays is not null && featureSnapshot?.AwayRestDays is not null;
+        var homeRestDays = ToFeature(featureSnapshot?.HomeRestDays);
+        var awayRestDays = ToFeature(featureSnapshot?.AwayRestDays);
+
         return new MarketModelInput
         {
-            Label = forecast.OutcomeOccurred == true,
-            Weight = (float)RecencyWeighting.CalculateWeight(forecast.SettledAt ?? forecast.CreatedAt, RecencyHalfLifeDays),
-            CalculatorProbability = (float)signals.Calculator,
-            StatisticalProbability = (float)(signals.Statistical ?? signals.Calculator),
-            BookmakerProbability = (float)(signals.Bookmaker ?? signals.Calculator),
-            HomeRestDays = (float)(featureSnapshot?.HomeRestDays ?? 0),
-            AwayRestDays = (float)(featureSnapshot?.AwayRestDays ?? 0),
-            RestDayDifferential = (float)((featureSnapshot?.HomeRestDays ?? 0) - (featureSnapshot?.AwayRestDays ?? 0)),
-            HomeFormPoints = (float)(featureSnapshot?.HomeFormPointsPerMatch ?? 0),
-            AwayFormPoints = (float)(featureSnapshot?.AwayFormPointsPerMatch ?? 0),
-            HomeGoalsForPerMatch = (float)(featureSnapshot?.HomeFormGoalsForPerMatch ?? 0),
-            AwayGoalsForPerMatch = (float)(featureSnapshot?.AwayFormGoalsForPerMatch ?? 0),
-            HomeGoalsAgainstPerMatch = (float)(featureSnapshot?.HomeFormGoalsAgainstPerMatch ?? 0),
-            AwayGoalsAgainstPerMatch = (float)(featureSnapshot?.AwayFormGoalsAgainstPerMatch ?? 0),
-            HeadToHeadHomeWins = featureSnapshot?.HeadToHeadHomeWins ?? 0,
-            HeadToHeadDraws = featureSnapshot?.HeadToHeadDraws ?? 0,
-            HeadToHeadAwayWins = featureSnapshot?.HeadToHeadAwayWins ?? 0
+            Label = label,
+            Weight = weight,
+            CalculatorProbability = (float)calculatorProbability,
+            StatisticalProbability = ToFeature(statisticalProbability),
+            BookmakerProbability = ToFeature(bookmakerProbability),
+            HomeRestDays = homeRestDays,
+            AwayRestDays = awayRestDays,
+            RestDayDifferential = hasRestDays ? homeRestDays - awayRestDays : float.NaN,
+            HomeFormPoints = ToFeature(featureSnapshot?.HomeFormPointsPerMatch),
+            AwayFormPoints = ToFeature(featureSnapshot?.AwayFormPointsPerMatch),
+            HomeGoalsForPerMatch = ToFeature(featureSnapshot?.HomeFormGoalsForPerMatch),
+            AwayGoalsForPerMatch = ToFeature(featureSnapshot?.AwayFormGoalsForPerMatch),
+            HomeGoalsAgainstPerMatch = ToFeature(featureSnapshot?.HomeFormGoalsAgainstPerMatch),
+            AwayGoalsAgainstPerMatch = ToFeature(featureSnapshot?.AwayFormGoalsAgainstPerMatch),
+            HeadToHeadHomeWins = hasSnapshot ? featureSnapshot!.HeadToHeadHomeWins : float.NaN,
+            HeadToHeadDraws = hasSnapshot ? featureSnapshot!.HeadToHeadDraws : float.NaN,
+            HeadToHeadAwayWins = hasSnapshot ? featureSnapshot!.HeadToHeadAwayWins : float.NaN,
+            HasSnapshot = hasSnapshot ? 1f : 0f,
+            HasStatistical = statisticalProbability is not null ? 1f : 0f,
+            HasBookmaker = bookmakerProbability is not null ? 1f : 0f,
+            HasRestDays = hasRestDays ? 1f : 0f
         };
     }
 
-    private static (double Calculator, double? Statistical, double? Bookmaker) ParseSignals(string? json, double fallback)
+    private static float ToFeature(double? value) => value is double number ? (float)number : float.NaN;
+
+    internal static (double Calculator, double? Statistical, double? Bookmaker) ParseSignals(string? json, double fallback)
     {
         if (string.IsNullOrWhiteSpace(json) || json == "{}")
         {
@@ -285,29 +303,45 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         }
     }
 
-    private static double? ReadSignal(JsonElement root, string sectionName, string? market)
+    internal static double? ReadSignal(JsonElement root, string sectionName, string? market)
     {
         if (!root.TryGetProperty(sectionName, out var section) || section.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
         {
             return null;
         }
 
-        var key = market switch
+        var (propertyName, complement) = market switch
         {
-            nameof(PredictionMarket.BothTeamsScore) => "btts",
-            nameof(PredictionMarket.Over25Goals) => "over25",
-            nameof(PredictionMarket.Under25Goals) => "under25",
-            nameof(PredictionMarket.HomeWin) => "homeWin",
-            nameof(PredictionMarket.AwayWin) => "awayWin",
-            nameof(PredictionMarket.Draw) => "draw",
-            _ => null
+            nameof(PredictionMarket.BothTeamsScore) => ("btts", false),
+            nameof(PredictionMarket.Over25Goals) => ("over25", false),
+            nameof(PredictionMarket.Under25Goals) => ("under25", false),
+            nameof(PredictionMarket.HomeWin) => ("homeWin", false),
+            nameof(PredictionMarket.AwayWin) => ("awayWin", false),
+            nameof(PredictionMarket.Draw) => ("draw", false),
+            _ => (string.Empty, false)
         };
-        return key is not null &&
-               section.TryGetProperty(key, out var value) &&
+
+        if (TryReadProbability(section, propertyName, out var probability))
+        {
+            return complement ? 1.0 - probability : probability;
+        }
+
+        if (market == nameof(PredictionMarket.Under25Goals) &&
+            TryReadProbability(section, "over25", out var over25))
+        {
+            return 1.0 - over25;
+        }
+
+        return null;
+    }
+
+    private static bool TryReadProbability(JsonElement section, string propertyName, out double probability)
+    {
+        probability = 0;
+        return propertyName.Length > 0 &&
+               section.TryGetProperty(propertyName, out var value) &&
                value.ValueKind == JsonValueKind.Number &&
-               value.TryGetDouble(out var probability)
-            ? probability
-            : null;
+               value.TryGetDouble(out probability);
     }
 
     private static string? ReadString(JsonElement root, string propertyName) =>
@@ -345,6 +379,10 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         public float HeadToHeadHomeWins { get; set; }
         public float HeadToHeadDraws { get; set; }
         public float HeadToHeadAwayWins { get; set; }
+        public float HasSnapshot { get; set; }
+        public float HasStatistical { get; set; }
+        public float HasBookmaker { get; set; }
+        public float HasRestDays { get; set; }
     }
 
     private sealed class MarketModelOutput

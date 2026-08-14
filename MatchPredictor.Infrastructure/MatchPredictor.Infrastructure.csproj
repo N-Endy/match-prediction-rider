@@ -29,6 +29,11 @@
     </ItemGroup>
 
     <ItemGroup>
+      <InternalsVisibleTo Include="MatchPredictor.Tests.Unit" />
+      <InternalsVisibleTo Include="MatchPredictor.Tests.Integration" />
+    </ItemGroup>
+
+    <ItemGroup>
       <Folder Include="Persistence\Migrations\" />
     </ItemGroup>
 

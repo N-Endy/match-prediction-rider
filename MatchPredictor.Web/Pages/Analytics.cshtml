@@ -128,13 +128,15 @@
                     <div class="mp-category-row">
                         <div class="mp-cat-header">
                             <span class="mp-cat-name">@MatchPredictor.Infrastructure.Utils.DateTimeProvider.ConvertUtcToLocal(run.RunAtUtc).ToString("dd MMM HH:mm") · @run.LookbackDays d</span>
-                            <span class="mp-cat-details">@run.SampleCount samples</span>
+                            <span class="mp-cat-details">@run.SampleCount samples · @run.StakeableBetCount stakeable</span>
                         </div>
                         <div class="mp-read-strip">
                             <span class="mp-read-badge mp-read-badge-strong">Brier @run.BrierScore.ToString("0.000")</span>
                             <span class="mp-read-badge mp-read-badge-caution">ECE @run.ExpectedCalibrationError.ToString("0.000")</span>
                             <span class="mp-read-badge @(run.FlatStakeRoiPercent >= 0 ? "mp-read-badge-strong" : "mp-read-badge-avoid")">ROI @run.FlatStakeRoiPercent.ToString("+0.0;-0.0;0.0")%</span>
                             <span class="mp-read-badge @(run.AverageClvPercent >= 0 ? "mp-read-badge-strong" : "mp-read-badge-avoid")">CLV @run.AverageClvPercent.ToString("+0.0;-0.0;0.0")%</span>
+                            <span class="mp-read-badge @(run.StakeableFlatStakeRoiPercent >= 0 ? "mp-read-badge-strong" : "mp-read-badge-avoid")">Stake ROI @run.StakeableFlatStakeRoiPercent.ToString("+0.0;-0.0;0.0")%</span>
+                            <span class="mp-read-badge @(run.StakeableAverageClvPercent >= 0 ? "mp-read-badge-strong" : "mp-read-badge-avoid")">Stake CLV @run.StakeableAverageClvPercent.ToString("+0.0;-0.0;0.0")%</span>
                         </div>
                     </div>
                 }

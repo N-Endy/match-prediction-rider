@@ -92,6 +92,53 @@ public static class MarketQuoteResolver
     }
 
     /// <summary>
+    /// Resolves a de-vigged market quote for stakeable-edge checks. Prefers live/stored
+    /// probabilities, then falls back to implied probability from live decimal odds.
+    /// </summary>
+    public static bool TryResolveStakeableQuote(
+        Prediction prediction,
+        SourceMarketFixture? sourceFixture,
+        MatchData? storedMatch,
+        out MarketQuote quote)
+    {
+        if (TryResolve(storedMatch ?? new MatchData(), prediction, sourceFixture, out quote))
+        {
+            return true;
+        }
+
+        if (!TryResolveLiveDecimalOdds(prediction, sourceFixture, out var decimalOdds))
+        {
+            quote = new MarketQuote();
+            return false;
+        }
+
+        var impliedProbability = BetPricingMath.ConvertDecimalOddsToProbability(decimalOdds) ?? 0d;
+        if (impliedProbability <= 0d)
+        {
+            quote = new MarketQuote();
+            return false;
+        }
+
+        var marketProbability = impliedProbability;
+        if (TryResolvePredictionMarket(prediction, out var market))
+        {
+            marketProbability = DeVigImpliedProbability(sourceFixture, market, impliedProbability);
+        }
+
+        quote = new MarketQuote
+        {
+            MarketProbability = marketProbability,
+            DecimalOdds = decimalOdds,
+            ImpliedProbability = impliedProbability,
+            PricingSource = LivePricingSourceLabel,
+            OddsFreshness = LiveOddsFreshnessLabel,
+            OddsDerivationSource = SourceOddsDerivationLabel,
+            SourceName = LiveSourceName
+        };
+        return true;
+    }
+
+    /// <summary>
     /// Resolves live SportyBet decimal odds for a prediction from a matched source fixture.
     /// Prefers raw book odds; falls back to probability-derived odds.
     /// </summary>

@@ -61,6 +61,21 @@ public partial class AnalyzerService
                     targetDateString);
             }
 
+            if (_fixtureFeatureService is not null)
+            {
+                try
+                {
+                    await _fixtureFeatureService.CaptureFeatureSnapshotsAsync(generationMatches);
+                }
+                catch (Exception featureEx)
+                {
+                    _logger.LogWarning(
+                        featureEx,
+                        "Failed to capture fixture feature snapshots during prediction generation for {TargetDate}.",
+                        targetDateString);
+                }
+            }
+
             var forecastCandidates = _dataAnalyzerService.BuildForecastCandidates(generationMatches, bookmakerSignals).ToList();
             foreach (var candidate in forecastCandidates)
             {

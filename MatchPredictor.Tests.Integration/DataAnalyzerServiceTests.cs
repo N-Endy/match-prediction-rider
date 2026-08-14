@@ -2,6 +2,7 @@ using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Services;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 using Xunit;
 
 namespace MatchPredictor.Tests.Integration;
@@ -174,6 +175,34 @@ public class DataAnalyzerServiceTests
         Assert.Equal(6, candidates.Count);
         Assert.Equal(1, probabilityCalculator.CalculateProbabilitiesCalls);
         Assert.Equal(0, probabilityCalculator.SingleMarketCalls);
+    }
+
+    [Fact]
+    public void BuildForecastCandidates_WritesUnder25OnProbabilitySignals()
+    {
+        var match = CreateMatch();
+        var service = new DataAnalyzerService(
+            new FakeProbabilityCalculator
+            {
+                Btts = 0.50,
+                Over25 = 0.62,
+                Under25 = 0.38,
+                HomeWin = 0.44,
+                AwayWin = 0.28
+            },
+            new FakeCalibrationService((_, raw) => raw),
+            new FakeThresholdTuningService(),
+            new IdentityProbabilityCorrectionService(),
+            Options.Create(new PredictionSettings()));
+
+        var under = Assert.Single(
+            service.BuildForecastCandidates([match]),
+            candidate => candidate.Market == PredictionMarket.Under25Goals);
+
+        using var document = JsonDocument.Parse(under.FeatureContributionsJson);
+        var calculator = document.RootElement.GetProperty("calculatorSignal");
+        Assert.Equal(0.62, calculator.GetProperty("over25").GetDouble(), 6);
+        Assert.Equal(0.38, calculator.GetProperty("under25").GetDouble(), 6);
     }
 
     private static MatchData CreateMatch()

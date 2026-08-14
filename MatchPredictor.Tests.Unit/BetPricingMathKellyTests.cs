@@ -30,4 +30,12 @@ public class BetPricingMathKellyTests
         Assert.Equal(0.0, BetPricingMath.CalculateFractionalKellyStakeFraction(0.70, 1.0), 6);
         Assert.Equal(0.0, BetPricingMath.CalculateFractionalKellyStakeFraction(0.70, 0.5), 6);
     }
+
+    [Fact]
+    public void MeetsMinimumEdge_RequiresThreePercentGap()
+    {
+        Assert.True(BetPricingMath.MeetsMinimumEdge(0.58, 0.54, 0.03));
+        Assert.False(BetPricingMath.MeetsMinimumEdge(0.56, 0.54, 0.03));
+        Assert.True(BetPricingMath.MeetsMinimumEdge(0.58, 0.54));
+    }
 }

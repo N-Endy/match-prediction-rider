@@ -13,5 +13,8 @@ public class HistoricalBacktestSummary
     public double LogLoss { get; set; }
     public double FlatStakeRoiPercent { get; set; }
     public double AverageClvPercent { get; set; }
+    public int StakeableBetCount { get; set; }
+    public double StakeableFlatStakeRoiPercent { get; set; }
+    public double StakeableAverageClvPercent { get; set; }
     public int LookbackDays { get; set; }
 }

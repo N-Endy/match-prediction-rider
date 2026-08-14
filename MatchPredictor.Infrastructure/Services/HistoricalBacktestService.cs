@@ -4,6 +4,7 @@ using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Statistics.Backtesting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace MatchPredictor.Infrastructure.Services;
 
@@ -13,11 +14,16 @@ public sealed class HistoricalBacktestService : IHistoricalBacktestService
 
     private readonly ApplicationDbContext _dbContext;
     private readonly ILogger<HistoricalBacktestService> _logger;
+    private readonly double _minimumEdge;
 
-    public HistoricalBacktestService(ApplicationDbContext dbContext, ILogger<HistoricalBacktestService> logger)
+    public HistoricalBacktestService(
+        ApplicationDbContext dbContext,
+        ILogger<HistoricalBacktestService> logger,
+        IOptions<PredictionSettings>? predictionOptions = null)
     {
         _dbContext = dbContext;
         _logger = logger;
+        _minimumEdge = predictionOptions?.Value.ValueBetMinimumEdge ?? 0.03;
     }
 
     public async Task RunNightlyBacktestAsync(CancellationToken cancellationToken = default)
@@ -74,11 +80,20 @@ public sealed class HistoricalBacktestService : IHistoricalBacktestService
                     Outcome: forecast.OutcomeOccurred == true,
                     DecimalOdds: publishOdds,
                     CloseDecimalOdds: closeOdds,
-                    DateUtc: forecast.MatchDateTime ?? forecast.SettledAt ?? forecast.CreatedAt);
+                    DateUtc: forecast.MatchDateTime ?? forecast.SettledAt ?? forecast.CreatedAt,
+                    FairMarketProbability: ResolveFairMarketProbability(orderedSnapshots, forecast.Market, publishOdds));
             })
             .ToList();
 
         var metrics = BacktestEvaluator.Evaluate(samples, betThreshold: 0.55);
+        var stakeableSamples = samples
+            .Where(sample =>
+                sample.FairMarketProbability is double marketProbability &&
+                BetPricingMath.MeetsMinimumEdge(sample.Probability, marketProbability, _minimumEdge))
+            .ToList();
+        var stakeableMetrics = stakeableSamples.Count == 0
+            ? BacktestMetrics.Empty
+            : BacktestEvaluator.Evaluate(stakeableSamples, betThreshold: 0.55);
         var summary = new HistoricalBacktestSummary
         {
             RunAtUtc = DateTime.UtcNow,
@@ -88,6 +103,9 @@ public sealed class HistoricalBacktestService : IHistoricalBacktestService
             LogLoss = metrics.LogLoss,
             FlatStakeRoiPercent = metrics.Roi * 100.0,
             AverageClvPercent = metrics.Clv * 100.0,
+            StakeableBetCount = stakeableMetrics.BetCount,
+            StakeableFlatStakeRoiPercent = stakeableMetrics.Roi * 100.0,
+            StakeableAverageClvPercent = stakeableMetrics.Clv * 100.0,
             LookbackDays = LookbackDays
         };
 
@@ -95,11 +113,39 @@ public sealed class HistoricalBacktestService : IHistoricalBacktestService
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation(
-            "Historical backtest complete: {Samples} samples, Brier={Brier:F4}, ECE={Ece:F4}, ROI={Roi:F1}%.",
+            "Historical backtest complete: {Samples} samples, Brier={Brier:F4}, ECE={Ece:F4}, ROI={Roi:F1}%, stakeable ROI={StakeableRoi:F1}% ({StakeableBets} bets).",
             summary.SampleCount,
             summary.BrierScore,
             summary.ExpectedCalibrationError,
-            summary.FlatStakeRoiPercent);
+            summary.FlatStakeRoiPercent,
+            summary.StakeableFlatStakeRoiPercent,
+            summary.StakeableBetCount);
+    }
+
+    private static double? ResolveFairMarketProbability(
+        IReadOnlyList<MarketOddsSnapshot> snapshots,
+        PredictionMarket market,
+        double? publishOdds)
+    {
+        var fair = snapshots
+            .Select(snapshot => market switch
+            {
+                PredictionMarket.HomeWin => snapshot.FairHomeWin,
+                PredictionMarket.AwayWin => snapshot.FairAwayWin,
+                PredictionMarket.Draw => snapshot.FairDraw,
+                PredictionMarket.Over25Goals => snapshot.FairOver25,
+                PredictionMarket.Under25Goals => snapshot.FairUnder25,
+                PredictionMarket.BothTeamsScore => snapshot.FairBttsYes,
+                _ => null
+            })
+            .FirstOrDefault(probability => probability is > 0 and < 1);
+
+        if (fair is > 0)
+        {
+            return fair;
+        }
+
+        return publishOdds is > 1.0 ? 1.0 / publishOdds.Value : null;
     }
 
     private static double? ResolveDecimalOdds(MarketOddsSnapshot snapshot, PredictionMarket market)

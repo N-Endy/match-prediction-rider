@@ -25,6 +25,12 @@ public static class BetPricingMath
         return Math.Round(1d / decimalOdds.Value, 6);
     }
 
+    public static bool MeetsMinimumEdge(
+        double modelProbability,
+        double marketProbability,
+        double minimumEdge = 0.03) =>
+        modelProbability - marketProbability >= minimumEdge;
+
     public static double? CalculateExpectedValuePercent(double? modelProbability, double? decimalOdds)
     {
         if (modelProbability is null || decimalOdds is null || modelProbability <= 0d || decimalOdds <= 1d)

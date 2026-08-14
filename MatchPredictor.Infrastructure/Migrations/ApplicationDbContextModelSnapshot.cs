@@ -619,6 +619,15 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<int>("SampleCount")
                         .HasColumnType("integer");
 
+                    b.Property<double>("StakeableAverageClvPercent")
+                        .HasColumnType("double precision");
+
+                    b.Property<int>("StakeableBetCount")
+                        .HasColumnType("integer");
+
+                    b.Property<double>("StakeableFlatStakeRoiPercent")
+                        .HasColumnType("double precision");
+
                     b.HasKey("Id");
 
                     b.HasIndex("RunAtUtc");

@@ -444,33 +444,30 @@ public class DataAnalyzerService : IDataAnalyzerService
             },
             ["statisticalSignal"] = statisticalSignal is null
                 ? null
-                : new Dictionary<string, double>
-                {
-                    ["btts"] = statisticalSignal.Btts,
-                    ["over25"] = statisticalSignal.Over25,
-                    ["homeWin"] = statisticalSignal.HomeWin,
-                    ["awayWin"] = statisticalSignal.AwayWin,
-                    ["draw"] = statisticalSignal.Draw
-                },
+                : BuildProbabilitySignalMap(
+                    statisticalSignal.Btts,
+                    statisticalSignal.Over25,
+                    statisticalSignal.Under25,
+                    statisticalSignal.HomeWin,
+                    statisticalSignal.AwayWin,
+                    statisticalSignal.Draw),
             ["statisticalSignalApplied"] = statisticalSignal is not null,
-            ["calculatorSignal"] = new Dictionary<string, double>
-            {
-                ["btts"] = calculatorSignal.Btts,
-                ["over25"] = calculatorSignal.Over25,
-                ["homeWin"] = calculatorSignal.HomeWin,
-                ["awayWin"] = calculatorSignal.AwayWin,
-                ["draw"] = calculatorSignal.Draw
-            },
+            ["calculatorSignal"] = BuildProbabilitySignalMap(
+                calculatorSignal.Btts,
+                calculatorSignal.Over25,
+                calculatorSignal.Under25,
+                calculatorSignal.HomeWin,
+                calculatorSignal.AwayWin,
+                calculatorSignal.Draw),
             ["bookmakerSignal"] = bookmakerSignal is null
                 ? null
-                : new Dictionary<string, double?>
-                {
-                    ["btts"] = bookmakerSignal.Btts,
-                    ["over25"] = bookmakerSignal.Over25,
-                    ["homeWin"] = bookmakerSignal.HomeWin,
-                    ["awayWin"] = bookmakerSignal.AwayWin,
-                    ["draw"] = bookmakerSignal.Draw
-                },
+                : BuildProbabilitySignalMap(
+                    bookmakerSignal.Btts,
+                    bookmakerSignal.Over25,
+                    bookmakerSignal.Under25,
+                    bookmakerSignal.HomeWin,
+                    bookmakerSignal.AwayWin,
+                    bookmakerSignal.Draw),
             ["bookmakerSignalApplied"] = bookmakerSignal is not null,
             ["mlSignal"] = mlSignal,
             ["mlSignalApplied"] = mlSignal is not null,
@@ -478,6 +475,26 @@ public class DataAnalyzerService : IDataAnalyzerService
         };
 
         return JsonSerializer.Serialize(summary);
+    }
+
+    private static Dictionary<string, double?> BuildProbabilitySignalMap(
+        double? btts,
+        double? over25,
+        double? under25,
+        double? homeWin,
+        double? awayWin,
+        double? draw)
+    {
+        var resolvedUnder25 = under25 ?? (over25 is double over ? 1.0 - over : null);
+        return new Dictionary<string, double?>
+        {
+            ["btts"] = btts,
+            ["over25"] = over25,
+            ["under25"] = resolvedUnder25,
+            ["homeWin"] = homeWin,
+            ["awayWin"] = awayWin,
+            ["draw"] = draw
+        };
     }
 
     private static double GetMarketProbability(MatchProbabilities probabilities, PredictionMarket market) =>
@@ -497,7 +514,7 @@ public class DataAnalyzerService : IDataAnalyzerService
         {
             PredictionMarket.BothTeamsScore => probabilities.Btts,
             PredictionMarket.Over25Goals => probabilities.Over25,
-            PredictionMarket.Under25Goals => probabilities.Under25,
+            PredictionMarket.Under25Goals => probabilities.Under25 ?? (probabilities.Over25 is double over ? 1.0 - over : null),
             PredictionMarket.HomeWin => probabilities.HomeWin,
             PredictionMarket.AwayWin => probabilities.AwayWin,
             PredictionMarket.Draw => probabilities.Draw,

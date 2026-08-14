@@ -30,6 +30,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
     private readonly ISourceMarketPricingService _pricingService;
     private readonly IAiAdvisorService _aiAdvisorService;
     private readonly BetslipSettings _settings;
+    private readonly double _minimumEdge;
     private readonly ILogger<BetslipGenerationService> _logger;
 
     public BetslipGenerationService(
@@ -38,7 +39,8 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         ISourceMarketPricingService pricingService,
         IAiAdvisorService aiAdvisorService,
         IOptions<BetslipSettings> options,
-        ILogger<BetslipGenerationService> logger)
+        ILogger<BetslipGenerationService> logger,
+        IOptions<PredictionSettings>? predictionOptions = null)
     {
         _dbContext = dbContext;
         _bookingService = bookingService;
@@ -46,6 +48,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         _aiAdvisorService = aiAdvisorService;
         _settings = options.Value;
         _logger = logger;
+        _minimumEdge = predictionOptions?.Value.ValueBetMinimumEdge ?? 0.03;
     }
 
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
@@ -75,15 +78,24 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 settings.MinMinutesBeforeKickoff);
 
             var composed = new List<ComposedBetslip>();
+            IReadOnlyList<SourceMarketFixture> sourceFixtures = [];
+            try
+            {
+                sourceFixtures = await _pricingService.GetTodaySourceMarketFixturesAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Live SportyBet pricing unavailable; banker and ladder slips will be skipped.");
+            }
 
-            var banker = await ComposeBankerSlipAsync(predictions, settings);
+            var banker = await ComposeBankerSlipAsync(predictions, settings, sourceFixtures);
             if (banker is not null)
             {
                 composed.Add(banker);
             }
 
             var usedFixtureKeys = CollectFixtureKeys(composed);
-            var ladderPool = await BuildLivePricedLadderPoolAsync(predictions, settings);
+            var ladderPool = BuildLivePricedLadderPool(predictions, sourceFixtures);
             var ladderBeforeExclusion = ladderPool.Count;
             ladderPool = ExcludeUsedFixtures(ladderPool, usedFixtureKeys);
             var ladderRemoved = ladderBeforeExclusion - ladderPool.Count;
@@ -137,7 +149,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             var drawSlip = (ComposedBetslip?)null;
             if (dayKind == BetslipDayKinds.Weekend)
             {
-                drawSlip = await ComposeDrawSlipAsync(predictions, oddsByPredictionId, settings, usedFixtureKeys);
+                drawSlip = await ComposeDrawSlipAsync(predictions, oddsByPredictionId, settings, usedFixtureKeys, sourceFixtures);
                 if (drawSlip is not null)
                 {
                     composed.Add(drawSlip);
@@ -245,19 +257,9 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
     private async Task<ComposedBetslip?> ComposeBankerSlipAsync(
         IReadOnlyList<Prediction> predictions,
-        BetslipSettings settings)
+        BetslipSettings settings,
+        IReadOnlyList<SourceMarketFixture> fixtures)
     {
-        IReadOnlyList<SourceMarketFixture> fixtures;
-        try
-        {
-            fixtures = await _pricingService.GetTodaySourceMarketFixturesAsync();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Banker slip skipped: live SportyBet pricing unavailable.");
-            return null;
-        }
-
         if (fixtures.Count == 0)
         {
             _logger.LogInformation("Banker slip skipped: no live SportyBet fixtures for today.");
@@ -280,7 +282,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 prediction.League,
                 prediction.MatchDateTime);
 
-            if (!MarketQuoteResolver.TryResolveLiveDecimalOdds(prediction, fixture, out var liveOdds))
+            if (!TryGetStakeableOdds(prediction, fixture, out var liveOdds))
             {
                 continue;
             }
@@ -584,7 +586,8 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         IReadOnlyList<Prediction> predictions,
         IReadOnlyDictionary<int, double> oddsByPredictionId,
         BetslipSettings settings,
-        IReadOnlySet<string> usedFixtureKeys)
+        IReadOnlySet<string> usedFixtureKeys,
+        IReadOnlyList<SourceMarketFixture> sourceFixtures)
     {
         var drawPool = predictions
             .Where(p => p.PredictionCategory == "Draw")
@@ -595,6 +598,16 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         var drawBeforeExclusion = drawPool.Count;
         drawPool = drawPool
             .Where(p => !IsFixtureUsed(ResolveFixtureKey(p), usedFixtureKeys))
+            .Where(p =>
+            {
+                var fixture = SourceMarketFixtureMatcher.FindBestFixture(
+                    sourceFixtures,
+                    p.HomeTeam,
+                    p.AwayTeam,
+                    p.League,
+                    p.MatchDateTime);
+                return TryGetStakeableOdds(p, fixture, out _);
+            })
             .ToList();
         var drawRemoved = drawBeforeExclusion - drawPool.Count;
 
@@ -845,21 +858,10 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         };
     }
 
-    private async Task<List<BetslipComposerCandidate>> BuildLivePricedLadderPoolAsync(
+    private List<BetslipComposerCandidate> BuildLivePricedLadderPool(
         IReadOnlyList<Prediction> predictions,
-        BetslipSettings settings)
+        IReadOnlyList<SourceMarketFixture> fixtures)
     {
-        IReadOnlyList<SourceMarketFixture> fixtures;
-        try
-        {
-            fixtures = await _pricingService.GetTodaySourceMarketFixturesAsync();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Ladder slips: live SportyBet pricing unavailable; no payout-band tickets will be built.");
-            return [];
-        }
-
         if (fixtures.Count == 0)
         {
             _logger.LogInformation("Ladder slips: no live SportyBet fixtures for today.");
@@ -876,7 +878,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 prediction.League,
                 prediction.MatchDateTime);
 
-            if (!MarketQuoteResolver.TryResolveLiveDecimalOdds(prediction, fixture, out var liveOdds))
+            if (!TryGetStakeableOdds(prediction, fixture, out var liveOdds))
             {
                 continue;
             }
@@ -905,6 +907,27 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             .OrderByDescending(c => c.Confidence)
             .ThenBy(c => c.PredictionId)
             .ToList();
+    }
+
+    private bool TryGetStakeableOdds(
+        Prediction prediction,
+        SourceMarketFixture? fixture,
+        out double liveOdds)
+    {
+        liveOdds = 0d;
+        if (!MarketQuoteResolver.TryResolveStakeableQuote(prediction, fixture, storedMatch: null, out var quote))
+        {
+            return false;
+        }
+
+        var modelProbability = (double)(prediction.ConfidenceScore ?? prediction.RawConfidenceScore ?? 0m);
+        if (!BetPricingMath.MeetsMinimumEdge(modelProbability, quote.MarketProbability, _minimumEdge))
+        {
+            return false;
+        }
+
+        liveOdds = quote.DecimalOdds;
+        return liveOdds > 1d;
     }
 
     private static HashSet<string> CollectFixtureKeys(IEnumerable<ComposedBetslip> slips)

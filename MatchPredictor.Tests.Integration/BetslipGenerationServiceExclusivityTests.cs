@@ -59,6 +59,22 @@ public class BetslipGenerationServiceExclusivityTests
                 underOdds: 1.75);
         }
 
+        for (var i = 1; i <= 5; i++)
+        {
+            AddMainPrediction(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(400 + i),
+                $"NoEdgeHome{i}",
+                $"NoEdgeAway{i}",
+                $"no-edge-fx-{i}",
+                confidence: 0.52m,
+                category: "BothTeamsScore",
+                bttsOdds: 1.55);
+        }
+
         context.Predictions.AddRange(predictions);
         await context.SaveChangesAsync();
 
@@ -86,6 +102,8 @@ public class BetslipGenerationServiceExclusivityTests
         var ladderFixtures = SelectionFixtureKeys(ladder.SelectMany(s => s.Selections), fixtureByPredictionId);
 
         Assert.Empty(bankerFixtures.Intersect(ladderFixtures, StringComparer.OrdinalIgnoreCase));
+        Assert.DoesNotContain(bankerFixtures, key => key.StartsWith("no-edge-fx-", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(ladderFixtures, key => key.StartsWith("no-edge-fx-", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -290,6 +308,17 @@ public class BetslipGenerationServiceExclusivityTests
                 WasPublished = true,
                 IsCurrentRevision = true,
                 PredictionRunId = Guid.NewGuid()
+            });
+            fixtures.Add(new SourceMarketFixture
+            {
+                EventId = $"draw-evt-{i}",
+                League = "Draw League",
+                HomeTeam = $"FreeDrawHome{i}",
+                AwayTeam = $"FreeDrawAway{i}",
+                MatchTimeUtc = kickoff.AddMinutes(300 + i),
+                HomeWinOdds = 2.20,
+                DrawOdds = 3.50,
+                AwayWinOdds = 3.40
             });
         }
 

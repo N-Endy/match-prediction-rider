@@ -1,3 +1,4 @@
+using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Statistics.Backtesting;
 using Xunit;
 
@@ -91,6 +92,26 @@ public class BacktestEvaluatorTests
 
         Assert.Equal(0, metrics.BetCount);
         Assert.Equal(0.0, metrics.Roi, 6);
+    }
+
+    [Fact]
+    public void Evaluate_StakeableSubset_IgnoresNoEdgeBets()
+    {
+        var samples = new List<BacktestSample>
+        {
+            new(0.70, true, DecimalOdds: 2.0, FairMarketProbability: 0.52),
+            new(0.56, false, DecimalOdds: 1.80, FairMarketProbability: 0.55)
+        };
+
+        var stakeable = samples
+            .Where(sample =>
+                sample.FairMarketProbability is double market &&
+                BetPricingMath.MeetsMinimumEdge(sample.Probability, market, 0.03))
+            .ToList();
+        var metrics = BacktestEvaluator.Evaluate(stakeable, betThreshold: 0.55);
+
+        Assert.Equal(1, metrics.BetCount);
+        Assert.Equal(1.0, metrics.Roi, 6);
     }
 
     [Fact]

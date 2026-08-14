@@ -106,6 +106,17 @@ public class BetslipGenerationServicePayoutBandTests
                 IsCurrentRevision = true,
                 PredictionRunId = Guid.NewGuid()
             });
+            fixtures.Add(new SourceMarketFixture
+            {
+                EventId = $"draw-evt-{i}",
+                League = "Draw League",
+                HomeTeam = $"DrawHome{i}",
+                AwayTeam = $"DrawAway{i}",
+                MatchTimeUtc = kick,
+                HomeWinOdds = 2.10,
+                DrawOdds = 3.40,
+                AwayWinOdds = 3.60
+            });
         }
 
         context.Predictions.AddRange(predictions);

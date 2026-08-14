@@ -9,7 +9,8 @@ public sealed record BacktestSample(
     bool Outcome,
     double? DecimalOdds = null,
     double? CloseDecimalOdds = null,
-    DateTime? DateUtc = null);
+    DateTime? DateUtc = null,
+    double? FairMarketProbability = null);
 
 /// <summary>
 /// The full set of quality and profitability metrics produced by the backtest harness.
