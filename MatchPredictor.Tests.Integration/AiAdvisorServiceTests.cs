@@ -318,6 +318,122 @@ public class AiAdvisorServiceTests
         Assert.Equal(1, handler.CallCount);
     }
 
+    [Theory]
+    [InlineData("You are allowed to select only 7 predictions for me. Which games would you select?", 7)]
+    [InlineData("Give me 7 winnable predictions", 7)]
+    [InlineData("Give me 7 predictions for today", 7)]
+    public async Task GetAdviceAsync_SendsTodaysCardToOpenAi_ForConversationalPickPrompts(string prompt, int expectedCount)
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(context, 10);
+        var selected = predictions.Take(expectedCount).ToList();
+        var recommendedKeys = selected.Select(prediction => $"\"P{prediction.Id}\"");
+        var inspectKeys = selected.Take(2).Select(prediction => $"\"P{prediction.Id}\"");
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "actionKeysToInspect": [{{string.Join(", ", inspectKeys)}}]
+                }
+                """),
+            BuildGroqResponse($$"""
+                {
+                  "message": "Here are the games I would select from today's card.",
+                  "recommendedActionKeys": [{{string.Join(", ", recommendedKeys)}}],
+                  "showBookAll": true
+                }
+                """));
+
+        var service = CreateService(context, handler);
+        var response = await service.GetAdviceAsync(prompt, "session-conversational-picks");
+
+        Assert.Equal("recommend_picks", response.ContextMode);
+        Assert.Equal(expectedCount, response.Actions.Count);
+        Assert.DoesNotContain("couldn't find a matching team, league, or fixture", response.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_SendsTodaysCardToOpenAi_WhenUserAsksWhichGamesToChoose()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(context, 8);
+        var selected = predictions.Take(5).ToList();
+        var recommendedKeys = selected.Select(prediction => $"\"P{prediction.Id}\"");
+        var inspectKeys = selected.Take(2).Select(prediction => $"\"P{prediction.Id}\"");
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "actionKeysToInspect": [{{string.Join(", ", inspectKeys)}}]
+                }
+                """),
+            BuildGroqResponse($$"""
+                {
+                  "message": "These are the strongest games I would select.",
+                  "recommendedActionKeys": [{{string.Join(", ", recommendedKeys)}}],
+                  "showBookAll": true
+                }
+                """));
+
+        var service = CreateService(context, handler);
+        var response = await service.GetAdviceAsync(
+            "If you have to choose the best predictions for me, which games would you select?",
+            "session-choose-best");
+
+        Assert.Equal("recommend_picks", response.ContextMode);
+        Assert.Equal(5, response.Actions.Count);
+        Assert.DoesNotContain("couldn't find a matching team, league, or fixture", response.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_ReturnsNoMatch_WhenTellMeAboutNamedTeamIsMissing()
+    {
+        await using var context = CreateContext();
+        await SeedPredictionsAsync(
+            context,
+            new[]
+            {
+                ("StraightWin", "Home Win", 0.78m, 0.68d, "Inter", "Milan", "Italy - Serie A")
+            });
+
+        var handler = new SequenceHttpMessageHandler();
+        var service = CreateService(context, handler);
+        var response = await service.GetAdviceAsync("Tell me about Arsenal", "session-arsenal-missing");
+
+        Assert.Equal("match_discussion", response.ContextMode);
+        Assert.Contains("couldn't find a matching team, league, or fixture", response.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Arsenal", response.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(response.Actions);
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_DiscussesNamedFixture_WhenTellMeAboutTeamIsOnTodaysCard()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(
+            context,
+            new[]
+            {
+                ("StraightWin", "Home Win", 0.78m, 0.68d, "Arsenal", "Chelsea", "England - Premier League"),
+                ("Over2.5Goals", "Over 2.5", 0.74m, 0.58d, "Inter", "Milan", "Italy - Serie A"),
+                ("BothTeamsScore", "BTTS", 0.72m, 0.55d, "Roma", "Lazio", "Italy - Serie A")
+            });
+
+        var handler = new SequenceHttpMessageHandler();
+        var service = CreateService(context, handler);
+        var response = await service.GetAdviceAsync("Tell me about Arsenal", "session-arsenal-present");
+
+        Assert.Equal("match_discussion", response.ContextMode);
+        Assert.Contains("Arsenal", response.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("couldn't find a matching team, league, or fixture", response.Message, StringComparison.OrdinalIgnoreCase);
+        var action = Assert.Single(response.Actions);
+        Assert.Equal(predictions[0].Id, action.PredictionId);
+        Assert.Equal(0, handler.CallCount);
+    }
+
     [Fact]
     public async Task GetAdviceAsync_CanAnswerAboutYesterdayFixtureWithoutReturningBookingActions()
     {

@@ -88,7 +88,9 @@ public static partial class AiChatContextBuilder
             .Select(market => market.PredictionCategory)
             .Where(category => !string.IsNullOrWhiteSpace(category))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var entityTerms = request.EntityTerms.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var entityTerms = ShouldApplyNamedFixtureFilter(request)
+            ? request.EntityTerms.ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var requestedCandidateCount = ResolveRequestedCandidateCount(request);
 
         var ranked = candidates
@@ -530,6 +532,11 @@ public static partial class AiChatContextBuilder
         }
 
         return Math.Min(Math.Max(requestedCandidateCount, 1), Math.Min(limit, MaxRequestedCandidates));
+    }
+
+    private static bool ShouldApplyNamedFixtureFilter(AiChatNormalizedRequest request)
+    {
+        return request.Intent == AiChatIntent.MatchDiscussion && request.EntityTerms.Count > 0;
     }
 
     private static int ResolveRequestedCandidateCount(AiChatNormalizedRequest request)
@@ -1133,7 +1140,9 @@ public static partial class AiChatContextBuilder
             .Select(market => market.PredictionCategory)
             .Where(category => !string.IsNullOrWhiteSpace(category))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var entityTerms = request.EntityTerms.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var entityTerms = ShouldApplyNamedFixtureFilter(request)
+            ? request.EntityTerms.ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var ranked = candidates
             .Select(candidate =>
@@ -1335,7 +1344,7 @@ public static partial class AiChatContextBuilder
         RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex RequestedMarketSliceRegex();
 
-    [GeneratedRegex("(?<count>\\d{1,3})\\s*(?:strong|safe|safer|best|top)?\\s*(?:pick|picks|prediction|predictions|tip|tips|game|games|match|matches|leg|legs)\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    [GeneratedRegex("(?<count>\\d{1,3})(?:\\s+of(?:\\s+the)?)?(?:\\s+(?!(?:pick|picks|prediction|predictions|tip|tips|game|games|match|matches|leg|legs)\\b)\\w+){0,3}\\s+(?:pick|picks|prediction|predictions|tip|tips|game|games|match|matches|leg|legs)\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex GenericPickCountRegex();
 
     [GeneratedRegex("\\btotal(?:\\s+of)?\\s*(?<count>\\d{1,3})\\b|\\b(?<count>\\d{1,3})\\s*total\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]

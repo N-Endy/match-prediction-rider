@@ -157,6 +157,52 @@ public class AiChatRequestParserTests
         Assert.Equal("today", result.Request.Scope);
         Assert.Equal(7, result.Request.RequestedTotalCount);
         Assert.True(result.Request.BookableOnly);
+        Assert.Empty(result.Request.EntityTerms);
+    }
+
+    [Theory]
+    [InlineData("You are allowed to select only 7 predictions for me. Which games would you select?", 7)]
+    [InlineData("Give me 7 winnable predictions", 7)]
+    [InlineData("Give me 7 winnable games", 7)]
+    [InlineData("Select 7 predictions", 7)]
+    public void ParseDeterministic_ParsesCountQualifiers_OnConversationalPickPrompts(string prompt, int expectedCount)
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            prompt,
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.Equal(AiChatIntent.RecommendPicks, result.Request.Intent);
+        Assert.Equal(expectedCount, result.Request.RequestedTotalCount);
+        Assert.Empty(result.Request.EntityTerms);
+    }
+
+    [Fact]
+    public void ParseDeterministic_TreatsChooseTheBestPrompt_AsRecommendPicksWithoutEntities()
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            "If you have to choose the best predictions for me, which games would you select?",
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.Equal(AiChatIntent.RecommendPicks, result.Request.Intent);
+        Assert.Null(result.Request.RequestedTotalCount);
+        Assert.Empty(result.Request.EntityTerms);
+    }
+
+    [Fact]
+    public void ParseDeterministic_ExtractsNamedTeam_OnlyForMatchDiscussion()
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            "Tell me about Arsenal",
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.Equal(AiChatIntent.MatchDiscussion, result.Request.Intent);
+        Assert.Contains(result.Request.EntityTerms, term => term.Contains("arsenal", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

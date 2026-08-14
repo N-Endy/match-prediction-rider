@@ -215,6 +215,19 @@ public class AiAdvisorService : IAiAdvisorService
 
         if (normalizedRequest.Intent == AiChatIntent.MatchDiscussion)
         {
+            if (selection.NoRelevantMatchesFound)
+            {
+                var namedFixtureMiss = new AiChatResponse
+                {
+                    Message = AiChatContextBuilder.BuildNoRelevantMatchesMessage(normalizedPrompt)
+                };
+
+                MergeSelectionWarnings(namedFixtureMiss, selection, normalizedRequest, parseResult);
+                FinalizeResponse(namedFixtureMiss, "match_discussion");
+                await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, namedFixtureMiss, selection, [], normalizedRequest, ct);
+                return namedFixtureMiss;
+            }
+
             var discussionResponse = BuildMatchDiscussionResponse(normalizedPrompt, relevantCandidates);
             MergeSelectionWarnings(discussionResponse, selection, normalizedRequest, parseResult);
             FinalizeResponse(discussionResponse, "match_discussion");

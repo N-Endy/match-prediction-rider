@@ -30,7 +30,7 @@ public class AiChatContextBuilderTests
     }
 
     [Fact]
-    public void BuildSelection_MatchesSpecificTeamAndLeagueQueries()
+    public void BuildSelection_IgnoresNamedTeams_OnPickListPrompts()
     {
         var predictions = new[]
         {
@@ -44,13 +44,16 @@ public class AiChatContextBuilderTests
             "What are the best La Liga picks for Real Madrid?",
             DateTime.UtcNow);
 
-        var candidate = Assert.Single(selection.Candidates);
-        Assert.Equal(1, candidate.PredictionId);
-        Assert.Equal("Real Madrid", candidate.HomeTeam);
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(AiChatIntent.RecommendPicks, selection.NormalizedRequest?.Intent);
+        Assert.Empty(selection.NormalizedRequest?.EntityTerms ?? []);
+        Assert.Equal(3, selection.Candidates.Count);
+        Assert.Contains(selection.Candidates, candidate => candidate.HomeTeam == "Real Madrid");
+        Assert.Contains(selection.Candidates, candidate => candidate.HomeTeam == "Manchester City");
     }
 
     [Fact]
-    public void BuildSelection_FlagsUnknownFixtureRequests()
+    public void BuildSelection_DoesNotNoMatch_WhenPickPromptHasUnknownTeamWords()
     {
         var predictions = new[]
         {
@@ -62,9 +65,53 @@ public class AiChatContextBuilderTests
             "Show me Bayern Munich picks",
             DateTime.UtcNow);
 
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(AiChatIntent.RecommendPicks, selection.NormalizedRequest?.Intent);
+        Assert.Empty(selection.NormalizedRequest?.EntityTerms ?? []);
+        var candidate = Assert.Single(selection.Candidates);
+        Assert.Equal(1, candidate.PredictionId);
+        Assert.Equal(1, selection.TotalAvailableCount);
+    }
+
+    [Fact]
+    public void BuildSelection_FlagsUnknownFixture_ForMatchDiscussionOfMissingTeam()
+    {
+        var predictions = new[]
+        {
+            CreatePrediction(1, "StraightWin", "Home Win", "Arsenal", "Chelsea", "England - Premier League", 0.78m)
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Tell me about Bayern Munich",
+            DateTime.UtcNow);
+
         Assert.True(selection.NoRelevantMatchesFound);
         Assert.Empty(selection.Candidates);
+        Assert.Equal(AiChatIntent.MatchDiscussion, selection.NormalizedRequest?.Intent);
+        Assert.Contains(selection.NormalizedRequest?.EntityTerms ?? [], term => term.Contains("bayern", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(1, selection.TotalAvailableCount);
+    }
+
+    [Fact]
+    public void BuildSelection_DiscussesNamedTeam_WhenOnTodaysCard()
+    {
+        var predictions = new[]
+        {
+            CreatePrediction(1, "StraightWin", "Home Win", "Arsenal", "Chelsea", "England - Premier League", 0.78m),
+            CreatePrediction(2, "Over2.5Goals", "Over 2.5", "Inter", "Milan", "Italy - Serie A", 0.75m)
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Tell me about Arsenal",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(AiChatIntent.MatchDiscussion, selection.NormalizedRequest?.Intent);
+        var candidate = Assert.Single(selection.Candidates);
+        Assert.Equal(1, candidate.PredictionId);
+        Assert.Equal("Arsenal", candidate.HomeTeam);
     }
 
     [Fact]
@@ -227,6 +274,65 @@ public class AiChatContextBuilderTests
         Assert.False(selection.NoRelevantMatchesFound);
         Assert.Equal(7, selection.Candidates.Count);
         Assert.Equal(7, selection.RequestedCandidateCount);
+    }
+
+    [Theory]
+    [InlineData("You are allowed to select only 7 predictions for me. Which games would you select?", 7)]
+    [InlineData("Give me 7 winnable predictions", 7)]
+    [InlineData("Select 7 predictions from today's card", 7)]
+    public void BuildSelection_UsesTodaysCard_ForConversationalPickPromptsWithCount(string prompt, int expectedCount)
+    {
+        var predictions = Enumerable.Range(1, 10)
+            .Select(index => CreatePrediction(
+                index,
+                "StraightWin",
+                index % 2 == 0 ? "Home Win" : "Away Win",
+                $"Home {index}",
+                $"Away {index}",
+                "England - Premier League",
+                0.90m - (index * 0.01m),
+                thresholdUsed: 0.68))
+            .ToArray();
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            prompt,
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(AiChatIntent.RecommendPicks, selection.NormalizedRequest?.Intent);
+        Assert.Empty(selection.NormalizedRequest?.EntityTerms ?? []);
+        Assert.Equal(expectedCount, selection.NormalizedRequest?.RequestedTotalCount);
+        Assert.Equal(expectedCount, selection.Candidates.Count);
+        Assert.Equal(expectedCount, selection.RequestedCandidateCount);
+    }
+
+    [Fact]
+    public void BuildSelection_UsesTodaysCard_ForChooseTheBestConversationalPrompt()
+    {
+        var predictions = Enumerable.Range(1, 10)
+            .Select(index => CreatePrediction(
+                index,
+                "StraightWin",
+                index % 2 == 0 ? "Home Win" : "Away Win",
+                $"Home {index}",
+                $"Away {index}",
+                "England - Premier League",
+                0.90m - (index * 0.01m),
+                thresholdUsed: 0.68))
+            .ToArray();
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "If you have to choose the best predictions for me, which games would you select?",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(AiChatIntent.RecommendPicks, selection.NormalizedRequest?.Intent);
+        Assert.Empty(selection.NormalizedRequest?.EntityTerms ?? []);
+        Assert.Null(selection.NormalizedRequest?.RequestedTotalCount);
+        Assert.Equal(5, selection.Candidates.Count);
+        Assert.All(selection.Candidates, candidate => Assert.StartsWith("Home ", candidate.HomeTeam));
     }
 
     [Fact]
