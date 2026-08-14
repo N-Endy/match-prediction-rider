@@ -702,7 +702,7 @@ a:hover {
 }
 
 .mp-score-confirm-panel {
-  width: min(28rem, 100%);
+  width: min(34rem, 100%);
   background: var(--surface, #fff);
   color: var(--text, #0f172a);
   border-radius: 12px;
@@ -718,6 +718,50 @@ a:hover {
 .mp-score-confirm-panel p {
   margin: 0 0 0.5rem;
   font-size: 0.9rem;
+}
+
+.mp-score-confirm-hint {
+  color: #64748b;
+}
+
+.mp-score-confirm-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+  max-height: min(22rem, 60vh);
+  overflow: auto;
+}
+
+.mp-score-confirm-candidate {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  width: 100%;
+  text-align: left;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.15);
+  background: #f8fafc;
+  padding: 0.65rem 0.75rem;
+  cursor: pointer;
+}
+
+.mp-score-confirm-candidate:hover,
+.mp-score-confirm-candidate:focus-visible {
+  border-color: rgba(234, 179, 8, 0.7);
+  background: rgba(234, 179, 8, 0.12);
+  outline: none;
+}
+
+.mp-score-confirm-candidate-teams {
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.mp-score-confirm-candidate-meta {
+  font-size: 0.8rem;
+  color: #64748b;
 }
 
 .mp-score-confirm-flip {

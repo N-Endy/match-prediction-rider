@@ -95,7 +95,11 @@ public static class ScoreMatchingHelper
         { "wolv", "wolves" },
         { "sheff", "sheffield" },
         { "nott", "nottingham" },
-        { "bri", "brighton" }
+        { "bri", "brighton" },
+        { "kiev", "kyiv" },
+        { "lvov", "lviv" },
+        { "kharkov", "kharkiv" },
+        { "odessa", "odesa" }
     };
 
     public readonly record struct TeamMatchResult(

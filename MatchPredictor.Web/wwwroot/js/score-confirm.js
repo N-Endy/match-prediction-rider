@@ -14,12 +14,10 @@
       '<div class="mp-score-confirm-panel">' +
       '<h3>Confirm score match</h3>' +
       '<p id="mpScoreConfirmPrediction"></p>' +
-      '<p id="mpScoreConfirmScraped"></p>' +
-      '<p id="mpScoreConfirmMeta"></p>' +
-      '<p id="mpScoreConfirmFlipNote" class="mp-score-confirm-flip" hidden></p>' +
+      '<p id="mpScoreConfirmHint" class="mp-score-confirm-hint">Choose the scraped row that matches this fixture.</p>' +
+      '<div id="mpScoreConfirmCandidates" class="mp-score-confirm-candidates"></div>' +
       '<div class="mp-score-confirm-actions">' +
       '<button type="button" id="mpScoreConfirmCancel">Cancel</button>' +
-      '<button type="button" class="mp-score-confirm-yes" id="mpScoreConfirmYes">Confirm match</button>' +
       '</div>' +
       '</div>';
     document.body.appendChild(dialog);
@@ -44,55 +42,90 @@
     pendingPayload = null;
   }
 
+  function parseCandidates(button) {
+    var raw = button.getAttribute('data-candidates') || '[]';
+    try {
+      var parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
   function openDialog(button) {
     var dialog = ensureDialog();
+    var candidates = parseCandidates(button);
     pendingPayload = {
       predictionId: Number(button.getAttribute('data-prediction-id')),
-      sourceName: button.getAttribute('data-source-name'),
-      sourceRowId: Number(button.getAttribute('data-source-row-id')),
       home: button.getAttribute('data-home') || '',
       away: button.getAttribute('data-away') || '',
-      scrapedHome: button.getAttribute('data-scraped-home') || '',
-      scrapedAway: button.getAttribute('data-scraped-away') || '',
-      scrapedScore: button.getAttribute('data-scraped-score') || '',
-      scrapedLeague: button.getAttribute('data-scraped-league') || '',
-      isLive: button.getAttribute('data-is-live') === 'true',
-      isFlipped: button.getAttribute('data-is-flipped') === 'true',
-      button: button
+      button: button,
+      candidates: candidates
     };
 
     dialog.querySelector('#mpScoreConfirmPrediction').textContent =
       'Prediction: ' + pendingPayload.home + ' vs ' + pendingPayload.away;
-    dialog.querySelector('#mpScoreConfirmScraped').textContent =
-      'Scraped: ' + pendingPayload.scrapedHome + ' vs ' + pendingPayload.scrapedAway +
-      ' — ' + pendingPayload.scrapedScore;
-    dialog.querySelector('#mpScoreConfirmMeta').textContent =
-      'Source: ' + pendingPayload.sourceName +
-      (pendingPayload.scrapedLeague ? ' · ' + pendingPayload.scrapedLeague : '');
 
-    var flipNote = dialog.querySelector('#mpScoreConfirmFlipNote');
-    if (pendingPayload.isFlipped) {
-      flipNote.hidden = false;
-      flipNote.textContent = 'Teams appear swapped on source; score will be mirrored to match prediction home/away.';
+    var list = dialog.querySelector('#mpScoreConfirmCandidates');
+    list.innerHTML = '';
+
+    if (candidates.length === 0) {
+      var empty = document.createElement('p');
+      empty.textContent = 'No scraped candidates were attached to this card.';
+      list.appendChild(empty);
     } else {
-      flipNote.hidden = true;
-      flipNote.textContent = '';
+      candidates.forEach(function (candidate) {
+        list.appendChild(createCandidateButton(candidate));
+      });
     }
 
-    var yesBtn = dialog.querySelector('#mpScoreConfirmYes');
-    yesBtn.onclick = confirmMatch;
     dialog.classList.add('is-open');
   }
 
-  async function confirmMatch() {
-    if (!pendingPayload) {
+  function createCandidateButton(candidate) {
+    var item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'mp-score-confirm-candidate';
+
+    var title = document.createElement('span');
+    title.className = 'mp-score-confirm-candidate-teams';
+    title.textContent =
+      (candidate.scrapedHomeTeam || '') + ' vs ' + (candidate.scrapedAwayTeam || '') +
+      ' — ' + (candidate.score || '');
+
+    var meta = document.createElement('span');
+    meta.className = 'mp-score-confirm-candidate-meta';
+    var parts = [candidate.sourceName || 'Unknown'];
+    if (candidate.scrapedLeague) {
+      parts.push(candidate.scrapedLeague);
+    }
+    if (candidate.isLive) {
+      parts.push('Live');
+    }
+    if (candidate.isFlipped) {
+      parts.push('Teams swapped on source');
+    }
+    meta.textContent = parts.join(' · ');
+
+    item.appendChild(title);
+    item.appendChild(meta);
+    item.addEventListener('click', function () {
+      confirmMatch(candidate, item);
+    });
+    return item;
+  }
+
+  async function confirmMatch(candidate, clickedButton) {
+    if (!pendingPayload || !candidate) {
       return;
     }
 
-    var yesBtn = document.getElementById('mpScoreConfirmYes');
-    if (yesBtn) {
-      yesBtn.disabled = true;
-      yesBtn.textContent = 'Confirming…';
+    var buttons = document.querySelectorAll('.mp-score-confirm-candidate');
+    buttons.forEach(function (button) {
+      button.disabled = true;
+    });
+    if (clickedButton) {
+      clickedButton.textContent = 'Confirming…';
     }
 
     try {
@@ -105,8 +138,8 @@
         },
         body: JSON.stringify({
           predictionId: pendingPayload.predictionId,
-          sourceName: pendingPayload.sourceName,
-          sourceRowId: pendingPayload.sourceRowId
+          sourceName: candidate.sourceName,
+          sourceRowId: candidate.sourceRowId
         })
       });
 
@@ -128,9 +161,14 @@
     } catch (error) {
       window.alert('Could not confirm score link.');
     } finally {
-      if (yesBtn) {
-        yesBtn.disabled = false;
-        yesBtn.textContent = 'Confirm match';
+      if (pendingPayload && pendingPayload.candidates) {
+        var list = document.querySelector('#mpScoreConfirmCandidates');
+        if (list) {
+          list.innerHTML = '';
+          pendingPayload.candidates.forEach(function (candidate) {
+            list.appendChild(createCandidateButton(candidate));
+          });
+        }
       }
     }
   }

@@ -4,7 +4,7 @@ namespace MatchPredictor.Domain.Interfaces;
 
 public interface IManualScoreLinkService
 {
-    Task<IReadOnlyDictionary<int, ScoreNearMissHint>> GetHintsAsync(
+    Task<IReadOnlyDictionary<int, ScoreNearMissHintSet>> GetHintsAsync(
         IReadOnlyList<int> predictionIds,
         CancellationToken cancellationToken = default);
 

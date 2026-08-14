@@ -40,8 +40,8 @@ public class ManualScoreLinkServiceTests
         var service = CreateService(context);
         var hints = await service.GetHintsAsync([prediction.Id]);
 
-        Assert.True(hints.TryGetValue(prediction.Id, out var hint));
-        Assert.Equal("FlashScore", hint!.SourceName);
+        var hint = AssertSingleHint(hints, prediction.Id);
+        Assert.Equal("FlashScore", hint.SourceName);
         Assert.Equal(score.Id, hint.SourceRowId);
         Assert.Equal("2:1", hint.Score);
         Assert.False(hint.IsFlipped);
@@ -83,8 +83,8 @@ public class ManualScoreLinkServiceTests
         var service = CreateService(context);
         var hints = await service.GetHintsAsync([prediction.Id]);
 
-        Assert.True(hints.TryGetValue(prediction.Id, out var hint));
-        Assert.Equal("AiScore", hint!.SourceName);
+        var hint = AssertSingleHint(hints, prediction.Id);
+        Assert.Equal("AiScore", hint.SourceName);
         Assert.True(hint.IsFlipped);
         Assert.Equal("1:2", hint.Score);
         Assert.Equal(score.Id, hint.SourceRowId);
@@ -125,8 +125,8 @@ public class ManualScoreLinkServiceTests
         var service = CreateService(context);
         var hints = await service.GetHintsAsync([prediction.Id]);
 
-        Assert.True(hints.TryGetValue(prediction.Id, out var hint));
-        Assert.Equal("AiScore", hint!.SourceName);
+        var hint = AssertSingleHint(hints, prediction.Id);
+        Assert.Equal("AiScore", hint.SourceName);
         Assert.Equal(score.Id, hint.SourceRowId);
         Assert.Equal("0:3", hint.Score);
     }
@@ -270,8 +270,8 @@ public class ManualScoreLinkServiceTests
         var service = CreateService(context);
         var hints = await service.GetHintsAsync([prediction.Id]);
 
-        Assert.True(hints.TryGetValue(prediction.Id, out var hint));
-        Assert.Equal(score.Id, hint!.SourceRowId);
+        var hint = AssertSingleHint(hints, prediction.Id);
+        Assert.Equal(score.Id, hint.SourceRowId);
         Assert.Equal("2:1", hint.Score);
         Assert.False(hint.IsFlipped);
     }
@@ -311,8 +311,8 @@ public class ManualScoreLinkServiceTests
         var service = CreateService(context);
         var hints = await service.GetHintsAsync([prediction.Id]);
 
-        Assert.True(hints.TryGetValue(prediction.Id, out var hint));
-        Assert.Equal(score.Id, hint!.SourceRowId);
+        var hint = AssertSingleHint(hints, prediction.Id);
+        Assert.Equal(score.Id, hint.SourceRowId);
         Assert.Equal("0:2", hint.Score);
         Assert.False(hint.IsFlipped);
     }
@@ -476,6 +476,158 @@ public class ManualScoreLinkServiceTests
         Assert.Equal("mp-score-correct", bttsUpdate.ScoreClass);
         Assert.False(straightUpdate.IsLive);
         Assert.False(bttsUpdate.IsLive);
+    }
+
+    [Fact]
+    public async Task GetHintsAsync_SurfacesKievKyivTransliterationAsCandidate()
+    {
+        await using var context = CreateContext();
+        var kickoff = GetStartedKickoff(16);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        var prediction = CreatePrediction(
+            date,
+            kickoff,
+            "Agrobiznes Volochisk",
+            "Lokomotiv Kiev",
+            "StraightWin",
+            "Home Win",
+            "UKRAINE - PERSHA LIGA");
+        context.Predictions.Add(prediction);
+
+        var score = new MatchScore
+        {
+            MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            League = "UKRAINE: Persha Liga",
+            HomeTeam = "Ahrobiznes Volochysk",
+            AwayTeam = "Lokomotyv Kyiv",
+            Score = "0:0",
+            BTTSLabel = false,
+            IsLive = false
+        };
+        ScoreSnapshotKeyFactory.Apply(score);
+        context.MatchScores.Add(score);
+        await context.SaveChangesAsync();
+
+        var service = CreateService(context);
+        var hints = await service.GetHintsAsync([prediction.Id]);
+
+        var hint = AssertSingleHint(hints, prediction.Id);
+        Assert.Equal(score.Id, hint.SourceRowId);
+        Assert.Equal("0:0", hint.Score);
+        Assert.False(hint.IsFlipped);
+        Assert.True(hint.Similarity >= ManualScoreLinkService.HintReviewSimilarityFloor);
+    }
+
+    [Fact]
+    public async Task GetHintsAsync_IncludesReviewBandLookalikeThatFailsStrictSideFloor()
+    {
+        await using var context = CreateContext();
+        var kickoff = GetStartedKickoff(15);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        var prediction = CreatePrediction(
+            date,
+            kickoff,
+            "Agrobiznes Volochisk",
+            "Lokomotiv Perm",
+            "StraightWin",
+            "Home Win",
+            "UKRAINE - PERSHA LIGA");
+        context.Predictions.Add(prediction);
+
+        var score = new MatchScore
+        {
+            MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            League = "UKRAINE: Persha Liga",
+            HomeTeam = "Ahrobiznes Volochysk",
+            AwayTeam = "Lokomotyv Parm",
+            Score = "1:0",
+            BTTSLabel = false,
+            IsLive = false
+        };
+        ScoreSnapshotKeyFactory.Apply(score);
+        context.MatchScores.Add(score);
+        await context.SaveChangesAsync();
+
+        var awayMatch = ScoreMatchingHelper.GetTeamMatchResultForAdminHint(
+            "Lokomotiv Perm",
+            "Lokomotyv Parm",
+            "UKRAINE - PERSHA LIGA",
+            "UKRAINE: Persha Liga");
+        Assert.True(awayMatch.Score < ManualScoreLinkService.HintMinSideScore);
+        Assert.True(awayMatch.Score >= ManualScoreLinkService.HintReviewMinSideScore);
+
+        var service = CreateService(context);
+        var hints = await service.GetHintsAsync([prediction.Id]);
+
+        var hint = AssertSingleHint(hints, prediction.Id);
+        Assert.Equal(score.Id, hint.SourceRowId);
+        Assert.Equal("ReviewBand", hint.RejectionHint);
+        Assert.True(hint.Similarity >= ManualScoreLinkService.HintReviewSimilarityFloor);
+        Assert.True(hint.Similarity < ManualScoreLinkService.HintSimilarityFloor);
+    }
+
+    [Fact]
+    public async Task GetHintsAsync_ListsMultipleReviewCandidatesForAdminPicker()
+    {
+        await using var context = CreateContext();
+        var kickoff = GetStartedKickoff(14);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        var prediction = CreatePrediction(
+            date,
+            kickoff,
+            "Agrobiznes Volochisk",
+            "Lokomotiv Kiev",
+            "StraightWin",
+            "Home Win",
+            "UKRAINE - PERSHA LIGA");
+        context.Predictions.Add(prediction);
+
+        var flash = new MatchScore
+        {
+            MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            League = "UKRAINE: Persha Liga",
+            HomeTeam = "Ahrobiznes Volochysk",
+            AwayTeam = "Lokomotyv Kyiv",
+            Score = "0:0",
+            BTTSLabel = false,
+            IsLive = false
+        };
+        ScoreSnapshotKeyFactory.Apply(flash);
+        context.MatchScores.Add(flash);
+
+        var ai = new AiScoreMatchScore
+        {
+            MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            League = "Ukraine Persha Liga",
+            HomeTeam = "FC Agrobiznes Volochisk",
+            AwayTeam = "FC Lokomotiv Kyiv",
+            Score = "0-0",
+            SourceEventId = "aiscore-agro-loko",
+            BTTSLabel = false,
+            IsLive = false
+        };
+        ScoreSnapshotKeyFactory.Apply(ai);
+        context.AiScoreMatchScores.Add(ai);
+        await context.SaveChangesAsync();
+
+        var service = CreateService(context);
+        var hints = await service.GetHintsAsync([prediction.Id]);
+
+        Assert.True(hints.TryGetValue(prediction.Id, out var set));
+        Assert.True(set!.Candidates.Count >= 2);
+        Assert.Contains(set.Candidates, candidate => candidate.SourceName == "FlashScore" && candidate.SourceRowId == flash.Id);
+        Assert.Contains(set.Candidates, candidate => candidate.SourceName == "AiScore" && candidate.SourceRowId == ai.Id);
+    }
+
+    private static ScoreNearMissHint AssertSingleHint(
+        IReadOnlyDictionary<int, ScoreNearMissHintSet> hints,
+        int predictionId)
+    {
+        Assert.True(hints.TryGetValue(predictionId, out var set));
+        return Assert.Single(set!.Candidates);
     }
 
     private static ManualScoreLinkService CreateService(ApplicationDbContext context) =>

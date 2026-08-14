@@ -16,14 +16,14 @@ public sealed class AdminScoreLinkController : ControllerBase
     }
 
     [HttpGet("hints")]
-    public async Task<ActionResult<IReadOnlyDictionary<int, ScoreNearMissHint>>> GetHints(
+    public async Task<ActionResult<IReadOnlyDictionary<int, ScoreNearMissHintSet>>> GetHints(
         [FromQuery] string? predictionIds,
         CancellationToken cancellationToken)
     {
         var ids = ParseIds(predictionIds);
         if (ids.Count == 0)
         {
-            return Ok(new Dictionary<int, ScoreNearMissHint>());
+            return Ok(new Dictionary<int, ScoreNearMissHintSet>());
         }
 
         var hints = await _manualScoreLinkService.GetHintsAsync(ids, cancellationToken);

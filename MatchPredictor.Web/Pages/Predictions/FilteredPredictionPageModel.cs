@@ -17,8 +17,8 @@ public abstract class FilteredPredictionPageModel : PageModel
         PredictionQueries = predictionQueries;
     }
 
-    public IReadOnlyDictionary<int, ScoreNearMissHint> ScoreNearMissHints { get; private set; } =
-        new Dictionary<int, ScoreNearMissHint>();
+    public IReadOnlyDictionary<int, ScoreNearMissHintSet> ScoreNearMissHints { get; private set; } =
+        new Dictionary<int, ScoreNearMissHintSet>();
 
     [BindProperty(SupportsGet = true)]
     public string Search { get; set; } = string.Empty;
@@ -79,14 +79,14 @@ public abstract class FilteredPredictionPageModel : PageModel
     {
         if (!HttpContext.IsAdminOperator() || FilteredMatches.Count == 0)
         {
-            ScoreNearMissHints = new Dictionary<int, ScoreNearMissHint>();
+            ScoreNearMissHints = new Dictionary<int, ScoreNearMissHintSet>();
             return;
         }
 
         var scoreLinkService = HttpContext.RequestServices.GetService<IManualScoreLinkService>();
         if (scoreLinkService is null)
         {
-            ScoreNearMissHints = new Dictionary<int, ScoreNearMissHint>();
+            ScoreNearMissHints = new Dictionary<int, ScoreNearMissHintSet>();
             return;
         }
 
@@ -98,7 +98,7 @@ public abstract class FilteredPredictionPageModel : PageModel
 
         if (predictionIds.Count == 0)
         {
-            ScoreNearMissHints = new Dictionary<int, ScoreNearMissHint>();
+            ScoreNearMissHints = new Dictionary<int, ScoreNearMissHintSet>();
             return;
         }
 

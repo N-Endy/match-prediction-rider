@@ -13,6 +13,9 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
     public const double HintSimilarityFloor = 0.70;
     public const double HintMinSideScore = 0.62;
     public const double HintMinLeagueScore = 0.40;
+    public const double HintReviewSimilarityFloor = 0.50;
+    public const double HintReviewMinSideScore = 0.35;
+    public const int MaxHintCandidates = 5;
     private const double OrientationPreferenceEpsilon = 0.05;
     private static readonly TimeSpan FutureFixtureSettlementTolerance = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan HintKickoffProximity = TimeSpan.FromHours(36);
@@ -31,13 +34,13 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
         _logger = logger;
     }
 
-    public async Task<IReadOnlyDictionary<int, ScoreNearMissHint>> GetHintsAsync(
+    public async Task<IReadOnlyDictionary<int, ScoreNearMissHintSet>> GetHintsAsync(
         IReadOnlyList<int> predictionIds,
         CancellationToken cancellationToken = default)
     {
         if (predictionIds.Count == 0)
         {
-            return new Dictionary<int, ScoreNearMissHint>();
+            return new Dictionary<int, ScoreNearMissHintSet>();
         }
 
         var distinctIds = predictionIds.Distinct().ToList();
@@ -53,7 +56,7 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
 
         if (unscoredEligible.Count == 0)
         {
-            return new Dictionary<int, ScoreNearMissHint>();
+            return new Dictionary<int, ScoreNearMissHintSet>();
         }
 
         var aliasLookup = await _teamResolutionService.LoadAliasLookupAsync(cancellationToken);
@@ -120,8 +123,8 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Score))
             .ToList();
 
-        var hintsByFixture = new Dictionary<string, ScoreNearMissHint>(StringComparer.OrdinalIgnoreCase);
-        var result = new Dictionary<int, ScoreNearMissHint>();
+        var hintsByFixture = new Dictionary<string, ScoreNearMissHintSet>(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<int, ScoreNearMissHintSet>();
 
         foreach (var prediction in unscoredEligible)
         {
@@ -131,18 +134,24 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
 
             if (hintsByFixture.TryGetValue(fixtureKey, out var existing))
             {
-                result[prediction.Id] = existing with { PredictionId = prediction.Id };
+                result[prediction.Id] = existing with
+                {
+                    PredictionId = prediction.Id,
+                    Candidates = existing.Candidates
+                        .Select(candidate => candidate with { PredictionId = prediction.Id })
+                        .ToList()
+                };
                 continue;
             }
 
-            var hint = FindBestHint(prediction, candidates, aliasLookup);
-            if (hint is null)
+            var hintSet = FindHintCandidates(prediction, candidates, aliasLookup);
+            if (hintSet.Candidates.Count == 0)
             {
                 continue;
             }
 
-            hintsByFixture[fixtureKey] = hint;
-            result[prediction.Id] = hint;
+            hintsByFixture[fixtureKey] = hintSet;
+            result[prediction.Id] = hintSet;
         }
 
         return result;
@@ -181,7 +190,14 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
         }
 
         var aliasLookup = await _teamResolutionService.LoadAliasLookupAsync(cancellationToken);
-        var orientation = ResolveOrientation(seedPrediction, scraped.HomeTeam, scraped.AwayTeam, scraped.League, aliasLookup);
+        var orientation = ResolveOrientation(
+            seedPrediction,
+            scraped.HomeTeam,
+            scraped.AwayTeam,
+            scraped.League,
+            aliasLookup,
+            HintReviewMinSideScore,
+            HintReviewSimilarityFloor);
         var appliedScore = orientation.IsFlipped ? ReverseScore(scraped.Score) : scraped.Score;
         var aliasScrapedHome = orientation.IsFlipped ? scraped.AwayTeam : scraped.HomeTeam;
         var aliasScrapedAway = orientation.IsFlipped ? scraped.HomeTeam : scraped.AwayTeam;
@@ -318,7 +334,7 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
         DateTime matchTime) =>
         new(sourceName, sourceRowId, sourceEventId, homeTeam, awayTeam, league, score, isLive, matchLocalDate, matchTime);
 
-    private static ScoreNearMissHint? FindBestHint(
+    private static ScoreNearMissHintSet FindHintCandidates(
         Prediction prediction,
         IReadOnlyList<ScoreCandidate> candidates,
         IReadOnlyDictionary<string, int> aliasLookup)
@@ -337,7 +353,9 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
                 candidate.HomeTeam,
                 candidate.AwayTeam,
                 candidate.League,
-                aliasLookup);
+                aliasLookup,
+                HintReviewMinSideScore,
+                HintReviewSimilarityFloor);
 
             if (!orientation.Accepted)
             {
@@ -347,31 +365,32 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
             scored.Add((candidate, orientation.Similarity, orientation.IsFlipped, orientation.RejectionHint));
         }
 
-        var best = scored
+        var ranked = scored
             .OrderByDescending(item => item.Similarity)
             .ThenBy(item => item.IsFlipped)
             .ThenBy(item => item.Candidate.IsLive)
-            .FirstOrDefault();
+            .Take(MaxHintCandidates)
+            .Select(item => new ScoreNearMissHint
+            {
+                PredictionId = prediction.Id,
+                SourceName = item.Candidate.SourceName,
+                SourceRowId = item.Candidate.SourceRowId,
+                SourceEventId = item.Candidate.SourceEventId,
+                ScrapedHomeTeam = item.Candidate.HomeTeam,
+                ScrapedAwayTeam = item.Candidate.AwayTeam,
+                ScrapedLeague = item.Candidate.League,
+                Score = item.Candidate.Score,
+                IsLive = item.Candidate.IsLive,
+                IsFlipped = item.IsFlipped,
+                Similarity = item.Similarity,
+                RejectionHint = item.RejectionHint
+            })
+            .ToList();
 
-        if (best.Candidate is null)
-        {
-            return null;
-        }
-
-        return new ScoreNearMissHint
+        return new ScoreNearMissHintSet
         {
             PredictionId = prediction.Id,
-            SourceName = best.Candidate.SourceName,
-            SourceRowId = best.Candidate.SourceRowId,
-            SourceEventId = best.Candidate.SourceEventId,
-            ScrapedHomeTeam = best.Candidate.HomeTeam,
-            ScrapedAwayTeam = best.Candidate.AwayTeam,
-            ScrapedLeague = best.Candidate.League,
-            Score = best.Candidate.Score,
-            IsLive = best.Candidate.IsLive,
-            IsFlipped = best.IsFlipped,
-            Similarity = best.Similarity,
-            RejectionHint = best.RejectionHint
+            Candidates = ranked
         };
     }
 
@@ -380,7 +399,9 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
         string scrapedHome,
         string scrapedAway,
         string? scrapedLeague,
-        IReadOnlyDictionary<string, int> aliasLookup)
+        IReadOnlyDictionary<string, int> aliasLookup,
+        double minSideScore,
+        double minSimilarity)
     {
         var normal = ScorePair(
             prediction.HomeTeam,
@@ -390,7 +411,9 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
             prediction.League,
             scrapedLeague,
             aliasLookup,
-            flipped: false);
+            flipped: false,
+            minSideScore,
+            minSimilarity);
 
         var flipped = ScorePair(
             prediction.HomeTeam,
@@ -400,7 +423,9 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
             prediction.League,
             scrapedLeague,
             aliasLookup,
-            flipped: true);
+            flipped: true,
+            minSideScore,
+            minSimilarity);
 
         if (!normal.Accepted && !flipped.Accepted)
         {
@@ -428,7 +453,9 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
         string? predictionLeague,
         string? scrapedLeague,
         IReadOnlyDictionary<string, int> aliasLookup,
-        bool flipped)
+        bool flipped,
+        double minSideScore,
+        double minSimilarity)
     {
         var leagueScore = ScoreMatchingHelper.GetLeagueMatchScore(predictionLeague, scrapedLeague);
         if (leagueScore < HintMinLeagueScore)
@@ -454,24 +481,30 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
             return OrientationScore.Rejected;
         }
 
-        if (homeMatch.Score < HintMinSideScore || awayMatch.Score < HintMinSideScore)
+        if (homeMatch.Score < minSideScore || awayMatch.Score < minSideScore)
         {
             return OrientationScore.Rejected;
         }
 
         var similarity = (homeMatch.Score + awayMatch.Score) / 2.0;
-        if (similarity < HintSimilarityFloor)
+        if (similarity < minSimilarity)
         {
             return OrientationScore.Rejected;
         }
 
-        var rejectionHint = !homeMatch.IsMatch || !awayMatch.IsMatch
-            ? "NearMiss"
-            : similarity < 0.84
-                ? "BelowFuzzyFloor"
-                : flipped
-                    ? "FlippedOrientation"
-                    : "AmbiguousOrNearMiss";
+        var isReviewBand = homeMatch.Score < HintMinSideScore ||
+                           awayMatch.Score < HintMinSideScore ||
+                           similarity < HintSimilarityFloor;
+
+        var rejectionHint = isReviewBand
+            ? "ReviewBand"
+            : !homeMatch.IsMatch || !awayMatch.IsMatch
+                ? "NearMiss"
+                : similarity < 0.84
+                    ? "BelowFuzzyFloor"
+                    : flipped
+                        ? "FlippedOrientation"
+                        : "AmbiguousOrNearMiss";
 
         return new OrientationScore(true, flipped, similarity, rejectionHint);
     }

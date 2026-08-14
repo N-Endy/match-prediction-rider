@@ -45,4 +45,40 @@ public class ScoreMatchingHelperTests
         Assert.True(womenMatch.IsMatch);
         Assert.True(youthMatch.IsMatch);
     }
+
+    [Theory]
+    [InlineData("Agrobiznes Volochisk", "Ahrobiznes Volochysk", true)]
+    [InlineData("Lokomotiv Kiev", "Lokomotyv Kyiv", true)]
+    [InlineData("Dynamo Kiev", "Dynamo Kyiv", true)]
+    [InlineData("Kiev", "Roma", false)]
+    public void TeamsMatch_NormalizesKievKyivAndAgrobiznesSpellings(string left, string right, bool expected)
+    {
+        Assert.Equal(expected, ScoreMatchingHelper.TeamsMatch(left, right));
+        Assert.Equal(expected, ScoreMatchingHelper.TeamsMatch(right, left));
+    }
+
+    [Fact]
+    public void GetTeamMatchResult_KievVsKyivClearsSettlementAndHintFloors()
+    {
+        var home = ScoreMatchingHelper.GetTeamMatchResult(
+            "Agrobiznes Volochisk",
+            "Ahrobiznes Volochysk",
+            "UKRAINE - PERSHA LIGA",
+            "UKRAINE: Persha Liga");
+        var away = ScoreMatchingHelper.GetTeamMatchResult(
+            "Lokomotiv Kiev",
+            "Lokomotyv Kyiv",
+            "UKRAINE - PERSHA LIGA",
+            "UKRAINE: Persha Liga");
+        var hintAway = ScoreMatchingHelper.GetTeamMatchResultForAdminHint(
+            "Lokomotiv Kiev",
+            "Lokomotyv Kyiv",
+            "UKRAINE - PERSHA LIGA",
+            "UKRAINE: Persha Liga");
+
+        Assert.True(home.IsMatch);
+        Assert.True(away.IsMatch);
+        Assert.True((home.Score + away.Score) / 2.0 >= 0.84);
+        Assert.True(hintAway.Score >= 0.62);
+    }
 }

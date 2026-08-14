@@ -1,4 +1,6 @@
 @model MatchPredictor.Domain.Models.Prediction
+@using System.Text.Json
+@using MatchPredictor.Domain.Models
 
 @{
     var nowUtc = DateTime.UtcNow;
@@ -8,13 +10,20 @@
     var isActuallyLive = MatchPredictor.Web.Helpers.PredictionDisplayHelper.IsActuallyLive(Model, nowUtc);
     var statusLabel = MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetStatusLabel(Model, nowUtc);
     var isAdminOperator = ViewData["IsAdminOperator"] as bool? == true;
-    MatchPredictor.Domain.Models.ScoreNearMissHint? scoreHint = null;
+    ScoreNearMissHintSet? scoreHintSet = null;
     if (isAdminOperator &&
         string.IsNullOrEmpty(Model.ActualScore) &&
-        ViewData["ScoreNearMissHints"] is System.Collections.Generic.IReadOnlyDictionary<int, MatchPredictor.Domain.Models.ScoreNearMissHint> hints)
+        ViewData["ScoreNearMissHints"] is System.Collections.Generic.IReadOnlyDictionary<int, ScoreNearMissHintSet> hints)
     {
-        hints.TryGetValue(Model.Id, out scoreHint);
+        hints.TryGetValue(Model.Id, out scoreHintSet);
     }
+
+    var scoreHintCandidates = scoreHintSet?.Candidates ?? [];
+    var scoreHintJson = scoreHintCandidates.Count == 0
+        ? "[]"
+        : JsonSerializer.Serialize(
+            scoreHintCandidates,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
 }
 
 <div class="mp-prediction-card mp-prediction-card-rich" data-prediction-id="@Model.Id">
@@ -53,22 +62,15 @@
                 </span>
             }
         }
-        else if (scoreHint is not null)
+        else if (scoreHintCandidates.Count > 0)
         {
             <button type="button"
                     class="mp-score-near-miss"
-                    title="Possible scraped score — click to confirm team names"
+                    title="Possible scraped score — click to choose a match"
                     data-prediction-id="@Model.Id"
                     data-home="@Model.HomeTeam"
                     data-away="@Model.AwayTeam"
-                    data-source-name="@scoreHint.SourceName"
-                    data-source-row-id="@scoreHint.SourceRowId"
-                    data-scraped-home="@scoreHint.ScrapedHomeTeam"
-                    data-scraped-away="@scoreHint.ScrapedAwayTeam"
-                    data-scraped-score="@scoreHint.Score"
-                    data-scraped-league="@scoreHint.ScrapedLeague"
-                    data-is-live="@scoreHint.IsLive.ToString().ToLowerInvariant()"
-                    data-is-flipped="@scoreHint.IsFlipped.ToString().ToLowerInvariant()">
+                    data-candidates="@scoreHintJson">
                 !
             </button>
         }

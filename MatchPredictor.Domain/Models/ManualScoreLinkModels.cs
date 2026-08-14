@@ -1,5 +1,11 @@
 namespace MatchPredictor.Domain.Models;
 
+public sealed record ScoreNearMissHintSet
+{
+    public int PredictionId { get; init; }
+    public IReadOnlyList<ScoreNearMissHint> Candidates { get; init; } = [];
+}
+
 public sealed record ScoreNearMissHint
 {
     public int PredictionId { get; init; }
