@@ -22,6 +22,12 @@ public class BetslipSettings
     public int BankerShortlistSize { get; set; } = 20;
     public int BankerMaxPicks { get; set; } = 8;
 
+    /// <summary>
+    /// Minimum model-vs-market edge for ladder acca legs. Banker and value bets keep
+    /// <see cref="PredictionSettings.ValueBetMinimumEdge"/> (3%).
+    /// </summary>
+    public double LadderMinimumEdge { get; set; } = 0.01;
+
     /// <summary>Stake used to translate combined odds into estimated Naira payout on cards.</summary>
     public decimal ReferenceStakeNaira { get; set; } = 100m;
 

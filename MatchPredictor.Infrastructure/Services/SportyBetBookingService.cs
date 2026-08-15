@@ -32,7 +32,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
     private const int DefaultPricingMaxPages = 10;
     private const int DefaultBookingMaxPages = 10;
     private const double MinimumDirectionalTeamScore = 0.72;
-    private const double MinimumConfidentMatchScore = 1.55;
+    private const double MinimumConfidentMatchScore = 1.48;
     private const double AmbiguousScoreGap = 0.12;
     private static readonly TimeSpan TightKickoffWindow = TimeSpan.FromMinutes(20);
     private static readonly TimeSpan LooseKickoffWindow = TimeSpan.FromMinutes(90);
@@ -483,7 +483,7 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                     else if (marketId == "18") // Over/Under
                                     {
                                         var specifier = market.TryGetProperty("specifier", out var spec) ? spec.GetString() : "";
-                                        if (specifier == "total=2.5")
+                                        if (IsOverUnder25Specifier(specifier))
                                         {
                                             if (market.TryGetProperty("outcomes", out var outcomes))
                                             {
@@ -841,6 +841,28 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         var defaultSeconds = string.Equals(clientName, BookingClientName, StringComparison.Ordinal) ? 60 : 30;
         var configuredSeconds = _configuration.GetValue<int?>(configKey);
         return TimeSpan.FromSeconds(Math.Max(10, configuredSeconds ?? defaultSeconds));
+    }
+
+    internal static bool IsOverUnder25Specifier(string? specifier)
+    {
+        if (string.IsNullOrWhiteSpace(specifier))
+        {
+            return false;
+        }
+
+        const string prefix = "total=";
+        var trimmed = specifier.Trim();
+        if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return double.TryParse(
+                   trimmed[prefix.Length..],
+                   NumberStyles.Float,
+                   CultureInfo.InvariantCulture,
+                   out var total)
+               && Math.Abs(total - 2.5d) < 0.001d;
     }
 
     private int ResolvePageSize(bool useBookingClient)

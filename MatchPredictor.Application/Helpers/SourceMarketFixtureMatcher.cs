@@ -62,7 +62,8 @@ public static class SourceMarketFixtureMatcher
             }
         }
 
-        return bestScore >= 1.55 ? bestFixture : null;
+        // Both teams already passed IsMatch; combined score only ranks candidates.
+        return bestFixture;
     }
 
     private static bool AreCanonicalAliasesEqual(string? leftTeam, string? rightTeam, string? leftLeague, string? rightLeague)

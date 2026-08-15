@@ -168,6 +168,12 @@ public class WeekendPayoutSlipComposerTests
     }
 
     [Fact]
+    public void BetslipSettings_DefaultsLadderMinimumEdgeToOnePercent()
+    {
+        Assert.Equal(0.01, new BetslipSettings().LadderMinimumEdge);
+    }
+
+    [Fact]
     public void Compose_PrefersResearchScoreOverRawConfidence()
     {
         var researched = new BetslipComposerCandidate

@@ -378,6 +378,51 @@ public class SportyBetBookingServiceTests
         Assert.Equal(["evt-close"], handler.SharedEventIds);
     }
 
+    [Fact]
+    public async Task GetTodaySourceMarketFixturesAsync_ParsesOver25Odds_WhenSpecifierIsTwoFifty()
+    {
+        await using var context = CreateContext();
+        var cache = CreateCache();
+        var todayLocalDate = DateTimeProvider.GetLocalDate();
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(todayLocalDate.ToDateTime(new TimeOnly(18, 0), DateTimeKind.Unspecified));
+        var handler = new SportyBetTestHandler(
+            upcomingPages: new Dictionary<int, string>
+            {
+                [1] = BuildUpcomingResponse(
+                    new SportyFixtureSpec(
+                        "evt-ou",
+                        "Over Home",
+                        "Over Away",
+                        "England - Premier League",
+                        kickoffUtc,
+                        TotalsSpecifier: "total=2.50"))
+            });
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["SportyBet:BaseUrl"] = "https://sporty.test",
+                ["SportyBet:SoccerSportId"] = "sr:sport:1",
+                ["SportyBet:Market1X2"] = "1",
+                ["SportyBet:PricingPageSize"] = "100",
+                ["SportyBet:PricingMaxPages"] = "1",
+                ["SportyBet:PricingTimeoutSeconds"] = "30"
+            })
+            .Build();
+        var service = new SportyBetBookingService(
+            configuration,
+            NullLogger<SportyBetBookingService>.Instance,
+            new StubHttpClientFactory(handler),
+            cache,
+            context);
+
+        var fixtures = await service.GetTodaySourceMarketFixturesAsync();
+
+        var fixture = Assert.Single(fixtures);
+        Assert.Equal("evt-ou", fixture.EventId);
+        Assert.Equal(1.90, fixture.Over25Odds);
+        Assert.Equal(2.05, fixture.Under25Odds);
+    }
+
     private static SportyBetBookingService CreateService(
         ApplicationDbContext context,
         IDistributedCache cache,
@@ -391,7 +436,10 @@ public class SportyBetBookingServiceTests
                 ["SportyBet:Market1X2"] = "1",
                 ["SportyBet:BookingPageSize"] = "100",
                 ["SportyBet:BookingMaxPages"] = "10",
-                ["SportyBet:BookingTimeoutSeconds"] = "60"
+                ["SportyBet:BookingTimeoutSeconds"] = "60",
+                ["SportyBet:PricingPageSize"] = "100",
+                ["SportyBet:PricingMaxPages"] = "2",
+                ["SportyBet:PricingTimeoutSeconds"] = "30"
             })
             .Build();
 
@@ -484,7 +532,7 @@ public class SportyBetBookingServiceTests
             markets.Add(new
             {
                 id = "18",
-                specifier = "total=2.5",
+                specifier = fixture.TotalsSpecifier,
                 outcomes = new[]
                 {
                     new { id = "12", desc = "Over 2.5", probability = "0.52", odds = "1.90" },
@@ -535,7 +583,8 @@ public class SportyBetBookingServiceTests
         DateTime? MatchTimeUtc,
         bool Include1X2 = true,
         bool IncludeTotals = true,
-        bool IncludeBtts = true);
+        bool IncludeBtts = true,
+        string TotalsSpecifier = "total=2.5");
 
     private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {

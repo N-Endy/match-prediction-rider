@@ -33,6 +33,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
     private readonly IAiAdvisorService _aiAdvisorService;
     private readonly BetslipSettings _settings;
     private readonly double _minimumEdge;
+    private readonly double _ladderMinimumEdge;
     private readonly ILogger<BetslipGenerationService> _logger;
 
     public BetslipGenerationService(
@@ -51,6 +52,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         _settings = options.Value;
         _logger = logger;
         _minimumEdge = predictionOptions?.Value.ValueBetMinimumEdge ?? 0.03;
+        _ladderMinimumEdge = Math.Clamp(_settings.LadderMinimumEdge, 0d, 1d);
     }
 
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
@@ -270,6 +272,9 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         }
 
         var livePriced = new List<(Prediction Prediction, BetslipComposerCandidate Candidate)>();
+        var unmatched = 0;
+        var noLiveQuote = 0;
+        var failedEdge = 0;
         foreach (var prediction in predictions.Where(p => MainCategories.Contains(p.PredictionCategory)))
         {
             var confidence = prediction.ConfidenceScore ?? prediction.RawConfidenceScore ?? 0m;
@@ -285,8 +290,23 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 prediction.League,
                 prediction.MatchDateTime);
 
-            if (!TryGetStakeableOdds(prediction, fixture, out var liveOdds))
+            if (fixture is null)
             {
+                unmatched++;
+                continue;
+            }
+
+            if (!TryGetStakeableOdds(prediction, fixture, _minimumEdge, out var liveOdds, out var dropReason))
+            {
+                if (dropReason == StakeableDropReason.NoLiveQuote)
+                {
+                    noLiveQuote++;
+                }
+                else if (dropReason == StakeableDropReason.FailedEdge)
+                {
+                    failedEdge++;
+                }
+
                 continue;
             }
 
@@ -308,10 +328,13 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         }
 
         _logger.LogInformation(
-            "Banker pricing: {LivePricedCount} live-priced candidates from {FixtureCount} SportyBet fixtures (min confidence {MinConfidence:0.##}).",
+            "Banker pricing: {LivePricedCount} live-priced candidates from {FixtureCount} SportyBet fixtures (min confidence {MinConfidence:0.##}; unmatched={Unmatched}, noLiveQuote={NoLiveQuote}, failedEdge={FailedEdge}).",
             livePriced.Count,
             fixtures.Count,
-            settings.BankerMinConfidence);
+            settings.BankerMinConfidence,
+            unmatched,
+            noLiveQuote,
+            failedEdge);
 
         // One pick per fixture — keep highest confidence. Cap the AI payload, not the eligible pool.
         var eligible = livePriced
@@ -611,7 +634,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                     p.AwayTeam,
                     p.League,
                     p.MatchDateTime);
-                return TryGetStakeableOdds(p, fixture, out _);
+                return TryGetStakeableOdds(p, fixture, _minimumEdge, out _, out _);
             })
             .ToList();
         var drawRemoved = drawBeforeExclusion - drawPool.Count;
@@ -959,8 +982,14 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             return [];
         }
 
+        var mainPredictions = predictions.Where(p => MainCategories.Contains(p.PredictionCategory)).ToList();
         var livePriced = new List<BetslipComposerCandidate>();
-        foreach (var prediction in predictions.Where(p => MainCategories.Contains(p.PredictionCategory)))
+        var unmatched = 0;
+        var noLiveQuote = 0;
+        var failedEdge = 0;
+        var unmatchedSample = new List<string>();
+
+        foreach (var prediction in mainPredictions)
         {
             var fixture = SourceMarketFixtureMatcher.FindBestFixture(
                 fixtures,
@@ -969,8 +998,28 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 prediction.League,
                 prediction.MatchDateTime);
 
-            if (!TryGetStakeableOdds(prediction, fixture, out var liveOdds))
+            if (fixture is null)
             {
+                unmatched++;
+                if (unmatchedSample.Count < 8)
+                {
+                    unmatchedSample.Add($"{prediction.HomeTeam} vs {prediction.AwayTeam} ({prediction.League})");
+                }
+
+                continue;
+            }
+
+            if (!TryGetStakeableOdds(prediction, fixture, _ladderMinimumEdge, out var liveOdds, out var dropReason))
+            {
+                if (dropReason == StakeableDropReason.NoLiveQuote)
+                {
+                    noLiveQuote++;
+                }
+                else if (dropReason == StakeableDropReason.FailedEdge)
+                {
+                    failedEdge++;
+                }
+
                 continue;
             }
 
@@ -992,33 +1041,65 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         }
 
         // One pick per fixture — keep highest confidence.
-        return livePriced
+        var unique = livePriced
             .GroupBy(c => c.FixtureKey, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.OrderByDescending(c => c.Confidence).ThenBy(c => c.PredictionId).First())
             .OrderByDescending(c => c.Confidence)
             .ThenBy(c => c.PredictionId)
             .ToList();
+
+        var collapsed = livePriced.Count - unique.Count;
+        _logger.LogInformation(
+            "Ladder pricing funnel: {PublishedMain} published main-market picks, {SportyBetFixtures} SportyBet fixtures; unmatched={Unmatched}, noLiveQuote={NoLiveQuote}, failedEdge={FailedEdge}, livePriced={LivePriced}, uniqueFixtures={UniqueFixtures} (collapsed {Collapsed}).",
+            mainPredictions.Count,
+            fixtures.Count,
+            unmatched,
+            noLiveQuote,
+            failedEdge,
+            livePriced.Count,
+            unique.Count,
+            collapsed);
+
+        if (unmatchedSample.Count > 0)
+        {
+            _logger.LogInformation("Ladder unmatched sample: {UnmatchedSample}.", string.Join("; ", unmatchedSample));
+        }
+
+        return unique;
+    }
+
+    private enum StakeableDropReason
+    {
+        None,
+        NoLiveQuote,
+        FailedEdge
     }
 
     private bool TryGetStakeableOdds(
         Prediction prediction,
         SourceMarketFixture? fixture,
-        out double liveOdds)
+        double minimumEdge,
+        out double liveOdds,
+        out StakeableDropReason dropReason)
     {
         liveOdds = 0d;
-        if (!MarketQuoteResolver.TryResolveStakeableQuote(prediction, fixture, storedMatch: null, out var quote))
+        if (!MarketQuoteResolver.TryResolveStakeableQuote(prediction, fixture, storedMatch: null, out var quote) ||
+            quote.DecimalOdds <= 1d)
         {
+            dropReason = StakeableDropReason.NoLiveQuote;
             return false;
         }
 
         var modelProbability = (double)(prediction.ConfidenceScore ?? prediction.RawConfidenceScore ?? 0m);
-        if (!BetPricingMath.MeetsMinimumEdge(modelProbability, quote.MarketProbability, _minimumEdge))
+        if (!BetPricingMath.MeetsMinimumEdge(modelProbability, quote.MarketProbability, minimumEdge))
         {
+            dropReason = StakeableDropReason.FailedEdge;
             return false;
         }
 
         liveOdds = quote.DecimalOdds;
-        return liveOdds > 1d;
+        dropReason = StakeableDropReason.None;
+        return true;
     }
 
     private static HashSet<string> CollectFixtureKeys(IEnumerable<ComposedBetslip> slips)
