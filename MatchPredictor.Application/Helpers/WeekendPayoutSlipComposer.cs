@@ -219,10 +219,11 @@ public static class WeekendPayoutSlipComposer
             {
                 Candidate = c,
                 Uses = usageCounts.GetValueOrDefault(c.PredictionId),
-                Score = (double)c.Confidence - overlapPenalty * usageCounts.GetValueOrDefault(c.PredictionId)
+                Score = ResolvePackingScore(c) - overlapPenalty * usageCounts.GetValueOrDefault(c.PredictionId)
             })
             .Where(x => x.Uses < maxSlipsPerPrediction)
             .OrderByDescending(x => x.Score)
+            .ThenByDescending(x => x.Candidate.ResearchScore ?? (double)x.Candidate.Confidence)
             .ThenByDescending(x => x.Candidate.Confidence)
             .ThenBy(x => band.PreferHigherSingles
                 ? -(x.Candidate.DecimalOdds ?? 0d)
@@ -385,6 +386,9 @@ public static class WeekendPayoutSlipComposer
 
         return $"₦{amount:0.##}";
     }
+
+    private static double ResolvePackingScore(BetslipComposerCandidate candidate) =>
+        candidate.ResearchScore ?? (double)candidate.Confidence;
 
     private static string ResolveFixtureKey(BetslipComposerCandidate candidate) =>
         string.IsNullOrWhiteSpace(candidate.FixtureKey)

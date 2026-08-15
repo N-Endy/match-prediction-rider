@@ -771,6 +771,11 @@ public class ValueBetsServiceTests
             double maxOdds,
             CancellationToken ct = default) =>
             Task.FromResult(new BankerPickResult());
+
+        public Task<LadderRankResult> RankLadderCandidatesAsync(
+            IReadOnlyList<LadderRankRequest> candidates,
+            CancellationToken ct = default) =>
+            Task.FromResult(new LadderRankResult());
     }
 
     private sealed class FakeSourceMarketPricingService : ISourceMarketPricingService

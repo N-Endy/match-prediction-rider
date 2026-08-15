@@ -12,6 +12,13 @@ public sealed class ChatCompletionsRequest
     public bool JsonMode { get; init; }
     public double? Temperature { get; init; }
     public int? MaxTokens { get; init; }
+    public int? TimeoutSeconds { get; init; }
+
+    /// <summary>
+    /// When true and the provider is OpenAI, call the Responses API with hosted web_search.
+    /// Ignored for Gemini/Groq.
+    /// </summary>
+    public bool UseWebSearch { get; init; }
 
     /// <summary>
     /// Optional OpenAI-compat reasoning_effort (e.g. "none" for Gemini latency-sensitive calls).

@@ -11,7 +11,7 @@ public static class ServiceExtension
     {
         services.AddHttpClient(OpenAiCompatibleChatCompletionsClient.HttpClientName, client =>
             {
-                client.Timeout = TimeSpan.FromSeconds(60);
+                client.Timeout = TimeSpan.FromSeconds(OpenAiCompatibleChatCompletionsClient.WebSearchTimeoutSeconds);
             })
             .AddPolicyHandler(HttpPolicyExtensions
                 .HandleTransientHttpError()

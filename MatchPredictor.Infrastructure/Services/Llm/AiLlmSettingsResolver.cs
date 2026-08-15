@@ -100,6 +100,12 @@ public sealed class AiLlmSettingsResolver : IAiLlmSettingsResolver
         return trimmed + "/chat/completions";
     }
 
+    public static string BuildResponsesUrl(string baseUrl)
+    {
+        var trimmed = baseUrl.TrimEnd('/');
+        return trimmed + "/responses";
+    }
+
     private ResolvedAiLlmSettings? ResolveFallbackSettings(
         IConfigurationSection section,
         string primaryProvider,

@@ -1048,6 +1048,255 @@ public class AiAdvisorServiceTests
         return predictions;
     }
 
+    [Fact]
+    public async Task SelectBankerPicksAsync_IncludesFootballInsightsInPayload()
+    {
+        await using var context = CreateContext();
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse("""
+                {"picks":[{"predictionId":11,"reason":"Form supports BTTS"}],"riskNote":"Check XI."}
+                """));
+        var insight = CreateInsightSnapshot("Banker Home", "Banker Away");
+        var service = CreateService(
+            context,
+            handler,
+            footballInsightService: new StubFootballInsightService(new Dictionary<string, FootballMatchInsightSnapshot>
+            {
+                ["11"] = insight
+            }));
+
+        var result = await service.SelectBankerPicksAsync(
+            [
+                new BankerPickRequest
+                {
+                    PredictionId = 11,
+                    League = "Test League",
+                    HomeTeam = "Banker Home",
+                    AwayTeam = "Banker Away",
+                    Market = "BTTS",
+                    PredictedOutcome = "BTTS",
+                    PredictionCategory = "BothTeamsScore",
+                    Confidence = 0.82m,
+                    DecimalOdds = 1.55,
+                    MatchDateTimeUtc = DateTime.UtcNow.AddHours(4)
+                },
+                new BankerPickRequest
+                {
+                    PredictionId = 12,
+                    League = "Test League",
+                    HomeTeam = "Other Home",
+                    AwayTeam = "Other Away",
+                    Market = "Over2.5",
+                    PredictedOutcome = "Over 2.5",
+                    PredictionCategory = "Over2.5Goals",
+                    Confidence = 0.80m,
+                    DecimalOdds = 1.60,
+                    MatchDateTimeUtc = DateTime.UtcNow.AddHours(5)
+                }
+            ],
+            minOdds: 1.5,
+            maxOdds: 10);
+
+        Assert.Equal(11, Assert.Single(result.Picks).PredictionId);
+        Assert.Contains("footballInsight", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.Contains("dataQuality", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.Contains("form", handler.RequestBodies[0], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SelectBankerPicksAsync_OpenAi_UsesWebSearchAndKeepsSuppliedIdsOnly()
+    {
+        await using var context = CreateContext();
+        var handler = new SequenceHttpMessageHandler(
+            BuildResponsesApiResponse("""
+                {"picks":[{"predictionId":11,"reason":"No injury news"},{"predictionId":999,"reason":"invented"}],"riskNote":"Verify XI."}
+                """));
+        var service = CreateService(
+            context,
+            handler,
+            footballInsightService: new StubFootballInsightService(new Dictionary<string, FootballMatchInsightSnapshot>
+            {
+                ["11"] = CreateInsightSnapshot("Banker Home", "Banker Away")
+            }),
+            llmConfig: new Dictionary<string, string?>
+            {
+                ["AiLlm:Provider"] = "openai",
+                ["AiLlm:ApiKey"] = "sk-test",
+                ["AiLlm:Model"] = "gpt-5.6-luna",
+                ["AiLlm:BaseUrl"] = "https://api.openai.com/v1/"
+            });
+
+        var result = await service.SelectBankerPicksAsync(
+            [
+                new BankerPickRequest
+                {
+                    PredictionId = 11,
+                    League = "Test League",
+                    HomeTeam = "Banker Home",
+                    AwayTeam = "Banker Away",
+                    Market = "BTTS",
+                    PredictedOutcome = "BTTS",
+                    PredictionCategory = "BothTeamsScore",
+                    Confidence = 0.82m,
+                    DecimalOdds = 1.55,
+                    MatchDateTimeUtc = DateTime.UtcNow.AddHours(4)
+                }
+            ],
+            minOdds: 1.5,
+            maxOdds: 10);
+
+        Assert.Equal(11, Assert.Single(result.Picks).PredictionId);
+        Assert.Equal("Verify XI.", result.RiskNote);
+        Assert.Contains("/responses", handler.RequestUris[0], StringComparison.Ordinal);
+        Assert.Contains("web_search", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.Contains("footballInsight", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("chat/completions", handler.RequestUris[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SelectBankerPicksAsync_OpenAi_ReturnsEmpty_OnJunkResponsesContent()
+    {
+        await using var context = CreateContext();
+        var handler = new SequenceHttpMessageHandler(
+            BuildResponsesApiResponse("this is not banker json"));
+        var service = CreateService(
+            context,
+            handler,
+            llmConfig: new Dictionary<string, string?>
+            {
+                ["AiLlm:Provider"] = "openai",
+                ["AiLlm:ApiKey"] = "sk-test",
+                ["AiLlm:BaseUrl"] = "https://api.openai.com/v1/"
+            });
+
+        var result = await service.SelectBankerPicksAsync(
+            [
+                new BankerPickRequest
+                {
+                    PredictionId = 11,
+                    League = "Test League",
+                    HomeTeam = "Banker Home",
+                    AwayTeam = "Banker Away",
+                    Market = "BTTS",
+                    PredictedOutcome = "BTTS",
+                    PredictionCategory = "BothTeamsScore",
+                    Confidence = 0.82m,
+                    DecimalOdds = 1.55
+                }
+            ],
+            minOdds: 1.5,
+            maxOdds: 10);
+
+        Assert.Empty(result.Picks);
+        Assert.Contains("/responses", handler.RequestUris[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SelectBestDrawPicksAsync_IncludesFootballInsightsAndSelectsFromSuppliedIdsOnly()
+    {
+        await using var context = CreateContext();
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse("""
+                {"picks":[{"predictionId":22,"reason":"High H2H draw rate"},{"predictionId":999,"reason":"invented"}]}
+                """));
+        var service = CreateService(
+            context,
+            handler,
+            footballInsightService: new StubFootballInsightService(new Dictionary<string, FootballMatchInsightSnapshot>
+            {
+                ["22"] = CreateInsightSnapshot("Draw Home", "Draw Away")
+            }));
+
+        var selected = await service.SelectBestDrawPicksAsync(
+            [
+                new BetslipDrawPickRequest
+                {
+                    PredictionId = 21,
+                    League = "Draw League",
+                    HomeTeam = "Low Conf Home",
+                    AwayTeam = "Low Conf Away",
+                    Confidence = 0.90m,
+                    MatchDateTimeUtc = DateTime.UtcNow.AddHours(3),
+                    PredictionCategory = "Draw"
+                },
+                new BetslipDrawPickRequest
+                {
+                    PredictionId = 22,
+                    League = "Draw League",
+                    HomeTeam = "Draw Home",
+                    AwayTeam = "Draw Away",
+                    Confidence = 0.55m,
+                    MatchDateTimeUtc = DateTime.UtcNow.AddHours(4),
+                    PredictionCategory = "Draw"
+                }
+            ],
+            count: 5);
+
+        Assert.Equal(22, Assert.Single(selected).PredictionId);
+        Assert.Contains("footballInsight", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.DoesNotContain(selected, pick => pick.PredictionId == 999);
+    }
+
+    [Fact]
+    public async Task RankLadderCandidatesAsync_ReturnsSuppliedIdsInModelOrder_DroppingUnknownIds()
+    {
+        await using var context = CreateContext();
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse("""
+                {"orderedPredictionIds":[3,1,999,2]}
+                """));
+        var service = CreateService(
+            context,
+            handler,
+            footballInsightService: new StubFootballInsightService(new Dictionary<string, FootballMatchInsightSnapshot>
+            {
+                ["3"] = CreateInsightSnapshot("Home 3", "Away 3")
+            }));
+
+        var ranked = await service.RankLadderCandidatesAsync(
+            [
+                new LadderRankRequest
+                {
+                    PredictionId = 1,
+                    League = "Test",
+                    HomeTeam = "Home 1",
+                    AwayTeam = "Away 1",
+                    Market = "BTTS",
+                    PredictedOutcome = "BTTS",
+                    PredictionCategory = "BothTeamsScore",
+                    Confidence = 0.90m,
+                    DecimalOdds = 1.55
+                },
+                new LadderRankRequest
+                {
+                    PredictionId = 2,
+                    League = "Test",
+                    HomeTeam = "Home 2",
+                    AwayTeam = "Away 2",
+                    Market = "Over2.5",
+                    PredictedOutcome = "Over 2.5",
+                    PredictionCategory = "Over2.5Goals",
+                    Confidence = 0.80m,
+                    DecimalOdds = 1.60
+                },
+                new LadderRankRequest
+                {
+                    PredictionId = 3,
+                    League = "Test",
+                    HomeTeam = "Home 3",
+                    AwayTeam = "Away 3",
+                    Market = "Under2.5",
+                    PredictedOutcome = "Under 2.5",
+                    PredictionCategory = "Under2.5Goals",
+                    Confidence = 0.50m,
+                    DecimalOdds = 1.70
+                }
+            ]);
+
+        Assert.Equal([3, 1, 2], ranked.OrderedPredictionIds);
+        Assert.Contains("footballInsight", handler.RequestBodies[0], StringComparison.Ordinal);
+    }
+
     private static ApplicationDbContext CreateContext()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
@@ -1089,10 +1338,11 @@ public class AiAdvisorServiceTests
         SequenceHttpMessageHandler handler,
         TestDistributedCache? cache = null,
         IValueBetsService? valueBetsService = null,
-        IAiChatFootballInsightService? footballInsightService = null)
+        IAiChatFootballInsightService? footballInsightService = null,
+        Dictionary<string, string?>? llmConfig = null)
     {
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
+            .AddInMemoryCollection(llmConfig ?? new Dictionary<string, string?>
             {
                 ["AiLlm:Provider"] = "gemini",
                 ["AiLlm:ApiKey"] = "test-api-key",
@@ -1192,6 +1442,23 @@ public class AiAdvisorServiceTests
         });
     }
 
+    private static string BuildResponsesApiResponse(string outputText)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            output_text = outputText,
+            output = new object[]
+            {
+                new { type = "web_search_call", id = "ws_test" },
+                new
+                {
+                    type = "message",
+                    content = new[] { new { type = "output_text", text = outputText } }
+                }
+            }
+        });
+    }
+
     private sealed class StubHttpClientFactory : IHttpClientFactory
     {
         private readonly HttpMessageHandler _handler;
@@ -1214,20 +1481,28 @@ public class AiAdvisorServiceTests
         }
 
         public int CallCount { get; private set; }
+        public List<string> RequestBodies { get; } = [];
+        public List<string> RequestUris { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             CallCount++;
+            RequestUris.Add(request.RequestUri?.ToString() ?? string.Empty);
+
+            if (request.Content is not null)
+            {
+                RequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+            }
 
             if (_responses.Count == 0)
             {
                 throw new InvalidOperationException("Unexpected HTTP call with no queued response.");
             }
 
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(_responses.Dequeue(), Encoding.UTF8, "application/json")
-            });
+            };
         }
     }
 

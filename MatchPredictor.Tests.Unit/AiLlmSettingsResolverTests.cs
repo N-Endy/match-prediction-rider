@@ -47,6 +47,9 @@ public class AiLlmSettingsResolverTests
         Assert.Equal(
             "https://api.openai.com/v1/chat/completions",
             AiLlmSettingsResolver.BuildChatCompletionsUrl(settings.BaseUrl));
+        Assert.Equal(
+            "https://api.openai.com/v1/responses",
+            AiLlmSettingsResolver.BuildResponsesUrl(settings.BaseUrl));
     }
 
     [Fact]
@@ -289,6 +292,170 @@ public class OpenAiCompatibleChatCompletionsClientTests
     }
 
     [Fact]
+    public async Task CompleteAsync_OpenAi_UseWebSearch_PostsResponsesWithWebSearchTool()
+    {
+        string? requestBody = null;
+        Uri? requestUri = null;
+
+        var handler = new CapturingHandler((request, _) =>
+        {
+            requestUri = request.RequestUri;
+            requestBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            return Task.FromResult(CreateResponsesOutputText("""{"picks":[{"predictionId":11,"reason":"XI confirmed"}]}"""));
+        });
+
+        var client = CreateClient(handler, new Dictionary<string, string?>
+        {
+            ["AiLlm:Provider"] = "openai",
+            ["AiLlm:ApiKey"] = "sk-test",
+            ["AiLlm:Model"] = "gpt-5.6-luna"
+        });
+
+        var result = await client.CompleteAsync(new ChatCompletionsRequest
+        {
+            UseWebSearch = true,
+            MaxTokens = 4000,
+            TimeoutSeconds = OpenAiCompatibleChatCompletionsClient.WebSearchTimeoutSeconds,
+            Messages =
+            [
+                new ChatCompletionsMessage { Role = "system", Content = "sys" },
+                new ChatCompletionsMessage { Role = "user", Content = "pick banker" }
+            ]
+        });
+
+        Assert.True(result.Success);
+        Assert.Contains("predictionId", result.Content, StringComparison.Ordinal);
+        Assert.Equal("https://api.openai.com/v1/responses", requestUri!.ToString());
+
+        using var doc = JsonDocument.Parse(requestBody!);
+        Assert.Equal("web_search", doc.RootElement.GetProperty("tools")[0].GetProperty("type").GetString());
+        Assert.Equal("auto", doc.RootElement.GetProperty("tool_choice").GetString());
+        Assert.Equal(4000, doc.RootElement.GetProperty("max_output_tokens").GetInt32());
+        Assert.False(doc.RootElement.TryGetProperty("response_format", out _));
+        Assert.False(doc.RootElement.TryGetProperty("messages", out _));
+    }
+
+    [Fact]
+    public async Task CompleteAsync_OpenAi_UseWebSearch_ParsesOutputMessageParts()
+    {
+        var handler = new CapturingHandler((_, _) =>
+            Task.FromResult(CreateResponsesOutputItems("""{"picks":[{"predictionId":22}]}""")));
+
+        var client = CreateClient(handler, new Dictionary<string, string?>
+        {
+            ["AiLlm:Provider"] = "openai",
+            ["AiLlm:ApiKey"] = "sk-test"
+        });
+
+        var result = await client.CompleteAsync(new ChatCompletionsRequest
+        {
+            UseWebSearch = true,
+            Messages = [new ChatCompletionsMessage { Role = "user", Content = "hi" }]
+        });
+
+        Assert.True(result.Success);
+        Assert.Contains("22", result.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_Gemini_UseWebSearch_DoesNotCallResponses()
+    {
+        Uri? requestUri = null;
+        string? requestBody = null;
+
+        var handler = new CapturingHandler((request, _) =>
+        {
+            requestUri = request.RequestUri;
+            requestBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            return Task.FromResult(CreateOpenAiResponse("{\"ok\":true}"));
+        });
+
+        var client = CreateClient(handler, new Dictionary<string, string?>
+        {
+            ["AiLlm:Provider"] = "gemini",
+            ["AiLlm:ApiKey"] = "gemini-key"
+        });
+
+        var result = await client.CompleteAsync(new ChatCompletionsRequest
+        {
+            UseWebSearch = true,
+            JsonMode = true,
+            Messages = [new ChatCompletionsMessage { Role = "user", Content = "hi" }]
+        });
+
+        Assert.True(result.Success);
+        Assert.Contains("/chat/completions", requestUri!.AbsolutePath, StringComparison.Ordinal);
+        using var doc = JsonDocument.Parse(requestBody!);
+        Assert.False(doc.RootElement.TryGetProperty("tools", out _));
+    }
+
+    [Fact]
+    public async Task CompleteAsync_OpenAi_UseWebSearchFailure_RetriesFallbackWithoutTools()
+    {
+        var callCount = 0;
+        var paths = new List<string>();
+        string? fallbackBody = null;
+
+        var handler = new CapturingHandler((request, _) =>
+        {
+            callCount++;
+            paths.Add(request.RequestUri!.AbsolutePath);
+            if (callCount == 1)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                {
+                    Content = new StringContent("search failed", Encoding.UTF8, "text/plain")
+                });
+            }
+
+            fallbackBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            return Task.FromResult(CreateOpenAiResponse("""{"picks":[{"predictionId":11}]}"""));
+        });
+
+        var client = CreateClient(handler, new Dictionary<string, string?>
+        {
+            ["AiLlm:Provider"] = "openai",
+            ["AiLlm:ApiKey"] = "sk-test",
+            ["AiLlm:Fallback:ApiKey"] = "gemini-key"
+        });
+
+        var result = await client.CompleteAsync(new ChatCompletionsRequest
+        {
+            UseWebSearch = true,
+            Messages = [new ChatCompletionsMessage { Role = "user", Content = "hi" }]
+        });
+
+        Assert.True(result.Success);
+        Assert.Equal(2, callCount);
+        Assert.EndsWith("/responses", paths[0]);
+        Assert.EndsWith("/chat/completions", paths[1]);
+        using var doc = JsonDocument.Parse(fallbackBody!);
+        Assert.False(doc.RootElement.TryGetProperty("tools", out _));
+        Assert.Equal("json_object", doc.RootElement.GetProperty("response_format").GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task CompleteAsync_OpenAi_UseWebSearch_Timeout_ReturnsTimeoutResult()
+    {
+        var handler = new CapturingHandler((_, _) => throw new TaskCanceledException());
+
+        var client = CreateClient(handler, new Dictionary<string, string?>
+        {
+            ["AiLlm:Provider"] = "openai",
+            ["AiLlm:ApiKey"] = "sk-test"
+        });
+
+        var result = await client.CompleteAsync(new ChatCompletionsRequest
+        {
+            UseWebSearch = true,
+            Messages = [new ChatCompletionsMessage { Role = "user", Content = "hi" }]
+        });
+
+        Assert.False(result.Success);
+        Assert.True(result.IsTimeout);
+    }
+
+    [Fact]
     public async Task CompleteAsync_PrimaryFailure_RetriesFallback()
     {
         var callCount = 0;
@@ -470,6 +637,50 @@ public class OpenAiCompatibleChatCompletionsClientTests
                 new
                 {
                     message = new { role = "assistant", content }
+                }
+            }
+        });
+
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        };
+    }
+
+    private static HttpResponseMessage CreateResponsesOutputText(string outputText)
+    {
+        var payload = JsonSerializer.Serialize(new
+        {
+            output_text = outputText,
+            output = new object[]
+            {
+                new { type = "web_search_call", id = "ws_1" },
+                new
+                {
+                    type = "message",
+                    content = new[] { new { type = "output_text", text = outputText } }
+                }
+            }
+        });
+
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        };
+    }
+
+    private static HttpResponseMessage CreateResponsesOutputItems(string messageText)
+    {
+        var payload = JsonSerializer.Serialize(new
+        {
+            output = new object[]
+            {
+                new { type = "web_search_call", id = "ws_2" },
+                new
+                {
+                    type = "message",
+                    role = "assistant",
+                    content = new[] { new { type = "output_text", text = messageText } }
                 }
             }
         });

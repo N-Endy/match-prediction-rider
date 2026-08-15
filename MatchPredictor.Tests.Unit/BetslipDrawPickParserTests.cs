@@ -51,4 +51,20 @@ public class BetslipDrawPickParserTests
     {
         Assert.Null(BetslipDrawPickParser.ParseRiskNote("not-json"));
     }
+
+    [Fact]
+    public void ParseOrderedPredictionIds_ReadsRankedArray()
+    {
+        const string json = """{"orderedPredictionIds":[30,10,20]}""";
+        var ids = BetslipDrawPickParser.ParseOrderedPredictionIds(json);
+        Assert.Equal([30, 10, 20], ids);
+    }
+
+    [Fact]
+    public void ParseOrderedPredictionIds_FallsBackToPicksArray()
+    {
+        const string json = """{"picks":[{"predictionId":8},{"predictionId":4}]}""";
+        var ids = BetslipDrawPickParser.ParseOrderedPredictionIds(json);
+        Assert.Equal([8, 4], ids);
+    }
 }

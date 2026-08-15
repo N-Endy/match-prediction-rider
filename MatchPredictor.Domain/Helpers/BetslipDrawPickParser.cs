@@ -97,6 +97,22 @@ public static partial class BetslipDrawPickParser
         return null;
     }
 
+    public static IReadOnlyList<int> ParseOrderedPredictionIds(string aiResponseJson)
+    {
+        if (string.IsNullOrWhiteSpace(aiResponseJson))
+        {
+            return [];
+        }
+
+        var normalized = NormalizeAiJson(aiResponseJson);
+        if (TryParseOrderedIds(normalized, out var ordered) && ordered.Count > 0)
+        {
+            return ordered.Distinct().ToList();
+        }
+
+        return ParsePredictionIds(aiResponseJson, 200);
+    }
+
     private static string NormalizeAiJson(string aiResponseJson)
     {
         var trimmed = aiResponseJson.Trim();
@@ -147,6 +163,52 @@ public static partial class BetslipDrawPickParser
             }
 
             return ids.Count > 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryParseOrderedIds(string json, out List<int> ids)
+    {
+        ids = [];
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            foreach (var propertyName in new[] { "orderedPredictionIds", "OrderedPredictionIds", "rankedPredictionIds", "RankedPredictionIds" })
+            {
+                if (!document.RootElement.TryGetProperty(propertyName, out var ranked) ||
+                    ranked.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                foreach (var element in ranked.EnumerateArray())
+                {
+                    if (element.ValueKind == JsonValueKind.Number &&
+                        element.TryGetInt32(out var id) &&
+                        id > 0)
+                    {
+                        ids.Add(id);
+                        continue;
+                    }
+
+                    if (TryReadPredictionId(element, out var predictionId))
+                    {
+                        ids.Add(predictionId);
+                    }
+                }
+
+                return ids.Count > 0;
+            }
+
+            return false;
         }
         catch (JsonException)
         {

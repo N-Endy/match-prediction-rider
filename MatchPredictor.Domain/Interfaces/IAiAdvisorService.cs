@@ -16,4 +16,8 @@ public interface IAiAdvisorService
         double minOdds,
         double maxOdds,
         CancellationToken ct = default);
+
+    Task<LadderRankResult> RankLadderCandidatesAsync(
+        IReadOnlyList<LadderRankRequest> candidates,
+        CancellationToken ct = default);
 }

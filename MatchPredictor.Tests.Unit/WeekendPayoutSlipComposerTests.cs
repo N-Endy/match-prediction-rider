@@ -167,6 +167,60 @@ public class WeekendPayoutSlipComposerTests
         Assert.Equal(1, new BetslipSettings().MaxSlipsPerPrediction);
     }
 
+    [Fact]
+    public void Compose_PrefersResearchScoreOverRawConfidence()
+    {
+        var researched = new BetslipComposerCandidate
+        {
+            PredictionId = 1,
+            FixtureKey = "fixture-researched",
+            League = "Test League",
+            HomeTeam = "Research Home",
+            AwayTeam = "Research Away",
+            Market = "BTTS",
+            PredictedOutcome = "BTTS",
+            PredictionCategory = "BothTeamsScore",
+            Confidence = 0.50m,
+            MatchDateTimeUtc = DateTime.UtcNow.AddHours(2),
+            DecimalOdds = 1.80,
+            ResearchScore = 50
+        };
+        var highConfidence = new BetslipComposerCandidate
+        {
+            PredictionId = 2,
+            FixtureKey = "fixture-confidence",
+            League = "Test League",
+            HomeTeam = "Confidence Home",
+            AwayTeam = "Confidence Away",
+            Market = "Over2.5",
+            PredictedOutcome = "Over 2.5",
+            PredictionCategory = "Over2.5Goals",
+            Confidence = 0.99m,
+            MatchDateTimeUtc = DateTime.UtcNow.AddHours(3),
+            DecimalOdds = 1.80
+        };
+
+        var settings = new BetslipSettings
+        {
+            WeekendSmallSlipCount = 1,
+            WeekendMediumSlipCount = 0,
+            WeekendBigSlipCount = 0,
+            WeekendMegaSlipCount = 0,
+            SmallMinOdds = 1.5,
+            SmallMaxOdds = 2.0,
+            SmallFallbackMinOdds = 1.5,
+            SmallFallbackMaxOdds = 2.0,
+            SmallMaxPicks = 1
+        };
+
+        var slips = WeekendPayoutSlipComposer.Compose(
+            [researched, highConfidence],
+            WeekendPayoutSlipComposer.BuildWeekendPlan(settings));
+
+        var slip = Assert.Single(slips);
+        Assert.Equal(1, Assert.Single(slip.Selections).PredictionId);
+    }
+
     private static List<BetslipComposerCandidate> BuildLadder(int count, double odds)
     {
         var categories = new[]

@@ -16,6 +16,7 @@ public sealed class BetslipComposerCandidate
     public DateTime? MatchDateTimeUtc { get; init; }
     public double? DecimalOdds { get; init; }
     public string? AiNote { get; init; }
+    public double? ResearchScore { get; init; }
 }
 
 public sealed class BetslipTierSpec

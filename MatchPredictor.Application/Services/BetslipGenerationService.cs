@@ -25,6 +25,8 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         "Under2.5Goals"
     ];
 
+    public const int MaxResearchPoolSize = 40;
+
     private readonly ApplicationDbContext _dbContext;
     private readonly ISportyBetBookingService _bookingService;
     private readonly ISourceMarketPricingService _pricingService;
@@ -99,6 +101,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             var ladderBeforeExclusion = ladderPool.Count;
             ladderPool = ExcludeUsedFixtures(ladderPool, usedFixtureKeys);
             var ladderRemoved = ladderBeforeExclusion - ladderPool.Count;
+            ladderPool = await RankLadderPoolAsync(ladderPool);
             var bands = dayKind == BetslipDayKinds.Weekend
                 ? WeekendPayoutSlipComposer.BuildWeekendPlan(settings)
                 : WeekendPayoutSlipComposer.BuildWeekdayPlan(settings);
@@ -310,16 +313,15 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             fixtures.Count,
             settings.BankerMinConfidence);
 
-        // One pick per fixture in the shortlist — keep highest confidence.
-        var shortlist = livePriced
+        // One pick per fixture — keep highest confidence. Cap the AI payload, not the eligible pool.
+        var eligible = livePriced
             .GroupBy(x => x.Candidate.FixtureKey, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.OrderByDescending(x => x.Candidate.Confidence).ThenBy(x => x.Candidate.PredictionId).First())
             .OrderByDescending(x => x.Candidate.Confidence)
             .ThenBy(x => x.Candidate.PredictionId)
-            .Take(Math.Max(1, settings.BankerShortlistSize))
             .ToList();
 
-        if (shortlist.Count == 0)
+        if (eligible.Count == 0)
         {
             _logger.LogInformation(
                 "Banker skipped: no live-priced candidates at/above min confidence {MinConfidence:0.##}.",
@@ -327,8 +329,10 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             return null;
         }
 
+        var researchPool = eligible.Take(MaxResearchPoolSize).ToList();
+
         var deterministic = BankerSlipComposer.Compose(
-            shortlist.Select(x => x.Candidate).ToList(),
+            eligible.Select(x => x.Candidate).ToList(),
             settings.BankerMinOdds,
             settings.BankerMaxOdds,
             settings.BankerFallbackMinOdds,
@@ -338,17 +342,17 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         if (deterministic.IsEmpty)
         {
             _logger.LogInformation(
-                "Banker skipped: no combination in {MinOdds:0.##}-{MaxOdds:0.##}x (fallback {FallbackMin:0.##}-{FallbackMax:0.##}x) from {ShortlistCount} shortlist picks.",
+                "Banker skipped: no combination in {MinOdds:0.##}-{MaxOdds:0.##}x (fallback {FallbackMin:0.##}-{FallbackMax:0.##}x) from {EligibleCount} eligible picks.",
                 settings.BankerMinOdds,
                 settings.BankerMaxOdds,
                 settings.BankerFallbackMinOdds,
                 settings.BankerFallbackMaxOdds,
-                shortlist.Count);
+                eligible.Count);
             return null;
         }
 
-        var signalByPredictionId = await LoadSignalSummariesAsync(shortlist.Select(x => x.Prediction).ToList());
-        var aiRequests = shortlist.Select(x =>
+        var signalByPredictionId = await LoadSignalSummariesAsync(researchPool.Select(x => x.Prediction).ToList());
+        var aiRequests = researchPool.Select(x =>
         {
             signalByPredictionId.TryGetValue(x.Prediction.Id, out var signal);
             return new BankerPickRequest
@@ -359,6 +363,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 AwayTeam = x.Candidate.AwayTeam,
                 Market = x.Candidate.Market,
                 PredictedOutcome = x.Candidate.PredictedOutcome,
+                PredictionCategory = x.Candidate.PredictionCategory,
                 Confidence = x.Candidate.Confidence,
                 DecimalOdds = x.Candidate.DecimalOdds ?? 0d,
                 MatchDateTimeUtc = x.Candidate.MatchDateTimeUtc,
@@ -385,7 +390,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             var aiResult = await _aiAdvisorService.SelectBankerPicksAsync(aiRequests, activeMin, activeMax);
             var validated = TryValidateBankerAiPicks(
                 aiResult,
-                shortlist.Select(x => x.Candidate).ToList(),
+                researchPool.Select(x => x.Candidate).ToList(),
                 activeMin,
                 activeMax,
                 settings.BankerMaxPicks);
@@ -612,7 +617,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         var drawRemoved = drawBeforeExclusion - drawPool.Count;
 
         var drawCandidates = drawPool
-            .Take(Math.Max(settings.DrawCandidatePoolSize, settings.DrawSlipSize))
+            .Take(MaxResearchPoolSize)
             .ToList();
 
         if (drawCandidates.Count == 0)
@@ -636,7 +641,8 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             HomeTeam = p.HomeTeam,
             AwayTeam = p.AwayTeam,
             Confidence = p.ConfidenceScore ?? p.RawConfidenceScore ?? 0m,
-            MatchDateTimeUtc = p.MatchDateTime
+            MatchDateTimeUtc = p.MatchDateTime,
+            PredictionCategory = p.PredictionCategory
         }).ToList();
 
         IReadOnlyList<BetslipDrawPickSelection> selected;
@@ -857,6 +863,91 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             Selections = selections
         };
     }
+
+    private async Task<List<BetslipComposerCandidate>> RankLadderPoolAsync(
+        List<BetslipComposerCandidate> ladderPool)
+    {
+        if (ladderPool.Count == 0)
+        {
+            return ladderPool;
+        }
+
+        var researchPool = ladderPool.Take(MaxResearchPoolSize).ToList();
+        try
+        {
+            var requests = researchPool.Select(c => new LadderRankRequest
+            {
+                PredictionId = c.PredictionId,
+                League = c.League,
+                HomeTeam = c.HomeTeam,
+                AwayTeam = c.AwayTeam,
+                Market = c.Market,
+                PredictedOutcome = c.PredictedOutcome,
+                PredictionCategory = c.PredictionCategory,
+                Confidence = c.Confidence,
+                DecimalOdds = c.DecimalOdds ?? 0d,
+                MatchDateTimeUtc = c.MatchDateTimeUtc
+            }).ToList();
+
+            var ranked = await _aiAdvisorService.RankLadderCandidatesAsync(requests);
+            return ApplyLadderResearchScores(ladderPool, ranked);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ladder AI ranking failed; packing by confidence.");
+            return ladderPool;
+        }
+    }
+
+    private static List<BetslipComposerCandidate> ApplyLadderResearchScores(
+        IReadOnlyList<BetslipComposerCandidate> pool,
+        LadderRankResult ranked)
+    {
+        if (ranked.OrderedPredictionIds.Count == 0)
+        {
+            return pool.ToList();
+        }
+
+        var allowed = pool.Select(c => c.PredictionId).ToHashSet();
+        var order = ranked.OrderedPredictionIds
+            .Where(allowed.Contains)
+            .Distinct()
+            .ToList();
+        if (order.Count == 0)
+        {
+            return pool.ToList();
+        }
+
+        var scores = order
+            .Select((id, index) => (id, score: 1000d + (order.Count - index)))
+            .ToDictionary(x => x.id, x => x.score);
+
+        return pool
+            .Select(c => scores.TryGetValue(c.PredictionId, out var score)
+                ? WithResearchScore(c, score)
+                : c)
+            .ToList();
+    }
+
+    private static BetslipComposerCandidate WithResearchScore(
+        BetslipComposerCandidate candidate,
+        double researchScore) =>
+        new()
+        {
+            PredictionId = candidate.PredictionId,
+            FixtureKey = candidate.FixtureKey,
+            League = candidate.League,
+            HomeTeam = candidate.HomeTeam,
+            AwayTeam = candidate.AwayTeam,
+            Market = candidate.Market,
+            PredictedOutcome = candidate.PredictedOutcome,
+            PredictionCategory = candidate.PredictionCategory,
+            Confidence = candidate.Confidence,
+            MatchDateTimeUtc = candidate.MatchDateTimeUtc,
+            DecimalOdds = candidate.DecimalOdds,
+            AiNote = candidate.AiNote,
+            ResearchScore = researchScore
+        };
 
     private List<BetslipComposerCandidate> BuildLivePricedLadderPool(
         IReadOnlyList<Prediction> predictions,

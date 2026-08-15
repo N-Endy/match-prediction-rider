@@ -216,5 +216,10 @@ public class BetslipGenerationServicePayoutBandTests
                 Picks = candidates.Take(4).Select(c => new BetslipDrawPickSelection { PredictionId = c.PredictionId }).ToList(),
                 RiskNote = "ok"
             });
+
+        public Task<LadderRankResult> RankLadderCandidatesAsync(
+            IReadOnlyList<LadderRankRequest> candidates,
+            CancellationToken ct = default) =>
+            Task.FromResult(new LadderRankResult());
     }
 }

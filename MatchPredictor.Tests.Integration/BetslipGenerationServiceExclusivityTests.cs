@@ -148,37 +148,16 @@ public class BetslipGenerationServiceExclusivityTests
 
         if (isWeekend)
         {
-            for (var i = 1; i <= 5; i++)
-            {
-                predictions.Add(new Prediction
-                {
-                    Id = nextId++,
-                    Date = today.ToString("dd-MM-yyyy"),
-                    Time = DateTimeProvider.ConvertUtcToLocal(kickoff.AddMinutes(i)).ToString("HH:mm"),
-                    MatchLocalDate = today,
-                    MatchDateTime = kickoff.AddMinutes(i),
-                    League = "Test League",
-                    HomeTeam = $"ExHome{i}",
-                    AwayTeam = $"ExAway{i}",
-                    FixtureKey = $"ex-fx-{i}",
-                    PredictionCategory = "Draw",
-                    PredictedOutcome = "Draw",
-                    ConfidenceScore = 0.99m,
-                    WasPublished = true,
-                    IsCurrentRevision = true,
-                    PredictionRunId = Guid.NewGuid()
-                });
-            }
-
             for (var i = 1; i <= 10; i++)
             {
+                var matchKickoff = kickoff.AddMinutes(200 + i);
                 predictions.Add(new Prediction
                 {
                     Id = nextId++,
                     Date = today.ToString("dd-MM-yyyy"),
-                    Time = DateTimeProvider.ConvertUtcToLocal(kickoff.AddMinutes(200 + i)).ToString("HH:mm"),
+                    Time = DateTimeProvider.ConvertUtcToLocal(matchKickoff).ToString("HH:mm"),
                     MatchLocalDate = today,
-                    MatchDateTime = kickoff.AddMinutes(200 + i),
+                    MatchDateTime = matchKickoff,
                     League = "Draw League",
                     HomeTeam = $"UniqueDrawHome{i}",
                     AwayTeam = $"UniqueDrawAway{i}",
@@ -189,6 +168,17 @@ public class BetslipGenerationServiceExclusivityTests
                     WasPublished = true,
                     IsCurrentRevision = true,
                     PredictionRunId = Guid.NewGuid()
+                });
+                fixtures.Add(new SourceMarketFixture
+                {
+                    EventId = $"unique-draw-evt-{i}",
+                    League = "Draw League",
+                    HomeTeam = $"UniqueDrawHome{i}",
+                    AwayTeam = $"UniqueDrawAway{i}",
+                    MatchTimeUtc = matchKickoff,
+                    HomeWinOdds = 2.20,
+                    DrawOdds = 3.50,
+                    AwayWinOdds = 3.40
                 });
             }
         }
@@ -346,6 +336,182 @@ public class BetslipGenerationServiceExclusivityTests
             Assert.StartsWith("free-draw-fx-", key, StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task GenerateDailyBetslipsAsync_Weekend_SendsDrawPoolBeyondOldTop12()
+    {
+        if (DateTimeProvider.GetLocalDate().DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
+        {
+            return;
+        }
+
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var today = DateTimeProvider.GetLocalDate();
+        var kickoff = DateTime.UtcNow.AddHours(5);
+        var fixtures = new List<SourceMarketFixture>();
+        var predictions = new List<Prediction>();
+        var nextId = 1;
+        var advisor = new LastFiveDrawAdvisor();
+
+        for (var i = 1; i <= 8; i++)
+        {
+            AddMainPrediction(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(i),
+                $"BankerHome{i}",
+                $"BankerAway{i}",
+                $"banker-fx-{i}",
+                confidence: 0.92m - i * 0.005m,
+                category: "BothTeamsScore",
+                bttsOdds: 1.55);
+        }
+
+        for (var i = 1; i <= 15; i++)
+        {
+            var id = nextId++;
+            var matchKickoff = kickoff.AddMinutes(300 + i);
+            predictions.Add(new Prediction
+            {
+                Id = id,
+                Date = today.ToString("dd-MM-yyyy"),
+                Time = DateTimeProvider.ConvertUtcToLocal(matchKickoff).ToString("HH:mm"),
+                MatchLocalDate = today,
+                MatchDateTime = matchKickoff,
+                League = "Draw League",
+                HomeTeam = $"FreeDrawHome{i}",
+                AwayTeam = $"FreeDrawAway{i}",
+                FixtureKey = $"free-draw-fx-{i}",
+                PredictionCategory = "Draw",
+                PredictedOutcome = "Draw",
+                ConfidenceScore = 0.80m - i * 0.01m,
+                WasPublished = true,
+                IsCurrentRevision = true,
+                PredictionRunId = Guid.NewGuid()
+            });
+            fixtures.Add(new SourceMarketFixture
+            {
+                EventId = $"draw-evt-{i}",
+                League = "Draw League",
+                HomeTeam = $"FreeDrawHome{i}",
+                AwayTeam = $"FreeDrawAway{i}",
+                MatchTimeUtc = matchKickoff,
+                HomeWinOdds = 2.20,
+                DrawOdds = 3.50,
+                AwayWinOdds = 3.40
+            });
+        }
+
+        context.Predictions.AddRange(predictions);
+        await context.SaveChangesAsync();
+
+        var service = CreateService(context, fixtures, advisor);
+        await service.GenerateDailyBetslipsAsync("morning");
+
+        Assert.NotNull(advisor.LastDrawCandidates);
+        Assert.Equal(15, advisor.LastDrawCandidates.Count);
+
+        var draws = await context.Betslips
+            .Include(s => s.Selections)
+            .SingleAsync(s => s.TierLabel == "AI Draws (5)");
+
+        Assert.Equal(5, draws.Selections.Count);
+        Assert.Contains(draws.Selections, s => s.PredictionId == 21);
+        Assert.Contains(draws.Selections, s => s.PredictionId == 22);
+        Assert.Contains(draws.Selections, s => s.PredictionId == 23);
+    }
+
+    [Fact]
+    public async Task GenerateDailyBetslipsAsync_RanksLadderPoolAfterBankerExclusion()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var today = DateTimeProvider.GetLocalDate();
+        var kickoff = DateTime.UtcNow.AddHours(5);
+        var fixtures = new List<SourceMarketFixture>();
+        var predictions = new List<Prediction>();
+        var nextId = 1;
+        var advisor = new RecordingAdvisor();
+
+        for (var i = 1; i <= 8; i++)
+        {
+            AddMainPrediction(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(i),
+                $"BankerHome{i}",
+                $"BankerAway{i}",
+                $"shared-banker-fx-{i}",
+                confidence: 0.92m - i * 0.005m,
+                category: "BothTeamsScore",
+                bttsOdds: 1.55);
+        }
+
+        for (var i = 1; i <= 40; i++)
+        {
+            AddMainPrediction(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(100 + i),
+                $"LadderHome{i}",
+                $"LadderAway{i}",
+                $"ladder-only-fx-{i}",
+                confidence: 0.85m - i * 0.001m,
+                category: i % 2 == 0 ? "Over2.5Goals" : "Under2.5Goals",
+                overOdds: 1.70,
+                underOdds: 1.75);
+        }
+
+        context.Predictions.AddRange(predictions);
+        await context.SaveChangesAsync();
+
+        var service = CreateService(context, fixtures, advisor);
+        await service.GenerateDailyBetslipsAsync("morning");
+
+        var set = await context.BetslipSets
+            .Include(s => s.Slips)
+            .ThenInclude(s => s.Selections)
+            .SingleAsync(s => s.IsCurrent);
+
+        var banker = set.Slips.Single(s => s.SlipNumber == BetslipGenerationService.BankerSlipNumber);
+        var bankerHomes = banker.Selections
+            .Select(s => s.HomeTeam)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.NotNull(advisor.LastLadderCandidates);
+        Assert.NotEmpty(advisor.LastLadderCandidates);
+        Assert.DoesNotContain(
+            advisor.LastLadderCandidates,
+            c => bankerHomes.Contains(c.HomeTeam));
+        Assert.All(
+            advisor.LastLadderCandidates,
+            c => Assert.True(
+                c.HomeTeam.StartsWith("LadderHome", StringComparison.Ordinal) ||
+                c.HomeTeam.StartsWith("BankerHome", StringComparison.Ordinal)));
+
+        var ladder = set.Slips
+            .Where(s => s.SlipNumber != BetslipGenerationService.BankerSlipNumber)
+            .ToList();
+        Assert.NotEmpty(ladder);
+
+        var fixtureByPredictionId = predictions.ToDictionary(p => p.Id, p => p.FixtureKey);
+        var bankerFixtures = SelectionFixtureKeys(banker.Selections, fixtureByPredictionId);
+        var ladderFixtures = SelectionFixtureKeys(ladder.SelectMany(s => s.Selections), fixtureByPredictionId);
+        Assert.Empty(bankerFixtures.Intersect(ladderFixtures, StringComparer.OrdinalIgnoreCase));
+    }
+
     private static HashSet<string> SelectionFixtureKeys(
         IEnumerable<BetslipSelection> selections,
         IReadOnlyDictionary<int, string> fixtureByPredictionId)
@@ -501,9 +667,37 @@ public class BetslipGenerationServiceExclusivityTests
                 Picks = candidates.Take(4).Select(c => new BetslipDrawPickSelection { PredictionId = c.PredictionId }).ToList(),
                 RiskNote = "ok"
             });
+
+        public virtual Task<LadderRankResult> RankLadderCandidatesAsync(
+            IReadOnlyList<LadderRankRequest> candidates,
+            CancellationToken ct = default) =>
+            Task.FromResult(new LadderRankResult());
     }
 
     private sealed class RecordingAdvisor : FakeAdvisor
+    {
+        public IReadOnlyList<BetslipDrawPickRequest>? LastDrawCandidates { get; private set; }
+        public IReadOnlyList<LadderRankRequest>? LastLadderCandidates { get; private set; }
+
+        public override Task<IReadOnlyList<BetslipDrawPickSelection>> SelectBestDrawPicksAsync(
+            IReadOnlyList<BetslipDrawPickRequest> candidates,
+            int count = 5,
+            CancellationToken ct = default)
+        {
+            LastDrawCandidates = candidates.ToList();
+            return base.SelectBestDrawPicksAsync(candidates, count, ct);
+        }
+
+        public override Task<LadderRankResult> RankLadderCandidatesAsync(
+            IReadOnlyList<LadderRankRequest> candidates,
+            CancellationToken ct = default)
+        {
+            LastLadderCandidates = candidates.ToList();
+            return base.RankLadderCandidatesAsync(candidates, ct);
+        }
+    }
+
+    private sealed class LastFiveDrawAdvisor : FakeAdvisor
     {
         public IReadOnlyList<BetslipDrawPickRequest>? LastDrawCandidates { get; private set; }
 
@@ -513,7 +707,8 @@ public class BetslipGenerationServiceExclusivityTests
             CancellationToken ct = default)
         {
             LastDrawCandidates = candidates.ToList();
-            return base.SelectBestDrawPicksAsync(candidates, count, ct);
+            return Task.FromResult<IReadOnlyList<BetslipDrawPickSelection>>(
+                candidates.TakeLast(count).Select(c => new BetslipDrawPickSelection { PredictionId = c.PredictionId }).ToList());
         }
     }
 }

@@ -454,6 +454,17 @@ public class AiAdvisorService : IAiAdvisorService
 
         try
         {
+            var insightsByPredictionId = await LoadBetslipFootballInsightsAsync(
+                candidates.Select(c => (
+                    c.PredictionId,
+                    c.League,
+                    c.HomeTeam,
+                    c.AwayTeam,
+                    string.IsNullOrWhiteSpace(c.PredictionCategory) ? "Draw" : c.PredictionCategory,
+                    "Draw",
+                    c.MatchDateTimeUtc)),
+                ct);
+
             var payload = JsonSerializer.Serialize(new
             {
                 requestedCount = count,
@@ -463,15 +474,20 @@ public class AiAdvisorService : IAiAdvisorService
                     c.League,
                     c.HomeTeam,
                     c.AwayTeam,
+                    PredictionCategory = string.IsNullOrWhiteSpace(c.PredictionCategory) ? "Draw" : c.PredictionCategory,
                     ConfidencePct = Math.Round((double)c.Confidence * 100d, 1),
-                    KickoffUtc = c.MatchDateTimeUtc
+                    KickoffUtc = c.MatchDateTimeUtc,
+                    footballInsight = ToCompactFootballInsight(insightsByPredictionId.GetValueOrDefault(c.PredictionId))
                 })
             });
 
             var systemPrompt =
                 "You are a football betting analyst. From the candidate draw predictions, select the best ones " +
-                "for a short draw accumulator. Prefer higher calibrated confidence, but diversify leagues when " +
-                "quality is similar. Respond with JSON only: {\"picks\":[{\"predictionId\":123,\"reason\":\"one short sentence\"}]}.";
+                "for a short draw accumulator. Blend calibrated confidence with supplied footballInsight " +
+                "(form, venue draw rates, and head-to-head) when dataQuality is not Low. Prefer higher " +
+                "confidence when research is thin or Low quality. Diversify leagues when quality is similar. " +
+                "Use only the supplied predictionIds. Do not invent fixtures. " +
+                "Respond with JSON only: {\"picks\":[{\"predictionId\":123,\"reason\":\"one short sentence\"}]}.";
 
             var userPrompt =
                 $"Select exactly {count} draw picks (or fewer only if fewer candidates exist).\n{payload}";
@@ -540,6 +556,17 @@ public class AiAdvisorService : IAiAdvisorService
 
         try
         {
+            var insightsByPredictionId = await LoadBetslipFootballInsightsAsync(
+                candidates.Select(c => (
+                    c.PredictionId,
+                    c.League,
+                    c.HomeTeam,
+                    c.AwayTeam,
+                    ResolveBetslipInsightCategory(c.PredictionCategory, c.Market),
+                    c.PredictedOutcome,
+                    c.MatchDateTimeUtc)),
+                ct);
+
             var payload = JsonSerializer.Serialize(new
             {
                 minOdds,
@@ -552,19 +579,35 @@ public class AiAdvisorService : IAiAdvisorService
                     c.AwayTeam,
                     c.Market,
                     c.PredictedOutcome,
+                    c.PredictionCategory,
                     ConfidencePct = Math.Round((double)c.Confidence * 100d, 1),
                     DecimalOdds = Math.Round(c.DecimalOdds, 2),
                     KickoffUtc = c.MatchDateTimeUtc,
                     c.SignalSummary,
                     c.AllSignalsAlign,
-                    c.ModelDivergesFromBookmaker
+                    c.ModelDivergesFromBookmaker,
+                    footballInsight = ToCompactFootballInsight(insightsByPredictionId.GetValueOrDefault(c.PredictionId))
                 })
             });
 
+            var useWebSearch = string.Equals(
+                _chatClient.Provider,
+                AiLlmSettingsResolver.OpenAiProvider,
+                StringComparison.Ordinal);
+
             var systemPrompt =
                 "You are selecting the single high-stakes banker slip of the day. Users put large stakes on it. " +
-                "Prefer picks where calibrated confidence is high and model/bookmaker signals agree. " +
-                "Do not include draws. The decimal-odds product of your picks MUST land between the provided min and max. " +
+                "Rank using calibrated confidence AND supplied footballInsight (form, venue, BTTS/totals rates, " +
+                "and head-to-head) when dataQuality is not Low. Prefer picks where model/bookmaker signals agree " +
+                "and research supports the market. When footballInsight contradicts a high-confidence pick, you may " +
+                "demote it. Do not include draws. Use only the supplied predictionIds. Do not invent fixtures or odds. " +
+                "The decimal-odds product of your picks MUST land between the provided min and max. " +
+                (useWebSearch
+                    ? "You may use web_search for last-minute news (injuries, suspensions, likely XI) on fixtures you " +
+                      "are considering as banker legs only. Search at most 8 times. Skip search when the card is thin " +
+                      "or news would not change the pick. If search contradicts a high-confidence pick, demote it. " +
+                      "When search was used, cite one concrete finding in reason. "
+                    : string.Empty) +
                 "Respond with JSON only: {\"picks\":[{\"predictionId\":123,\"reason\":\"one short sentence\"}],\"riskNote\":\"one short risk caution\"}.";
 
             var userPrompt =
@@ -575,9 +618,11 @@ public class AiAdvisorService : IAiAdvisorService
                 userPrompt,
                 null,
                 ct,
-                jsonMode: true,
+                jsonMode: !useWebSearch,
                 temperature: 0.15,
-                maxTokens: 1500);
+                maxTokens: useWebSearch ? 4000 : 1500,
+                useWebSearch: useWebSearch,
+                timeoutSeconds: useWebSearch ? OpenAiCompatibleChatCompletionsClient.WebSearchTimeoutSeconds : null);
 
             if (raw.StartsWith("❌", StringComparison.Ordinal) ||
                 raw.StartsWith("⏳", StringComparison.Ordinal) ||
@@ -626,6 +671,225 @@ public class AiAdvisorService : IAiAdvisorService
             return empty;
         }
     }
+
+    public async Task<LadderRankResult> RankLadderCandidatesAsync(
+        IReadOnlyList<LadderRankRequest> candidates,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+
+        var empty = new LadderRankResult();
+        if (candidates.Count == 0 || !_chatClient.IsConfigured)
+        {
+            return empty;
+        }
+
+        try
+        {
+            var insightsByPredictionId = await LoadBetslipFootballInsightsAsync(
+                candidates.Select(c => (
+                    c.PredictionId,
+                    c.League,
+                    c.HomeTeam,
+                    c.AwayTeam,
+                    ResolveBetslipInsightCategory(c.PredictionCategory, c.Market),
+                    c.PredictedOutcome,
+                    c.MatchDateTimeUtc)),
+                ct);
+
+            var payload = JsonSerializer.Serialize(new
+            {
+                candidates = candidates.Select(c => new
+                {
+                    c.PredictionId,
+                    c.League,
+                    c.HomeTeam,
+                    c.AwayTeam,
+                    c.Market,
+                    c.PredictedOutcome,
+                    c.PredictionCategory,
+                    ConfidencePct = Math.Round((double)c.Confidence * 100d, 1),
+                    DecimalOdds = Math.Round(c.DecimalOdds, 2),
+                    KickoffUtc = c.MatchDateTimeUtc,
+                    footballInsight = ToCompactFootballInsight(insightsByPredictionId.GetValueOrDefault(c.PredictionId))
+                })
+            });
+
+            var systemPrompt =
+                "You are ranking live-priced football accumulator candidates. C# will pack payout bands, " +
+                "enforce fixture exclusivity, and validate odds — you only rank. Blend calibrated confidence " +
+                "with supplied footballInsight (form, venue, BTTS/totals rates, head-to-head) when dataQuality " +
+                "is not Low. Promote a lower-confidence pick when research strongly supports it. Demote a " +
+                "high-confidence pick when research contradicts it. Use only the supplied predictionIds. " +
+                "Do not invent fixtures. Do not pack bands or choose a slip. " +
+                "Respond with JSON only: {\"orderedPredictionIds\":[123,456]} from best to worst.";
+
+            var userPrompt =
+                $"Rank these {candidates.Count} ladder candidates from best to worst.\n{payload}";
+
+            var raw = await CompleteChatAsync(
+                systemPrompt,
+                userPrompt,
+                null,
+                ct,
+                jsonMode: true,
+                temperature: 0.15,
+                maxTokens: 1500);
+
+            if (raw.StartsWith("❌", StringComparison.Ordinal) ||
+                raw.StartsWith("⏳", StringComparison.Ordinal) ||
+                raw.StartsWith("⚠️", StringComparison.Ordinal))
+            {
+                return empty;
+            }
+
+            var orderedIds = Domain.Helpers.BetslipDrawPickParser.ParseOrderedPredictionIds(raw);
+            if (orderedIds.Count == 0)
+            {
+                return empty;
+            }
+
+            var allowed = candidates.Select(c => c.PredictionId).ToHashSet();
+            var ordered = orderedIds.Where(allowed.Contains).Distinct().ToList();
+            return ordered.Count == 0
+                ? empty
+                : new LadderRankResult { OrderedPredictionIds = ordered };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ladder AI ranking failed; caller will pack by confidence.");
+            return empty;
+        }
+    }
+
+    private async Task<IReadOnlyDictionary<int, FootballMatchInsightSnapshot>> LoadBetslipFootballInsightsAsync(
+        IEnumerable<(int PredictionId, string League, string HomeTeam, string AwayTeam, string PredictionCategory, string PredictedOutcome, DateTime? MatchDateTimeUtc)> candidates,
+        CancellationToken ct)
+    {
+        var requests = new List<AiChatFootballInsightRequest>();
+        foreach (var candidate in candidates)
+        {
+            if (candidate.PredictionCategory is not ("BothTeamsScore" or "Over2.5Goals" or "Under2.5Goals" or "Draw" or "StraightWin"))
+            {
+                continue;
+            }
+
+            requests.Add(BuildBetslipInsightRequest(candidate));
+        }
+
+        if (requests.Count == 0)
+        {
+            return new Dictionary<int, FootballMatchInsightSnapshot>();
+        }
+
+        try
+        {
+            var insights = await _footballInsightService.GetInsightsAsync(requests, ct);
+            var byId = new Dictionary<int, FootballMatchInsightSnapshot>();
+            foreach (var request in requests)
+            {
+                if (!int.TryParse(request.ActionKey, NumberStyles.Integer, CultureInfo.InvariantCulture, out var predictionId))
+                {
+                    continue;
+                }
+
+                if (insights.TryGetValue(request.ActionKey, out var snapshot))
+                {
+                    byId[predictionId] = snapshot;
+                }
+            }
+
+            return byId;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Betslip football insights unavailable; ranking with confidence and signals only.");
+            return new Dictionary<int, FootballMatchInsightSnapshot>();
+        }
+    }
+
+    private static AiChatFootballInsightRequest BuildBetslipInsightRequest(
+        (int PredictionId, string League, string HomeTeam, string AwayTeam, string PredictionCategory, string PredictedOutcome, DateTime? MatchDateTimeUtc) candidate)
+    {
+        var local = candidate.MatchDateTimeUtc.HasValue
+            ? DateTimeProvider.ConvertUtcToLocal(candidate.MatchDateTimeUtc.Value)
+            : DateTimeProvider.GetLocalTime();
+
+        return new AiChatFootballInsightRequest
+        {
+            ActionKey = candidate.PredictionId.ToString(CultureInfo.InvariantCulture),
+            League = candidate.League,
+            HomeTeam = candidate.HomeTeam,
+            AwayTeam = candidate.AwayTeam,
+            PredictionCategory = candidate.PredictionCategory,
+            PredictedOutcome = candidate.PredictedOutcome,
+            MatchLocalDate = DateOnly.FromDateTime(local),
+            KickoffTime = TimeOnly.FromDateTime(local).ToString("HH:mm", CultureInfo.InvariantCulture),
+            MatchDateTimeUtc = candidate.MatchDateTimeUtc
+        };
+    }
+
+    private static string ResolveBetslipInsightCategory(string predictionCategory, string market)
+    {
+        if (!string.IsNullOrWhiteSpace(predictionCategory))
+        {
+            return predictionCategory;
+        }
+
+        return market switch
+        {
+            "BTTS" => "BothTeamsScore",
+            "Over2.5" => "Over2.5Goals",
+            "Under2.5" => "Under2.5Goals",
+            "1X2" => "Draw",
+            "StraightWin" => "StraightWin",
+            _ => predictionCategory
+        };
+    }
+
+    private static object? ToCompactFootballInsight(FootballMatchInsightSnapshot? snapshot)
+    {
+        if (snapshot is null)
+        {
+            return null;
+        }
+
+        return new
+        {
+            source = snapshot.InsightSource,
+            dataQuality = snapshot.DataQuality,
+            isLowConfidence = snapshot.IsLowConfidence,
+            home = CompactForm(snapshot.HomeForm),
+            away = CompactForm(snapshot.AwayForm),
+            h2h = snapshot.HeadToHead is null
+                ? null
+                : new
+                {
+                    snapshot.HeadToHead.SampleSize,
+                    snapshot.HeadToHead.Draws,
+                    snapshot.HeadToHead.HomeTeamWins,
+                    snapshot.HeadToHead.AwayTeamWins,
+                    snapshot.HeadToHead.BttsRate,
+                    snapshot.HeadToHead.Over25Rate,
+                    recentScores = snapshot.HeadToHead.RecentScores.Take(5)
+                }
+        };
+    }
+
+    private static object CompactForm(TeamFormSnapshot form) =>
+        new
+        {
+            ppm = Math.Round(form.PointsPerMatch, 2),
+            venuePpm = Math.Round(form.VenuePointsPerMatch, 2),
+            lastFive = string.Join(
+                string.Empty,
+                form.LastFiveOverallResults.Select(match =>
+                    string.IsNullOrWhiteSpace(match.Result) ? "?" : match.Result.Trim()[..1])),
+            drawRate = Math.Round(form.DrawRate, 2),
+            bttsRate = Math.Round(form.BttsRate, 2),
+            over25 = Math.Round(form.Over25Rate, 2),
+            under25 = Math.Round(form.Under25Rate, 2)
+        };
 
     private static bool NeedsCatalogInsightEnrichment(AiChatNormalizedRequest normalizedRequest, string userPrompt)
     {
@@ -3167,7 +3431,9 @@ public class AiAdvisorService : IAiAdvisorService
         CancellationToken ct,
         bool jsonMode = false,
         double temperature = 0.5,
-        int maxTokens = 4096)
+        int maxTokens = 4096,
+        bool useWebSearch = false,
+        int? timeoutSeconds = null)
     {
         var messages = new List<ChatCompletionsMessage>
         {
@@ -3194,7 +3460,9 @@ public class AiAdvisorService : IAiAdvisorService
                 Messages = messages,
                 JsonMode = jsonMode,
                 Temperature = temperature,
-                MaxTokens = maxTokens
+                MaxTokens = maxTokens,
+                UseWebSearch = useWebSearch,
+                TimeoutSeconds = timeoutSeconds
             },
             ct);
 

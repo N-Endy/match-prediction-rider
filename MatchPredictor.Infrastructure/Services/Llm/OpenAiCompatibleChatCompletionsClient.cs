@@ -8,6 +8,7 @@ namespace MatchPredictor.Infrastructure.Services.Llm;
 public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClient
 {
     public const string HttpClientName = "AiLlm";
+    public const int WebSearchTimeoutSeconds = 120;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -101,7 +102,16 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
             fallback.Provider,
             fallback.Model);
 
-        var fallbackResult = await CompleteWithSettingsAsync(fallback, request, ct);
+        var fallbackRequest = request.UseWebSearch
+            ? new ChatCompletionsRequest
+            {
+                Messages = request.Messages,
+                JsonMode = true,
+                Temperature = request.Temperature,
+                MaxTokens = request.MaxTokens
+            }
+            : request;
+        var fallbackResult = await CompleteWithSettingsAsync(fallback, fallbackRequest, ct);
         if (IsUsableSuccess(fallbackResult))
         {
             _logger.LogInformation(
@@ -120,14 +130,26 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
     {
         try
         {
-            using var httpClient = _httpClientFactory.CreateClient(HttpClientName);
-            if (httpClient.Timeout == Timeout.InfiniteTimeSpan || httpClient.Timeout.TotalSeconds < settings.TimeoutSeconds)
+            var useResponses = request.UseWebSearch &&
+                string.Equals(settings.Provider, AiLlmSettingsResolver.OpenAiProvider, StringComparison.Ordinal);
+            var timeoutSeconds = request.TimeoutSeconds ?? settings.TimeoutSeconds;
+            if (useResponses)
             {
-                httpClient.Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds);
+                timeoutSeconds = Math.Max(timeoutSeconds, WebSearchTimeoutSeconds);
             }
 
-            var url = AiLlmSettingsResolver.BuildChatCompletionsUrl(settings.BaseUrl);
-            var body = BuildRequestBody(settings, request);
+            using var httpClient = _httpClientFactory.CreateClient(HttpClientName);
+            if (httpClient.Timeout == Timeout.InfiniteTimeSpan || httpClient.Timeout.TotalSeconds < timeoutSeconds)
+            {
+                httpClient.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
+            }
+
+            var url = useResponses
+                ? AiLlmSettingsResolver.BuildResponsesUrl(settings.BaseUrl)
+                : AiLlmSettingsResolver.BuildChatCompletionsUrl(settings.BaseUrl);
+            var body = useResponses
+                ? BuildResponsesRequestBody(settings, request)
+                : BuildRequestBody(settings, request);
             var json = JsonSerializer.Serialize(body, SerializerOptions);
 
             using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
@@ -164,14 +186,9 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
             try
             {
                 using var doc = JsonDocument.Parse(responseBody);
-                if (doc.RootElement.TryGetProperty("choices", out var choices) &&
-                    choices.ValueKind == JsonValueKind.Array &&
-                    choices.GetArrayLength() > 0 &&
-                    choices[0].TryGetProperty("message", out var message) &&
-                    message.TryGetProperty("content", out var contentElement))
-                {
-                    content = contentElement.GetString();
-                }
+                content = useResponses
+                    ? ExtractResponsesContent(doc.RootElement)
+                    : ExtractChatCompletionsContent(doc.RootElement);
             }
             catch (JsonException ex)
             {
@@ -307,5 +324,159 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
         }
 
         return body;
+    }
+
+    private static Dictionary<string, object?> BuildResponsesRequestBody(
+        ResolvedAiLlmSettings settings,
+        ChatCompletionsRequest request)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["model"] = settings.Model,
+            ["input"] = request.Messages
+                .Select(m => new { role = m.Role, content = m.Content })
+                .ToArray(),
+            ["tools"] = new object[] { new { type = "web_search" } },
+            ["tool_choice"] = "auto"
+        };
+
+        if (request.MaxTokens is { } maxTokens)
+        {
+            body["max_output_tokens"] = maxTokens;
+        }
+
+        return body;
+    }
+
+    private static string? ExtractChatCompletionsContent(JsonElement root)
+    {
+        if (root.TryGetProperty("choices", out var choices) &&
+            choices.ValueKind == JsonValueKind.Array &&
+            choices.GetArrayLength() > 0 &&
+            choices[0].TryGetProperty("message", out var message) &&
+            message.TryGetProperty("content", out var contentElement) &&
+            contentElement.ValueKind == JsonValueKind.String)
+        {
+            return contentElement.GetString();
+        }
+
+        return null;
+    }
+
+    private string? ExtractResponsesContent(JsonElement root)
+    {
+        if (root.TryGetProperty("output_text", out var outputText) &&
+            outputText.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(outputText.GetString()))
+        {
+            LogWebSearchCalls(root);
+            return outputText.GetString();
+        }
+
+        if (!root.TryGetProperty("output", out var output) || output.ValueKind != JsonValueKind.Array)
+        {
+            return ExtractChatCompletionsContent(root);
+        }
+
+        var searchCalls = 0;
+        var parts = new List<string>();
+        foreach (var item in output.EnumerateArray())
+        {
+            var type = item.TryGetProperty("type", out var typeElement) && typeElement.ValueKind == JsonValueKind.String
+                ? typeElement.GetString()
+                : null;
+
+            if (string.Equals(type, "web_search_call", StringComparison.OrdinalIgnoreCase))
+            {
+                searchCalls++;
+                continue;
+            }
+
+            if (!string.Equals(type, "message", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var text = ExtractMessageText(item);
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                parts.Add(text);
+            }
+        }
+
+        if (searchCalls > 0)
+        {
+            _logger.LogInformation("Luna web search completed {SearchCallCount} search call(s) for banker ranking.", searchCalls);
+        }
+
+        return parts.Count == 0 ? null : string.Join("\n", parts);
+    }
+
+    private void LogWebSearchCalls(JsonElement root)
+    {
+        if (!root.TryGetProperty("output", out var output) || output.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        var searchCalls = output.EnumerateArray().Count(item =>
+            item.TryGetProperty("type", out var typeElement) &&
+            typeElement.ValueKind == JsonValueKind.String &&
+            string.Equals(typeElement.GetString(), "web_search_call", StringComparison.OrdinalIgnoreCase));
+        if (searchCalls > 0)
+        {
+            _logger.LogInformation("Luna web search completed {SearchCallCount} search call(s) for banker ranking.", searchCalls);
+        }
+    }
+
+    private static string? ExtractMessageText(JsonElement message)
+    {
+        if (!message.TryGetProperty("content", out var content))
+        {
+            return null;
+        }
+
+        if (content.ValueKind == JsonValueKind.String)
+        {
+            return content.GetString();
+        }
+
+        if (content.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var parts = new List<string>();
+        foreach (var part in content.EnumerateArray())
+        {
+            if (part.ValueKind == JsonValueKind.String)
+            {
+                var value = part.GetString();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    parts.Add(value);
+                }
+
+                continue;
+            }
+
+            if (part.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            foreach (var propertyName in new[] { "text", "output_text" })
+            {
+                if (part.TryGetProperty(propertyName, out var textElement) &&
+                    textElement.ValueKind == JsonValueKind.String &&
+                    !string.IsNullOrWhiteSpace(textElement.GetString()))
+                {
+                    parts.Add(textElement.GetString()!);
+                    break;
+                }
+            }
+        }
+
+        return parts.Count == 0 ? null : string.Join("\n", parts);
     }
 }
