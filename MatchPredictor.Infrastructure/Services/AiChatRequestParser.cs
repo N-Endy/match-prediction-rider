@@ -89,7 +89,7 @@ public partial class AiChatRequestParser
         var hasExplicitMarketCounts = requestedMarkets.Any(market => market.ExplicitCount && market.Count > 0);
         var requestedTotalCount = hasExplicitMarketCounts
             ? null
-            : ExtractRequestedTotalCount(prompt, tokens);
+            : ExtractRequestedTotalCount(prompt);
         var intent = DetectIntent(prompt, promptLower, tokens, requestedMarkets, hasWorkingSlip, hasContextCandidates);
         var wantsBooking = MentionsBookingIntent(promptLower);
         var valueBias = DetectValueBias(promptLower, intent);
@@ -395,7 +395,7 @@ public partial class AiChatRequestParser
         return requestedMarkets;
     }
 
-    private static int? ExtractRequestedTotalCount(string userPrompt, HashSet<string> tokens)
+    private static int? ExtractRequestedTotalCount(string userPrompt)
     {
         if (string.IsNullOrWhiteSpace(userPrompt))
         {
@@ -424,11 +424,6 @@ public partial class AiChatRequestParser
         if (followUpMatch.Success)
         {
             return ClampCount(ResolveCount(followUpMatch.Groups["count"].Value));
-        }
-
-        if (tokens.SetEquals(["give", "strong", "picks"]) || tokens.SetEquals(["strong", "picks"]))
-        {
-            return 5;
         }
 
         return null;
@@ -1218,7 +1213,7 @@ public partial class AiChatRequestParser
     [GeneratedRegex(@"\b(?:total(?:\s+of)?\s*(?<count>\d{1,3}|couple|few|several|handful)|(?<count>\d{1,3}|couple|few|several|handful)\s*total)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex TotalCountRegex();
 
-    [GeneratedRegex(@"\b(?<count>\d{1,3}|couple|few|several|handful)\s*(?:of\s+(?:the\s+)?)?(?:(?!(?:pick|picks|prediction|predictions|tip|tips|game|games|match|matches|leg|legs)\b)\w+\s+){0,3}(?:pick|picks|prediction|predictions|tip|tips|game|games|match|matches|leg|legs)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    [GeneratedRegex(@"\b(?<count>\d{1,3}|couple|few|several|handful)\s*(?:of\s+(?:the\s+)?)?(?:(?!(?:pick|picks|prediction|predictions|recommendation|recommendations|tip|tips|game|games|match|matches|leg|legs)\b)\w+\s+){0,3}(?:pick|picks|prediction|predictions|recommendation|recommendations|tip|tips|game|games|match|matches|leg|legs)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex GenericPickCountRegex();
 
     [GeneratedRegex(@"\b(?<count>\d{1,3}|couple|few|several|handful)\s+of\s+the\s+best\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]

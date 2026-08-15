@@ -326,16 +326,11 @@ public class AiAdvisorServiceTests
     {
         await using var context = CreateContext();
         var predictions = await SeedPredictionsAsync(context, 10);
-        var selected = predictions.Take(expectedCount).ToList();
-        var recommendedKeys = selected.Select(prediction => $"\"P{prediction.Id}\"");
-        var inspectKeys = selected.Take(2).Select(prediction => $"\"P{prediction.Id}\"");
+        var recommendedKeys = predictions
+            .Take(expectedCount)
+            .Select(prediction => $"\"P{prediction.Id}\"");
 
         var handler = new SequenceHttpMessageHandler(
-            BuildGroqResponse($$"""
-                {
-                  "actionKeysToInspect": [{{string.Join(", ", inspectKeys)}}]
-                }
-                """),
             BuildGroqResponse($$"""
                 {
                   "message": "Here are the games I would select from today's card.",
@@ -350,7 +345,7 @@ public class AiAdvisorServiceTests
         Assert.Equal("recommend_picks", response.ContextMode);
         Assert.Equal(expectedCount, response.Actions.Count);
         Assert.DoesNotContain("couldn't find a matching team, league, or fixture", response.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(2, handler.CallCount);
+        Assert.Equal(1, handler.CallCount);
     }
 
     [Fact]
@@ -358,19 +353,14 @@ public class AiAdvisorServiceTests
     {
         await using var context = CreateContext();
         var predictions = await SeedPredictionsAsync(context, 8);
-        var selected = predictions.Take(5).ToList();
-        var recommendedKeys = selected.Select(prediction => $"\"P{prediction.Id}\"");
-        var inspectKeys = selected.Take(2).Select(prediction => $"\"P{prediction.Id}\"");
+        var recommendedKeys = predictions
+            .Take(3)
+            .Select(prediction => $"\"P{prediction.Id}\"");
 
         var handler = new SequenceHttpMessageHandler(
             BuildGroqResponse($$"""
                 {
-                  "actionKeysToInspect": [{{string.Join(", ", inspectKeys)}}]
-                }
-                """),
-            BuildGroqResponse($$"""
-                {
-                  "message": "These are the strongest games I would select.",
+                  "message": "These are the strongest games I would select after researching the card.",
                   "recommendedActionKeys": [{{string.Join(", ", recommendedKeys)}}],
                   "showBookAll": true
                 }
@@ -382,9 +372,37 @@ public class AiAdvisorServiceTests
             "session-choose-best");
 
         Assert.Equal("recommend_picks", response.ContextMode);
-        Assert.Equal(5, response.Actions.Count);
+        Assert.Equal(3, response.Actions.Count);
         Assert.DoesNotContain("couldn't find a matching team, league, or fixture", response.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(2, handler.CallCount);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_CanReturnFifteenRecommendations_FromFullTodaysCard()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(context, 20);
+        var recommendedKeys = predictions
+            .Take(15)
+            .Select(prediction => $"\"P{prediction.Id}\"");
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "message": "Here are 15 researched picks from today's full card.",
+                  "recommendedActionKeys": [{{string.Join(", ", recommendedKeys)}}],
+                  "showBookAll": true
+                }
+                """));
+
+        var service = CreateService(context, handler);
+        var response = await service.GetAdviceAsync("Give me 15 recommendations", "session-fifteen");
+
+        Assert.Equal("recommend_picks", response.ContextMode);
+        Assert.Equal(15, response.Actions.Count);
+        Assert.DoesNotContain("couldn't find a matching team, league, or fixture", response.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("payload does not include", response.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, handler.CallCount);
     }
 
     [Fact]
@@ -938,12 +956,7 @@ public class AiAdvisorServiceTests
         var handler = new SequenceHttpMessageHandler(
             BuildGroqResponse($$"""
                 {
-                  "actionKeysToInspect": ["{{firstActionKey}}", "{{secondActionKey}}"]
-                }
-                """),
-            BuildGroqResponse($$"""
-                {
-                  "message": "Here are five grounded picks from today's card.",
+                  "message": "Here are researched picks from today's card.",
                   "recommendedActionKeys": ["{{firstActionKey}}", "{{secondActionKey}}"],
                   "showBookAll": true
                 }
@@ -959,7 +972,7 @@ public class AiAdvisorServiceTests
 
         var response = await service.GetAdviceAsync("Give me 5 strong picks", "football-lookup-session");
 
-        Assert.Equal(2, handler.CallCount);
+        Assert.Equal(1, handler.CallCount);
         Assert.Equal(5, response.Actions.Count);
         Assert.Contains(response.Actions, action => action.ActionKey == firstActionKey && !string.IsNullOrWhiteSpace(action.AnalysisSummary));
         Assert.Contains(response.Actions, action => action.ActionKey == secondActionKey && action.InsightBullets.Count > 0);

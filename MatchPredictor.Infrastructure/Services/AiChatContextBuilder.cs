@@ -559,9 +559,17 @@ public static partial class AiChatContextBuilder
             return Math.Min(6, request.RequestedMarkets.Count * 2);
         }
 
-        return request.Intent is AiChatIntent.RecommendPicks or AiChatIntent.MixedMarketRecommendation or AiChatIntent.ValueBetRequest
-            ? 5
-            : 0;
+        return 0;
+    }
+
+    private static bool ShouldSendFullRecommendationPool(AiChatNormalizedRequest request)
+    {
+        if (request.RandomSelection)
+        {
+            return false;
+        }
+
+        return request.Intent is AiChatIntent.RecommendPicks or AiChatIntent.MixedMarketRecommendation;
     }
 
     private static HashSet<string> DetectMarketFilters(HashSet<string> promptTokens)
@@ -942,7 +950,7 @@ public static partial class AiChatContextBuilder
     {
         if (request.RequestedMarkets.Count == 0)
         {
-            var maxCandidates = request.ActionDirective == "target_odds"
+            var maxCandidates = request.ActionDirective == "target_odds" || ShouldSendFullRecommendationPool(request)
                 ? limit
                 : ResolveSelectionLimit(limit, ResolveRequestedCandidateCount(request));
 
@@ -1344,7 +1352,7 @@ public static partial class AiChatContextBuilder
         RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex RequestedMarketSliceRegex();
 
-    [GeneratedRegex("(?<count>\\d{1,3})(?:\\s+of(?:\\s+the)?)?(?:\\s+(?!(?:pick|picks|prediction|predictions|tip|tips|game|games|match|matches|leg|legs)\\b)\\w+){0,3}\\s+(?:pick|picks|prediction|predictions|tip|tips|game|games|match|matches|leg|legs)\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    [GeneratedRegex("(?<count>\\d{1,3})(?:\\s+of(?:\\s+the)?)?(?:\\s+(?!(?:pick|picks|prediction|predictions|recommendation|recommendations|tip|tips|game|games|match|matches|leg|legs)\\b)\\w+){0,3}\\s+(?:pick|picks|prediction|predictions|recommendation|recommendations|tip|tips|game|games|match|matches|leg|legs)\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex GenericPickCountRegex();
 
     [GeneratedRegex("\\btotal(?:\\s+of)?\\s*(?<count>\\d{1,3})\\b|\\b(?<count>\\d{1,3})\\s*total\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]

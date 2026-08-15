@@ -165,6 +165,7 @@ public class AiChatRequestParserTests
     [InlineData("Give me 7 winnable predictions", 7)]
     [InlineData("Give me 7 winnable games", 7)]
     [InlineData("Select 7 predictions", 7)]
+    [InlineData("Give me 15 recommendations", 15)]
     public void ParseDeterministic_ParsesCountQualifiers_OnConversationalPickPrompts(string prompt, int expectedCount)
     {
         var result = AiChatRequestParser.ParseDeterministic(

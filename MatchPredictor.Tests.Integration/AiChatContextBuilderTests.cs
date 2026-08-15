@@ -272,7 +272,7 @@ public class AiChatContextBuilderTests
             DateTime.UtcNow);
 
         Assert.False(selection.NoRelevantMatchesFound);
-        Assert.Equal(7, selection.Candidates.Count);
+        Assert.Equal(10, selection.Candidates.Count);
         Assert.Equal(7, selection.RequestedCandidateCount);
     }
 
@@ -303,8 +303,34 @@ public class AiChatContextBuilderTests
         Assert.Equal(AiChatIntent.RecommendPicks, selection.NormalizedRequest?.Intent);
         Assert.Empty(selection.NormalizedRequest?.EntityTerms ?? []);
         Assert.Equal(expectedCount, selection.NormalizedRequest?.RequestedTotalCount);
-        Assert.Equal(expectedCount, selection.Candidates.Count);
+        Assert.Equal(10, selection.Candidates.Count);
         Assert.Equal(expectedCount, selection.RequestedCandidateCount);
+    }
+
+    [Fact]
+    public void BuildSelection_SendsFullCard_WhenUserAsksForFifteenRecommendations()
+    {
+        var predictions = Enumerable.Range(1, 20)
+            .Select(index => CreatePrediction(
+                index,
+                "StraightWin",
+                index % 2 == 0 ? "Home Win" : "Away Win",
+                $"Home {index}",
+                $"Away {index}",
+                "England - Premier League",
+                0.90m - (index * 0.01m),
+                thresholdUsed: 0.68))
+            .ToArray();
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me 15 recommendations",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(15, selection.NormalizedRequest?.RequestedTotalCount);
+        Assert.Equal(20, selection.Candidates.Count);
+        Assert.Equal(15, selection.RequestedCandidateCount);
     }
 
     [Fact]
@@ -331,7 +357,8 @@ public class AiChatContextBuilderTests
         Assert.Equal(AiChatIntent.RecommendPicks, selection.NormalizedRequest?.Intent);
         Assert.Empty(selection.NormalizedRequest?.EntityTerms ?? []);
         Assert.Null(selection.NormalizedRequest?.RequestedTotalCount);
-        Assert.Equal(5, selection.Candidates.Count);
+        Assert.Equal(10, selection.Candidates.Count);
+        Assert.Equal(0, selection.RequestedCandidateCount);
         Assert.All(selection.Candidates, candidate => Assert.StartsWith("Home ", candidate.HomeTeam));
     }
 
@@ -529,11 +556,11 @@ public class AiChatContextBuilderTests
 
         Assert.False(selection.NoRelevantMatchesFound);
         Assert.Equal(3, selection.RequestedCandidateCount);
-        Assert.Equal(3, selection.Candidates.Count);
+        Assert.Equal(10, selection.Candidates.Count);
     }
 
     [Fact]
-    public void BuildSelection_DefaultsStrongGenericRequests_ToFivePicks()
+    public void BuildSelection_SendsFullCard_ForGenericStrongPickRequests()
     {
         var predictions = Enumerable.Range(1, 10)
             .Select(index => CreatePrediction(index, "StraightWin", "Home Win", $"Team {index}", $"Opponent {index}", "England - Premier League", 0.88m - (index * 0.01m), thresholdUsed: 0.68))
@@ -544,8 +571,8 @@ public class AiChatContextBuilderTests
             "Give me your strong picks for today",
             DateTime.UtcNow);
 
-        Assert.Equal(5, selection.RequestedCandidateCount);
-        Assert.Equal(5, selection.Candidates.Count);
+        Assert.Equal(0, selection.RequestedCandidateCount);
+        Assert.Equal(10, selection.Candidates.Count);
     }
 
     [Fact]

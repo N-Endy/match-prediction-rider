@@ -678,8 +678,6 @@ public class AiAdvisorService : IAiAdvisorService
 
         var footballCandidates = candidatePool
             .Where(candidate => IsFootballInsightEligible(candidate, normalizedRequest))
-            .OrderByDescending(AiChatContextBuilder.ComputeAppCoreStrength)
-            .Take(12)
             .ToList();
 
         if (footballCandidates.Count == 0)
@@ -687,12 +685,28 @@ public class AiAdvisorService : IAiAdvisorService
             return;
         }
 
-        var actionKeysToInspect = await DetermineFootballLookupActionKeysAsync(
-            llmConfigured,
-            userPrompt,
-            normalizedRequest,
-            footballCandidates,
-            ct);
+        List<string> actionKeysToInspect;
+        if (normalizedRequest.Intent is AiChatIntent.RecommendPicks or AiChatIntent.MixedMarketRecommendation)
+        {
+            actionKeysToInspect = footballCandidates
+                .Take(MaxRecommendedActions)
+                .Select(candidate => candidate.ActionKey)
+                .ToList();
+        }
+        else
+        {
+            footballCandidates = footballCandidates
+                .OrderByDescending(AiChatContextBuilder.ComputeAppCoreStrength)
+                .Take(12)
+                .ToList();
+
+            actionKeysToInspect = await DetermineFootballLookupActionKeysAsync(
+                llmConfigured,
+                userPrompt,
+                normalizedRequest,
+                footballCandidates,
+                ct);
+        }
         if (actionKeysToInspect.Count == 0)
         {
             return;
@@ -2374,22 +2388,27 @@ public class AiAdvisorService : IAiAdvisorService
             SIGNAL INTERPRETATION:
             - When allSignalsAlign is true or signalSpreadPoints < 5: call it consensus — higher conviction.
             - When modelEdgePoints is positive but modelDivergesFromBookmaker is true: flag as model-only edge and use lower conviction language.
-            - When footballInsight contradicts the model edge, say the model still clears threshold but form is mixed — do not override the pick ranking.
+            - When footballInsight contradicts the model edge, you may drop or demote that pick. Do not treat the C# ranking as final.
+            - When footballInsight supports a lower-confidence candidate (strong form, venue, or head-to-head), you may promote it over a weaker-research high-confidence pick.
             - When modelSignals.statistical is null or thinHistory is true: note limited historical sample for that fixture.
             - When modelSignals.machineLearning is absent: do not mention machine learning.
 
             PICKING RULES:
-            - Rank by: (a) marginAboveThreshold, (b) positive modelEdgePoints, (c) signal agreement, (d) footballSupportScore when reliable.
-            - "Best" and "safe" picks should lean on higher calibrated confidence, stronger margin above threshold, and positive modelEdgePoints when available.
-            - "Safe" requests: prefer Straight Win, confidence >= threshold + 8pp, estimatedOdds <= 1.75, and signal agreement when available.
+            - You choose the recommendations. The payload is today's published card (capped), not a pre-selected answer.
+            - Rank using BOTH sources: (a) calibratedConfidence, marginAboveThreshold, modelEdgePoints, signal agreement, AND (b) footballInsight / footballSupportScore when present and not Low quality.
+            - Research may change which games you pick. Do not default to 5 legs.
+            - If requestedPredictionCount is a positive number, return that many bookable actionKeys from the supplied card.
+            - If requestedPredictionCount is missing or 0, choose a researched set from the full supplied card. Size it from the evidence, not from a hidden default of 5.
+            - If the user asks for more legs than the payload contains, recommend every suitable bookable candidate and say how many were actually supplied. Do not invent fixtures.
+            - "Best" and "safe" picks should still respect model threshold, but blend in form, venue, and head-to-head when footballInsight is present.
+            - "Safe" requests: prefer Straight Win, confidence >= threshold + 8pp, estimatedOdds <= 1.75, and signal agreement when available — unless research clearly warns against a candidate.
             - "Value" requests: require modelEdgePoints > 0 and mention edge in the explanation.
             - Prefer low-variance Straight Win setups when the user asks for safer options.
-            - When footballInsight is present, blend the app edge with 1-2 concrete football signals from the supplied stats.
-            - If footballInsight.dataQuality is Low or footballInsight.isLowConfidence is true, say the model edge matters more than the thin form sample.
+            - When footballInsight is present, cite 1-2 concrete football signals from the supplied stats in the explanation.
+            - If footballInsight.dataQuality is Low or footballInsight.isLowConfidence is true, lean more on the model edge than the thin form sample.
             - If multiple picks are suggested, keep them grounded and avoid hype or guarantees.
             - If you recommend a set of legs, make the message feel like you are guiding the user through the card with calm confidence.
             - If the payload includes requestedMarkets with counts, try to satisfy that market mix as closely as the supplied candidates allow.
-            - When the user asks for a list of picks, recommend the supplied candidates that best fit the request instead of narrowing aggressively.
             - If the payload includes a rolloverTargetOdds, hit it within ±8% using the fewest legs and never add a leg below threshold.
             - If fewer than 2 strong candidates exist, say so in warnings.
             - Never mention data you were not given.
