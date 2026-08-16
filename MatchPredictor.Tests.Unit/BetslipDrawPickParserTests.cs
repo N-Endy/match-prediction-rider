@@ -67,4 +67,42 @@ public class BetslipDrawPickParserTests
         var ids = BetslipDrawPickParser.ParseOrderedPredictionIds(json);
         Assert.Equal([8, 4], ids);
     }
+
+    [Fact]
+    public void ParseScreenedPassers_ReadsPassedArrayAndDropsDuplicates()
+    {
+        const string json = """
+            {"passed":[{"predictionId":11,"score":88,"reason":"Form fits"},{"predictionId":11,"score":10,"reason":"dup"},{"predictionId":22,"score":70}]}
+            """;
+
+        var passed = BetslipDrawPickParser.ParseScreenedPassers(json);
+        Assert.Equal(2, passed.Count);
+        Assert.Equal(11, passed[0].PredictionId);
+        Assert.Equal(88, passed[0].Score);
+        Assert.Equal("Form fits", passed[0].Reason);
+        Assert.Equal(22, passed[1].PredictionId);
+    }
+
+    [Fact]
+    public void IsExplicitEmptyPassedList_TrueForEmptyPassedArray()
+    {
+        Assert.True(BetslipDrawPickParser.IsExplicitEmptyPassedList("""{"passed":[]}"""));
+        Assert.False(BetslipDrawPickParser.IsExplicitEmptyPassedList("not-json"));
+        Assert.False(BetslipDrawPickParser.IsExplicitEmptyPassedList("""{"picks":[]}"""));
+    }
+
+    [Fact]
+    public void ParseLadderComposeSlips_ReadsSlipNumbersAndIds()
+    {
+        const string json = """
+            {"slips":[{"slipNumber":1,"predictionIds":[10,11]},{"slipNumber":2,"picks":[{"predictionId":20}]}]}
+            """;
+
+        var slips = BetslipDrawPickParser.ParseLadderComposeSlips(json);
+        Assert.Equal(2, slips.Count);
+        Assert.Equal(1, slips[0].SlipNumber);
+        Assert.Equal([10, 11], slips[0].PredictionIds);
+        Assert.Equal(2, slips[1].SlipNumber);
+        Assert.Equal([20], slips[1].PredictionIds);
+    }
 }

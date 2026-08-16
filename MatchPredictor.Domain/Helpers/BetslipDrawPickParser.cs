@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using MatchPredictor.Domain.Models;
 
 namespace MatchPredictor.Domain.Helpers;
 
@@ -111,6 +112,169 @@ public static partial class BetslipDrawPickParser
         }
 
         return ParsePredictionIds(aiResponseJson, 200);
+    }
+
+    public static IReadOnlyList<BetslipScreenPick> ParseScreenedPassers(string aiResponseJson)
+    {
+        if (string.IsNullOrWhiteSpace(aiResponseJson))
+        {
+            return [];
+        }
+
+        var normalized = NormalizeAiJson(aiResponseJson);
+        try
+        {
+            using var document = JsonDocument.Parse(normalized);
+            var passed = new List<BetslipScreenPick>();
+            foreach (var element in EnumerateNamedArray(document.RootElement, "passed", "Passed", "picks", "selections"))
+            {
+                if (!TryReadPredictionId(element, out var predictionId))
+                {
+                    continue;
+                }
+
+                var score = 50d;
+                foreach (var propertyName in new[] { "score", "Score", "rating", "Rating" })
+                {
+                    if (element.TryGetProperty(propertyName, out var scoreElement) &&
+                        scoreElement.ValueKind == JsonValueKind.Number &&
+                        scoreElement.TryGetDouble(out var parsed))
+                    {
+                        score = parsed;
+                        break;
+                    }
+                }
+
+                passed.Add(new BetslipScreenPick
+                {
+                    PredictionId = predictionId,
+                    Score = Math.Clamp(score, 0d, 100d),
+                    Reason = ReadReason(element)
+                });
+            }
+
+            return passed
+                .GroupBy(pick => pick.PredictionId)
+                .Select(group => group.First())
+                .ToList();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    public static bool IsExplicitEmptyPassedList(string aiResponseJson)
+    {
+        if (string.IsNullOrWhiteSpace(aiResponseJson))
+        {
+            return false;
+        }
+
+        var normalized = NormalizeAiJson(aiResponseJson);
+        try
+        {
+            using var document = JsonDocument.Parse(normalized);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            foreach (var propertyName in new[] { "passed", "Passed" })
+            {
+                if (document.RootElement.TryGetProperty(propertyName, out var passed) &&
+                    passed.ValueKind == JsonValueKind.Array)
+                {
+                    return passed.GetArrayLength() == 0;
+                }
+            }
+
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    public static IReadOnlyList<LadderComposeSlip> ParseLadderComposeSlips(string aiResponseJson)
+    {
+        if (string.IsNullOrWhiteSpace(aiResponseJson))
+        {
+            return [];
+        }
+
+        var normalized = NormalizeAiJson(aiResponseJson);
+        try
+        {
+            using var document = JsonDocument.Parse(normalized);
+            var slips = new List<LadderComposeSlip>();
+            foreach (var element in EnumerateNamedArray(document.RootElement, "slips", "Slips"))
+            {
+                if (element.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var slipNumber = 0;
+                foreach (var propertyName in new[] { "slipNumber", "SlipNumber", "number", "Number" })
+                {
+                    if (element.TryGetProperty(propertyName, out var numberElement) &&
+                        numberElement.ValueKind == JsonValueKind.Number &&
+                        numberElement.TryGetInt32(out var parsed) &&
+                        parsed > 0)
+                    {
+                        slipNumber = parsed;
+                        break;
+                    }
+                }
+
+                if (slipNumber <= 0)
+                {
+                    continue;
+                }
+
+                var ids = new List<int>();
+                foreach (var propertyName in new[] { "predictionIds", "PredictionIds", "picks", "Picks" })
+                {
+                    if (!element.TryGetProperty(propertyName, out var picks) ||
+                        picks.ValueKind != JsonValueKind.Array)
+                    {
+                        continue;
+                    }
+
+                    foreach (var pick in picks.EnumerateArray())
+                    {
+                        if (pick.ValueKind == JsonValueKind.Number &&
+                            pick.TryGetInt32(out var id) &&
+                            id > 0)
+                        {
+                            ids.Add(id);
+                            continue;
+                        }
+
+                        if (TryReadPredictionId(pick, out var predictionId))
+                        {
+                            ids.Add(predictionId);
+                        }
+                    }
+
+                    break;
+                }
+
+                slips.Add(new LadderComposeSlip
+                {
+                    SlipNumber = slipNumber,
+                    PredictionIds = ids.Distinct().ToList()
+                });
+            }
+
+            return slips;
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
     }
 
     private static string NormalizeAiJson(string aiResponseJson)
@@ -230,7 +394,10 @@ public static partial class BetslipDrawPickParser
         return ids.Count > 0;
     }
 
-    private static IEnumerable<JsonElement> EnumeratePickElements(JsonElement root)
+    private static IEnumerable<JsonElement> EnumeratePickElements(JsonElement root) =>
+        EnumerateNamedArray(root, "picks", "selections", "draws", "bestDraws", "passed");
+
+    private static IEnumerable<JsonElement> EnumerateNamedArray(JsonElement root, params string[] propertyNames)
     {
         if (root.ValueKind == JsonValueKind.Array)
         {
@@ -247,7 +414,7 @@ public static partial class BetslipDrawPickParser
             yield break;
         }
 
-        foreach (var propertyName in new[] { "picks", "selections", "draws", "bestDraws" })
+        foreach (var propertyName in propertyNames)
         {
             if (root.TryGetProperty(propertyName, out var picks) && picks.ValueKind == JsonValueKind.Array)
             {

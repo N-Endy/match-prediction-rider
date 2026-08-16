@@ -672,12 +672,31 @@ public class BetslipGenerationServiceExclusivityTests
             IReadOnlyList<LadderRankRequest> candidates,
             CancellationToken ct = default) =>
             Task.FromResult(new LadderRankResult());
+
+        public virtual Task<BetslipScreenResult> ScreenBetslipCandidatesAsync(
+            IReadOnlyList<BetslipScreenRequest> candidates,
+            CancellationToken ct = default) =>
+            Task.FromResult(new BetslipScreenResult
+            {
+                Passed = candidates.Select(c => new BetslipScreenPick
+                {
+                    PredictionId = c.PredictionId,
+                    Score = (double)c.Confidence * 100d
+                }).ToList()
+            });
+
+        public virtual Task<LadderComposeResult> ComposeLadderSlipsAsync(
+            IReadOnlyList<LadderRankRequest> candidates,
+            IReadOnlyList<LadderComposeBandRequest> bands,
+            CancellationToken ct = default) =>
+            Task.FromResult(new LadderComposeResult());
     }
 
     private sealed class RecordingAdvisor : FakeAdvisor
     {
         public IReadOnlyList<BetslipDrawPickRequest>? LastDrawCandidates { get; private set; }
         public IReadOnlyList<LadderRankRequest>? LastLadderCandidates { get; private set; }
+        public List<IReadOnlyList<BetslipScreenRequest>> ScreenedBatches { get; } = [];
 
         public override Task<IReadOnlyList<BetslipDrawPickSelection>> SelectBestDrawPicksAsync(
             IReadOnlyList<BetslipDrawPickRequest> candidates,
@@ -694,6 +713,23 @@ public class BetslipGenerationServiceExclusivityTests
         {
             LastLadderCandidates = candidates.ToList();
             return base.RankLadderCandidatesAsync(candidates, ct);
+        }
+
+        public override Task<BetslipScreenResult> ScreenBetslipCandidatesAsync(
+            IReadOnlyList<BetslipScreenRequest> candidates,
+            CancellationToken ct = default)
+        {
+            ScreenedBatches.Add(candidates.ToList());
+            return base.ScreenBetslipCandidatesAsync(candidates, ct);
+        }
+
+        public override Task<LadderComposeResult> ComposeLadderSlipsAsync(
+            IReadOnlyList<LadderRankRequest> candidates,
+            IReadOnlyList<LadderComposeBandRequest> bands,
+            CancellationToken ct = default)
+        {
+            LastLadderCandidates = candidates.ToList();
+            return base.ComposeLadderSlipsAsync(candidates, bands, ct);
         }
     }
 

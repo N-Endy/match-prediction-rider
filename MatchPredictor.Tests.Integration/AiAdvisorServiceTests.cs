@@ -1297,6 +1297,112 @@ public class AiAdvisorServiceTests
         Assert.Contains("footballInsight", handler.RequestBodies[0], StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ScreenBetslipCandidatesAsync_ReturnsSuppliedIdsOnly_WithoutWebSearch()
+    {
+        await using var context = CreateContext();
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse("""
+                {"passed":[{"predictionId":2,"score":91,"reason":"Form supports"},{"predictionId":999,"score":80,"reason":"invented"}]}
+                """));
+        var service = CreateService(
+            context,
+            handler,
+            footballInsightService: new StubFootballInsightService(new Dictionary<string, FootballMatchInsightSnapshot>
+            {
+                ["2"] = CreateInsightSnapshot("Home 2", "Away 2")
+            }));
+
+        var result = await service.ScreenBetslipCandidatesAsync(
+            [
+                new BetslipScreenRequest
+                {
+                    PredictionId = 1,
+                    League = "Test",
+                    HomeTeam = "Home 1",
+                    AwayTeam = "Away 1",
+                    Market = "BTTS",
+                    PredictedOutcome = "BTTS",
+                    PredictionCategory = "BothTeamsScore",
+                    Confidence = 0.80m,
+                    DecimalOdds = 1.55
+                },
+                new BetslipScreenRequest
+                {
+                    PredictionId = 2,
+                    League = "Test",
+                    HomeTeam = "Home 2",
+                    AwayTeam = "Away 2",
+                    Market = "Over2.5",
+                    PredictedOutcome = "Over 2.5",
+                    PredictionCategory = "Over2.5Goals",
+                    Confidence = 0.70m,
+                    DecimalOdds = 1.70
+                }
+            ]);
+
+        Assert.Equal(2, Assert.Single(result.Passed).PredictionId);
+        Assert.Contains("footballInsight", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("web_search", handler.RequestBodies[0], StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("/responses", handler.RequestUris[0], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ComposeLadderSlipsAsync_DropsUnknownIds()
+    {
+        await using var context = CreateContext();
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse("""
+                {"slips":[{"slipNumber":1,"predictionIds":[2,999,1]}]}
+                """));
+        var service = CreateService(context, handler);
+
+        var result = await service.ComposeLadderSlipsAsync(
+            [
+                new LadderRankRequest
+                {
+                    PredictionId = 1,
+                    League = "Test",
+                    HomeTeam = "Home 1",
+                    AwayTeam = "Away 1",
+                    Market = "BTTS",
+                    PredictedOutcome = "BTTS",
+                    PredictionCategory = "BothTeamsScore",
+                    Confidence = 0.80m,
+                    DecimalOdds = 1.55
+                },
+                new LadderRankRequest
+                {
+                    PredictionId = 2,
+                    League = "Test",
+                    HomeTeam = "Home 2",
+                    AwayTeam = "Away 2",
+                    Market = "Over2.5",
+                    PredictedOutcome = "Over 2.5",
+                    PredictionCategory = "Over2.5Goals",
+                    Confidence = 0.75m,
+                    DecimalOdds = 1.70
+                }
+            ],
+            [
+                new LadderComposeBandRequest
+                {
+                    SlipNumber = 1,
+                    Title = "Small Acca A",
+                    BandKey = "small",
+                    MinOdds = 20,
+                    MaxOdds = 120,
+                    FallbackMinOdds = 10,
+                    FallbackMaxOdds = 150,
+                    MaxPicks = 18
+                }
+            ]);
+
+        var slip = Assert.Single(result.Slips);
+        Assert.Equal(1, slip.SlipNumber);
+        Assert.Equal([2, 1], slip.PredictionIds);
+    }
+
     private static ApplicationDbContext CreateContext()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()

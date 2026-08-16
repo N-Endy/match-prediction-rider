@@ -776,6 +776,17 @@ public class ValueBetsServiceTests
             IReadOnlyList<LadderRankRequest> candidates,
             CancellationToken ct = default) =>
             Task.FromResult(new LadderRankResult());
+
+        public Task<BetslipScreenResult> ScreenBetslipCandidatesAsync(
+            IReadOnlyList<BetslipScreenRequest> candidates,
+            CancellationToken ct = default) =>
+            Task.FromResult(new BetslipScreenResult());
+
+        public Task<LadderComposeResult> ComposeLadderSlipsAsync(
+            IReadOnlyList<LadderRankRequest> candidates,
+            IReadOnlyList<LadderComposeBandRequest> bands,
+            CancellationToken ct = default) =>
+            Task.FromResult(new LadderComposeResult());
     }
 
     private sealed class FakeSourceMarketPricingService : ISourceMarketPricingService

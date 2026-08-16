@@ -288,7 +288,7 @@ public class BetslipGenerationServiceBankerTests
     }
 
     [Fact]
-    public async Task GenerateDailyBetslipsAsync_CapsBankerAiPoolAtForty()
+    public async Task GenerateDailyBetslipsAsync_SendsAllScreenedLiveQuotedPassersToBanker()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
@@ -338,7 +338,7 @@ public class BetslipGenerationServiceBankerTests
             ResultFactory = candidates => new BankerPickResult
             {
                 Picks = candidates.Take(4).Select(c => new BetslipDrawPickSelection { PredictionId = c.PredictionId }).ToList(),
-                RiskNote = "capped"
+                RiskNote = "full-card"
             }
         };
 
@@ -355,15 +355,20 @@ public class BetslipGenerationServiceBankerTests
                 BankerMaxOdds = 10.0,
                 BankerFallbackMinOdds = 4.0,
                 BankerFallbackMaxOdds = 12.0,
-                BankerShortlistSize = 20
+                BankerShortlistSize = 20,
+                ScreenBatchSize = 25
             }),
             NullLogger<BetslipGenerationService>.Instance);
 
         await service.GenerateDailyBetslipsAsync("morning");
 
+        Assert.Equal(2, ai.ScreenedBatches.Count);
+        Assert.Equal(25, ai.ScreenedBatches[0].Count);
+        Assert.Equal(20, ai.ScreenedBatches[1].Count);
+        Assert.Equal(45, ai.ScreenedBatches.SelectMany(b => b.Select(c => c.PredictionId)).Distinct().Count());
         Assert.NotNull(ai.LastCandidates);
-        Assert.Equal(BetslipGenerationService.MaxResearchPoolSize, ai.LastCandidates.Count);
-        Assert.DoesNotContain(ai.LastCandidates, c => c.PredictionId > 40);
+        Assert.Equal(45, ai.LastCandidates.Count);
+        Assert.Contains(ai.LastCandidates, c => c.PredictionId > 40);
     }
 
     private sealed class FakeBookingService : ISportyBetBookingService
@@ -405,6 +410,7 @@ public class BetslipGenerationServiceBankerTests
             Task.FromResult<IReadOnlyList<BetslipDrawPickSelection>>([]);
 
         public IReadOnlyList<BankerPickRequest>? LastCandidates { get; private set; }
+        public List<IReadOnlyList<BetslipScreenRequest>> ScreenedBatches { get; } = [];
 
         public Task<BankerPickResult> SelectBankerPicksAsync(
             IReadOnlyList<BankerPickRequest> candidates,
@@ -420,5 +426,29 @@ public class BetslipGenerationServiceBankerTests
             IReadOnlyList<LadderRankRequest> candidates,
             CancellationToken ct = default) =>
             Task.FromResult(new LadderRankResult());
+
+        public Task<BetslipScreenResult> ScreenBetslipCandidatesAsync(
+            IReadOnlyList<BetslipScreenRequest> candidates,
+            CancellationToken ct = default)
+        {
+            ScreenedBatches.Add(candidates.ToList());
+            return Task.FromResult(PassAllScreened(candidates));
+        }
+
+        public Task<LadderComposeResult> ComposeLadderSlipsAsync(
+            IReadOnlyList<LadderRankRequest> candidates,
+            IReadOnlyList<LadderComposeBandRequest> bands,
+            CancellationToken ct = default) =>
+            Task.FromResult(new LadderComposeResult());
     }
+
+    private static BetslipScreenResult PassAllScreened(IReadOnlyList<BetslipScreenRequest> candidates) =>
+        new()
+        {
+            Passed = candidates.Select(c => new BetslipScreenPick
+            {
+                PredictionId = c.PredictionId,
+                Score = (double)c.Confidence * 100d
+            }).ToList()
+        };
 }

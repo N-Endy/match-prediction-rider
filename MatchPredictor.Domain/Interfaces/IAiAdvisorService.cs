@@ -20,4 +20,13 @@ public interface IAiAdvisorService
     Task<LadderRankResult> RankLadderCandidatesAsync(
         IReadOnlyList<LadderRankRequest> candidates,
         CancellationToken ct = default);
+
+    Task<BetslipScreenResult> ScreenBetslipCandidatesAsync(
+        IReadOnlyList<BetslipScreenRequest> candidates,
+        CancellationToken ct = default);
+
+    Task<LadderComposeResult> ComposeLadderSlipsAsync(
+        IReadOnlyList<LadderRankRequest> candidates,
+        IReadOnlyList<LadderComposeBandRequest> bands,
+        CancellationToken ct = default);
 }

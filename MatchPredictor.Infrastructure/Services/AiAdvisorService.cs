@@ -762,6 +762,214 @@ public class AiAdvisorService : IAiAdvisorService
         }
     }
 
+    public async Task<BetslipScreenResult> ScreenBetslipCandidatesAsync(
+        IReadOnlyList<BetslipScreenRequest> candidates,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+
+        if (candidates.Count == 0)
+        {
+            return new BetslipScreenResult();
+        }
+
+        if (!_chatClient.IsConfigured)
+        {
+            return PassScreenByConfidence(candidates);
+        }
+
+        try
+        {
+            var insightsByPredictionId = await LoadBetslipFootballInsightsAsync(
+                candidates.Select(c => (
+                    c.PredictionId,
+                    c.League,
+                    c.HomeTeam,
+                    c.AwayTeam,
+                    ResolveBetslipInsightCategory(c.PredictionCategory, c.Market),
+                    c.PredictedOutcome,
+                    c.MatchDateTimeUtc)),
+                ct);
+
+            var payload = JsonSerializer.Serialize(new
+            {
+                candidates = candidates.Select(c => new
+                {
+                    c.PredictionId,
+                    c.League,
+                    c.HomeTeam,
+                    c.AwayTeam,
+                    c.Market,
+                    c.PredictedOutcome,
+                    c.PredictionCategory,
+                    ConfidencePct = Math.Round((double)c.Confidence * 100d, 1),
+                    DecimalOdds = Math.Round(c.DecimalOdds, 2),
+                    KickoffUtc = c.MatchDateTimeUtc,
+                    footballInsight = ToCompactFootballInsight(insightsByPredictionId.GetValueOrDefault(c.PredictionId))
+                })
+            });
+
+            var systemPrompt =
+                "You are screening live-priced football predictions for today's betslips. " +
+                "Pass only picks you would stake on a published slip after blending calibrated confidence with " +
+                "supplied footballInsight (form, venue, BTTS/totals rates, head-to-head) when dataQuality is not Low. " +
+                "Reject thin research, contradictory form, or picks that look like noise. " +
+                "Use only the supplied predictionIds. Do not invent fixtures. Do not pack slips. " +
+                "Respond with JSON only: {\"passed\":[{\"predictionId\":123,\"score\":0-100,\"reason\":\"one short sentence\"}]}.";
+
+            var userPrompt =
+                $"Screen these {candidates.Count} live-quoted candidates. Return only the ones that pass.\n{payload}";
+
+            var raw = await CompleteChatAsync(
+                systemPrompt,
+                userPrompt,
+                null,
+                ct,
+                jsonMode: true,
+                temperature: 0.15,
+                maxTokens: 2000);
+
+            if (raw.StartsWith("❌", StringComparison.Ordinal) ||
+                raw.StartsWith("⏳", StringComparison.Ordinal) ||
+                raw.StartsWith("⚠️", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Betslip screening returned an error response.");
+            }
+
+            var allowed = candidates.Select(c => c.PredictionId).ToHashSet();
+            var parsed = Domain.Helpers.BetslipDrawPickParser.ParseScreenedPassers(raw)
+                .Where(pick => allowed.Contains(pick.PredictionId))
+                .ToList();
+
+            if (parsed.Count == 0 && !Domain.Helpers.BetslipDrawPickParser.IsExplicitEmptyPassedList(raw))
+            {
+                throw new InvalidOperationException("Betslip screening returned no parseable passers.");
+            }
+
+            return new BetslipScreenResult { Passed = parsed };
+        }
+        catch (Exception ex) when (ex is not InvalidOperationException)
+        {
+            _logger.LogWarning(ex, "Betslip screening batch failed; caller will keep the batch as confidence passers.");
+            throw;
+        }
+    }
+
+    public async Task<LadderComposeResult> ComposeLadderSlipsAsync(
+        IReadOnlyList<LadderRankRequest> candidates,
+        IReadOnlyList<LadderComposeBandRequest> bands,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        ArgumentNullException.ThrowIfNull(bands);
+
+        var empty = new LadderComposeResult();
+        if (candidates.Count == 0 || bands.Count == 0 || !_chatClient.IsConfigured)
+        {
+            return empty;
+        }
+
+        try
+        {
+            var insightsByPredictionId = await LoadBetslipFootballInsightsAsync(
+                candidates.Select(c => (
+                    c.PredictionId,
+                    c.League,
+                    c.HomeTeam,
+                    c.AwayTeam,
+                    ResolveBetslipInsightCategory(c.PredictionCategory, c.Market),
+                    c.PredictedOutcome,
+                    c.MatchDateTimeUtc)),
+                ct);
+
+            var payload = JsonSerializer.Serialize(new
+            {
+                bands = bands.Select(b => new
+                {
+                    b.SlipNumber,
+                    b.Title,
+                    b.BandKey,
+                    b.MinOdds,
+                    b.MaxOdds,
+                    b.FallbackMinOdds,
+                    b.FallbackMaxOdds,
+                    b.MaxPicks
+                }),
+                candidates = candidates.Select(c => new
+                {
+                    c.PredictionId,
+                    c.League,
+                    c.HomeTeam,
+                    c.AwayTeam,
+                    c.Market,
+                    c.PredictedOutcome,
+                    c.PredictionCategory,
+                    ConfidencePct = Math.Round((double)c.Confidence * 100d, 1),
+                    DecimalOdds = Math.Round(c.DecimalOdds, 2),
+                    KickoffUtc = c.MatchDateTimeUtc,
+                    footballInsight = ToCompactFootballInsight(insightsByPredictionId.GetValueOrDefault(c.PredictionId))
+                })
+            });
+
+            var systemPrompt =
+                "You are building payout-band football accumulators from already-screened live-priced candidates. " +
+                "C# will validate IDs, fixture exclusivity, and odds product — you choose the legs. " +
+                "Use only the supplied predictionIds. Do not invent fixtures or odds. " +
+                "Each fixture may appear on at most one slip. Do not include draws. " +
+                "For each band, pick legs so the decimal-odds product lands between minOdds and maxOdds " +
+                "(fallbackMinOdds-fallbackMaxOdds if the primary band is impossible). Stay within maxPicks. " +
+                "Omit a band rather than pad with junk. " +
+                "Respond with JSON only: {\"slips\":[{\"slipNumber\":1,\"predictionIds\":[123,456]}]}.";
+
+            var userPrompt =
+                $"Build the {bands.Count} payout-band slip(s) from these {candidates.Count} candidates.\n{payload}";
+
+            var raw = await CompleteChatAsync(
+                systemPrompt,
+                userPrompt,
+                null,
+                ct,
+                jsonMode: true,
+                temperature: 0.15,
+                maxTokens: 2500);
+
+            if (raw.StartsWith("❌", StringComparison.Ordinal) ||
+                raw.StartsWith("⏳", StringComparison.Ordinal) ||
+                raw.StartsWith("⚠️", StringComparison.Ordinal))
+            {
+                return empty;
+            }
+
+            var allowed = candidates.Select(c => c.PredictionId).ToHashSet();
+            var slips = Domain.Helpers.BetslipDrawPickParser.ParseLadderComposeSlips(raw)
+                .Select(slip => new LadderComposeSlip
+                {
+                    SlipNumber = slip.SlipNumber,
+                    PredictionIds = slip.PredictionIds.Where(allowed.Contains).Distinct().ToList()
+                })
+                .Where(slip => slip.PredictionIds.Count > 0)
+                .ToList();
+
+            return slips.Count == 0 ? empty : new LadderComposeResult { Slips = slips };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ladder AI compose failed; caller will pack remaining bands.");
+            return empty;
+        }
+    }
+
+    private static BetslipScreenResult PassScreenByConfidence(IReadOnlyList<BetslipScreenRequest> candidates) =>
+        new()
+        {
+            Passed = candidates.Select(c => new BetslipScreenPick
+            {
+                PredictionId = c.PredictionId,
+                Score = Math.Clamp((double)c.Confidence * 100d, 0d, 100d),
+                Reason = string.Empty
+            }).ToList()
+        };
+
     private async Task<IReadOnlyDictionary<int, FootballMatchInsightSnapshot>> LoadBetslipFootballInsightsAsync(
         IEnumerable<(int PredictionId, string League, string HomeTeam, string AwayTeam, string PredictionCategory, string PredictedOutcome, DateTime? MatchDateTimeUtc)> candidates,
         CancellationToken ct)

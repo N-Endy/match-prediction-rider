@@ -221,5 +221,23 @@ public class BetslipGenerationServicePayoutBandTests
             IReadOnlyList<LadderRankRequest> candidates,
             CancellationToken ct = default) =>
             Task.FromResult(new LadderRankResult());
+
+        public Task<BetslipScreenResult> ScreenBetslipCandidatesAsync(
+            IReadOnlyList<BetslipScreenRequest> candidates,
+            CancellationToken ct = default) =>
+            Task.FromResult(new BetslipScreenResult
+            {
+                Passed = candidates.Select(c => new BetslipScreenPick
+                {
+                    PredictionId = c.PredictionId,
+                    Score = (double)c.Confidence * 100d
+                }).ToList()
+            });
+
+        public Task<LadderComposeResult> ComposeLadderSlipsAsync(
+            IReadOnlyList<LadderRankRequest> candidates,
+            IReadOnlyList<LadderComposeBandRequest> bands,
+            CancellationToken ct = default) =>
+            Task.FromResult(new LadderComposeResult());
     }
 }

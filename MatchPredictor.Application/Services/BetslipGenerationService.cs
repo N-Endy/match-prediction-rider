@@ -25,8 +25,6 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         "Under2.5Goals"
     ];
 
-    public const int MaxResearchPoolSize = 40;
-
     private readonly ApplicationDbContext _dbContext;
     private readonly ISportyBetBookingService _bookingService;
     private readonly ISourceMarketPricingService _pricingService;
@@ -71,7 +69,6 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         {
             var kickoffCutoff = nowUtc.AddMinutes(settings.MinMinutesBeforeKickoff);
             var predictions = await LoadTodayPredictionsAsync(today, kickoffCutoff);
-            var oddsByPredictionId = await LoadPublishOddsAsync(predictions.Select(p => p.Id).ToList());
 
             _logger.LogInformation(
                 "Betslip generation started for {Date} ({DayKind}/{RunLabel}): {PredictionCount} published predictions past kickoff cutoff ({CutoffMinutes} min).",
@@ -92,38 +89,41 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 _logger.LogWarning(ex, "Live SportyBet pricing unavailable; banker and ladder slips will be skipped.");
             }
 
-            var banker = await ComposeBankerSlipAsync(predictions, settings, sourceFixtures);
+            var universe = BuildLiveQuotedUniverse(predictions, sourceFixtures);
+            var passers = await ScreenLiveQuotedUniverseAsync(universe);
+            var mainPassers = CollapseOnePerFixture(
+                passers.Where(p => MainCategories.Contains(p.Candidate.PredictionCategory)).ToList());
+            var drawPassers = passers
+                .Where(p => string.Equals(p.Candidate.PredictionCategory, "Draw", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var bankerPassers = FilterByCategoryAndEdge(mainPassers, MainCategories, _minimumEdge);
+            var banker = await ComposeBankerFromPassersAsync(bankerPassers, settings);
             if (banker is not null)
             {
                 composed.Add(banker);
             }
 
             var usedFixtureKeys = CollectFixtureKeys(composed);
-            var ladderPool = BuildLivePricedLadderPool(predictions, sourceFixtures);
-            var ladderBeforeExclusion = ladderPool.Count;
-            ladderPool = ExcludeUsedFixtures(ladderPool, usedFixtureKeys);
-            var ladderRemoved = ladderBeforeExclusion - ladderPool.Count;
-            ladderPool = await RankLadderPoolAsync(ladderPool);
             var bands = dayKind == BetslipDayKinds.Weekend
                 ? WeekendPayoutSlipComposer.BuildWeekendPlan(settings)
                 : WeekendPayoutSlipComposer.BuildWeekdayPlan(settings);
 
-            _logger.LogInformation(
-                "Ladder pool after banker exclusion: {PoolCount} candidates ({RemovedCount} removed).",
-                ladderPool.Count,
-                ladderRemoved);
+            var ladderPassers = ExcludeUsedFixtures(
+                FilterByCategoryAndEdge(mainPassers, MainCategories, _ladderMinimumEdge),
+                usedFixtureKeys);
 
             _logger.LogInformation(
-                "Ladder pool ready: {PoolCount} live-priced candidates for {BandCount} band(s).",
-                ladderPool.Count,
+                "Ladder pool after banker exclusion: {PoolCount} screened passers ({RemovedCount} removed).",
+                ladderPassers.Count,
+                FilterByCategoryAndEdge(mainPassers, MainCategories, _ladderMinimumEdge).Count - ladderPassers.Count);
+
+            _logger.LogInformation(
+                "Ladder pool ready: {PoolCount} screened passers for {BandCount} band(s).",
+                ladderPassers.Count,
                 bands.Count);
 
-            var ladderSlips = WeekendPayoutSlipComposer.Compose(
-                ladderPool,
-                bands,
-                settings.MaxSlipsPerPrediction,
-                settings.MaxSingleMarketShare,
-                settings.OverlapPenalty);
+            var ladderSlips = await ComposeLadderFromPassersAsync(ladderPassers, bands, settings);
             composed.AddRange(ladderSlips);
             AddFixtureKeys(usedFixtureKeys, ladderSlips);
 
@@ -154,7 +154,10 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             var drawSlip = (ComposedBetslip?)null;
             if (dayKind == BetslipDayKinds.Weekend)
             {
-                drawSlip = await ComposeDrawSlipAsync(predictions, oddsByPredictionId, settings, usedFixtureKeys, sourceFixtures);
+                drawSlip = await ComposeDrawFromPassersAsync(
+                    drawPassers,
+                    settings,
+                    usedFixtureKeys);
                 if (drawSlip is not null)
                 {
                     composed.Add(drawSlip);
@@ -239,123 +242,28 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             .ToListAsync();
     }
 
-    private async Task<Dictionary<int, double>> LoadPublishOddsAsync(IReadOnlyList<int> predictionIds)
+    private async Task<ComposedBetslip?> ComposeBankerFromPassersAsync(
+        IReadOnlyList<LiveQuotedCandidate> passers,
+        BetslipSettings settings)
     {
-        if (predictionIds.Count == 0)
+        if (passers.Count == 0)
         {
-            return new Dictionary<int, double>();
-        }
-
-        var snapshots = await _dbContext.PredictionOddsSnapshots
-            .AsNoTracking()
-            .Where(s =>
-                predictionIds.Contains(s.PredictionId) &&
-                s.SnapshotKind == PredictionOddsSnapshotKind.Publish &&
-                s.DecimalOdds > 1)
-            .OrderByDescending(s => s.CapturedAtUtc)
-            .ToListAsync();
-
-        return snapshots
-            .GroupBy(s => s.PredictionId)
-            .ToDictionary(g => g.Key, g => g.First().DecimalOdds);
-    }
-
-    private async Task<ComposedBetslip?> ComposeBankerSlipAsync(
-        IReadOnlyList<Prediction> predictions,
-        BetslipSettings settings,
-        IReadOnlyList<SourceMarketFixture> fixtures)
-    {
-        if (fixtures.Count == 0)
-        {
-            _logger.LogInformation("Banker slip skipped: no live SportyBet fixtures for today.");
+            _logger.LogInformation("Banker skipped: no screened main-market passers meeting the 3% edge floor.");
             return null;
         }
 
-        var livePriced = new List<(Prediction Prediction, BetslipComposerCandidate Candidate)>();
-        var unmatched = 0;
-        var noLiveQuote = 0;
-        var failedEdge = 0;
-        foreach (var prediction in predictions.Where(p => MainCategories.Contains(p.PredictionCategory)))
-        {
-            var confidence = prediction.ConfidenceScore ?? prediction.RawConfidenceScore ?? 0m;
-            if ((double)confidence < settings.BankerMinConfidence)
-            {
-                continue;
-            }
-
-            var fixture = SourceMarketFixtureMatcher.FindBestFixture(
-                fixtures,
-                prediction.HomeTeam,
-                prediction.AwayTeam,
-                prediction.League,
-                prediction.MatchDateTime);
-
-            if (fixture is null)
-            {
-                unmatched++;
-                continue;
-            }
-
-            if (!TryGetStakeableOdds(prediction, fixture, _minimumEdge, out var liveOdds, out var dropReason))
-            {
-                if (dropReason == StakeableDropReason.NoLiveQuote)
-                {
-                    noLiveQuote++;
-                }
-                else if (dropReason == StakeableDropReason.FailedEdge)
-                {
-                    failedEdge++;
-                }
-
-                continue;
-            }
-
-            var baseCandidate = ToCandidate(prediction, new Dictionary<int, double>());
-            livePriced.Add((prediction, new BetslipComposerCandidate
-            {
-                PredictionId = baseCandidate.PredictionId,
-                FixtureKey = baseCandidate.FixtureKey,
-                League = baseCandidate.League,
-                HomeTeam = baseCandidate.HomeTeam,
-                AwayTeam = baseCandidate.AwayTeam,
-                Market = baseCandidate.Market,
-                PredictedOutcome = baseCandidate.PredictedOutcome,
-                PredictionCategory = baseCandidate.PredictionCategory,
-                Confidence = confidence,
-                MatchDateTimeUtc = baseCandidate.MatchDateTimeUtc,
-                DecimalOdds = liveOdds
-            }));
-        }
-
-        _logger.LogInformation(
-            "Banker pricing: {LivePricedCount} live-priced candidates from {FixtureCount} SportyBet fixtures (min confidence {MinConfidence:0.##}; unmatched={Unmatched}, noLiveQuote={NoLiveQuote}, failedEdge={FailedEdge}).",
-            livePriced.Count,
-            fixtures.Count,
-            settings.BankerMinConfidence,
-            unmatched,
-            noLiveQuote,
-            failedEdge);
-
-        // One pick per fixture — keep highest confidence. Cap the AI payload, not the eligible pool.
-        var eligible = livePriced
-            .GroupBy(x => x.Candidate.FixtureKey, StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.OrderByDescending(x => x.Candidate.Confidence).ThenBy(x => x.Candidate.PredictionId).First())
-            .OrderByDescending(x => x.Candidate.Confidence)
-            .ThenBy(x => x.Candidate.PredictionId)
+        var eligible = passers
+            .Select(p => p.Candidate)
+            .OrderByDescending(c => c.ResearchScore ?? (double)c.Confidence)
+            .ThenBy(c => c.PredictionId)
             .ToList();
 
-        if (eligible.Count == 0)
-        {
-            _logger.LogInformation(
-                "Banker skipped: no live-priced candidates at/above min confidence {MinConfidence:0.##}.",
-                settings.BankerMinConfidence);
-            return null;
-        }
-
-        var researchPool = eligible.Take(MaxResearchPoolSize).ToList();
+        _logger.LogInformation(
+            "Banker compose pool: {PasserCount} screened passers meeting the 3% edge floor.",
+            eligible.Count);
 
         var deterministic = BankerSlipComposer.Compose(
-            eligible.Select(x => x.Candidate).ToList(),
+            eligible,
             settings.BankerMinOdds,
             settings.BankerMaxOdds,
             settings.BankerFallbackMinOdds,
@@ -365,7 +273,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         if (deterministic.IsEmpty)
         {
             _logger.LogInformation(
-                "Banker skipped: no combination in {MinOdds:0.##}-{MaxOdds:0.##}x (fallback {FallbackMin:0.##}-{FallbackMax:0.##}x) from {EligibleCount} eligible picks.",
+                "Banker skipped: no combination in {MinOdds:0.##}-{MaxOdds:0.##}x (fallback {FallbackMin:0.##}-{FallbackMax:0.##}x) from {EligibleCount} screened passers.",
                 settings.BankerMinOdds,
                 settings.BankerMaxOdds,
                 settings.BankerFallbackMinOdds,
@@ -374,8 +282,8 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             return null;
         }
 
-        var signalByPredictionId = await LoadSignalSummariesAsync(researchPool.Select(x => x.Prediction).ToList());
-        var aiRequests = researchPool.Select(x =>
+        var signalByPredictionId = await LoadSignalSummariesAsync(passers.Select(p => p.Prediction).ToList());
+        var aiRequests = passers.Select(x =>
         {
             signalByPredictionId.TryGetValue(x.Prediction.Id, out var signal);
             return new BankerPickRequest
@@ -413,7 +321,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             var aiResult = await _aiAdvisorService.SelectBankerPicksAsync(aiRequests, activeMin, activeMax);
             var validated = TryValidateBankerAiPicks(
                 aiResult,
-                researchPool.Select(x => x.Candidate).ToList(),
+                eligible,
                 activeMin,
                 activeMax,
                 settings.BankerMaxPicks);
@@ -610,62 +518,40 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         };
     }
 
-    private async Task<ComposedBetslip?> ComposeDrawSlipAsync(
-        IReadOnlyList<Prediction> predictions,
-        IReadOnlyDictionary<int, double> oddsByPredictionId,
+    private async Task<ComposedBetslip?> ComposeDrawFromPassersAsync(
+        IReadOnlyList<LiveQuotedCandidate> passers,
         BetslipSettings settings,
-        IReadOnlySet<string> usedFixtureKeys,
-        IReadOnlyList<SourceMarketFixture> sourceFixtures)
+        IReadOnlySet<string> usedFixtureKeys)
     {
-        var drawPool = predictions
-            .Where(p => p.PredictionCategory == "Draw")
-            .OrderByDescending(p => p.ConfidenceScore ?? p.RawConfidenceScore ?? 0m)
-            .ThenBy(p => p.Id)
-            .ToList();
+        var drawPassers = ExcludeUsedFixtures(
+            FilterByCategoryAndEdge(passers, ["Draw"], _minimumEdge),
+            usedFixtureKeys);
 
-        var drawBeforeExclusion = drawPool.Count;
-        drawPool = drawPool
-            .Where(p => !IsFixtureUsed(ResolveFixtureKey(p), usedFixtureKeys))
-            .Where(p =>
-            {
-                var fixture = SourceMarketFixtureMatcher.FindBestFixture(
-                    sourceFixtures,
-                    p.HomeTeam,
-                    p.AwayTeam,
-                    p.League,
-                    p.MatchDateTime);
-                return TryGetStakeableOdds(p, fixture, _minimumEdge, out _, out _);
-            })
-            .ToList();
-        var drawRemoved = drawBeforeExclusion - drawPool.Count;
-
-        var drawCandidates = drawPool
-            .Take(MaxResearchPoolSize)
-            .ToList();
-
-        if (drawCandidates.Count == 0)
+        if (drawPassers.Count == 0)
         {
-            _logger.LogInformation(
-                "AI Draws skipped: no published Draw candidates for today ({RemovedCount} excluded as already used).",
-                drawRemoved);
+            _logger.LogInformation("AI Draws skipped: no screened Draw passers remaining after exclusivity and 3% edge.");
             return null;
         }
 
         _logger.LogInformation(
-            "AI Draws pool: {CandidateCount} draw candidate(s) after excluding {RemovedCount} used fixture(s); targeting {DrawSlipSize} pick(s).",
-            drawCandidates.Count,
-            drawRemoved,
+            "AI Draws pool: {CandidateCount} screened draw passer(s); targeting {DrawSlipSize} pick(s).",
+            drawPassers.Count,
             settings.DrawSlipSize);
 
-        var requests = drawCandidates.Select(p => new BetslipDrawPickRequest
+        var orderedPassers = drawPassers
+            .OrderByDescending(p => p.Candidate.ResearchScore ?? (double)p.Candidate.Confidence)
+            .ThenBy(p => p.Prediction.Id)
+            .ToList();
+
+        var requests = orderedPassers.Select(p => new BetslipDrawPickRequest
         {
-            PredictionId = p.Id,
-            League = p.League,
-            HomeTeam = p.HomeTeam,
-            AwayTeam = p.AwayTeam,
-            Confidence = p.ConfidenceScore ?? p.RawConfidenceScore ?? 0m,
-            MatchDateTimeUtc = p.MatchDateTime,
-            PredictionCategory = p.PredictionCategory
+            PredictionId = p.Prediction.Id,
+            League = p.Candidate.League,
+            HomeTeam = p.Candidate.HomeTeam,
+            AwayTeam = p.Candidate.AwayTeam,
+            Confidence = p.Candidate.Confidence,
+            MatchDateTimeUtc = p.Candidate.MatchDateTimeUtc,
+            PredictionCategory = p.Candidate.PredictionCategory
         }).ToList();
 
         IReadOnlyList<BetslipDrawPickSelection> selected;
@@ -682,36 +568,21 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 .ToList();
         }
 
-        var byId = drawCandidates.ToDictionary(p => p.Id);
+        var byId = orderedPassers.ToDictionary(p => p.Prediction.Id);
         var picks = new List<BetslipComposerCandidate>();
         foreach (var pick in selected)
         {
-            if (!byId.TryGetValue(pick.PredictionId, out var prediction))
+            if (!byId.TryGetValue(pick.PredictionId, out var passer))
             {
                 continue;
             }
 
-            var candidate = ToCandidate(prediction, oddsByPredictionId);
-            picks.Add(new BetslipComposerCandidate
-            {
-                PredictionId = candidate.PredictionId,
-                FixtureKey = candidate.FixtureKey,
-                League = candidate.League,
-                HomeTeam = candidate.HomeTeam,
-                AwayTeam = candidate.AwayTeam,
-                Market = candidate.Market,
-                PredictedOutcome = candidate.PredictedOutcome,
-                PredictionCategory = candidate.PredictionCategory,
-                Confidence = candidate.Confidence,
-                MatchDateTimeUtc = candidate.MatchDateTimeUtc,
-                DecimalOdds = candidate.DecimalOdds,
-                AiNote = string.IsNullOrWhiteSpace(pick.Reason) ? null : pick.Reason.Trim()
-            });
+            picks.Add(WithAiNote(passer.Candidate, pick.Reason));
         }
 
         if (picks.Count == 0)
         {
-            picks = drawCandidates.Take(settings.DrawSlipSize).Select(p => ToCandidate(p, oddsByPredictionId)).ToList();
+            picks = orderedPassers.Take(settings.DrawSlipSize).Select(p => p.Candidate).ToList();
         }
 
         _logger.LogInformation("AI Draws composed: {PickCount} pick(s).", picks.Count);
@@ -887,70 +758,193 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         };
     }
 
-    private async Task<List<BetslipComposerCandidate>> RankLadderPoolAsync(
-        List<BetslipComposerCandidate> ladderPool)
+    private async Task<List<ComposedBetslip>> ComposeLadderFromPassersAsync(
+        IReadOnlyList<LiveQuotedCandidate> passers,
+        IReadOnlyList<PayoutBandSpec> bands,
+        BetslipSettings settings)
     {
-        if (ladderPool.Count == 0)
+        if (passers.Count == 0 || bands.Count == 0)
         {
-            return ladderPool;
+            return [];
         }
 
-        var researchPool = ladderPool.Take(MaxResearchPoolSize).ToList();
+        var pool = passers
+            .Select(p => p.Candidate)
+            .OrderByDescending(c => c.ResearchScore ?? (double)c.Confidence)
+            .ThenBy(c => c.PredictionId)
+            .ToList();
+
+        var aiSlips = new List<ComposedBetslip>();
+        var usedFixtures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var usedPredictionIds = new HashSet<int>();
+
         try
         {
-            var requests = researchPool.Select(c => new LadderRankRequest
+            var requests = pool.Select(ToLadderRankRequest).ToList();
+            var bandRequests = bands.Select(b => new LadderComposeBandRequest
             {
-                PredictionId = c.PredictionId,
-                League = c.League,
-                HomeTeam = c.HomeTeam,
-                AwayTeam = c.AwayTeam,
-                Market = c.Market,
-                PredictedOutcome = c.PredictedOutcome,
-                PredictionCategory = c.PredictionCategory,
-                Confidence = c.Confidence,
-                DecimalOdds = c.DecimalOdds ?? 0d,
-                MatchDateTimeUtc = c.MatchDateTimeUtc
+                SlipNumber = b.SlipNumber,
+                Title = b.Title,
+                BandKey = b.BandKey,
+                MinOdds = b.MinOdds,
+                MaxOdds = b.MaxOdds,
+                FallbackMinOdds = b.FallbackMinOdds,
+                FallbackMaxOdds = b.FallbackMaxOdds,
+                MaxPicks = b.MaxPicks
             }).ToList();
 
-            var ranked = await _aiAdvisorService.RankLadderCandidatesAsync(requests);
-            return ApplyLadderResearchScores(ladderPool, ranked);
+            var composed = await _aiAdvisorService.ComposeLadderSlipsAsync(requests, bandRequests);
+            var bySlipNumber = composed.Slips.ToDictionary(s => s.SlipNumber);
+            foreach (var band in bands)
+            {
+                if (!bySlipNumber.TryGetValue(band.SlipNumber, out var aiSlip))
+                {
+                    continue;
+                }
+
+                var validated = TryValidateAiLadderSlip(aiSlip.PredictionIds, band, pool, usedFixtures, usedPredictionIds);
+                if (validated is null)
+                {
+                    continue;
+                }
+
+                aiSlips.Add(validated);
+                foreach (var selection in validated.Selections)
+                {
+                    usedPredictionIds.Add(selection.PredictionId);
+                    if (!string.IsNullOrWhiteSpace(selection.FixtureKey))
+                    {
+                        usedFixtures.Add(selection.FixtureKey);
+                    }
+                }
+            }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Ladder AI ranking failed; packing by confidence.");
-            return ladderPool;
+            _logger.LogWarning(ex, "Ladder AI compose failed; packing remaining bands deterministically.");
         }
+
+        var missingBands = bands.Where(b => aiSlips.All(s => s.SlipNumber != b.SlipNumber)).ToList();
+        if (missingBands.Count == 0)
+        {
+            return aiSlips.OrderBy(s => s.SlipNumber).ToList();
+        }
+
+        var leftover = pool
+            .Where(c => !usedPredictionIds.Contains(c.PredictionId) && !IsFixtureUsed(c.FixtureKey, usedFixtures))
+            .ToList();
+        var packed = WeekendPayoutSlipComposer.Compose(
+            leftover,
+            missingBands,
+            settings.MaxSlipsPerPrediction,
+            settings.MaxSingleMarketShare,
+            settings.OverlapPenalty);
+
+        if (packed.Count > 0)
+        {
+            _logger.LogInformation(
+                "Ladder packer filled {PackedCount} band(s) the AI missed: {Titles}.",
+                packed.Count,
+                string.Join(", ", packed.Select(s => s.Title)));
+        }
+
+        return aiSlips.Concat(packed).OrderBy(s => s.SlipNumber).ToList();
     }
 
-    private static List<BetslipComposerCandidate> ApplyLadderResearchScores(
+    private static ComposedBetslip? TryValidateAiLadderSlip(
+        IReadOnlyList<int> predictionIds,
+        PayoutBandSpec band,
         IReadOnlyList<BetslipComposerCandidate> pool,
-        LadderRankResult ranked)
+        IReadOnlySet<string> usedFixtures,
+        IReadOnlySet<int> usedPredictionIds)
     {
-        if (ranked.OrderedPredictionIds.Count == 0)
+        var byId = pool.ToDictionary(c => c.PredictionId);
+        var selected = new List<BetslipComposerCandidate>();
+        var slipFixtures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var predictionId in predictionIds)
         {
-            return pool.ToList();
+            if (selected.Count >= Math.Max(1, band.MaxPicks))
+            {
+                break;
+            }
+
+            if (usedPredictionIds.Contains(predictionId) || !byId.TryGetValue(predictionId, out var candidate))
+            {
+                continue;
+            }
+
+            if (candidate.DecimalOdds is not > 1d)
+            {
+                continue;
+            }
+
+            var fixtureKey = string.IsNullOrWhiteSpace(candidate.FixtureKey)
+                ? $"{candidate.League}|{candidate.HomeTeam}|{candidate.AwayTeam}"
+                : candidate.FixtureKey;
+            if (IsFixtureUsed(fixtureKey, usedFixtures) || !slipFixtures.Add(fixtureKey))
+            {
+                continue;
+            }
+
+            selected.Add(candidate);
         }
 
-        var allowed = pool.Select(c => c.PredictionId).ToHashSet();
-        var order = ranked.OrderedPredictionIds
-            .Where(allowed.Contains)
-            .Distinct()
-            .ToList();
-        if (order.Count == 0)
+        if (selected.Count == 0)
         {
-            return pool.ToList();
+            return null;
         }
 
-        var scores = order
-            .Select((id, index) => (id, score: 1000d + (order.Count - index)))
-            .ToDictionary(x => x.id, x => x.score);
+        var combined = BankerSlipComposer.CalculateCombinedOdds(selected);
+        var usedFallback = false;
+        var activeMin = band.MinOdds;
+        var activeMax = band.MaxOdds;
+        if (!BankerSlipComposer.IsWithinOddsRange(combined, band.MinOdds, band.MaxOdds))
+        {
+            if (!BankerSlipComposer.IsWithinOddsRange(combined, band.FallbackMinOdds, band.FallbackMaxOdds))
+            {
+                return null;
+            }
 
-        return pool
-            .Select(c => scores.TryGetValue(c.PredictionId, out var score)
-                ? WithResearchScore(c, score)
-                : c)
-            .ToList();
+            usedFallback = true;
+            activeMin = band.FallbackMinOdds;
+            activeMax = band.FallbackMaxOdds;
+        }
+
+        return new ComposedBetslip
+        {
+            SlipNumber = band.SlipNumber,
+            Title = band.Title,
+            TierLabel = band.TierLabel,
+            TargetMinSelections = 1,
+            TargetMaxSelections = band.MaxPicks,
+            Selections = selected,
+            ShortfallNote = usedFallback
+                ? $"Widened payout range to {activeMin:0.##}-{activeMax:0.##}x."
+                : null,
+            TargetCombinedOdds = combined,
+            ActiveMinOdds = activeMin,
+            ActiveMaxOdds = activeMax,
+            IsPayoutBand = true,
+            IsMega = band.IsMega,
+            AiSummary = "AI-composed payout band from screened live-priced passers."
+        };
     }
+
+    private static LadderRankRequest ToLadderRankRequest(BetslipComposerCandidate candidate) =>
+        new()
+        {
+            PredictionId = candidate.PredictionId,
+            League = candidate.League,
+            HomeTeam = candidate.HomeTeam,
+            AwayTeam = candidate.AwayTeam,
+            Market = candidate.Market,
+            PredictedOutcome = candidate.PredictedOutcome,
+            PredictionCategory = candidate.PredictionCategory,
+            Confidence = candidate.Confidence,
+            DecimalOdds = candidate.DecimalOdds ?? 0d,
+            MatchDateTimeUtc = candidate.MatchDateTimeUtc
+        };
 
     private static BetslipComposerCandidate WithResearchScore(
         BetslipComposerCandidate candidate,
@@ -972,24 +966,43 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             ResearchScore = researchScore
         };
 
-    private List<BetslipComposerCandidate> BuildLivePricedLadderPool(
+    private static BetslipComposerCandidate WithAiNote(BetslipComposerCandidate candidate, string? reason) =>
+        new()
+        {
+            PredictionId = candidate.PredictionId,
+            FixtureKey = candidate.FixtureKey,
+            League = candidate.League,
+            HomeTeam = candidate.HomeTeam,
+            AwayTeam = candidate.AwayTeam,
+            Market = candidate.Market,
+            PredictedOutcome = candidate.PredictedOutcome,
+            PredictionCategory = candidate.PredictionCategory,
+            Confidence = candidate.Confidence,
+            MatchDateTimeUtc = candidate.MatchDateTimeUtc,
+            DecimalOdds = candidate.DecimalOdds,
+            AiNote = string.IsNullOrWhiteSpace(reason) ? candidate.AiNote : reason.Trim(),
+            ResearchScore = candidate.ResearchScore
+        };
+
+    private List<LiveQuotedCandidate> BuildLiveQuotedUniverse(
         IReadOnlyList<Prediction> predictions,
         IReadOnlyList<SourceMarketFixture> fixtures)
     {
         if (fixtures.Count == 0)
         {
-            _logger.LogInformation("Ladder slips: no live SportyBet fixtures for today.");
+            _logger.LogInformation("Live-quoted universe empty: no SportyBet fixtures for today.");
             return [];
         }
 
-        var mainPredictions = predictions.Where(p => MainCategories.Contains(p.PredictionCategory)).ToList();
-        var livePriced = new List<BetslipComposerCandidate>();
+        var screenable = predictions
+            .Where(p => MainCategories.Contains(p.PredictionCategory) || p.PredictionCategory == "Draw")
+            .ToList();
+        var liveQuoted = new List<LiveQuotedCandidate>();
         var unmatched = 0;
         var noLiveQuote = 0;
-        var failedEdge = 0;
         var unmatchedSample = new List<string>();
 
-        foreach (var prediction in mainPredictions)
+        foreach (var prediction in screenable)
         {
             var fixture = SourceMarketFixtureMatcher.FindBestFixture(
                 fixtures,
@@ -1009,96 +1022,197 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 continue;
             }
 
-            if (!TryGetStakeableOdds(prediction, fixture, _ladderMinimumEdge, out var liveOdds, out var dropReason))
+            if (!TryGetLiveQuote(prediction, fixture, out var liveOdds, out var marketProbability))
             {
-                if (dropReason == StakeableDropReason.NoLiveQuote)
-                {
-                    noLiveQuote++;
-                }
-                else if (dropReason == StakeableDropReason.FailedEdge)
-                {
-                    failedEdge++;
-                }
-
+                noLiveQuote++;
                 continue;
             }
 
             var baseCandidate = ToCandidate(prediction, new Dictionary<int, double>());
-            livePriced.Add(new BetslipComposerCandidate
+            liveQuoted.Add(new LiveQuotedCandidate
             {
-                PredictionId = baseCandidate.PredictionId,
-                FixtureKey = baseCandidate.FixtureKey,
-                League = baseCandidate.League,
-                HomeTeam = baseCandidate.HomeTeam,
-                AwayTeam = baseCandidate.AwayTeam,
-                Market = baseCandidate.Market,
-                PredictedOutcome = baseCandidate.PredictedOutcome,
-                PredictionCategory = baseCandidate.PredictionCategory,
-                Confidence = baseCandidate.Confidence,
-                MatchDateTimeUtc = baseCandidate.MatchDateTimeUtc,
-                DecimalOdds = liveOdds
+                Prediction = prediction,
+                Candidate = new BetslipComposerCandidate
+                {
+                    PredictionId = baseCandidate.PredictionId,
+                    FixtureKey = baseCandidate.FixtureKey,
+                    League = baseCandidate.League,
+                    HomeTeam = baseCandidate.HomeTeam,
+                    AwayTeam = baseCandidate.AwayTeam,
+                    Market = baseCandidate.Market,
+                    PredictedOutcome = baseCandidate.PredictedOutcome,
+                    PredictionCategory = baseCandidate.PredictionCategory,
+                    Confidence = baseCandidate.Confidence,
+                    MatchDateTimeUtc = baseCandidate.MatchDateTimeUtc,
+                    DecimalOdds = liveOdds
+                },
+                MarketProbability = marketProbability
             });
         }
 
-        // One pick per fixture — keep highest confidence.
-        var unique = livePriced
-            .GroupBy(c => c.FixtureKey, StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.OrderByDescending(c => c.Confidence).ThenBy(c => c.PredictionId).First())
-            .OrderByDescending(c => c.Confidence)
-            .ThenBy(c => c.PredictionId)
-            .ToList();
-
-        var collapsed = livePriced.Count - unique.Count;
         _logger.LogInformation(
-            "Ladder pricing funnel: {PublishedMain} published main-market picks, {SportyBetFixtures} SportyBet fixtures; unmatched={Unmatched}, noLiveQuote={NoLiveQuote}, failedEdge={FailedEdge}, livePriced={LivePriced}, uniqueFixtures={UniqueFixtures} (collapsed {Collapsed}).",
-            mainPredictions.Count,
+            "Live-quoted universe: {Published} published main/draw picks, {SportyBetFixtures} SportyBet fixtures; unmatched={Unmatched}, noLiveQuote={NoLiveQuote}, liveQuoted={LiveQuoted}.",
+            screenable.Count,
             fixtures.Count,
             unmatched,
             noLiveQuote,
-            failedEdge,
-            livePriced.Count,
-            unique.Count,
-            collapsed);
+            liveQuoted.Count);
 
         if (unmatchedSample.Count > 0)
         {
-            _logger.LogInformation("Ladder unmatched sample: {UnmatchedSample}.", string.Join("; ", unmatchedSample));
+            _logger.LogInformation("Live-quoted unmatched sample: {UnmatchedSample}.", string.Join("; ", unmatchedSample));
         }
 
-        return unique;
+        return liveQuoted;
     }
 
-    private enum StakeableDropReason
+    private async Task<List<LiveQuotedCandidate>> ScreenLiveQuotedUniverseAsync(List<LiveQuotedCandidate> universe)
     {
-        None,
-        NoLiveQuote,
-        FailedEdge
+        if (universe.Count == 0)
+        {
+            return [];
+        }
+
+        var batchSize = Math.Clamp(_settings.ScreenBatchSize, 5, 50);
+        var passedById = new Dictionary<int, BetslipScreenPick>();
+        var fallbackIds = new HashSet<int>();
+        var batchCount = 0;
+
+        foreach (var batch in universe.Chunk(batchSize))
+        {
+            batchCount++;
+            var requests = batch.Select(ToScreenRequest).ToList();
+            try
+            {
+                var result = await _aiAdvisorService.ScreenBetslipCandidatesAsync(requests);
+                foreach (var pick in result.Passed)
+                {
+                    passedById[pick.PredictionId] = pick;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Betslip screening batch {BatchNumber} failed; keeping {BatchSize} candidates as confidence passers.",
+                    batchCount,
+                    batch.Length);
+                foreach (var candidate in batch)
+                {
+                    fallbackIds.Add(candidate.Prediction.Id);
+                }
+            }
+        }
+
+        var passers = new List<LiveQuotedCandidate>();
+        var rejectedSample = new List<string>();
+        foreach (var candidate in universe)
+        {
+            if (passedById.TryGetValue(candidate.Prediction.Id, out var pick))
+            {
+                passers.Add(candidate with
+                {
+                    Candidate = WithResearchScore(
+                        WithAiNote(candidate.Candidate, pick.Reason),
+                        pick.Score)
+                });
+                continue;
+            }
+
+            if (fallbackIds.Contains(candidate.Prediction.Id))
+            {
+                passers.Add(candidate with
+                {
+                    Candidate = WithResearchScore(candidate.Candidate, (double)candidate.Candidate.Confidence * 100d)
+                });
+                continue;
+            }
+
+            if (rejectedSample.Count < 8)
+            {
+                rejectedSample.Add(
+                    $"{candidate.Candidate.HomeTeam} vs {candidate.Candidate.AwayTeam} ({candidate.Candidate.Market})");
+            }
+        }
+
+        _logger.LogInformation(
+            "Betslip screening: {BatchCount} batch(es) of {BatchSize}; liveQuoted={LiveQuoted}, passed={Passed}, fallback={Fallback}, rejected={Rejected}.",
+            batchCount,
+            batchSize,
+            universe.Count,
+            passedById.Count,
+            fallbackIds.Count,
+            universe.Count - passers.Count);
+
+        if (rejectedSample.Count > 0)
+        {
+            _logger.LogInformation("Betslip screening reject sample: {RejectedSample}.", string.Join("; ", rejectedSample));
+        }
+
+        return passers;
     }
 
-    private bool TryGetStakeableOdds(
+    private static List<LiveQuotedCandidate> CollapseOnePerFixture(IReadOnlyList<LiveQuotedCandidate> passers) =>
+        passers
+            .GroupBy(p => p.Candidate.FixtureKey, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g
+                .OrderByDescending(p => p.Candidate.ResearchScore ?? (double)p.Candidate.Confidence)
+                .ThenBy(p => p.Prediction.Id)
+                .First())
+            .OrderByDescending(p => p.Candidate.ResearchScore ?? (double)p.Candidate.Confidence)
+            .ThenBy(p => p.Prediction.Id)
+            .ToList();
+
+    private static List<LiveQuotedCandidate> FilterByCategoryAndEdge(
+        IReadOnlyList<LiveQuotedCandidate> passers,
+        IReadOnlyCollection<string> categories,
+        double minimumEdge) =>
+        passers
+            .Where(p => categories.Contains(p.Candidate.PredictionCategory))
+            .Where(p => BetPricingMath.MeetsMinimumEdge(
+                (double)p.Candidate.Confidence,
+                p.MarketProbability,
+                minimumEdge))
+            .ToList();
+
+    private static BetslipScreenRequest ToScreenRequest(LiveQuotedCandidate candidate) =>
+        new()
+        {
+            PredictionId = candidate.Prediction.Id,
+            League = candidate.Candidate.League,
+            HomeTeam = candidate.Candidate.HomeTeam,
+            AwayTeam = candidate.Candidate.AwayTeam,
+            Market = candidate.Candidate.Market,
+            PredictedOutcome = candidate.Candidate.PredictedOutcome,
+            PredictionCategory = candidate.Candidate.PredictionCategory,
+            Confidence = candidate.Candidate.Confidence,
+            DecimalOdds = candidate.Candidate.DecimalOdds ?? 0d,
+            MatchDateTimeUtc = candidate.Candidate.MatchDateTimeUtc
+        };
+
+    private sealed record LiveQuotedCandidate
+    {
+        public required Prediction Prediction { get; init; }
+        public required BetslipComposerCandidate Candidate { get; init; }
+        public required double MarketProbability { get; init; }
+    }
+
+    private bool TryGetLiveQuote(
         Prediction prediction,
         SourceMarketFixture? fixture,
-        double minimumEdge,
         out double liveOdds,
-        out StakeableDropReason dropReason)
+        out double marketProbability)
     {
         liveOdds = 0d;
+        marketProbability = 0d;
         if (!MarketQuoteResolver.TryResolveStakeableQuote(prediction, fixture, storedMatch: null, out var quote) ||
             quote.DecimalOdds <= 1d)
         {
-            dropReason = StakeableDropReason.NoLiveQuote;
-            return false;
-        }
-
-        var modelProbability = (double)(prediction.ConfidenceScore ?? prediction.RawConfidenceScore ?? 0m);
-        if (!BetPricingMath.MeetsMinimumEdge(modelProbability, quote.MarketProbability, minimumEdge))
-        {
-            dropReason = StakeableDropReason.FailedEdge;
             return false;
         }
 
         liveOdds = quote.DecimalOdds;
-        dropReason = StakeableDropReason.None;
+        marketProbability = quote.MarketProbability;
         return true;
     }
 
@@ -1121,6 +1235,20 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 }
             }
         }
+    }
+
+    private static List<LiveQuotedCandidate> ExcludeUsedFixtures(
+        IReadOnlyList<LiveQuotedCandidate> candidates,
+        IReadOnlySet<string> usedFixtureKeys)
+    {
+        if (usedFixtureKeys.Count == 0)
+        {
+            return candidates.ToList();
+        }
+
+        return candidates
+            .Where(c => !IsFixtureUsed(c.Candidate.FixtureKey, usedFixtureKeys))
+            .ToList();
     }
 
     private static List<BetslipComposerCandidate> ExcludeUsedFixtures(

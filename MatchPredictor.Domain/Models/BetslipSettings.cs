@@ -28,6 +28,9 @@ public class BetslipSettings
     /// </summary>
     public double LadderMinimumEdge { get; set; } = 0.01;
 
+    /// <summary>How many live-quoted picks are sent to the AI screener per request.</summary>
+    public int ScreenBatchSize { get; set; } = 25;
+
     /// <summary>Stake used to translate combined odds into estimated Naira payout on cards.</summary>
     public decimal ReferenceStakeNaira { get; set; } = 100m;
 

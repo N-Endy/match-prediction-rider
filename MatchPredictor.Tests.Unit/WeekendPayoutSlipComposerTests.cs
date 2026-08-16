@@ -174,6 +174,12 @@ public class WeekendPayoutSlipComposerTests
     }
 
     [Fact]
+    public void BetslipSettings_DefaultsScreenBatchSizeToTwentyFive()
+    {
+        Assert.Equal(25, new BetslipSettings().ScreenBatchSize);
+    }
+
+    [Fact]
     public void Compose_PrefersResearchScoreOverRawConfidence()
     {
         var researched = new BetslipComposerCandidate
