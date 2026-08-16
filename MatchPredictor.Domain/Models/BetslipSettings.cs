@@ -22,14 +22,17 @@ public class BetslipSettings
     public int BankerShortlistSize { get; set; } = 20;
     public int BankerMaxPicks { get; set; } = 8;
 
-    /// <summary>
-    /// Minimum model-vs-market edge for ladder acca legs. Banker and value bets keep
+    /// <summary>Minimum model-vs-market edge for ladder acca legs. Banker, rollover, and value bets keep
     /// <see cref="PredictionSettings.ValueBetMinimumEdge"/> (3%).
     /// </summary>
     public double LadderMinimumEdge { get; set; } = 0.01;
 
     /// <summary>How many live-quoted picks are sent to the AI screener per request.</summary>
     public int ScreenBatchSize { get; set; } = 25;
+
+    public double RolloverMinOdds { get; set; } = 1.20;
+    public double RolloverMaxOdds { get; set; } = 1.50;
+    public int RolloverShortlistSize { get; set; } = 15;
 
     /// <summary>Stake used to translate combined odds into estimated Naira payout on cards.</summary>
     public decimal ReferenceStakeNaira { get; set; } = 100m;

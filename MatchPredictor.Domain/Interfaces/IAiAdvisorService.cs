@@ -17,6 +17,12 @@ public interface IAiAdvisorService
         double maxOdds,
         CancellationToken ct = default);
 
+    Task<BankerPickResult> SelectRolloverPickAsync(
+        IReadOnlyList<BankerPickRequest> candidates,
+        double minOdds,
+        double maxOdds,
+        CancellationToken ct = default);
+
     Task<LadderRankResult> RankLadderCandidatesAsync(
         IReadOnlyList<LadderRankRequest> candidates,
         CancellationToken ct = default);

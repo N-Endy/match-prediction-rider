@@ -371,6 +371,89 @@ public class BetslipGenerationServiceBankerTests
         Assert.Contains(ai.LastCandidates, c => c.PredictionId > 40);
     }
 
+    [Fact]
+    public async Task GenerateDailyBetslipsAsync_PacksBankerFromLiveQuotedLeftovers_WhenScreenPassesFewIds()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var today = DateTimeProvider.GetLocalDate();
+        var kickoff = DateTime.UtcNow.AddHours(5);
+        var fixtures = new List<SourceMarketFixture>();
+        var predictions = new List<Prediction>();
+
+        for (var i = 1; i <= 6; i++)
+        {
+            var matchKickoff = kickoff.AddMinutes(i * 10);
+            predictions.Add(new Prediction
+            {
+                Id = i,
+                Date = today.ToString("dd-MM-yyyy"),
+                Time = DateTimeProvider.ConvertUtcToLocal(matchKickoff).ToString("HH:mm"),
+                MatchLocalDate = today,
+                MatchDateTime = matchKickoff,
+                League = "Test League",
+                HomeTeam = $"LeftoverHome{i}",
+                AwayTeam = $"LeftoverAway{i}",
+                FixtureKey = $"leftover-fx-{i}",
+                PredictionCategory = "BothTeamsScore",
+                PredictedOutcome = "BTTS",
+                ConfidenceScore = 0.80m,
+                WasPublished = true,
+                IsCurrentRevision = true,
+                PredictionRunId = Guid.NewGuid()
+            });
+            fixtures.Add(new SourceMarketFixture
+            {
+                EventId = $"leftover-evt-{i}",
+                League = "Test League",
+                HomeTeam = $"LeftoverHome{i}",
+                AwayTeam = $"LeftoverAway{i}",
+                MatchTimeUtc = matchKickoff,
+                BttsYesOdds = 1.55
+            });
+        }
+
+        context.Predictions.AddRange(predictions);
+        await context.SaveChangesAsync();
+
+        var ai = new FakeBankerAiAdvisor
+        {
+            ScreenPassLimit = 1,
+            ResultFactory = _ => new BankerPickResult()
+        };
+
+        var service = new BetslipGenerationService(
+            context,
+            new FakeBookingService(),
+            new FakePricingService { Fixtures = fixtures },
+            ai,
+            Options.Create(new BetslipSettings
+            {
+                BookingDelayMilliseconds = 0,
+                BankerMinOdds = 5.0,
+                BankerMaxOdds = 10.0,
+                BankerFallbackMinOdds = 4.0,
+                BankerFallbackMaxOdds = 12.0,
+                BankerMaxPicks = 8
+            }),
+            NullLogger<BetslipGenerationService>.Instance,
+            Options.Create(new PredictionSettings { ValueBetMinimumEdge = 0.03 }));
+
+        await service.GenerateDailyBetslipsAsync("morning");
+
+        var banker = await context.Betslips
+            .Include(s => s.Selections)
+            .SingleAsync(s => s.SlipNumber == BetslipGenerationService.BankerSlipNumber);
+
+        Assert.NotNull(ai.LastCandidates);
+        Assert.Equal(6, ai.LastCandidates.Count);
+        Assert.True(banker.Selections.Count >= 4);
+        Assert.True(banker.CombinedDecimalOdds is >= 4.0 and <= 12.0);
+    }
+
     private sealed class FakeBookingService : ISportyBetBookingService
     {
         public Task<BookingResult> BookGamesAsync(List<BookingSelection> selections) =>
@@ -422,17 +505,36 @@ public class BetslipGenerationServiceBankerTests
             return Task.FromResult(ResultFactory(candidates));
         }
 
+        public Task<BankerPickResult> SelectRolloverPickAsync(
+            IReadOnlyList<BankerPickRequest> candidates,
+            double minOdds,
+            double maxOdds,
+            CancellationToken ct = default) =>
+            Task.FromResult(new BankerPickResult());
+
         public Task<LadderRankResult> RankLadderCandidatesAsync(
             IReadOnlyList<LadderRankRequest> candidates,
             CancellationToken ct = default) =>
             Task.FromResult(new LadderRankResult());
+
+        public int? ScreenPassLimit { get; init; }
 
         public Task<BetslipScreenResult> ScreenBetslipCandidatesAsync(
             IReadOnlyList<BetslipScreenRequest> candidates,
             CancellationToken ct = default)
         {
             ScreenedBatches.Add(candidates.ToList());
-            return Task.FromResult(PassAllScreened(candidates));
+            var passed = ScreenPassLimit is int limit
+                ? candidates.Take(limit)
+                : candidates;
+            return Task.FromResult(new BetslipScreenResult
+            {
+                Passed = passed.Select(c => new BetslipScreenPick
+                {
+                    PredictionId = c.PredictionId,
+                    Score = (double)c.Confidence * 100d
+                }).ToList()
+            });
         }
 
         public Task<LadderComposeResult> ComposeLadderSlipsAsync(
@@ -441,14 +543,4 @@ public class BetslipGenerationServiceBankerTests
             CancellationToken ct = default) =>
             Task.FromResult(new LadderComposeResult());
     }
-
-    private static BetslipScreenResult PassAllScreened(IReadOnlyList<BetslipScreenRequest> candidates) =>
-        new()
-        {
-            Passed = candidates.Select(c => new BetslipScreenPick
-            {
-                PredictionId = c.PredictionId,
-                Score = (double)c.Confidence * 100d
-            }).ToList()
-        };
 }

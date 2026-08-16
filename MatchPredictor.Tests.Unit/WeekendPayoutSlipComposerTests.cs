@@ -180,6 +180,15 @@ public class WeekendPayoutSlipComposerTests
     }
 
     [Fact]
+    public void BetslipSettings_DefaultsRolloverOddsBandToOneTwentyThroughOneFifty()
+    {
+        var settings = new BetslipSettings();
+        Assert.Equal(1.20, settings.RolloverMinOdds);
+        Assert.Equal(1.50, settings.RolloverMaxOdds);
+        Assert.Equal(15, settings.RolloverShortlistSize);
+    }
+
+    [Fact]
     public void Compose_PrefersResearchScoreOverRawConfidence()
     {
         var researched = new BetslipComposerCandidate

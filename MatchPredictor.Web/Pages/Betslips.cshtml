@@ -10,7 +10,7 @@
             <h1 class="mp-page-title">🎫 Pre-booked Betslips</h1>
             <p class="mp-page-subtext">
                 Ready-to-play SportyBet slips from today's analysed Straight Win, BTTS, Over 2.5, and Under 2.5 picks.
-                Weekend tickets target payout bands at a ₦@((int)Model.ReferenceStakeNaira) stake (Small → Mega), plus the Banker and AI Draws.
+                The Rollover is a single 1.20–1.50x stack-it-all pick. Weekend tickets then add the Banker, payout bands at a ₦@((int)Model.ReferenceStakeNaira) stake (Small → Mega), and AI Draws.
                 Generated twice daily at 5:00 AM and 1:00 PM WAT.
             </p>
         </div>
@@ -35,6 +35,13 @@
             <span>@Model.CurrentSet.SlipCount slip@(Model.CurrentSet.SlipCount == 1 ? "" : "s")</span>
             <span>@Model.CurrentSet.SlipLocalDate.ToString("dddd d MMMM")</span>
         </div>
+
+        @if (Model.RolloverSlip is not null)
+        {
+            <div class="mp-betslip-banker-wrap">
+                <partial name="_BetslipCard" model="Model.RolloverSlip" />
+            </div>
+        }
 
         @if (Model.BankerSlip is null)
         {

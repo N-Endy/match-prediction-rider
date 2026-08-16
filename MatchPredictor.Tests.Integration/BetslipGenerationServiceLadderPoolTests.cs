@@ -97,11 +97,7 @@ public class BetslipGenerationServiceLadderPoolTests
             .SingleAsync(s => s.IsCurrent);
 
         var banker = Assert.Single(set.Slips, s => s.SlipNumber == BetslipGenerationService.BankerSlipNumber);
-        var ladder = set.Slips
-            .Where(s =>
-                s.SlipNumber != BetslipGenerationService.BankerSlipNumber &&
-                !string.Equals(s.TierLabel, "AI Draws (5)", StringComparison.Ordinal))
-            .ToList();
+        var ladder = set.Slips.Where(BetslipGenerationService.IsLadderSlip).ToList();
         Assert.NotEmpty(ladder);
 
         var bankerIds = banker.Selections
@@ -121,6 +117,107 @@ public class BetslipGenerationServiceLadderPoolTests
             .ToHashSet();
 
         Assert.Empty(bankerIds.Intersect(thinIds));
+        Assert.NotEmpty(ladderIds.Intersect(thinIds));
+    }
+
+    [Fact]
+    public async Task GenerateDailyBetslipsAsync_PacksLadderFromOnePercentLeftovers_WhenScreenRejectsThem()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var today = DateTimeProvider.GetLocalDate();
+        var kickoff = DateTime.UtcNow.AddHours(5);
+        var fixtures = new List<SourceMarketFixture>();
+        var predictions = new List<Prediction>();
+        var nextId = 1;
+
+        for (var i = 1; i <= 6; i++)
+        {
+            AddBttsPrediction(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(i),
+                $"BankerHome{i}",
+                $"BankerAway{i}",
+                $"banker-fx-{i}",
+                confidence: 0.80m,
+                bttsOdds: 1.55);
+        }
+
+        for (var i = 1; i <= 12; i++)
+        {
+            AddBttsPrediction(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(100 + i),
+                $"ThinHome{i}",
+                $"ThinAway{i}",
+                $"thin-edge-fx-{i}",
+                confidence: 0.66m,
+                bttsOdds: 1.55);
+        }
+
+        context.Predictions.AddRange(predictions);
+        await context.SaveChangesAsync();
+
+        var service = new BetslipGenerationService(
+            context,
+            new FakeBooking(),
+            new FakePricing { Fixtures = fixtures },
+            new SparseScreenAdvisor(),
+            Options.Create(new BetslipSettings
+            {
+                BookingDelayMilliseconds = 0,
+                MaxSlipsPerPrediction = 1,
+                BankerMinOdds = 5.0,
+                BankerMaxOdds = 10.0,
+                BankerFallbackMinOdds = 4.0,
+                BankerFallbackMaxOdds = 12.0,
+                BankerMaxPicks = 8,
+                LadderMinimumEdge = 0.01,
+                WeekendSmallSlipCount = 1,
+                WeekendMediumSlipCount = 0,
+                WeekendBigSlipCount = 0,
+                WeekendMegaSlipCount = 0,
+                SmallMinOdds = 20,
+                SmallMaxOdds = 120,
+                SmallFallbackMinOdds = 10,
+                SmallFallbackMaxOdds = 150,
+                SmallMaxPicks = 18,
+                DailyMaxPicks = 18
+            }),
+            NullLogger<BetslipGenerationService>.Instance,
+            Options.Create(new PredictionSettings { ValueBetMinimumEdge = 0.03 }));
+
+        await service.GenerateDailyBetslipsAsync("morning");
+
+        var set = await context.BetslipSets
+            .Include(s => s.Slips)
+            .ThenInclude(s => s.Selections)
+            .SingleAsync(s => s.IsCurrent);
+
+        Assert.Contains(set.Slips, BetslipGenerationService.IsBankerSlip);
+        var ladder = set.Slips.Where(BetslipGenerationService.IsLadderSlip).ToList();
+        Assert.NotEmpty(ladder);
+
+        var thinIds = predictions
+            .Where(p => p.FixtureKey.StartsWith("thin-edge-fx-", StringComparison.Ordinal))
+            .Select(p => p.Id)
+            .ToHashSet();
+        var ladderIds = ladder
+            .SelectMany(s => s.Selections)
+            .Select(s => s.PredictionId)
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .ToHashSet();
+
         Assert.NotEmpty(ladderIds.Intersect(thinIds));
     }
 
@@ -346,7 +443,7 @@ public class BetslipGenerationServiceLadderPoolTests
             .ThenInclude(s => s.Selections)
             .SingleAsync(s => s.IsCurrent);
 
-        var ladder = set.Slips.Where(s => s.SlipNumber != BetslipGenerationService.BankerSlipNumber).ToList();
+        var ladder = set.Slips.Where(BetslipGenerationService.IsLadderSlip).ToList();
         Assert.NotEmpty(ladder);
         Assert.Contains(ladder, s => s.Selections.Count > 1);
     }
@@ -571,6 +668,31 @@ public class BetslipGenerationServiceLadderPoolTests
             {
                 Picks = candidates.Take(4).Select(c => new BetslipDrawPickSelection { PredictionId = c.PredictionId }).ToList(),
                 RiskNote = "ok"
+            });
+
+        public virtual Task<BankerPickResult> SelectRolloverPickAsync(
+            IReadOnlyList<BankerPickRequest> candidates,
+            double minOdds,
+            double maxOdds,
+            CancellationToken ct = default) =>
+            Task.FromResult(new BankerPickResult());
+    }
+
+    private sealed class SparseScreenAdvisor : FakeAdvisor
+    {
+        public override Task<BetslipScreenResult> ScreenBetslipCandidatesAsync(
+            IReadOnlyList<BetslipScreenRequest> candidates,
+            CancellationToken ct = default) =>
+            Task.FromResult(new BetslipScreenResult
+            {
+                Passed = candidates
+                    .Where(c => c.Confidence >= 0.75m)
+                    .Select(c => new BetslipScreenPick
+                    {
+                        PredictionId = c.PredictionId,
+                        Score = 90
+                    })
+                    .ToList()
             });
     }
 

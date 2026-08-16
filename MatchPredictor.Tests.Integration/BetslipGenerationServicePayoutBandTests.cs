@@ -159,7 +159,7 @@ public class BetslipGenerationServicePayoutBandTests
         Assert.DoesNotContain(set.Slips, s => s.SelectionCount >= 40);
 
         var ladder = set.Slips
-            .Where(s => s.SlipNumber is >= 1 and <= 6)
+            .Where(BetslipGenerationService.IsLadderSlip)
             .OrderBy(s => s.SlipNumber)
             .ToList();
 
@@ -216,6 +216,13 @@ public class BetslipGenerationServicePayoutBandTests
                 Picks = candidates.Take(4).Select(c => new BetslipDrawPickSelection { PredictionId = c.PredictionId }).ToList(),
                 RiskNote = "ok"
             });
+
+        public Task<BankerPickResult> SelectRolloverPickAsync(
+            IReadOnlyList<BankerPickRequest> candidates,
+            double minOdds,
+            double maxOdds,
+            CancellationToken ct = default) =>
+            Task.FromResult(new BankerPickResult());
 
         public Task<LadderRankResult> RankLadderCandidatesAsync(
             IReadOnlyList<LadderRankRequest> candidates,

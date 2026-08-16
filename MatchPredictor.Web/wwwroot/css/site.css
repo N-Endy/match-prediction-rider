@@ -2212,6 +2212,43 @@ a:hover {
   margin: 1.25rem 0 1.75rem;
 }
 
+.mp-betslip-card-rollover {
+  border-color: rgba(45, 212, 191, 0.55);
+  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.2), 0 12px 40px rgba(45, 212, 191, 0.08);
+  background: linear-gradient(180deg, rgba(45, 212, 191, 0.08), rgba(255, 255, 255, 0.02));
+}
+
+.mp-betslip-rollover-odds {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--radius-sm, 8px);
+  background: rgba(45, 212, 191, 0.12);
+  border: 1px solid rgba(45, 212, 191, 0.35);
+}
+
+.mp-betslip-rollover-odds-value {
+  font-size: 1.75rem;
+  font-weight: 800;
+  color: #5eead4;
+  letter-spacing: -0.02em;
+}
+
+.mp-betslip-rollover-odds-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mp-betslip-rollover-disclaimer {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #5eead4;
+  line-height: 1.45;
+}
+
 .mp-betslip-card-banker {
   border-color: rgba(234, 179, 8, 0.55);
   box-shadow: 0 0 0 1px rgba(234, 179, 8, 0.2), 0 12px 40px rgba(234, 179, 8, 0.08);

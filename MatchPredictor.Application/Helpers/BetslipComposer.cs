@@ -40,6 +40,7 @@ public sealed class ComposedBetslip
     public string? AiSummary { get; init; }
     public double? TargetCombinedOdds { get; init; }
     public bool IsBanker { get; init; }
+    public bool IsRollover { get; init; }
     public bool IsPayoutBand { get; init; }
     public bool IsMega { get; init; }
     public double? ActiveMinOdds { get; init; }

@@ -91,11 +91,7 @@ public class BetslipGenerationServiceExclusivityTests
         Assert.NotNull(banker);
         Assert.NotEmpty(banker.Selections);
 
-        var ladder = set.Slips
-            .Where(s =>
-                s.SlipNumber != BetslipGenerationService.BankerSlipNumber &&
-                !string.Equals(s.TierLabel, "AI Draws (5)", StringComparison.Ordinal))
-            .ToList();
+        var ladder = set.Slips.Where(BetslipGenerationService.IsLadderSlip).ToList();
         Assert.NotEmpty(ladder);
 
         var bankerFixtures = SelectionFixtureKeys(banker.Selections, fixtureByPredictionId);
@@ -501,9 +497,7 @@ public class BetslipGenerationServiceExclusivityTests
                 c.HomeTeam.StartsWith("LadderHome", StringComparison.Ordinal) ||
                 c.HomeTeam.StartsWith("BankerHome", StringComparison.Ordinal)));
 
-        var ladder = set.Slips
-            .Where(s => s.SlipNumber != BetslipGenerationService.BankerSlipNumber)
-            .ToList();
+        var ladder = set.Slips.Where(BetslipGenerationService.IsLadderSlip).ToList();
         Assert.NotEmpty(ladder);
 
         var fixtureByPredictionId = predictions.ToDictionary(p => p.Id, p => p.FixtureKey);
@@ -667,6 +661,13 @@ public class BetslipGenerationServiceExclusivityTests
                 Picks = candidates.Take(4).Select(c => new BetslipDrawPickSelection { PredictionId = c.PredictionId }).ToList(),
                 RiskNote = "ok"
             });
+
+        public Task<BankerPickResult> SelectRolloverPickAsync(
+            IReadOnlyList<BankerPickRequest> candidates,
+            double minOdds,
+            double maxOdds,
+            CancellationToken ct = default) =>
+            Task.FromResult(new BankerPickResult());
 
         public virtual Task<LadderRankResult> RankLadderCandidatesAsync(
             IReadOnlyList<LadderRankRequest> candidates,

@@ -672,6 +672,131 @@ public class AiAdvisorService : IAiAdvisorService
         }
     }
 
+    public async Task<BankerPickResult> SelectRolloverPickAsync(
+        IReadOnlyList<BankerPickRequest> candidates,
+        double minOdds,
+        double maxOdds,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+
+        var empty = new BankerPickResult();
+        if (candidates.Count == 0 || !_chatClient.IsConfigured)
+        {
+            return empty;
+        }
+
+        try
+        {
+            var insightsByPredictionId = await LoadBetslipFootballInsightsAsync(
+                candidates.Select(c => (
+                    c.PredictionId,
+                    c.League,
+                    c.HomeTeam,
+                    c.AwayTeam,
+                    ResolveBetslipInsightCategory(c.PredictionCategory, c.Market),
+                    c.PredictedOutcome,
+                    c.MatchDateTimeUtc)),
+                ct);
+
+            var payload = JsonSerializer.Serialize(new
+            {
+                minOdds,
+                maxOdds,
+                candidates = candidates.Select(c => new
+                {
+                    c.PredictionId,
+                    c.League,
+                    c.HomeTeam,
+                    c.AwayTeam,
+                    c.Market,
+                    c.PredictedOutcome,
+                    c.PredictionCategory,
+                    ConfidencePct = Math.Round((double)c.Confidence * 100d, 1),
+                    DecimalOdds = Math.Round(c.DecimalOdds, 2),
+                    KickoffUtc = c.MatchDateTimeUtc,
+                    c.SignalSummary,
+                    c.AllSignalsAlign,
+                    c.ModelDivergesFromBookmaker,
+                    footballInsight = ToCompactFootballInsight(insightsByPredictionId.GetValueOrDefault(c.PredictionId))
+                })
+            });
+
+            var useWebSearch = string.Equals(
+                _chatClient.Provider,
+                AiLlmSettingsResolver.OpenAiProvider,
+                StringComparison.Ordinal);
+
+            var systemPrompt =
+                "You are selecting ONE rollover pick. The entire bankroll from this bet is staked on the next one, " +
+                "so it must be a well-researched short. Pick exactly one predictionId. " +
+                "Decimal odds MUST be between the provided min and max. Do not include draws. " +
+                "Rank using calibrated confidence AND supplied footballInsight (form, venue, BTTS/totals rates, " +
+                "head-to-head) when dataQuality is not Low. Prefer picks where model/bookmaker signals agree. " +
+                "Use only the supplied predictionIds. Do not invent fixtures or odds. " +
+                (useWebSearch
+                    ? "You may use web_search for last-minute news (injuries, suspensions, likely XI) on fixtures you " +
+                      "are considering. Search at most 4 times. Skip search when news would not change the pick. " +
+                      "If search contradicts a high-confidence pick, demote it. When search was used, cite one " +
+                      "concrete finding in reason. "
+                    : string.Empty) +
+                "Respond with JSON only: {\"picks\":[{\"predictionId\":123,\"reason\":\"one short sentence\"}],\"riskNote\":\"one short risk caution\"}.";
+
+            var userPrompt =
+                $"Select the single rollover pick. Odds must be between {minOdds:0.##} and {maxOdds:0.##}.\n{payload}";
+
+            var raw = await CompleteChatAsync(
+                systemPrompt,
+                userPrompt,
+                null,
+                ct,
+                jsonMode: !useWebSearch,
+                temperature: 0.15,
+                maxTokens: useWebSearch ? 4000 : 800,
+                useWebSearch: useWebSearch,
+                timeoutSeconds: useWebSearch ? OpenAiCompatibleChatCompletionsClient.WebSearchTimeoutSeconds : null);
+
+            if (raw.StartsWith("❌", StringComparison.Ordinal) ||
+                raw.StartsWith("⏳", StringComparison.Ordinal) ||
+                raw.StartsWith("⚠️", StringComparison.Ordinal))
+            {
+                return empty;
+            }
+
+            var selectedIds = Domain.Helpers.BetslipDrawPickParser.ParsePredictionIds(raw, 1);
+            if (selectedIds.Count == 0)
+            {
+                return empty;
+            }
+
+            var allowed = candidates.Select(c => c.PredictionId).ToHashSet();
+            var predictionId = selectedIds[0];
+            if (!allowed.Contains(predictionId))
+            {
+                return empty;
+            }
+
+            var reasons = Domain.Helpers.BetslipDrawPickParser.ParseReasons(raw);
+            return new BankerPickResult
+            {
+                Picks =
+                [
+                    new BetslipDrawPickSelection
+                    {
+                        PredictionId = predictionId,
+                        Reason = reasons.GetValueOrDefault(predictionId, string.Empty)
+                    }
+                ],
+                RiskNote = Domain.Helpers.BetslipDrawPickParser.ParseRiskNote(raw) ?? string.Empty
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Rollover AI selection failed; caller will use the top short.");
+            return empty;
+        }
+    }
+
     public async Task<LadderRankResult> RankLadderCandidatesAsync(
         IReadOnlyList<LadderRankRequest> candidates,
         CancellationToken ct = default)
@@ -811,9 +936,11 @@ public class AiAdvisorService : IAiAdvisorService
 
             var systemPrompt =
                 "You are screening live-priced football predictions for today's betslips. " +
-                "Pass only picks you would stake on a published slip after blending calibrated confidence with " +
-                "supplied footballInsight (form, venue, BTTS/totals rates, head-to-head) when dataQuality is not Low. " +
-                "Reject thin research, contradictory form, or picks that look like noise. " +
+                "Score each candidate 0-100 after blending calibrated confidence with supplied footballInsight " +
+                "(form, venue, BTTS/totals rates, head-to-head) when dataQuality is not Low. " +
+                "Pass picks you would put on a published slip AND playable ladder shorts that are not clearly noise. " +
+                "Do not starve the card: a typical batch of 25 should return a healthy passed list unless the slice is junk. " +
+                "Reject only thin research, contradictory form, or obvious mismatches. " +
                 "Use only the supplied predictionIds. Do not invent fixtures. Do not pack slips. " +
                 "Respond with JSON only: {\"passed\":[{\"predictionId\":123,\"score\":0-100,\"reason\":\"one short sentence\"}]}.";
 

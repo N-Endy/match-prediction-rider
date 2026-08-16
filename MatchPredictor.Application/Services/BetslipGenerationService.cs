@@ -16,6 +16,9 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
     private const string JobResource = "matchpredictor-betslips";
     public const int BankerSlipNumber = 0;
     public const string BankerTierLabel = "Banker (5-10x)";
+    public const int RolloverSlipNumber = 10;
+    public const string RolloverTierLabel = "Rollover (1.20-1.50x)";
+    public const string DrawsTierLabel = "AI Draws (5)";
 
     private static readonly string[] MainCategories =
     [
@@ -90,36 +93,47 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             }
 
             var universe = BuildLiveQuotedUniverse(predictions, sourceFixtures);
-            var passers = await ScreenLiveQuotedUniverseAsync(universe);
-            var mainPassers = CollapseOnePerFixture(
-                passers.Where(p => MainCategories.Contains(p.Candidate.PredictionCategory)).ToList());
-            var drawPassers = passers
+            var (ranked, aiPassedCount) = await ScreenLiveQuotedUniverseAsync(universe);
+            var mainPool = CollapseOnePerFixture(
+                ranked.Where(p => MainCategories.Contains(p.Candidate.PredictionCategory)).ToList());
+            var drawPool = ranked
                 .Where(p => string.Equals(p.Candidate.PredictionCategory, "Draw", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
-            var bankerPassers = FilterByCategoryAndEdge(mainPassers, MainCategories, _minimumEdge);
+            LogComposeFunnel(universe, mainPool, aiPassedCount);
+
+            var rollover = await ComposeRolloverFromPassersAsync(mainPool, settings);
+            if (rollover is not null)
+            {
+                composed.Add(rollover);
+            }
+
+            var usedFixtureKeys = CollectFixtureKeys(composed);
+            var bankerPassers = ExcludeUsedFixtures(
+                FilterByCategoryAndEdge(mainPool, MainCategories, _minimumEdge),
+                usedFixtureKeys);
             var banker = await ComposeBankerFromPassersAsync(bankerPassers, settings);
             if (banker is not null)
             {
                 composed.Add(banker);
             }
 
-            var usedFixtureKeys = CollectFixtureKeys(composed);
+            AddFixtureKeys(usedFixtureKeys, composed.Where(s => s.IsBanker));
             var bands = dayKind == BetslipDayKinds.Weekend
                 ? WeekendPayoutSlipComposer.BuildWeekendPlan(settings)
                 : WeekendPayoutSlipComposer.BuildWeekdayPlan(settings);
 
             var ladderPassers = ExcludeUsedFixtures(
-                FilterByCategoryAndEdge(mainPassers, MainCategories, _ladderMinimumEdge),
+                FilterByCategoryAndEdge(mainPool, MainCategories, _ladderMinimumEdge),
                 usedFixtureKeys);
 
             _logger.LogInformation(
-                "Ladder pool after banker exclusion: {PoolCount} screened passers ({RemovedCount} removed).",
+                "Ladder pool after exclusivity: {PoolCount} live-quoted picks ({RemovedCount} removed).",
                 ladderPassers.Count,
-                FilterByCategoryAndEdge(mainPassers, MainCategories, _ladderMinimumEdge).Count - ladderPassers.Count);
+                FilterByCategoryAndEdge(mainPool, MainCategories, _ladderMinimumEdge).Count - ladderPassers.Count);
 
             _logger.LogInformation(
-                "Ladder pool ready: {PoolCount} screened passers for {BandCount} band(s).",
+                "Ladder pool ready: {PoolCount} live-quoted picks for {BandCount} band(s).",
                 ladderPassers.Count,
                 bands.Count);
 
@@ -155,7 +169,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             if (dayKind == BetslipDayKinds.Weekend)
             {
                 drawSlip = await ComposeDrawFromPassersAsync(
-                    drawPassers,
+                    drawPool,
                     settings,
                     usedFixtureKeys);
                 if (drawSlip is not null)
@@ -204,16 +218,15 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             await _dbContext.BetslipSets.AddAsync(betslipSet);
             await _dbContext.SaveChangesAsync();
 
-            var hasBanker = betslipSet.Slips.Any(s => s.SlipNumber == BankerSlipNumber);
-            var ladderPersisted = betslipSet.Slips.Count(s =>
-                s.SlipNumber != BankerSlipNumber &&
-                !string.Equals(s.TierLabel, "AI Draws (5)", StringComparison.Ordinal));
-            var hasDraws = betslipSet.Slips.Any(s =>
-                string.Equals(s.TierLabel, "AI Draws (5)", StringComparison.Ordinal));
+            var hasRollover = betslipSet.Slips.Any(IsRolloverSlip);
+            var hasBanker = betslipSet.Slips.Any(IsBankerSlip);
+            var ladderPersisted = betslipSet.Slips.Count(IsLadderSlip);
+            var hasDraws = betslipSet.Slips.Any(IsDrawSlip);
 
             _logger.LogInformation(
-                "Betslip generation finished: {SlipCount} slips persisted (banker={HasBanker}, ladder={LadderCount}, draws={HasDraws}).",
+                "Betslip generation finished: {SlipCount} slips persisted (rollover={HasRollover}, banker={HasBanker}, ladder={LadderCount}, draws={HasDraws}).",
                 betslipSet.SlipCount,
+                hasRollover ? "yes" : "no",
                 hasBanker ? "yes" : "no",
                 ladderPersisted,
                 hasDraws ? "yes" : "no");
@@ -242,13 +255,172 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             .ToListAsync();
     }
 
+    public static bool IsRolloverSlip(Betslip slip) =>
+        slip.SlipNumber == RolloverSlipNumber ||
+        slip.TierLabel.StartsWith("Rollover", StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsBankerSlip(Betslip slip) =>
+        slip.SlipNumber == BankerSlipNumber ||
+        slip.TierLabel.StartsWith("Banker", StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsDrawSlip(Betslip slip) =>
+        string.Equals(slip.TierLabel, DrawsTierLabel, StringComparison.Ordinal);
+
+    public static bool IsLadderSlip(Betslip slip) =>
+        !IsRolloverSlip(slip) && !IsBankerSlip(slip) && !IsDrawSlip(slip);
+
+    private async Task<ComposedBetslip?> ComposeRolloverFromPassersAsync(
+        IReadOnlyList<LiveQuotedCandidate> mainPool,
+        BetslipSettings settings)
+    {
+        var minOdds = settings.RolloverMinOdds;
+        var maxOdds = settings.RolloverMaxOdds;
+        var pool = FilterByCategoryAndEdge(mainPool, MainCategories, _minimumEdge)
+            .Where(p => p.Candidate.DecimalOdds is double odds &&
+                        BankerSlipComposer.IsWithinOddsRange(odds, minOdds, maxOdds))
+            .OrderByDescending(p => p.Candidate.ResearchScore ?? (double)p.Candidate.Confidence)
+            .ThenBy(p => p.Prediction.Id)
+            .ToList();
+
+        if (pool.Count == 0)
+        {
+            _logger.LogInformation(
+                "Rollover skipped: no live-quoted main-market pick in {MinOdds:0.##}-{MaxOdds:0.##}x meeting the 3% edge floor.",
+                minOdds,
+                maxOdds);
+            return null;
+        }
+
+        var shortlistSize = Math.Clamp(settings.RolloverShortlistSize, 1, 50);
+        var shortlist = pool.Take(shortlistSize).ToList();
+
+        _logger.LogInformation(
+            "Rollover compose pool: {PoolCount} live-quoted shorts in {MinOdds:0.##}-{MaxOdds:0.##}x; shortlist={ShortlistCount}.",
+            pool.Count,
+            minOdds,
+            maxOdds,
+            shortlist.Count);
+
+        var selected = shortlist[0].Candidate;
+        var aiVetted = false;
+        var riskNote = string.Empty;
+        var shortfallNotes = new List<string>();
+
+        try
+        {
+            var signalByPredictionId = await LoadSignalSummariesAsync(shortlist.Select(p => p.Prediction).ToList());
+            var aiRequests = shortlist.Select(x =>
+            {
+                signalByPredictionId.TryGetValue(x.Prediction.Id, out var signal);
+                return new BankerPickRequest
+                {
+                    PredictionId = x.Candidate.PredictionId,
+                    League = x.Candidate.League,
+                    HomeTeam = x.Candidate.HomeTeam,
+                    AwayTeam = x.Candidate.AwayTeam,
+                    Market = x.Candidate.Market,
+                    PredictedOutcome = x.Candidate.PredictedOutcome,
+                    PredictionCategory = x.Candidate.PredictionCategory,
+                    Confidence = x.Candidate.Confidence,
+                    DecimalOdds = x.Candidate.DecimalOdds ?? 0d,
+                    MatchDateTimeUtc = x.Candidate.MatchDateTimeUtc,
+                    SignalSummary = signal?.Summary,
+                    AllSignalsAlign = signal?.AllSignalsAlign,
+                    ModelDivergesFromBookmaker = signal?.ModelDivergesFromBookmaker
+                };
+            }).ToList();
+
+            var aiResult = await _aiAdvisorService.SelectRolloverPickAsync(aiRequests, minOdds, maxOdds);
+            var validated = TryValidateRolloverAiPick(
+                aiResult,
+                shortlist.Select(p => p.Candidate).ToList(),
+                minOdds,
+                maxOdds);
+
+            if (validated is not null)
+            {
+                selected = validated.Value.Selection;
+                riskNote = validated.Value.RiskNote;
+                aiVetted = true;
+            }
+            else
+            {
+                shortfallNotes.Add("AI rollover selection invalid or unavailable; using the top remaining short (not AI-vetted).");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Rollover AI selection failed; using the top remaining short.");
+            shortfallNotes.Add("AI rollover selection failed; using the top remaining short (not AI-vetted).");
+        }
+
+        if (!aiVetted && string.IsNullOrWhiteSpace(riskNote))
+        {
+            riskNote = "Single stack-it-all rollover. Not AI-vetted.";
+        }
+
+        var combined = selected.DecimalOdds ?? 0d;
+        _logger.LogInformation(
+            "Rollover composed: 1 leg, {CombinedOdds:0.##}x ({MinOdds:0.##}-{MaxOdds:0.##}x), AI vetted={AiVetted}.",
+            combined,
+            minOdds,
+            maxOdds,
+            aiVetted);
+
+        var summary = string.IsNullOrWhiteSpace(riskNote)
+            ? "Single stack-it-all pick — the whole bankroll rolls into the next bet."
+            : $"Single stack-it-all pick. {riskNote}";
+
+        return new ComposedBetslip
+        {
+            SlipNumber = RolloverSlipNumber,
+            Title = "Rollover",
+            TierLabel = RolloverTierLabel,
+            TargetMinSelections = 1,
+            TargetMaxSelections = 1,
+            Selections = [selected],
+            ShortfallNote = shortfallNotes.Count > 0 ? string.Join(" ", shortfallNotes) : null,
+            AiSummary = summary,
+            TargetCombinedOdds = combined,
+            IsRollover = true,
+            ActiveMinOdds = minOdds,
+            ActiveMaxOdds = maxOdds
+        };
+    }
+
+    private static (BetslipComposerCandidate Selection, string RiskNote)? TryValidateRolloverAiPick(
+        BankerPickResult aiResult,
+        IReadOnlyList<BetslipComposerCandidate> shortlist,
+        double minOdds,
+        double maxOdds)
+    {
+        if (aiResult.Picks.Count == 0)
+        {
+            return null;
+        }
+
+        var byId = shortlist.ToDictionary(c => c.PredictionId);
+        if (!byId.TryGetValue(aiResult.Picks[0].PredictionId, out var candidate))
+        {
+            return null;
+        }
+
+        if (candidate.DecimalOdds is not double odds ||
+            !BankerSlipComposer.IsWithinOddsRange(odds, minOdds, maxOdds))
+        {
+            return null;
+        }
+
+        return (WithAiNote(candidate, aiResult.Picks[0].Reason), aiResult.RiskNote?.Trim() ?? string.Empty);
+    }
+
     private async Task<ComposedBetslip?> ComposeBankerFromPassersAsync(
         IReadOnlyList<LiveQuotedCandidate> passers,
         BetslipSettings settings)
     {
         if (passers.Count == 0)
         {
-            _logger.LogInformation("Banker skipped: no screened main-market passers meeting the 3% edge floor.");
+            _logger.LogInformation("Banker skipped: no live-quoted main-market picks meeting the 3% edge floor.");
             return null;
         }
 
@@ -259,7 +431,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             .ToList();
 
         _logger.LogInformation(
-            "Banker compose pool: {PasserCount} screened passers meeting the 3% edge floor.",
+            "Banker compose pool: {PasserCount} live-quoted picks meeting the 3% edge floor.",
             eligible.Count);
 
         var deterministic = BankerSlipComposer.Compose(
@@ -273,7 +445,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         if (deterministic.IsEmpty)
         {
             _logger.LogInformation(
-                "Banker skipped: no combination in {MinOdds:0.##}-{MaxOdds:0.##}x (fallback {FallbackMin:0.##}-{FallbackMax:0.##}x) from {EligibleCount} screened passers.",
+                "Banker skipped: no combination in {MinOdds:0.##}-{MaxOdds:0.##}x (fallback {FallbackMin:0.##}-{FallbackMax:0.##}x) from {EligibleCount} live-quoted picks.",
                 settings.BankerMinOdds,
                 settings.BankerMaxOdds,
                 settings.BankerFallbackMinOdds,
@@ -529,12 +701,12 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
         if (drawPassers.Count == 0)
         {
-            _logger.LogInformation("AI Draws skipped: no screened Draw passers remaining after exclusivity and 3% edge.");
+            _logger.LogInformation("AI Draws skipped: no live-quoted Draw picks remaining after exclusivity and 3% edge.");
             return null;
         }
 
         _logger.LogInformation(
-            "AI Draws pool: {CandidateCount} screened draw passer(s); targeting {DrawSlipSize} pick(s).",
+            "AI Draws pool: {CandidateCount} live-quoted draw pick(s); targeting {DrawSlipSize} pick(s).",
             drawPassers.Count,
             settings.DrawSlipSize);
 
@@ -715,14 +887,15 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             combinedOdds = oddsValues.Aggregate(1d, (acc, odds) => acc * odds);
         }
 
-        if (composed.IsBanker &&
+        if ((composed.IsBanker || composed.IsRollover) &&
             combinedOdds is > 1 &&
-            composed.ActiveMinOdds is double bankerMin &&
-            composed.ActiveMaxOdds is double bankerMax &&
-            !BankerSlipComposer.IsWithinOddsRange(combinedOdds.Value, bankerMin, bankerMax))
+            composed.ActiveMinOdds is double featuredMin &&
+            composed.ActiveMaxOdds is double featuredMax &&
+            !BankerSlipComposer.IsWithinOddsRange(combinedOdds.Value, featuredMin, featuredMax))
         {
+            var rangeKind = composed.IsRollover ? "rollover" : "banker";
             statusParts.Add(
-                $"After booking skips, total odds {combinedOdds.Value:0.00}x fell outside the {bankerMin:0.##}-{bankerMax:0.##}x banker range.");
+                $"After booking skips, total odds {combinedOdds.Value:0.00}x fell outside the {featuredMin:0.##}-{featuredMax:0.##}x {rangeKind} range.");
         }
 
         if (composed.IsPayoutBand &&
@@ -1066,11 +1239,42 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         return liveQuoted;
     }
 
-    private async Task<List<LiveQuotedCandidate>> ScreenLiveQuotedUniverseAsync(List<LiveQuotedCandidate> universe)
+    private void LogComposeFunnel(
+        IReadOnlyList<LiveQuotedCandidate> universe,
+        IReadOnlyList<LiveQuotedCandidate> collapsedMain,
+        int aiPassedCount)
+    {
+        var uniqueFixtures = universe
+            .Select(c => c.Candidate.FixtureKey)
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+
+        _logger.LogInformation(
+            "Betslip compose funnel: liveQuoted={LiveQuoted}, uniqueFixtures={UniqueFixtures}, main3pct={Main3}, main1pct={Main1}, aiPassed={AiPassed}, afterCollapse main3pct={Collapsed3}, main1pct={Collapsed1}.",
+            universe.Count,
+            uniqueFixtures,
+            CountMainWithEdge(universe, _minimumEdge),
+            CountMainWithEdge(universe, _ladderMinimumEdge),
+            aiPassedCount,
+            CountMainWithEdge(collapsedMain, _minimumEdge),
+            CountMainWithEdge(collapsedMain, _ladderMinimumEdge));
+    }
+
+    private static int CountMainWithEdge(IEnumerable<LiveQuotedCandidate> candidates, double minimumEdge) =>
+        candidates.Count(p =>
+            MainCategories.Contains(p.Candidate.PredictionCategory) &&
+            BetPricingMath.MeetsMinimumEdge(
+                (double)p.Candidate.Confidence,
+                p.MarketProbability,
+                minimumEdge));
+
+    private async Task<(List<LiveQuotedCandidate> Ranked, int PassedCount)> ScreenLiveQuotedUniverseAsync(
+        List<LiveQuotedCandidate> universe)
     {
         if (universe.Count == 0)
         {
-            return [];
+            return ([], 0);
         }
 
         var batchSize = Math.Clamp(_settings.ScreenBatchSize, 5, 50);
@@ -1094,7 +1298,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             {
                 _logger.LogWarning(
                     ex,
-                    "Betslip screening batch {BatchNumber} failed; keeping {BatchSize} candidates as confidence passers.",
+                    "Betslip screening batch {BatchNumber} failed; keeping {BatchSize} candidates as confidence-ranked packable picks.",
                     batchCount,
                     batch.Length);
                 foreach (var candidate in batch)
@@ -1104,13 +1308,13 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             }
         }
 
-        var passers = new List<LiveQuotedCandidate>();
+        var ranked = new List<LiveQuotedCandidate>(universe.Count);
         var rejectedSample = new List<string>();
         foreach (var candidate in universe)
         {
             if (passedById.TryGetValue(candidate.Prediction.Id, out var pick))
             {
-                passers.Add(candidate with
+                ranked.Add(candidate with
                 {
                     Candidate = WithResearchScore(
                         WithAiNote(candidate.Candidate, pick.Reason),
@@ -1119,22 +1323,19 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 continue;
             }
 
-            if (fallbackIds.Contains(candidate.Prediction.Id))
+            ranked.Add(candidate with
             {
-                passers.Add(candidate with
-                {
-                    Candidate = WithResearchScore(candidate.Candidate, (double)candidate.Candidate.Confidence * 100d)
-                });
-                continue;
-            }
+                Candidate = WithResearchScore(candidate.Candidate, (double)candidate.Candidate.Confidence * 100d)
+            });
 
-            if (rejectedSample.Count < 8)
+            if (!fallbackIds.Contains(candidate.Prediction.Id) && rejectedSample.Count < 8)
             {
                 rejectedSample.Add(
                     $"{candidate.Candidate.HomeTeam} vs {candidate.Candidate.AwayTeam} ({candidate.Candidate.Market})");
             }
         }
 
+        var rejectedCount = universe.Count - passedById.Count - fallbackIds.Count;
         _logger.LogInformation(
             "Betslip screening: {BatchCount} batch(es) of {BatchSize}; liveQuoted={LiveQuoted}, passed={Passed}, fallback={Fallback}, rejected={Rejected}.",
             batchCount,
@@ -1142,14 +1343,14 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             universe.Count,
             passedById.Count,
             fallbackIds.Count,
-            universe.Count - passers.Count);
+            rejectedCount);
 
         if (rejectedSample.Count > 0)
         {
             _logger.LogInformation("Betslip screening reject sample: {RejectedSample}.", string.Join("; ", rejectedSample));
         }
 
-        return passers;
+        return (ranked, passedById.Count);
     }
 
     private static List<LiveQuotedCandidate> CollapseOnePerFixture(IReadOnlyList<LiveQuotedCandidate> passers) =>

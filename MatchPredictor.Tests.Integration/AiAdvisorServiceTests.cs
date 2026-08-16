@@ -1192,6 +1192,87 @@ public class AiAdvisorServiceTests
     }
 
     [Fact]
+    public async Task SelectRolloverPickAsync_DropsUnknownIds()
+    {
+        await using var context = CreateContext();
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse("""
+                {"picks":[{"predictionId":999,"reason":"invented"}],"riskNote":"Skip."}
+                """));
+        var service = CreateService(context, handler);
+
+        var result = await service.SelectRolloverPickAsync(
+            [
+                new BankerPickRequest
+                {
+                    PredictionId = 11,
+                    League = "Test League",
+                    HomeTeam = "Roll Home",
+                    AwayTeam = "Roll Away",
+                    Market = "BTTS",
+                    PredictedOutcome = "BTTS",
+                    PredictionCategory = "BothTeamsScore",
+                    Confidence = 0.81m,
+                    DecimalOdds = 1.30
+                }
+            ],
+            minOdds: 1.20,
+            maxOdds: 1.50);
+
+        Assert.Empty(result.Picks);
+    }
+
+    [Fact]
+    public async Task SelectRolloverPickAsync_OpenAi_UsesWebSearchAndKeepsSuppliedIdsOnly()
+    {
+        await using var context = CreateContext();
+        var handler = new SequenceHttpMessageHandler(
+            BuildResponsesApiResponse("""
+                {"picks":[{"predictionId":11,"reason":"No injury news"},{"predictionId":999,"reason":"invented"}],"riskNote":"Stack carefully."}
+                """));
+        var service = CreateService(
+            context,
+            handler,
+            footballInsightService: new StubFootballInsightService(new Dictionary<string, FootballMatchInsightSnapshot>
+            {
+                ["11"] = CreateInsightSnapshot("Roll Home", "Roll Away")
+            }),
+            llmConfig: new Dictionary<string, string?>
+            {
+                ["AiLlm:Provider"] = "openai",
+                ["AiLlm:ApiKey"] = "sk-test",
+                ["AiLlm:Model"] = "gpt-5.6-luna",
+                ["AiLlm:BaseUrl"] = "https://api.openai.com/v1/"
+            });
+
+        var result = await service.SelectRolloverPickAsync(
+            [
+                new BankerPickRequest
+                {
+                    PredictionId = 11,
+                    League = "Test League",
+                    HomeTeam = "Roll Home",
+                    AwayTeam = "Roll Away",
+                    Market = "BTTS",
+                    PredictedOutcome = "BTTS",
+                    PredictionCategory = "BothTeamsScore",
+                    Confidence = 0.81m,
+                    DecimalOdds = 1.30,
+                    MatchDateTimeUtc = DateTime.UtcNow.AddHours(4)
+                }
+            ],
+            minOdds: 1.20,
+            maxOdds: 1.50);
+
+        Assert.Equal(11, Assert.Single(result.Picks).PredictionId);
+        Assert.Equal("Stack carefully.", result.RiskNote);
+        Assert.Contains("/responses", handler.RequestUris[0], StringComparison.Ordinal);
+        Assert.Contains("web_search", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.Contains("footballInsight", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("chat/completions", handler.RequestUris[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task SelectBestDrawPicksAsync_IncludesFootballInsightsAndSelectsFromSuppliedIdsOnly()
     {
         await using var context = CreateContext();

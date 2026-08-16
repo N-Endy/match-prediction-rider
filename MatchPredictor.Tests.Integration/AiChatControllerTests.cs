@@ -116,6 +116,13 @@ public class AiChatControllerTests
             CancellationToken ct = default) =>
             Task.FromResult(new BankerPickResult());
 
+        public Task<BankerPickResult> SelectRolloverPickAsync(
+            IReadOnlyList<BankerPickRequest> candidates,
+            double minOdds,
+            double maxOdds,
+            CancellationToken ct = default) =>
+            Task.FromResult(new BankerPickResult());
+
         public Task<LadderRankResult> RankLadderCandidatesAsync(
             IReadOnlyList<LadderRankRequest> candidates,
             CancellationToken ct = default) =>

@@ -2,11 +2,13 @@
 @using MatchPredictor.Domain.Models
 @using MatchPredictor.Application.Services
 @{
+    var isRollover = Model.SlipNumber == BetslipGenerationService.RolloverSlipNumber
+                     || Model.TierLabel.StartsWith("Rollover", StringComparison.OrdinalIgnoreCase);
     var isBanker = Model.SlipNumber == BetslipGenerationService.BankerSlipNumber
                    || Model.TierLabel.StartsWith("Banker", StringComparison.OrdinalIgnoreCase);
     var isDrawSlip = string.Equals(Model.TierLabel, "AI Draws (5)", StringComparison.Ordinal);
     var isMega = Model.TierLabel.StartsWith("Mega", StringComparison.OrdinalIgnoreCase);
-    var isPayoutBand = !isBanker && !isDrawSlip && Model.CombinedDecimalOdds is > 1;
+    var isPayoutBand = !isBanker && !isRollover && !isDrawSlip && Model.CombinedDecimalOdds is > 1;
     var referenceStake = ViewData["ReferenceStakeNaira"] as decimal? ?? 100m;
     var estimatedReturn = isPayoutBand
         ? referenceStake * (decimal)Model.CombinedDecimalOdds!.Value
@@ -18,13 +20,15 @@
         _ => "mp-betslip-status-failed"
     };
     var bookedCount = Model.Selections.Count(s => s.WasBooked);
-    var cardClass = isBanker
-        ? "mp-betslip-card mp-betslip-card-banker"
-        : isDrawSlip
-            ? "mp-betslip-card mp-betslip-card-ai"
-            : isMega
-                ? "mp-betslip-card mp-betslip-card-mega"
-                : "mp-betslip-card";
+    var cardClass = isRollover
+        ? "mp-betslip-card mp-betslip-card-rollover"
+        : isBanker
+            ? "mp-betslip-card mp-betslip-card-banker"
+            : isDrawSlip
+                ? "mp-betslip-card mp-betslip-card-ai"
+                : isMega
+                    ? "mp-betslip-card mp-betslip-card-mega"
+                    : "mp-betslip-card";
 
     static string FormatNaira(decimal amount)
     {
@@ -51,11 +55,11 @@
         <span class="mp-betslip-status @statusClass">@Model.BookingStatus</span>
     </header>
 
-    @if (isBanker && Model.CombinedDecimalOdds is > 1)
+    @if ((isBanker || isRollover) && Model.CombinedDecimalOdds is > 1)
     {
-        <div class="mp-betslip-banker-odds">
-            <span class="mp-betslip-banker-odds-value">@Model.CombinedDecimalOdds.Value.ToString("0.00")x</span>
-            <span class="mp-betslip-banker-odds-label">total odds</span>
+        <div class="@(isRollover ? "mp-betslip-rollover-odds" : "mp-betslip-banker-odds")">
+            <span class="@(isRollover ? "mp-betslip-rollover-odds-value" : "mp-betslip-banker-odds-value")">@Model.CombinedDecimalOdds.Value.ToString("0.00")x</span>
+            <span class="@(isRollover ? "mp-betslip-rollover-odds-label" : "mp-betslip-banker-odds-label")">@(isRollover ? "single-leg odds" : "total odds")</span>
         </div>
     }
 
@@ -77,7 +81,7 @@
         <div>
             <span class="mp-betslip-metric-label">Picks</span>
             <strong>@Model.SelectionCount</strong>
-            @if (!isBanker && !isPayoutBand)
+            @if (!isBanker && !isRollover && !isPayoutBand)
             {
                 <span class="mp-betslip-metric-hint">target @Model.TargetMinSelections–@Model.TargetMaxSelections</span>
             }
@@ -90,7 +94,7 @@
             <span class="mp-betslip-metric-label">Booked</span>
             <strong>@bookedCount</strong>
         </div>
-        @if (!isBanker && !isPayoutBand && Model.CombinedDecimalOdds is > 1)
+        @if (!isBanker && !isRollover && !isPayoutBand && Model.CombinedDecimalOdds is > 1)
         {
             <div>
                 <span class="mp-betslip-metric-label">Est. odds</span>
@@ -98,6 +102,13 @@
             </div>
         }
     </div>
+
+    @if (isRollover)
+    {
+        <p class="mp-betslip-rollover-disclaimer">
+            Single stack-it-all pick. The whole bankroll from this bet rolls into the next one. Odds verified against live SportyBet at generation time.
+        </p>
+    }
 
     @if (isBanker)
     {
@@ -148,7 +159,7 @@
         <p class="mp-betslip-status-message">@Model.StatusMessage</p>
     }
 
-    <details class="mp-betslip-details"@(isBanker ? " open" : "")>
+    <details class="mp-betslip-details"@(isBanker || isRollover ? " open" : "")>
         <summary>View @Model.SelectionCount selections</summary>
         <ul class="mp-betslip-selection-list">
             @foreach (var selection in Model.Selections

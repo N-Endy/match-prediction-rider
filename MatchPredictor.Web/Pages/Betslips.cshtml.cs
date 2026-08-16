@@ -20,6 +20,7 @@ public class BetslipsModel : PageModel
 
     public BetslipSet? CurrentSet { get; private set; }
     public string GeneratedLocalLabel { get; private set; } = string.Empty;
+    public Betslip? RolloverSlip { get; private set; }
     public Betslip? BankerSlip { get; private set; }
     public IReadOnlyList<Betslip> OtherSlips { get; private set; } = [];
     public decimal ReferenceStakeNaira { get; private set; } = 100m;
@@ -38,12 +39,14 @@ public class BetslipsModel : PageModel
         var local = DateTimeProvider.ConvertUtcToLocal(CurrentSet.GeneratedAtUtc);
         GeneratedLocalLabel = $"{local:ddd d MMM yyyy, HH:mm} WAT";
 
+        RolloverSlip = CurrentSet.Slips
+            .FirstOrDefault(s => BetslipGenerationService.IsRolloverSlip(s));
+
         BankerSlip = CurrentSet.Slips
-            .FirstOrDefault(s => s.SlipNumber == BetslipGenerationService.BankerSlipNumber
-                                 || s.TierLabel.StartsWith("Banker", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(s => BetslipGenerationService.IsBankerSlip(s));
 
         OtherSlips = CurrentSet.Slips
-            .Where(s => s != BankerSlip)
+            .Where(s => s != RolloverSlip && s != BankerSlip)
             .OrderBy(s => s.SlipNumber)
             .ToList();
     }
