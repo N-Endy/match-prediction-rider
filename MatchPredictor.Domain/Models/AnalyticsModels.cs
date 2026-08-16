@@ -12,6 +12,7 @@ public class AnalyticsStats
     public double LogLoss { get; set; }
     public double RawExpectedCalibrationError { get; set; }
     public double ExpectedCalibrationError { get; set; }
+    public double Uncertainty { get; set; }
     public double Precision { get; set; }
     public double Recall { get; set; }
     public double F1Score { get; set; }

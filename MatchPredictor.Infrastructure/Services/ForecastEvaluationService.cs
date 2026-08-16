@@ -90,6 +90,8 @@ public class ForecastEvaluationService : IForecastEvaluationService
                 settledForecasts.Select(forecast => (forecast.RawProbability, forecast.OutcomeOccurred!.Value)));
             stats.ExpectedCalibrationError = CalculateExpectedCalibrationError(
                 settledForecasts.Select(forecast => (forecast.CalibratedProbability, forecast.OutcomeOccurred!.Value)));
+            var overallObservedRate = settledForecasts.Average(forecast => forecast.OutcomeOccurred == true ? 1.0 : 0.0);
+            stats.Uncertainty = overallObservedRate * (1.0 - overallObservedRate);
             stats.ConfidenceBandStats = BuildConfidenceBandStats(settledForecasts);
             stats.LeagueSegmentStats = BuildLeagueSegmentStats(settledForecasts);
             stats.SourceSegmentStats = BuildSourceSegmentStats(settledForecasts);
