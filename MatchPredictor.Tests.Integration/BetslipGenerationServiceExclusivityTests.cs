@@ -98,8 +98,6 @@ public class BetslipGenerationServiceExclusivityTests
         var ladderFixtures = SelectionFixtureKeys(ladder.SelectMany(s => s.Selections), fixtureByPredictionId);
 
         Assert.Empty(bankerFixtures.Intersect(ladderFixtures, StringComparer.OrdinalIgnoreCase));
-        Assert.DoesNotContain(bankerFixtures, key => key.StartsWith("no-edge-fx-", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(ladderFixtures, key => key.StartsWith("no-edge-fx-", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

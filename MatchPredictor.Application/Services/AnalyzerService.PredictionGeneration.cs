@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Hangfire;
 using MatchPredictor.Application.Helpers;
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Utils;
@@ -38,6 +39,16 @@ public partial class AnalyzerService
             foreach (var match in matches)
             {
                 ApplyCanonicalFixtureIdentity(match);
+            }
+
+            var bookingsSkipped = matches.RemoveAll(match =>
+                UnsupportedFixtureFilter.IsBookingsFixture(match.HomeTeam, match.AwayTeam));
+            if (bookingsSkipped > 0)
+            {
+                _logger.LogInformation(
+                    "Skipped {Count} bookings fixture(s) for {TargetDate}.",
+                    bookingsSkipped,
+                    targetDateString);
             }
 
             var generationMatches = DeduplicateMatchesForGeneration(matches, targetDateString);

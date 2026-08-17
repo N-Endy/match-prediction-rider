@@ -121,6 +121,78 @@ public class BetslipGenerationServiceLadderPoolTests
     }
 
     [Fact]
+    public async Task GenerateDailyBetslipsAsync_BooksBankerAndLadder_WhenNoThreePercentEdge()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var today = DateTimeProvider.GetLocalDate();
+        var kickoff = DateTime.UtcNow.AddHours(5);
+        var fixtures = new List<SourceMarketFixture>();
+        var predictions = new List<Prediction>();
+        var nextId = 1;
+
+        for (var i = 1; i <= 20; i++)
+        {
+            AddBttsPrediction(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(i),
+                $"ThinHome{i}",
+                $"ThinAway{i}",
+                $"thin-card-fx-{i}",
+                confidence: 0.52m,
+                bttsOdds: 1.55);
+        }
+
+        context.Predictions.AddRange(predictions);
+        await context.SaveChangesAsync();
+
+        var service = new BetslipGenerationService(
+            context,
+            new FakeBooking(),
+            new FakePricing { Fixtures = fixtures },
+            new FakeAdvisor(),
+            Options.Create(new BetslipSettings
+            {
+                BookingDelayMilliseconds = 0,
+                MaxSlipsPerPrediction = 1,
+                BankerMinOdds = 5.0,
+                BankerMaxOdds = 10.0,
+                BankerFallbackMinOdds = 4.0,
+                BankerFallbackMaxOdds = 12.0,
+                BankerMaxPicks = 8,
+                WeekendSmallSlipCount = 1,
+                WeekendMediumSlipCount = 0,
+                WeekendBigSlipCount = 0,
+                WeekendMegaSlipCount = 0,
+                SmallMinOdds = 20,
+                SmallMaxOdds = 120,
+                SmallFallbackMinOdds = 10,
+                SmallFallbackMaxOdds = 150,
+                SmallMaxPicks = 18,
+                DailyMaxPicks = 18
+            }),
+            NullLogger<BetslipGenerationService>.Instance,
+            Options.Create(new PredictionSettings { ValueBetMinimumEdge = 0.03 }));
+
+        await service.GenerateDailyBetslipsAsync("morning");
+
+        var set = await context.BetslipSets
+            .Include(s => s.Slips)
+            .ThenInclude(s => s.Selections)
+            .SingleAsync(s => s.IsCurrent);
+
+        Assert.Contains(set.Slips, BetslipGenerationService.IsBankerSlip);
+        Assert.NotEmpty(set.Slips.Where(BetslipGenerationService.IsLadderSlip));
+        Assert.DoesNotContain(set.Slips, BetslipGenerationService.IsRolloverSlip);
+    }
+
+    [Fact]
     public async Task GenerateDailyBetslipsAsync_PacksLadderFromOnePercentLeftovers_WhenScreenRejectsThem()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()

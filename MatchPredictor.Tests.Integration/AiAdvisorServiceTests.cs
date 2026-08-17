@@ -1319,6 +1319,61 @@ public class AiAdvisorServiceTests
     }
 
     [Fact]
+    public async Task SelectBestDrawPicksAsync_OpenAi_UsesWebSearchAndKeepsSuppliedIdsOnly()
+    {
+        await using var context = CreateContext();
+        var handler = new SequenceHttpMessageHandler(
+            BuildResponsesApiResponse("""
+                {"picks":[{"predictionId":22,"reason":"No late news"},{"predictionId":999,"reason":"invented"}]}
+                """));
+        var service = CreateService(
+            context,
+            handler,
+            footballInsightService: new StubFootballInsightService(new Dictionary<string, FootballMatchInsightSnapshot>
+            {
+                ["22"] = CreateInsightSnapshot("Draw Home", "Draw Away")
+            }),
+            llmConfig: new Dictionary<string, string?>
+            {
+                ["AiLlm:Provider"] = "openai",
+                ["AiLlm:ApiKey"] = "sk-test",
+                ["AiLlm:Model"] = "gpt-5.6-luna",
+                ["AiLlm:BaseUrl"] = "https://api.openai.com/v1/"
+            });
+
+        var selected = await service.SelectBestDrawPicksAsync(
+            [
+                new BetslipDrawPickRequest
+                {
+                    PredictionId = 21,
+                    League = "Draw League",
+                    HomeTeam = "Low Conf Home",
+                    AwayTeam = "Low Conf Away",
+                    Confidence = 0.90m,
+                    MatchDateTimeUtc = DateTime.UtcNow.AddHours(3),
+                    PredictionCategory = "Draw"
+                },
+                new BetslipDrawPickRequest
+                {
+                    PredictionId = 22,
+                    League = "Draw League",
+                    HomeTeam = "Draw Home",
+                    AwayTeam = "Draw Away",
+                    Confidence = 0.55m,
+                    MatchDateTimeUtc = DateTime.UtcNow.AddHours(4),
+                    PredictionCategory = "Draw"
+                }
+            ],
+            count: 5);
+
+        Assert.Equal(22, Assert.Single(selected).PredictionId);
+        Assert.Contains("/responses", handler.RequestUris[0], StringComparison.Ordinal);
+        Assert.Contains("web_search", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("chat/completions", handler.RequestUris[0], StringComparison.Ordinal);
+        Assert.DoesNotContain(selected, pick => pick.PredictionId == 999);
+    }
+
+    [Fact]
     public async Task RankLadderCandidatesAsync_ReturnsSuppliedIdsInModelOrder_DroppingUnknownIds()
     {
         await using var context = CreateContext();
@@ -1482,6 +1537,73 @@ public class AiAdvisorServiceTests
         var slip = Assert.Single(result.Slips);
         Assert.Equal(1, slip.SlipNumber);
         Assert.Equal([2, 1], slip.PredictionIds);
+    }
+
+    [Fact]
+    public async Task ComposeLadderSlipsAsync_OpenAi_UsesWebSearchAndDropsUnknownIds()
+    {
+        await using var context = CreateContext();
+        var handler = new SequenceHttpMessageHandler(
+            BuildResponsesApiResponse("""
+                {"slips":[{"slipNumber":1,"predictionIds":[2,999,1]}]}
+                """));
+        var service = CreateService(
+            context,
+            handler,
+            llmConfig: new Dictionary<string, string?>
+            {
+                ["AiLlm:Provider"] = "openai",
+                ["AiLlm:ApiKey"] = "sk-test",
+                ["AiLlm:Model"] = "gpt-5.6-luna",
+                ["AiLlm:BaseUrl"] = "https://api.openai.com/v1/"
+            });
+
+        var result = await service.ComposeLadderSlipsAsync(
+            [
+                new LadderRankRequest
+                {
+                    PredictionId = 1,
+                    League = "Test",
+                    HomeTeam = "Home 1",
+                    AwayTeam = "Away 1",
+                    Market = "BTTS",
+                    PredictedOutcome = "BTTS",
+                    PredictionCategory = "BothTeamsScore",
+                    Confidence = 0.80m,
+                    DecimalOdds = 1.55
+                },
+                new LadderRankRequest
+                {
+                    PredictionId = 2,
+                    League = "Test",
+                    HomeTeam = "Home 2",
+                    AwayTeam = "Away 2",
+                    Market = "Over2.5",
+                    PredictedOutcome = "Over 2.5",
+                    PredictionCategory = "Over2.5Goals",
+                    Confidence = 0.75m,
+                    DecimalOdds = 1.70
+                }
+            ],
+            [
+                new LadderComposeBandRequest
+                {
+                    SlipNumber = 1,
+                    Title = "Small Acca A",
+                    BandKey = "small",
+                    MinOdds = 20,
+                    MaxOdds = 120,
+                    FallbackMinOdds = 10,
+                    FallbackMaxOdds = 150,
+                    MaxPicks = 18
+                }
+            ]);
+
+        var slip = Assert.Single(result.Slips);
+        Assert.Equal([2, 1], slip.PredictionIds);
+        Assert.Contains("/responses", handler.RequestUris[0], StringComparison.Ordinal);
+        Assert.Contains("web_search", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("chat/completions", handler.RequestUris[0], StringComparison.Ordinal);
     }
 
     private static ApplicationDbContext CreateContext()

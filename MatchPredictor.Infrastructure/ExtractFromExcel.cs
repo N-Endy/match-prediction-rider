@@ -1,3 +1,4 @@
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using Microsoft.Extensions.Logging;
@@ -132,6 +133,18 @@ public class ExtractFromExcel : IExtractFromExcel
                 if (matchDateTime.Date != targetDate)
                     continue;
 
+                var homeTeam = worksheet.Cells[row, 2].Value?.ToString();
+                var awayTeam = worksheet.Cells[row, 3].Value?.ToString();
+                if (UnsupportedFixtureFilter.IsBookingsFixture(homeTeam, awayTeam))
+                {
+                    _logger.LogDebug(
+                        "Skipping row {Row} because fixture '{HomeTeam} vs {AwayTeam}' is an unsupported bookings market.",
+                        row,
+                        homeTeam,
+                        awayTeam);
+                    continue;
+                }
+
                 var matchData = new MatchData
                 {
                     Date = matchDateTime.ToString("dd-MM-yyyy", CultureInfo.InvariantCulture),
@@ -139,8 +152,8 @@ public class ExtractFromExcel : IExtractFromExcel
                     MatchLocalDate = DateOnly.FromDateTime(matchDateTime),
                     MatchLocalTime = TimeOnly.FromDateTime(matchDateTime),
                     League = worksheet.Cells[row, 4].Value?.ToString(),
-                    HomeTeam = worksheet.Cells[row, 2].Value?.ToString(),
-                    AwayTeam = worksheet.Cells[row, 3].Value?.ToString(),
+                    HomeTeam = homeTeam,
+                    AwayTeam = awayTeam,
                     HomeWin = ParseProbability(worksheet.Cells[row, 6].Value),
                     Draw = ParseProbability(worksheet.Cells[row, 7].Value),
                     AwayWin = ParseProbability(worksheet.Cells[row, 8].Value),

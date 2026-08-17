@@ -1,5 +1,6 @@
 using System.Text.Json;
 using MatchPredictor.Application.Helpers;
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
@@ -77,6 +78,17 @@ public class ValueBetsService : IValueBetsService
             return report;
         }
 
+        upcomingMatches = upcomingMatches
+            .Where(match => !UnsupportedFixtureFilter.IsBookingsFixture(match.HomeTeam, match.AwayTeam))
+            .ToList();
+
+        if (!upcomingMatches.Any())
+        {
+            _logger.LogInformation("No upcoming matches available for Value Bets today after excluding bookings fixtures.");
+            report.ExclusionBreakdown = BuildExclusionBreakdown(exclusionCounts);
+            return report;
+        }
+
         IReadOnlyList<SourceMarketFixture> sourceMarketFixtures = [];
         try
         {
@@ -94,6 +106,9 @@ public class ValueBetsService : IValueBetsService
             .Where(prediction => prediction.MatchLocalDate == todayLocalDate)
             .Where(prediction => prediction.IsCurrentRevision)
             .ToListAsync(ct);
+        currentPredictions = currentPredictions
+            .Where(prediction => !UnsupportedFixtureFilter.IsBookingsFixture(prediction.HomeTeam, prediction.AwayTeam))
+            .ToList();
         var currentPredictionLookup = currentPredictions
             .GroupBy(prediction => BuildCurrentPredictionLookupKey(
                 FixtureIdentityFactory.FromPrediction(prediction).FixtureKey,

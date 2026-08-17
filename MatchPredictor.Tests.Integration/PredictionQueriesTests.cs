@@ -128,4 +128,57 @@ public class PredictionQueriesTests
         Assert.Equal("09:00", result.Time);
         Assert.Equal(new TimeOnly(9, 0), result.MatchLocalTime);
     }
+
+    [Fact]
+    public async Task GetBTTSAsync_ExcludesBookingsFixtures()
+    {
+        await using var context = CreateContext();
+        var matchLocalDate = new DateOnly(2030, 1, 3);
+        var kickoffTime = new TimeOnly(14, 0);
+
+        context.Predictions.AddRange(
+            new Prediction
+            {
+                Date = "03-01-2030",
+                Time = "14:00",
+                MatchLocalDate = matchLocalDate,
+                MatchLocalTime = kickoffTime,
+                League = "MLS",
+                HomeTeam = "Charlotte FC (Bookings)",
+                AwayTeam = "Columbus Crew (Bookings)",
+                PredictionCategory = "BothTeamsScore",
+                PredictedOutcome = "BTTS",
+                PredictionRunId = Guid.NewGuid(),
+                RunLabel = "00:35 WAT",
+                RunReason = "refresh",
+                IsCurrentRevision = true,
+                RevisionNumber = 1
+            },
+            new Prediction
+            {
+                Date = "03-01-2030",
+                Time = "15:00",
+                MatchLocalDate = matchLocalDate,
+                MatchLocalTime = new TimeOnly(15, 0),
+                League = "MLS",
+                HomeTeam = "Charlotte FC",
+                AwayTeam = "Columbus Crew",
+                PredictionCategory = "BothTeamsScore",
+                PredictedOutcome = "BTTS",
+                PredictionRunId = Guid.NewGuid(),
+                RunLabel = "00:35 WAT",
+                RunReason = "refresh",
+                IsCurrentRevision = true,
+                RevisionNumber = 1
+            });
+
+        await context.SaveChangesAsync();
+        var queries = new PredictionQueries(context);
+
+        var results = await queries.GetBTTSAsync(matchLocalDate.ToDateTime(kickoffTime));
+
+        var result = Assert.Single(results);
+        Assert.Equal("Charlotte FC", result.HomeTeam);
+        Assert.Equal("Columbus Crew", result.AwayTeam);
+    }
 }

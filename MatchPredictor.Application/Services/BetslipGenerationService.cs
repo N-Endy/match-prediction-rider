@@ -1,5 +1,6 @@
 using Hangfire;
 using MatchPredictor.Application.Helpers;
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
@@ -110,7 +111,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
             var usedFixtureKeys = CollectFixtureKeys(composed);
             var bankerPassers = ExcludeUsedFixtures(
-                FilterByCategoryAndEdge(mainPool, MainCategories, _minimumEdge),
+                FilterByCategory(mainPool, MainCategories),
                 usedFixtureKeys);
             var banker = await ComposeBankerFromPassersAsync(bankerPassers, settings);
             if (banker is not null)
@@ -124,13 +125,13 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 : WeekendPayoutSlipComposer.BuildWeekdayPlan(settings);
 
             var ladderPassers = ExcludeUsedFixtures(
-                FilterByCategoryAndEdge(mainPool, MainCategories, _ladderMinimumEdge),
+                FilterByCategory(mainPool, MainCategories),
                 usedFixtureKeys);
 
             _logger.LogInformation(
                 "Ladder pool after exclusivity: {PoolCount} live-quoted picks ({RemovedCount} removed).",
                 ladderPassers.Count,
-                FilterByCategoryAndEdge(mainPool, MainCategories, _ladderMinimumEdge).Count - ladderPassers.Count);
+                FilterByCategory(mainPool, MainCategories).Count - ladderPassers.Count);
 
             _logger.LogInformation(
                 "Ladder pool ready: {PoolCount} live-quoted picks for {BandCount} band(s).",
@@ -245,7 +246,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
     private async Task<List<Prediction>> LoadTodayPredictionsAsync(DateOnly today, DateTime kickoffCutoffUtc)
     {
-        return await _dbContext.Predictions
+        var predictions = await _dbContext.Predictions
             .AsNoTracking()
             .Where(p =>
                 p.MatchLocalDate == today &&
@@ -253,6 +254,10 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 p.WasPublished &&
                 (p.MatchDateTime == null || p.MatchDateTime > kickoffCutoffUtc))
             .ToListAsync();
+
+        return predictions
+            .Where(p => !UnsupportedFixtureFilter.IsBookingsFixture(p.HomeTeam, p.AwayTeam))
+            .ToList();
     }
 
     public static bool IsRolloverSlip(Betslip slip) =>
@@ -275,7 +280,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
     {
         var minOdds = settings.RolloverMinOdds;
         var maxOdds = settings.RolloverMaxOdds;
-        var pool = FilterByCategoryAndEdge(mainPool, MainCategories, _minimumEdge)
+        var pool = FilterByCategory(mainPool, MainCategories)
             .Where(p => p.Candidate.DecimalOdds is double odds &&
                         BankerSlipComposer.IsWithinOddsRange(odds, minOdds, maxOdds))
             .OrderByDescending(p => p.Candidate.ResearchScore ?? (double)p.Candidate.Confidence)
@@ -285,7 +290,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         if (pool.Count == 0)
         {
             _logger.LogInformation(
-                "Rollover skipped: no live-quoted main-market pick in {MinOdds:0.##}-{MaxOdds:0.##}x meeting the 3% edge floor.",
+                "Rollover skipped: no live-quoted main-market pick in {MinOdds:0.##}-{MaxOdds:0.##}x.",
                 minOdds,
                 maxOdds);
             return null;
@@ -420,7 +425,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
     {
         if (passers.Count == 0)
         {
-            _logger.LogInformation("Banker skipped: no live-quoted main-market picks meeting the 3% edge floor.");
+            _logger.LogInformation("Banker skipped: no live-quoted main-market picks remaining.");
             return null;
         }
 
@@ -431,7 +436,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             .ToList();
 
         _logger.LogInformation(
-            "Banker compose pool: {PasserCount} live-quoted picks meeting the 3% edge floor.",
+            "Banker compose pool: {PasserCount} live-quoted picks.",
             eligible.Count);
 
         var deterministic = BankerSlipComposer.Compose(
@@ -696,12 +701,12 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         IReadOnlySet<string> usedFixtureKeys)
     {
         var drawPassers = ExcludeUsedFixtures(
-            FilterByCategoryAndEdge(passers, ["Draw"], _minimumEdge),
+            FilterByCategory(passers, ["Draw"]),
             usedFixtureKeys);
 
         if (drawPassers.Count == 0)
         {
-            _logger.LogInformation("AI Draws skipped: no live-quoted Draw picks remaining after exclusivity and 3% edge.");
+            _logger.LogInformation("AI Draws skipped: no live-quoted Draw picks remaining after exclusivity.");
             return null;
         }
 
@@ -1364,16 +1369,11 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             .ThenBy(p => p.Prediction.Id)
             .ToList();
 
-    private static List<LiveQuotedCandidate> FilterByCategoryAndEdge(
+    private static List<LiveQuotedCandidate> FilterByCategory(
         IReadOnlyList<LiveQuotedCandidate> passers,
-        IReadOnlyCollection<string> categories,
-        double minimumEdge) =>
+        IReadOnlyCollection<string> categories) =>
         passers
             .Where(p => categories.Contains(p.Candidate.PredictionCategory))
-            .Where(p => BetPricingMath.MeetsMinimumEdge(
-                (double)p.Candidate.Confidence,
-                p.MarketProbability,
-                minimumEdge))
             .ToList();
 
     private static BetslipScreenRequest ToScreenRequest(LiveQuotedCandidate candidate) =>

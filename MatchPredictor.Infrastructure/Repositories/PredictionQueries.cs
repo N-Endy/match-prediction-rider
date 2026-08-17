@@ -1,3 +1,4 @@
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
@@ -42,6 +43,7 @@ public class PredictionQueries : IPredictionQueries
         var random = new Random();
 
         return predictionsForDay
+            .Where(p => !UnsupportedFixtureFilter.IsBookingsFixture(p.HomeTeam, p.AwayTeam))
             .DistinctBy(p => !string.IsNullOrWhiteSpace(p.FixtureKey)
                 ? p.FixtureKey
                 : $"{Normalize(p.League)}|{Normalize(p.HomeTeam)}|{Normalize(p.AwayTeam)}|{p.MatchLocalDate}")
@@ -63,6 +65,7 @@ public class PredictionQueries : IPredictionQueries
             .ToListAsync();
 
         var list = filteredPredictions
+            .Where(p => !UnsupportedFixtureFilter.IsBookingsFixture(p.HomeTeam, p.AwayTeam))
             .OrderBy(p => p.MatchLocalTime ?? DateTimeProvider.ParseLocalTimeOrNull(p.Time))
             .ThenBy(p => p.League)
             .ThenBy(p => p.HomeTeam)

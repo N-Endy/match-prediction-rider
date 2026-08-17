@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
@@ -481,12 +482,23 @@ public class AiAdvisorService : IAiAdvisorService
                 })
             });
 
+            var useWebSearch = string.Equals(
+                _chatClient.Provider,
+                AiLlmSettingsResolver.OpenAiProvider,
+                StringComparison.Ordinal);
+
             var systemPrompt =
                 "You are a football betting analyst. From the candidate draw predictions, select the best ones " +
                 "for a short draw accumulator. Blend calibrated confidence with supplied footballInsight " +
                 "(form, venue draw rates, and head-to-head) when dataQuality is not Low. Prefer higher " +
                 "confidence when research is thin or Low quality. Diversify leagues when quality is similar. " +
                 "Use only the supplied predictionIds. Do not invent fixtures. " +
+                (useWebSearch
+                    ? "You may use web_search for last-minute news (injuries, suspensions, likely XI) on fixtures you " +
+                      "are considering. Search at most 4 times. Skip search when news would not change the pick. " +
+                      "If search contradicts a high-confidence pick, demote it. When search was used, cite one " +
+                      "concrete finding in reason. "
+                    : string.Empty) +
                 "Respond with JSON only: {\"picks\":[{\"predictionId\":123,\"reason\":\"one short sentence\"}]}.";
 
             var userPrompt =
@@ -497,9 +509,11 @@ public class AiAdvisorService : IAiAdvisorService
                 userPrompt,
                 null,
                 ct,
-                jsonMode: true,
+                jsonMode: !useWebSearch,
                 temperature: 0.2,
-                maxTokens: 1200);
+                maxTokens: useWebSearch ? 4000 : 1200,
+                useWebSearch: useWebSearch,
+                timeoutSeconds: useWebSearch ? OpenAiCompatibleChatCompletionsClient.WebSearchTimeoutSeconds : null);
 
             if (raw.StartsWith("❌", StringComparison.Ordinal) ||
                 raw.StartsWith("⏳", StringComparison.Ordinal) ||
@@ -1038,14 +1052,25 @@ public class AiAdvisorService : IAiAdvisorService
                 })
             });
 
+            var useWebSearch = string.Equals(
+                _chatClient.Provider,
+                AiLlmSettingsResolver.OpenAiProvider,
+                StringComparison.Ordinal);
+
             var systemPrompt =
-                "You are building payout-band football accumulators from already-screened live-priced candidates. " +
+                "You are building payout-band football accumulators from live-priced candidates. " +
                 "C# will validate IDs, fixture exclusivity, and odds product — you choose the legs. " +
                 "Use only the supplied predictionIds. Do not invent fixtures or odds. " +
                 "Each fixture may appear on at most one slip. Do not include draws. " +
                 "For each band, pick legs so the decimal-odds product lands between minOdds and maxOdds " +
                 "(fallbackMinOdds-fallbackMaxOdds if the primary band is impossible). Stay within maxPicks. " +
                 "Omit a band rather than pad with junk. " +
+                (useWebSearch
+                    ? "You may use web_search for last-minute news (injuries, suspensions, likely XI) on fixtures you " +
+                      "are considering as acca legs. Search at most 8 times. Skip search when the card is thin " +
+                      "or news would not change the pick. If search contradicts a high-confidence pick, demote it. " +
+                      "Keep JSON ids only even when search was used. "
+                    : string.Empty) +
                 "Respond with JSON only: {\"slips\":[{\"slipNumber\":1,\"predictionIds\":[123,456]}]}.";
 
             var userPrompt =
@@ -1056,9 +1081,11 @@ public class AiAdvisorService : IAiAdvisorService
                 userPrompt,
                 null,
                 ct,
-                jsonMode: true,
+                jsonMode: !useWebSearch,
                 temperature: 0.15,
-                maxTokens: 2500);
+                maxTokens: useWebSearch ? 4000 : 2500,
+                useWebSearch: useWebSearch,
+                timeoutSeconds: useWebSearch ? OpenAiCompatibleChatCompletionsClient.WebSearchTimeoutSeconds : null);
 
             if (raw.StartsWith("❌", StringComparison.Ordinal) ||
                 raw.StartsWith("⏳", StringComparison.Ordinal) ||
@@ -1820,14 +1847,16 @@ public class AiAdvisorService : IAiAdvisorService
         var todayLocalDate = DateOnly.FromDateTime(nowLocal);
         var earliestLocalDate = todayLocalDate.AddDays(-7);
 
-        return await _dbContext.Predictions
+        return (await _dbContext.Predictions
             .AsNoTracking()
             .Where(prediction => prediction.IsCurrentRevision && prediction.WasPublished)
             .Where(prediction => prediction.MatchLocalDate >= earliestLocalDate && prediction.MatchLocalDate <= todayLocalDate)
             .OrderByDescending(prediction => prediction.MatchLocalDate)
             .ThenByDescending(prediction => prediction.MatchDateTime)
             .ThenByDescending(prediction => prediction.MatchLocalTime)
-            .ToListAsync(ct);
+            .ToListAsync(ct))
+            .Where(prediction => !UnsupportedFixtureFilter.IsBookingsFixture(prediction.HomeTeam, prediction.AwayTeam))
+            .ToList();
     }
 
     private async Task<IReadOnlyDictionary<int, AiChatContextBuilder.AiChatCandidatePricing>> LoadCandidatePricingByPredictionIdAsync(

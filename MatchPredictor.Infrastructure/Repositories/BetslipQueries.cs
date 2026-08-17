@@ -18,6 +18,7 @@ public class BetslipQueries : IBetslipQueries
     {
         return await _context.BetslipSets
             .AsNoTracking()
+            .AsSplitQuery()
             .Include(s => s.Slips)
                 .ThenInclude(slip => slip.Selections)
             .Where(s => s.IsCurrent)

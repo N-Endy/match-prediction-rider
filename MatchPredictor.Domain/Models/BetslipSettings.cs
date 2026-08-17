@@ -22,8 +22,8 @@ public class BetslipSettings
     public int BankerShortlistSize { get; set; } = 20;
     public int BankerMaxPicks { get; set; } = 8;
 
-    /// <summary>Minimum model-vs-market edge for ladder acca legs. Banker, rollover, and value bets keep
-    /// <see cref="PredictionSettings.ValueBetMinimumEdge"/> (3%).
+    /// <summary>Logged in the compose funnel only. Betslip packing no longer gates on this floor.
+    /// Value bets still use <see cref="PredictionSettings.ValueBetMinimumEdge"/> (3%).
     /// </summary>
     public double LadderMinimumEdge { get; set; } = 0.01;
 
