@@ -112,7 +112,7 @@ Each cron job: `POST`, header `X-Cron-Secret: <secret>`, expect HTTP **202**.
 | `score-update` | `*/12 * * * *` |
 | `score-backfill` | `17 * * * *` |
 | `closing-line-snapshot` | `*/5 * * * *` |
-| `betslip-generation` | `0 5,13 * * *` |
+| `betslip-generation` | `0 2,13 * * *` |
 
 Optional recovery: `POST /api/ops/jobs/startup-catchup` enqueues daily analysis followed by data sync (same as worker startup catch-up).
 

@@ -148,7 +148,7 @@ internal static class HangfireRecurringJobs
             recurringJobs.AddOrUpdate<IBetslipGenerationService>(
                 "betslip-generation-job",
                 service => service.GenerateDailyBetslipsAsync(null),
-                "0 5,13 * * *",
+                "0 2,13 * * *",
                 new RecurringJobOptions { TimeZone = watTimeZone }));
     }
 
