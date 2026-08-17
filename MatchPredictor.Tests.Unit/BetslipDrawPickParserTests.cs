@@ -69,13 +69,13 @@ public class BetslipDrawPickParserTests
     }
 
     [Fact]
-    public void ParseScreenedPassers_ReadsPassedArrayAndDropsDuplicates()
+    public void ParseScreenedScores_ReadsScoresArrayAndDropsDuplicates()
     {
         const string json = """
-            {"passed":[{"predictionId":11,"score":88,"reason":"Form fits"},{"predictionId":11,"score":10,"reason":"dup"},{"predictionId":22,"score":70}]}
+            {"scores":[{"predictionId":11,"score":88,"reason":"Form fits"},{"predictionId":11,"score":10,"reason":"dup"},{"predictionId":22,"score":70}]}
             """;
 
-        var passed = BetslipDrawPickParser.ParseScreenedPassers(json);
+        var passed = BetslipDrawPickParser.ParseScreenedScores(json);
         Assert.Equal(2, passed.Count);
         Assert.Equal(11, passed[0].PredictionId);
         Assert.Equal(88, passed[0].Score);
@@ -84,11 +84,25 @@ public class BetslipDrawPickParserTests
     }
 
     [Fact]
-    public void IsExplicitEmptyPassedList_TrueForEmptyPassedArray()
+    public void ParseScreenedScores_ReadsLegacyPassedArray()
     {
-        Assert.True(BetslipDrawPickParser.IsExplicitEmptyPassedList("""{"passed":[]}"""));
-        Assert.False(BetslipDrawPickParser.IsExplicitEmptyPassedList("not-json"));
-        Assert.False(BetslipDrawPickParser.IsExplicitEmptyPassedList("""{"picks":[]}"""));
+        const string json = """
+            {"passed":[{"predictionId":11,"score":88,"reason":"Form fits"},{"predictionId":22,"score":70}]}
+            """;
+
+        var passed = BetslipDrawPickParser.ParseScreenedScores(json);
+        Assert.Equal(2, passed.Count);
+        Assert.Equal(11, passed[0].PredictionId);
+        Assert.Equal(22, passed[1].PredictionId);
+    }
+
+    [Fact]
+    public void IsExplicitEmptyScoreList_TrueForEmptyScoresOrPassedArray()
+    {
+        Assert.True(BetslipDrawPickParser.IsExplicitEmptyScoreList("""{"scores":[]}"""));
+        Assert.True(BetslipDrawPickParser.IsExplicitEmptyScoreList("""{"passed":[]}"""));
+        Assert.False(BetslipDrawPickParser.IsExplicitEmptyScoreList("not-json"));
+        Assert.False(BetslipDrawPickParser.IsExplicitEmptyScoreList("""{"picks":[]}"""));
     }
 
     [Fact]

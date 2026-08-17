@@ -114,7 +114,7 @@ public static partial class BetslipDrawPickParser
         return ParsePredictionIds(aiResponseJson, 200);
     }
 
-    public static IReadOnlyList<BetslipScreenPick> ParseScreenedPassers(string aiResponseJson)
+    public static IReadOnlyList<BetslipScreenPick> ParseScreenedScores(string aiResponseJson)
     {
         if (string.IsNullOrWhiteSpace(aiResponseJson))
         {
@@ -126,7 +126,7 @@ public static partial class BetslipDrawPickParser
         {
             using var document = JsonDocument.Parse(normalized);
             var passed = new List<BetslipScreenPick>();
-            foreach (var element in EnumerateNamedArray(document.RootElement, "passed", "Passed", "picks", "selections"))
+            foreach (var element in EnumerateNamedArray(document.RootElement, "scores", "Scores", "passed", "Passed", "picks", "selections"))
             {
                 if (!TryReadPredictionId(element, out var predictionId))
                 {
@@ -164,7 +164,7 @@ public static partial class BetslipDrawPickParser
         }
     }
 
-    public static bool IsExplicitEmptyPassedList(string aiResponseJson)
+    public static bool IsExplicitEmptyScoreList(string aiResponseJson)
     {
         if (string.IsNullOrWhiteSpace(aiResponseJson))
         {
@@ -180,7 +180,7 @@ public static partial class BetslipDrawPickParser
                 return false;
             }
 
-            foreach (var propertyName in new[] { "passed", "Passed" })
+            foreach (var propertyName in new[] { "scores", "Scores", "passed", "Passed" })
             {
                 if (document.RootElement.TryGetProperty(propertyName, out var passed) &&
                     passed.ValueKind == JsonValueKind.Array)

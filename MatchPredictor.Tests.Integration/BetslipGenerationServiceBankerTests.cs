@@ -194,6 +194,98 @@ public class BetslipGenerationServiceBankerTests
     }
 
     [Fact]
+    public async Task GenerateDailyBetslipsAsync_KeepsBankerAiPicks_AfterDroppingUnknownId()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var today = DateTimeProvider.GetLocalDate();
+        var kickoff = DateTime.UtcNow.AddHours(5);
+        var fixtures = new List<SourceMarketFixture>();
+        var predictions = new List<Prediction>();
+
+        for (var i = 1; i <= 6; i++)
+        {
+            var matchKickoff = kickoff.AddMinutes(i * 10);
+            predictions.Add(new Prediction
+            {
+                Id = i,
+                Date = today.ToString("dd-MM-yyyy"),
+                Time = DateTimeProvider.ConvertUtcToLocal(matchKickoff).ToString("HH:mm"),
+                MatchLocalDate = today,
+                MatchDateTime = matchKickoff,
+                League = "Test League",
+                HomeTeam = $"KeepHome{i}",
+                AwayTeam = $"KeepAway{i}",
+                FixtureKey = $"keep-fx-{i}",
+                PredictionCategory = "BothTeamsScore",
+                PredictedOutcome = "BTTS",
+                ConfidenceScore = 0.80m,
+                WasPublished = true,
+                IsCurrentRevision = true,
+                PredictionRunId = Guid.NewGuid()
+            });
+            fixtures.Add(new SourceMarketFixture
+            {
+                EventId = $"keep-evt-{i}",
+                League = "Test League",
+                HomeTeam = $"KeepHome{i}",
+                AwayTeam = $"KeepAway{i}",
+                MatchTimeUtc = matchKickoff,
+                BttsYesOdds = 1.55
+            });
+        }
+
+        context.Predictions.AddRange(predictions);
+        await context.SaveChangesAsync();
+
+        var service = new BetslipGenerationService(
+            context,
+            new FakeBookingService(),
+            new FakePricingService { Fixtures = fixtures },
+            new FakeBankerAiAdvisor
+            {
+                ResultFactory = candidates => new BankerPickResult
+                {
+                    Picks =
+                    [
+                        new BetslipDrawPickSelection { PredictionId = candidates[0].PredictionId, Reason = "Keep" },
+                        new BetslipDrawPickSelection { PredictionId = 999, Reason = "Invented" },
+                        new BetslipDrawPickSelection { PredictionId = candidates[1].PredictionId, Reason = "Keep" },
+                        new BetslipDrawPickSelection { PredictionId = candidates[2].PredictionId, Reason = "Keep" },
+                        new BetslipDrawPickSelection { PredictionId = candidates[3].PredictionId, Reason = "Keep" },
+                        new BetslipDrawPickSelection { PredictionId = candidates[4].PredictionId, Reason = "Keep" }
+                    ],
+                    RiskNote = "Partial accept after dropping an invented id."
+                }
+            },
+            Options.Create(new BetslipSettings
+            {
+                BookingDelayMilliseconds = 0,
+                BankerMinOdds = 5.0,
+                BankerMaxOdds = 10.0,
+                BankerFallbackMinOdds = 4.0,
+                BankerFallbackMaxOdds = 12.0,
+                BankerMaxPicks = 8
+            }),
+            NullLogger<BetslipGenerationService>.Instance);
+
+        await service.GenerateDailyBetslipsAsync("morning");
+
+        var banker = await context.Betslips
+            .Include(s => s.Selections)
+            .SingleAsync(s => s.SlipNumber == BetslipGenerationService.BankerSlipNumber);
+
+        Assert.Equal(5, banker.Selections.Count);
+        Assert.DoesNotContain(banker.Selections, selection => selection.PredictionId == 999);
+        Assert.Equal("Partial accept after dropping an invented id.", banker.AiSummary);
+        Assert.DoesNotContain("not AI-vetted", banker.StatusMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.True(banker.CombinedDecimalOdds is >= 5.0 and <= 10.0);
+    }
+
+    [Fact]
     public async Task GenerateDailyBetslipsAsync_SendsFullEligiblePool_NotConfidenceShortlistOf20()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
@@ -529,7 +621,7 @@ public class BetslipGenerationServiceBankerTests
                 : candidates;
             return Task.FromResult(new BetslipScreenResult
             {
-                Passed = passed.Select(c => new BetslipScreenPick
+                Scores = passed.Select(c => new BetslipScreenPick
                 {
                     PredictionId = c.PredictionId,
                     Score = (double)c.Confidence * 100d

@@ -55,7 +55,7 @@ public class AiAdvisorServiceTests
     }
 
     [Fact]
-    public async Task GetAdviceAsync_ReturnsRawFallbackMessage_WhenModelDoesNotReturnJson()
+    public async Task GetAdviceAsync_HidesRawModelText_WhenModelDoesNotReturnJson()
     {
         await using var context = CreateContext();
         var predictions = await SeedPredictionsAsync(context, 1);
@@ -66,10 +66,76 @@ public class AiAdvisorServiceTests
 
         var response = await service.GetAdviceAsync("Give me the best BTTS predictions", "session-2");
 
-        Assert.Equal("This is not valid JSON.", response.Message);
+        Assert.Equal("I couldn't generate a clean response just now. I lined up the strongest published picks from today's card instead.", response.Message);
+        Assert.DoesNotContain("This is not valid JSON.", response.Message);
         var action = Assert.Single(response.Actions);
         Assert.Equal(predictions[0].Id, action.PredictionId);
         Assert.False(response.ShowBookAll);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_DoesNotPadResearchedShortlist_WhenModelReturnsFewerKeys()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(context, 6);
+        var chosenKey = $"P{predictions[1].Id}";
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "message": "Only one researched pick survives the news check.",
+                  "recommendedActionKeys": ["{{chosenKey}}"],
+                  "showBookAll": false
+                }
+                """));
+        var service = CreateService(context, handler);
+
+        var response = await service.GetAdviceAsync("Give me 5 strong picks", "session-no-pad");
+
+        var action = Assert.Single(response.Actions);
+        Assert.Equal(chosenKey, action.ActionKey);
+        Assert.Contains(response.Warnings, warning => warning.Contains("Research supported 1 of 5", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(response.Actions, item => item.ActionKey == $"P{predictions[0].Id}");
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_OpenAiRecommend_UsesWebSearchAndKeepsAllowlistedKeys()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(context, 3);
+        var chosenKey = $"P{predictions[0].Id}";
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildResponsesApiResponse($$"""
+                {
+                  "message": "Here is the researched pick after checking news.",
+                  "recommendations": [
+                    { "actionKey": "{{chosenKey}}", "explanation": "No late injury news and 78% calibrated confidence." },
+                    { "actionKey": "P999999", "explanation": "Invented." }
+                  ],
+                  "showBookAll": false
+                }
+                """));
+        var service = CreateService(
+            context,
+            handler,
+            llmConfig: new Dictionary<string, string?>
+            {
+                ["AiLlm:Provider"] = "openai",
+                ["AiLlm:ApiKey"] = "sk-test",
+                ["AiLlm:Model"] = "gpt-5.6-luna",
+                ["AiLlm:BaseUrl"] = "https://api.openai.com/v1/"
+            });
+
+        var response = await service.GetAdviceAsync("Give me 2 strong picks", "session-chat-web-search");
+
+        var action = Assert.Single(response.Actions);
+        Assert.Equal(chosenKey, action.ActionKey);
+        Assert.Contains("/responses", handler.RequestUris[0], StringComparison.Ordinal);
+        Assert.Contains("web_search", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("chat/completions", handler.RequestUris[0], StringComparison.Ordinal);
+        Assert.Contains("Search at most 4 times", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.Contains("relevantPredictions", handler.RequestBodies[0], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -313,9 +379,13 @@ public class AiAdvisorServiceTests
             "session-total-mix");
 
         Assert.Equal("mixed_market_recommendation", response.ContextMode);
-        Assert.Equal(20, response.Actions.Count);
+        Assert.InRange(response.Actions.Count, 1, 20);
         Assert.DoesNotContain("couldn't find a matching team, league, or fixture", response.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, handler.CallCount);
+        if (response.Actions.Count < 20)
+        {
+            Assert.Contains(response.Warnings, warning => warning.Contains("Research supported", StringComparison.OrdinalIgnoreCase));
+        }
     }
 
     [Theory]
@@ -973,7 +1043,8 @@ public class AiAdvisorServiceTests
         var response = await service.GetAdviceAsync("Give me 5 strong picks", "football-lookup-session");
 
         Assert.Equal(1, handler.CallCount);
-        Assert.Equal(5, response.Actions.Count);
+        Assert.Equal(2, response.Actions.Count);
+        Assert.Contains(response.Warnings, warning => warning.Contains("Research supported 2 of 5", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(response.Actions, action => action.ActionKey == firstActionKey && !string.IsNullOrWhiteSpace(action.AnalysisSummary));
         Assert.Contains(response.Actions, action => action.ActionKey == secondActionKey && action.InsightBullets.Count > 0);
     }
@@ -1078,7 +1149,9 @@ public class AiAdvisorServiceTests
                     PredictionCategory = "BothTeamsScore",
                     Confidence = 0.82m,
                     DecimalOdds = 1.55,
-                    MatchDateTimeUtc = DateTime.UtcNow.AddHours(4)
+                    MatchDateTimeUtc = DateTime.UtcNow.AddHours(4),
+                    ResearchScore = 91,
+                    ScreenReason = "Form supports"
                 },
                 new BankerPickRequest
                 {
@@ -1099,6 +1172,8 @@ public class AiAdvisorServiceTests
 
         Assert.Equal(11, Assert.Single(result.Picks).PredictionId);
         Assert.Contains("footballInsight", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.Contains("ResearchScore", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.Contains("ScreenReason", handler.RequestBodies[0], StringComparison.Ordinal);
         Assert.Contains("dataQuality", handler.RequestBodies[0], StringComparison.Ordinal);
         Assert.Contains("form", handler.RequestBodies[0], StringComparison.OrdinalIgnoreCase);
     }
@@ -1439,7 +1514,7 @@ public class AiAdvisorServiceTests
         await using var context = CreateContext();
         var handler = new SequenceHttpMessageHandler(
             BuildGroqResponse("""
-                {"passed":[{"predictionId":2,"score":91,"reason":"Form supports"},{"predictionId":999,"score":80,"reason":"invented"}]}
+                {"scores":[{"predictionId":2,"score":91,"reason":"Form supports"},{"predictionId":999,"score":80,"reason":"invented"}]}
                 """));
         var service = CreateService(
             context,
@@ -1477,10 +1552,14 @@ public class AiAdvisorServiceTests
                 }
             ]);
 
-        Assert.Equal(2, Assert.Single(result.Passed).PredictionId);
+        Assert.Equal(2, result.Scores.Count);
+        Assert.Contains(result.Scores, pick => pick.PredictionId == 2 && pick.Score == 91);
+        Assert.Contains(result.Scores, pick => pick.PredictionId == 1);
+        Assert.DoesNotContain(result.Scores, pick => pick.PredictionId == 999);
         Assert.Contains("footballInsight", handler.RequestBodies[0], StringComparison.Ordinal);
         Assert.DoesNotContain("web_search", handler.RequestBodies[0], StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("/responses", handler.RequestUris[0], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Score EVERY supplied candidate", handler.RequestBodies[0], StringComparison.Ordinal);
     }
 
     [Fact]

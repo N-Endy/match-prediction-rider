@@ -331,7 +331,9 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                     MatchDateTimeUtc = x.Candidate.MatchDateTimeUtc,
                     SignalSummary = signal?.Summary,
                     AllSignalsAlign = signal?.AllSignalsAlign,
-                    ModelDivergesFromBookmaker = signal?.ModelDivergesFromBookmaker
+                    ModelDivergesFromBookmaker = signal?.ModelDivergesFromBookmaker,
+                    ResearchScore = x.Candidate.ResearchScore,
+                    ScreenReason = x.Candidate.AiNote
                 };
             }).ToList();
 
@@ -477,7 +479,9 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 MatchDateTimeUtc = x.Candidate.MatchDateTimeUtc,
                 SignalSummary = signal?.Summary,
                 AllSignalsAlign = signal?.AllSignalsAlign,
-                ModelDivergesFromBookmaker = signal?.ModelDivergesFromBookmaker
+                ModelDivergesFromBookmaker = signal?.ModelDivergesFromBookmaker,
+                ResearchScore = x.Candidate.ResearchScore,
+                ScreenReason = x.Candidate.AiNote
             };
         }).ToList();
 
@@ -574,7 +578,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         {
             if (!byId.TryGetValue(pick.PredictionId, out var candidate))
             {
-                return null;
+                continue;
             }
 
             var fixtureKey = string.IsNullOrWhiteSpace(candidate.FixtureKey)
@@ -583,7 +587,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
             if (!usedFixtures.Add(fixtureKey))
             {
-                return null;
+                continue;
             }
 
             selected.Add(new BetslipComposerCandidate
@@ -599,8 +603,14 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 Confidence = candidate.Confidence,
                 MatchDateTimeUtc = candidate.MatchDateTimeUtc,
                 DecimalOdds = candidate.DecimalOdds,
-                AiNote = string.IsNullOrWhiteSpace(pick.Reason) ? null : pick.Reason.Trim()
+                AiNote = string.IsNullOrWhiteSpace(pick.Reason) ? null : pick.Reason.Trim(),
+                ResearchScore = candidate.ResearchScore
             });
+        }
+
+        if (selected.Count == 0)
+        {
+            return null;
         }
 
         var combined = BankerSlipComposer.CalculateCombinedOdds(selected);
@@ -728,7 +738,9 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             AwayTeam = p.Candidate.AwayTeam,
             Confidence = p.Candidate.Confidence,
             MatchDateTimeUtc = p.Candidate.MatchDateTimeUtc,
-            PredictionCategory = p.Candidate.PredictionCategory
+            PredictionCategory = p.Candidate.PredictionCategory,
+            ResearchScore = p.Candidate.ResearchScore,
+            ScreenReason = p.Candidate.AiNote
         }).ToList();
 
         IReadOnlyList<BetslipDrawPickSelection> selected;
@@ -1121,7 +1133,9 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             PredictionCategory = candidate.PredictionCategory,
             Confidence = candidate.Confidence,
             DecimalOdds = candidate.DecimalOdds ?? 0d,
-            MatchDateTimeUtc = candidate.MatchDateTimeUtc
+            MatchDateTimeUtc = candidate.MatchDateTimeUtc,
+            ResearchScore = candidate.ResearchScore,
+            ScreenReason = candidate.AiNote
         };
 
     private static BetslipComposerCandidate WithResearchScore(
@@ -1283,7 +1297,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         }
 
         var batchSize = Math.Clamp(_settings.ScreenBatchSize, 5, 50);
-        var passedById = new Dictionary<int, BetslipScreenPick>();
+        var scoredById = new Dictionary<int, BetslipScreenPick>();
         var fallbackIds = new HashSet<int>();
         var batchCount = 0;
 
@@ -1294,9 +1308,9 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             try
             {
                 var result = await _aiAdvisorService.ScreenBetslipCandidatesAsync(requests);
-                foreach (var pick in result.Passed)
+                foreach (var pick in result.Scores)
                 {
-                    passedById[pick.PredictionId] = pick;
+                    scoredById[pick.PredictionId] = pick;
                 }
             }
             catch (Exception ex)
@@ -1314,10 +1328,11 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         }
 
         var ranked = new List<LiveQuotedCandidate>(universe.Count);
-        var rejectedSample = new List<string>();
+        var weakSample = new List<string>();
+        const double weakScoreThreshold = 40d;
         foreach (var candidate in universe)
         {
-            if (passedById.TryGetValue(candidate.Prediction.Id, out var pick))
+            if (scoredById.TryGetValue(candidate.Prediction.Id, out var pick))
             {
                 ranked.Add(candidate with
                 {
@@ -1325,6 +1340,13 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                         WithAiNote(candidate.Candidate, pick.Reason),
                         pick.Score)
                 });
+
+                if (pick.Score < weakScoreThreshold && weakSample.Count < 8)
+                {
+                    weakSample.Add(
+                        $"{candidate.Candidate.HomeTeam} vs {candidate.Candidate.AwayTeam} ({candidate.Candidate.Market}, {pick.Score:0})");
+                }
+
                 continue;
             }
 
@@ -1332,30 +1354,28 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             {
                 Candidate = WithResearchScore(candidate.Candidate, (double)candidate.Candidate.Confidence * 100d)
             });
-
-            if (!fallbackIds.Contains(candidate.Prediction.Id) && rejectedSample.Count < 8)
-            {
-                rejectedSample.Add(
-                    $"{candidate.Candidate.HomeTeam} vs {candidate.Candidate.AwayTeam} ({candidate.Candidate.Market})");
-            }
         }
 
-        var rejectedCount = universe.Count - passedById.Count - fallbackIds.Count;
+        ranked = ranked
+            .OrderByDescending(p => p.Candidate.ResearchScore ?? (double)p.Candidate.Confidence)
+            .ThenBy(p => p.Prediction.Id)
+            .ToList();
+
         _logger.LogInformation(
-            "Betslip screening: {BatchCount} batch(es) of {BatchSize}; liveQuoted={LiveQuoted}, passed={Passed}, fallback={Fallback}, rejected={Rejected}.",
+            "Betslip screening: {BatchCount} batch(es) of {BatchSize}; liveQuoted={LiveQuoted}, scored={Scored}, fallback={Fallback}, weak={Weak}.",
             batchCount,
             batchSize,
             universe.Count,
-            passedById.Count,
+            scoredById.Count,
             fallbackIds.Count,
-            rejectedCount);
+            weakSample.Count);
 
-        if (rejectedSample.Count > 0)
+        if (weakSample.Count > 0)
         {
-            _logger.LogInformation("Betslip screening reject sample: {RejectedSample}.", string.Join("; ", rejectedSample));
+            _logger.LogInformation("Betslip screening weak sample: {WeakSample}.", string.Join("; ", weakSample));
         }
 
-        return (ranked, passedById.Count);
+        return (ranked, scoredById.Count);
     }
 
     private static List<LiveQuotedCandidate> CollapseOnePerFixture(IReadOnlyList<LiveQuotedCandidate> passers) =>

@@ -9,6 +9,8 @@ public sealed class BetslipDrawPickRequest
     public decimal Confidence { get; init; }
     public DateTime? MatchDateTimeUtc { get; init; }
     public string PredictionCategory { get; init; } = "Draw";
+    public double? ResearchScore { get; init; }
+    public string? ScreenReason { get; init; }
 }
 
 public sealed class BetslipDrawPickSelection
@@ -32,6 +34,8 @@ public sealed class BankerPickRequest
     public bool? AllSignalsAlign { get; init; }
     public bool? ModelDivergesFromBookmaker { get; init; }
     public string PredictionCategory { get; init; } = string.Empty;
+    public double? ResearchScore { get; init; }
+    public string? ScreenReason { get; init; }
 }
 
 public sealed class BankerPickResult
@@ -52,6 +56,8 @@ public sealed class LadderRankRequest
     public decimal Confidence { get; init; }
     public double DecimalOdds { get; init; }
     public DateTime? MatchDateTimeUtc { get; init; }
+    public double? ResearchScore { get; init; }
+    public string? ScreenReason { get; init; }
 }
 
 public sealed class LadderRankResult
@@ -82,7 +88,7 @@ public sealed class BetslipScreenPick
 
 public sealed class BetslipScreenResult
 {
-    public IReadOnlyList<BetslipScreenPick> Passed { get; init; } = [];
+    public IReadOnlyList<BetslipScreenPick> Scores { get; init; } = [];
 }
 
 public sealed class LadderComposeBandRequest

@@ -234,7 +234,7 @@ public class BetslipGenerationServicePayoutBandTests
             CancellationToken ct = default) =>
             Task.FromResult(new BetslipScreenResult
             {
-                Passed = candidates.Select(c => new BetslipScreenPick
+                Scores = candidates.Select(c => new BetslipScreenPick
                 {
                     PredictionId = c.PredictionId,
                     Score = (double)c.Confidence * 100d

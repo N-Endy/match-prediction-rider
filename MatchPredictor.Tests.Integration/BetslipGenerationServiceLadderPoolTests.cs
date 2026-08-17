@@ -718,7 +718,7 @@ public class BetslipGenerationServiceLadderPoolTests
             CancellationToken ct = default) =>
             Task.FromResult(new BetslipScreenResult
             {
-                Passed = candidates.Select(c => new BetslipScreenPick
+                Scores = candidates.Select(c => new BetslipScreenPick
                 {
                     PredictionId = c.PredictionId,
                     Score = (double)c.Confidence * 100d
@@ -757,7 +757,7 @@ public class BetslipGenerationServiceLadderPoolTests
             CancellationToken ct = default) =>
             Task.FromResult(new BetslipScreenResult
             {
-                Passed = candidates
+                Scores = candidates
                     .Where(c => c.Confidence >= 0.75m)
                     .Select(c => new BetslipScreenPick
                     {
@@ -798,7 +798,7 @@ public class BetslipGenerationServiceLadderPoolTests
 
             return Task.FromResult(new BetslipScreenResult
             {
-                Passed = candidates.Select(c => new BetslipScreenPick
+                Scores = candidates.Select(c => new BetslipScreenPick
                 {
                     PredictionId = c.PredictionId,
                     Score = 80
@@ -853,7 +853,7 @@ public class BetslipGenerationServiceLadderPoolTests
             CancellationToken ct = default) =>
             Task.FromResult(new BetslipScreenResult
             {
-                Passed = candidates.Select(c => new BetslipScreenPick
+                Scores = candidates.Select(c => new BetslipScreenPick
                 {
                     PredictionId = c.PredictionId,
                     Score = c.PredictionCategory == "Over2.5Goals" ? 99 : 10
