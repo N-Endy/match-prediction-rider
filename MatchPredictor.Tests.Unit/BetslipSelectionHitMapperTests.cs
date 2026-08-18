@@ -57,6 +57,31 @@ public class BetslipSelectionHitMapperTests
         Assert.Equal(BetslipSelectionHitStatus.Live, status);
     }
 
+    [Fact]
+    public void MapSelection_FallsBackToFixtureMatch_WhenPredictionIdIsMissing()
+    {
+        var date = new DateOnly(2026, 8, 17);
+        var selection = new BetslipSelection
+        {
+            HomeTeam = "Hacken",
+            AwayTeam = "Halmstads",
+            PredictedOutcome = "Home Win"
+        };
+        var prediction = CreatePrediction("StraightWin", "Home Win", actualScore: "2-0", actualOutcome: "Home Win");
+        prediction.MatchLocalDate = date;
+        prediction.HomeTeam = "Hacken";
+        prediction.AwayTeam = "Halmstads";
+
+        var status = BetslipSelectionHitMapper.MapSelection(
+            selection,
+            date,
+            new Dictionary<int, Prediction>(),
+            [prediction],
+            DateTime.UtcNow);
+
+        Assert.Equal(BetslipSelectionHitStatus.Won, status);
+    }
+
     private static Prediction CreatePrediction(
         string category,
         string predictedOutcome,

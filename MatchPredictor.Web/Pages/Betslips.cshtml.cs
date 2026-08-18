@@ -4,6 +4,7 @@ using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Utils;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.Options;
 
@@ -30,125 +31,38 @@ public class BetslipsModel : PageModel
     public BetslipRecordSection RecordSection { get; private set; } = BetslipRecordSection.Banker;
     public DateOnly RecordDate { get; private set; }
     public DateOnly CalendarMonth { get; private set; }
-    public IReadOnlyList<BetslipCalendarDay> CalendarDays { get; private set; } = [];
-    public IReadOnlyList<BetslipRecordRunViewModel> RecordRuns { get; private set; } = [];
+    public BetslipCalendarViewModel Calendar { get; private set; } = new();
+    public BetslipRecordResultsViewModel Results { get; private set; } = new();
     public bool HasRecordDateSelection { get; private set; }
 
     public string RecordSectionSlug => BetslipKinds.ToSlug(RecordSection);
 
     public async Task OnGetAsync(string? record, DateOnly? date, string? month, CancellationToken ct)
     {
-        ReferenceStakeNaira = _settings.ReferenceStakeNaira > 0 ? _settings.ReferenceStakeNaira : 100m;
-        ViewData["ReferenceStakeNaira"] = ReferenceStakeNaira;
-
-        CurrentSet = await _betslipQueries.GetCurrentSetAsync(ct);
-        if (CurrentSet is not null)
-        {
-            var local = DateTimeProvider.ConvertUtcToLocal(CurrentSet.GeneratedAtUtc);
-            GeneratedLocalLabel = $"{local:ddd d MMM yyyy, HH:mm} WAT";
-
-            RolloverSlip = CurrentSet.Slips
-                .FirstOrDefault(s => BetslipGenerationService.IsRolloverSlip(s));
-
-            BankerSlip = CurrentSet.Slips
-                .FirstOrDefault(s => BetslipGenerationService.IsBankerSlip(s));
-
-            OtherSlips = CurrentSet.Slips
-                .Where(s => s != RolloverSlip && s != BankerSlip)
-                .OrderBy(s => s.SlipNumber)
-                .ToList();
-        }
-
-        RecordSection = BetslipKinds.ParseSectionOrDefault(record);
-        var today = DateTimeProvider.GetLocalDate();
-        var latest = await _betslipQueries.GetLatestSlipDateAsync(RecordSection, ct);
-
-        var monthStart = ParseMonth(month);
-        if (date is not null)
-        {
-            RecordDate = date.Value;
-            HasRecordDateSelection = true;
-            CalendarMonth = monthStart ?? new DateOnly(RecordDate.Year, RecordDate.Month, 1);
-        }
-        else if (monthStart is not null)
-        {
-            CalendarMonth = monthStart.Value;
-            RecordDate = latest is { } latestDate &&
-                         latestDate.Year == CalendarMonth.Year &&
-                         latestDate.Month == CalendarMonth.Month
-                ? latestDate
-                : CalendarMonth;
-            HasRecordDateSelection = latest is not null &&
-                                     latest.Value.Year == CalendarMonth.Year &&
-                                     latest.Value.Month == CalendarMonth.Month;
-        }
-        else if (latest is not null)
-        {
-            RecordDate = latest.Value;
-            HasRecordDateSelection = true;
-            CalendarMonth = new DateOnly(RecordDate.Year, RecordDate.Month, 1);
-        }
-        else
-        {
-            RecordDate = today;
-            HasRecordDateSelection = false;
-            CalendarMonth = new DateOnly(today.Year, today.Month, 1);
-        }
-
-        var datesWithSlips = await _betslipQueries.GetSlipDatesAsync(
-            RecordSection,
-            CalendarMonth.Year,
-            CalendarMonth.Month,
-            ct);
-        var datesSet = datesWithSlips.ToHashSet();
-
-        if (date is null &&
-            HasRecordDateSelection &&
-            !datesSet.Contains(RecordDate) &&
-            RecordDate.Year == CalendarMonth.Year &&
-            RecordDate.Month == CalendarMonth.Month)
-        {
-            HasRecordDateSelection = false;
-        }
-
-        CalendarDays = BuildCalendar(CalendarMonth, datesSet, RecordDate, today, HasRecordDateSelection);
-
-        if (!HasRecordDateSelection)
-        {
-            return;
-        }
-
-        var records = await _betslipQueries.GetSlipsForDateAsync(RecordSection, RecordDate, ct);
-        var utcNow = DateTime.UtcNow;
-        RecordRuns = records.Runs
-            .Select(run => new BetslipRecordRunViewModel
-            {
-                RunLabel = run.RunLabel,
-                GeneratedAtUtc = run.GeneratedAtUtc,
-                DayKind = run.DayKind,
-                Slips = run.Slips
-                    .Select(slip => new BetslipRecordCardViewModel
-                    {
-                        Slip = slip,
-                        HitStatusBySelectionId = slip.Selections.ToDictionary(
-                            selection => selection.Id,
-                            selection =>
-                            {
-                                Prediction? prediction = null;
-                                if (selection.PredictionId is int predictionId)
-                                {
-                                    records.PredictionsById.TryGetValue(predictionId, out prediction);
-                                }
-
-                                return BetslipSelectionHitMapper.Map(prediction, utcNow);
-                            })
-                    })
-                    .ToList()
-            })
-            .ToList();
+        ApplyStake();
+        await LoadCurrentSetAsync(ct);
+        await LoadRecordsAsync(record, date, month, loadResults: date is not null, ct);
     }
 
-    public string RecordUrl(BetslipRecordSection section, DateOnly? date = null, DateOnly? month = null)
+    public async Task<IActionResult> OnGetRecordDayAsync(string? record, DateOnly date, CancellationToken ct)
+    {
+        ApplyStake();
+        await LoadRecordsAsync(record, date, month: null, loadResults: true, ct);
+        return Partial("_BetslipRecordResults", Results);
+    }
+
+    public async Task<IActionResult> OnGetRecordCalendarAsync(
+        string? record,
+        string? month,
+        DateOnly? date,
+        CancellationToken ct)
+    {
+        ApplyStake();
+        await LoadRecordsAsync(record, date, month, loadResults: false, ct);
+        return Partial("_BetslipCalendar", Calendar);
+    }
+
+    public static string RecordUrl(BetslipRecordSection section, DateOnly? date = null, DateOnly? month = null)
     {
         var slug = BetslipKinds.ToSlug(section);
         if (date is not null)
@@ -172,6 +86,115 @@ public class BetslipsModel : PageModel
             _ => string.IsNullOrWhiteSpace(runLabel) ? "Run" : runLabel
         };
 
+    private void ApplyStake()
+    {
+        ReferenceStakeNaira = _settings.ReferenceStakeNaira > 0 ? _settings.ReferenceStakeNaira : 100m;
+        ViewData["ReferenceStakeNaira"] = ReferenceStakeNaira;
+    }
+
+    private async Task LoadCurrentSetAsync(CancellationToken ct)
+    {
+        CurrentSet = await _betslipQueries.GetCurrentSetAsync(ct);
+        if (CurrentSet is null)
+        {
+            return;
+        }
+
+        var local = DateTimeProvider.ConvertUtcToLocal(CurrentSet.GeneratedAtUtc);
+        GeneratedLocalLabel = $"{local:ddd d MMM yyyy, HH:mm} WAT";
+
+        RolloverSlip = CurrentSet.Slips
+            .FirstOrDefault(s => BetslipGenerationService.IsRolloverSlip(s));
+
+        BankerSlip = CurrentSet.Slips
+            .FirstOrDefault(s => BetslipGenerationService.IsBankerSlip(s));
+
+        OtherSlips = CurrentSet.Slips
+            .Where(s => s != RolloverSlip && s != BankerSlip)
+            .OrderBy(s => s.SlipNumber)
+            .ToList();
+    }
+
+    private async Task LoadRecordsAsync(
+        string? record,
+        DateOnly? date,
+        string? month,
+        bool loadResults,
+        CancellationToken ct)
+    {
+        RecordSection = BetslipKinds.ParseSectionOrDefault(record);
+        var today = DateTimeProvider.GetLocalDate();
+        var monthStart = ParseMonth(month);
+
+        HasRecordDateSelection = date is not null;
+        RecordDate = date ?? today;
+        CalendarMonth = monthStart
+                        ?? (date is not null
+                            ? new DateOnly(date.Value.Year, date.Value.Month, 1)
+                            : new DateOnly(today.Year, today.Month, 1));
+
+        var datesWithSlips = await _betslipQueries.GetSlipDatesAsync(
+            RecordSection,
+            CalendarMonth.Year,
+            CalendarMonth.Month,
+            ct);
+        var datesSet = datesWithSlips.ToHashSet();
+        var selectedInMonth = HasRecordDateSelection &&
+                              RecordDate.Year == CalendarMonth.Year &&
+                              RecordDate.Month == CalendarMonth.Month;
+
+        Calendar = BuildCalendar(RecordSection, CalendarMonth, datesSet, RecordDate, today, selectedInMonth);
+
+        if (!loadResults || !HasRecordDateSelection)
+        {
+            Results = new BetslipRecordResultsViewModel
+            {
+                Section = RecordSection,
+                Date = RecordDate,
+                HasDateSelection = false,
+                ReferenceStakeNaira = ReferenceStakeNaira
+            };
+            return;
+        }
+
+        var records = await _betslipQueries.GetSlipsForDateAsync(RecordSection, RecordDate, ct);
+        var utcNow = DateTime.UtcNow;
+        Results = new BetslipRecordResultsViewModel
+        {
+            Section = RecordSection,
+            Date = RecordDate,
+            HasDateSelection = true,
+            ReferenceStakeNaira = ReferenceStakeNaira,
+            Runs = MapRuns(records, utcNow)
+        };
+    }
+
+    private static IReadOnlyList<BetslipRecordRunViewModel> MapRuns(BetslipRecordsForDate records, DateTime utcNow)
+    {
+        return records.Runs
+            .Select(run => new BetslipRecordRunViewModel
+            {
+                RunLabel = run.RunLabel,
+                GeneratedAtUtc = run.GeneratedAtUtc,
+                DayKind = run.DayKind,
+                Slips = run.Slips
+                    .Select(slip => new BetslipRecordCardViewModel
+                    {
+                        Slip = slip,
+                        HitStatusBySelectionId = slip.Selections.ToDictionary(
+                            selection => selection.Id,
+                            selection => BetslipSelectionHitMapper.MapSelection(
+                                selection,
+                                records.Date,
+                                records.PredictionsById,
+                                records.FallbackPredictions,
+                                utcNow))
+                    })
+                    .ToList()
+            })
+            .ToList();
+    }
+
     private static DateOnly? ParseMonth(string? month)
     {
         if (string.IsNullOrWhiteSpace(month))
@@ -187,7 +210,8 @@ public class BetslipsModel : PageModel
         return null;
     }
 
-    private static IReadOnlyList<BetslipCalendarDay> BuildCalendar(
+    private static BetslipCalendarViewModel BuildCalendar(
+        BetslipRecordSection section,
         DateOnly monthStart,
         IReadOnlySet<DateOnly> datesWithSlips,
         DateOnly selectedDate,
@@ -200,18 +224,42 @@ public class BetslipsModel : PageModel
         for (var i = 0; i < 42; i++)
         {
             var day = gridStart.AddDays(i);
+            var hasSlips = datesWithSlips.Contains(day);
             days.Add(new BetslipCalendarDay
             {
                 Date = day,
                 IsInMonth = day.Month == monthStart.Month && day.Year == monthStart.Year,
-                HasSlips = datesWithSlips.Contains(day),
+                HasSlips = hasSlips,
                 IsSelected = hasSelection && day == selectedDate,
-                IsToday = day == today
+                IsToday = day == today,
+                Href = hasSlips ? RecordUrl(section, day) : null
             });
         }
 
-        return days;
+        var prevMonth = monthStart.AddMonths(-1);
+        var nextMonth = monthStart.AddMonths(1);
+        return new BetslipCalendarViewModel
+        {
+            Section = section,
+            CalendarMonth = monthStart,
+            Days = days,
+            PrevMonthHref = RecordUrl(section, month: prevMonth),
+            NextMonthHref = RecordUrl(section, month: nextMonth),
+            PrevMonthValue = prevMonth.ToString("yyyy-MM"),
+            NextMonthValue = nextMonth.ToString("yyyy-MM")
+        };
     }
+}
+
+public sealed class BetslipCalendarViewModel
+{
+    public BetslipRecordSection Section { get; init; }
+    public DateOnly CalendarMonth { get; init; }
+    public IReadOnlyList<BetslipCalendarDay> Days { get; init; } = [];
+    public string PrevMonthHref { get; init; } = string.Empty;
+    public string NextMonthHref { get; init; } = string.Empty;
+    public string PrevMonthValue { get; init; } = string.Empty;
+    public string NextMonthValue { get; init; } = string.Empty;
 }
 
 public sealed class BetslipCalendarDay
@@ -221,6 +269,16 @@ public sealed class BetslipCalendarDay
     public bool HasSlips { get; init; }
     public bool IsSelected { get; init; }
     public bool IsToday { get; init; }
+    public string? Href { get; init; }
+}
+
+public sealed class BetslipRecordResultsViewModel
+{
+    public BetslipRecordSection Section { get; init; }
+    public DateOnly Date { get; init; }
+    public bool HasDateSelection { get; init; }
+    public decimal ReferenceStakeNaira { get; init; } = 100m;
+    public IReadOnlyList<BetslipRecordRunViewModel> Runs { get; init; } = [];
 }
 
 public sealed class BetslipRecordRunViewModel

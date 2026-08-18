@@ -1,0 +1,34 @@
+@model MatchPredictor.Web.Pages.BetslipRecordResultsViewModel
+@using MatchPredictor.Domain.Helpers
+@using MatchPredictor.Web.Pages
+
+@if (!Model.HasDateSelection)
+{
+    <p class="mp-betslip-records-empty">Pick a highlighted date to see booked slips.</p>
+}
+else if (Model.Runs.Count == 0)
+{
+    <p class="mp-betslip-records-empty">No @BetslipKinds.ToDisplayName(Model.Section) slips were stored for @Model.Date.ToString("dddd d MMMM yyyy").</p>
+}
+else
+{
+    <p class="mp-betslip-records-date">@Model.Date.ToString("dddd d MMMM yyyy")</p>
+    @foreach (var run in Model.Runs)
+    {
+        <div class="mp-betslip-record-run">
+            <h3 class="mp-betslip-record-run-title">
+                @BetslipsModel.FormatRunLabel(run.RunLabel) run
+                @if (!string.IsNullOrWhiteSpace(run.DayKind))
+                {
+                    <span>· @run.DayKind</span>
+                }
+            </h3>
+            <div class="@(run.Slips.Count == 1 ? "mp-betslip-banker-wrap" : "mp-betslip-grid")">
+                @foreach (var card in run.Slips)
+                {
+                    <partial name="_BetslipRecordCard" model="card" />
+                }
+            </div>
+        </div>
+    }
+}

@@ -230,6 +230,74 @@ public class BetslipQueriesTests
         Assert.Equal(new DateOnly(2026, 8, 1), latest);
     }
 
+    [Fact]
+    public async Task GetSlipsForDateAsync_IncludesFallbackPredictions_WhenSelectionHasNoPredictionId()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var date = new DateOnly(2026, 8, 17);
+
+        context.Predictions.Add(new Prediction
+        {
+            Id = 77,
+            Date = "17-08-2026",
+            Time = "15:00",
+            MatchLocalDate = date,
+            League = "Sweden - Allsvenskan",
+            HomeTeam = "Hacken",
+            AwayTeam = "Halmstads",
+            PredictionCategory = "StraightWin",
+            PredictedOutcome = "Home Win",
+            ActualScore = "2-0",
+            ActualOutcome = "Home Win",
+            WasPublished = true,
+            IsCurrentRevision = true,
+            PredictionRunId = Guid.NewGuid()
+        });
+
+        context.BetslipSets.Add(CreateSet(
+            date,
+            BetslipRunLabels.Morning,
+            isCurrent: true,
+            generatedAtUtc: new DateTime(2026, 8, 17, 1, 0, 0, DateTimeKind.Utc),
+            slips:
+            [
+                new Betslip
+                {
+                    SlipNumber = BetslipKinds.RolloverSlipNumber,
+                    Title = "Rollover",
+                    TierLabel = "Rollover (1.20-1.50x)",
+                    BookingStatus = BetslipBookingStatuses.Booked,
+                    SelectionCount = 1,
+                    Selections =
+                    [
+                        new BetslipSelection
+                        {
+                            HomeTeam = "Hacken",
+                            AwayTeam = "Halmstads",
+                            Market = "StraightWin",
+                            PredictedOutcome = "Home Win",
+                            WasBooked = true
+                        }
+                    ]
+                }
+            ]));
+
+        await context.SaveChangesAsync();
+
+        var queries = new BetslipQueries(context);
+        var records = await queries.GetSlipsForDateAsync(BetslipRecordSection.Rollover, date);
+
+        var selection = Assert.Single(Assert.Single(Assert.Single(records.Runs).Slips).Selections);
+        Assert.Null(selection.PredictionId);
+        var fallback = Assert.Single(records.FallbackPredictions);
+        Assert.Equal("Hacken", fallback.HomeTeam);
+        Assert.Equal("2-0", fallback.ActualScore);
+    }
+
     private static BetslipSet CreateSet(
         DateOnly date,
         string runLabel,

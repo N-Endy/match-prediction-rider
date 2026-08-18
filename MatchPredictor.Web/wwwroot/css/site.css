@@ -2373,30 +2373,31 @@ a:hover {
   border-color: rgba(139, 92, 246, 0.5);
 }
 
-.mp-betslip-calendar-wrap {
-  margin-bottom: 1.5rem;
-}
-
-.mp-betslip-calendar-summary {
-  list-style: none;
-  cursor: pointer;
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-}
-
-.mp-betslip-calendar-summary::-webkit-details-marker {
-  display: none;
+.mp-betslip-records-body {
+  display: grid;
+  grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
 }
 
 .mp-betslip-calendar {
-  margin-top: 0.85rem;
-  max-width: 22rem;
+  margin-top: 0;
+  max-width: none;
+  width: 100%;
   padding: 0.85rem;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   background: var(--bg-card, rgba(255, 255, 255, 0.03));
+}
+
+@media (max-width: 800px) {
+  .mp-betslip-records-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+#betslip-record-results .mp-betslip-banker-wrap {
+  margin: 0 0 1.25rem;
 }
 
 .mp-betslip-calendar-nav {
@@ -2492,13 +2493,13 @@ a:hover {
 
 .mp-betslip-hit {
   flex-shrink: 0;
-  min-width: 1.6rem;
-  height: 1.6rem;
+  min-width: 1.85rem;
+  height: 1.85rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-full);
-  font-size: 0.75rem;
+  font-size: 0.9rem;
   font-weight: 800;
 }
 

@@ -1,0 +1,40 @@
+@model MatchPredictor.Web.Pages.BetslipCalendarViewModel
+
+<div class="mp-betslip-calendar" data-calendar-month="@Model.CalendarMonth.ToString("yyyy-MM")">
+    <div class="mp-betslip-calendar-nav">
+        <a class="mp-betslip-calendar-nav-btn"
+           href="@Model.PrevMonthHref"
+           data-record-month="@Model.PrevMonthValue"
+           aria-label="Previous month">‹</a>
+        <span class="mp-betslip-calendar-month">@Model.CalendarMonth.ToString("MMMM yyyy")</span>
+        <a class="mp-betslip-calendar-nav-btn"
+           href="@Model.NextMonthHref"
+           data-record-month="@Model.NextMonthValue"
+           aria-label="Next month">›</a>
+    </div>
+    <div class="mp-betslip-calendar-weekdays" aria-hidden="true">
+        <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+    </div>
+    <div class="mp-betslip-calendar-grid">
+        @foreach (var day in Model.Days)
+        {
+            var cellClass = "mp-betslip-calendar-day"
+                + (day.IsInMonth ? "" : " is-outside")
+                + (day.IsToday ? " is-today" : "")
+                + (day.IsSelected ? " is-selected" : "")
+                + (day.HasSlips ? " has-slips" : "");
+            if (day.HasSlips && !string.IsNullOrWhiteSpace(day.Href))
+            {
+                <a class="@cellClass"
+                   href="@day.Href"
+                   data-record-date="@day.Date.ToString("yyyy-MM-dd")"
+                   aria-current="@(day.IsSelected ? "date" : null)"
+                   aria-label="@day.Date.ToString("dddd d MMMM yyyy")">@day.Date.Day</a>
+            }
+            else
+            {
+                <span class="@cellClass">@day.Date.Day</span>
+            }
+        }
+    </div>
+</div>

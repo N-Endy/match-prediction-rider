@@ -23,6 +23,7 @@ public sealed class BetslipRecordsForDate
     public IReadOnlyList<BetslipRecordRun> Runs { get; init; } = [];
     public IReadOnlyDictionary<int, Prediction> PredictionsById { get; init; } =
         new Dictionary<int, Prediction>();
+    public IReadOnlyList<Prediction> FallbackPredictions { get; init; } = [];
 }
 
 public sealed class BetslipRecordRun

@@ -1,11 +1,8 @@
 @page "/betslips"
 @model MatchPredictor.Web.Pages.BetslipsModel
-@using MatchPredictor.Domain.Helpers
 @using MatchPredictor.Domain.Models
 @{
     ViewData["Title"] = "Pre-booked Betslips";
-    var prevMonth = Model.CalendarMonth.AddMonths(-1);
-    var nextMonth = Model.CalendarMonth.AddMonths(1);
 }
 
 <div class="mp-container">
@@ -71,7 +68,11 @@
         }
     }
 
-    <section class="mp-betslip-records" aria-labelledby="betslip-records-heading">
+    <section class="mp-betslip-records"
+             aria-labelledby="betslip-records-heading"
+             data-betslip-records
+             data-record-section="@Model.RecordSectionSlug"
+             data-record-month="@Model.CalendarMonth.ToString("yyyy-MM")">
         <header class="mp-betslip-records-header">
             <h2 id="betslip-records-heading" class="mp-betslip-records-title">
                 <i class="fa-regular fa-calendar" aria-hidden="true"></i>
@@ -79,111 +80,146 @@
             </h2>
             <nav class="mp-betslip-record-tabs" aria-label="Betslip type">
                 <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.Rollover ? "active" : "")"
-                   href="@Model.RecordUrl(BetslipRecordSection.Rollover, Model.HasRecordDateSelection ? Model.RecordDate : null)">Rollover</a>
+                   data-record-section="rollover"
+                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Rollover)">Rollover</a>
                 <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.Banker ? "active" : "")"
-                   href="@Model.RecordUrl(BetslipRecordSection.Banker, Model.HasRecordDateSelection ? Model.RecordDate : null)">Banker</a>
+                   data-record-section="banker"
+                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Banker)">Banker</a>
                 <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.Ladder ? "active" : "")"
-                   href="@Model.RecordUrl(BetslipRecordSection.Ladder, Model.HasRecordDateSelection ? Model.RecordDate : null)">Ladder</a>
+                   data-record-section="ladder"
+                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Ladder)">Ladder</a>
                 <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.AiDraws ? "active" : "")"
-                   href="@Model.RecordUrl(BetslipRecordSection.AiDraws, Model.HasRecordDateSelection ? Model.RecordDate : null)">AI Draws</a>
+                   data-record-section="draws"
+                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.AiDraws)">AI Draws</a>
             </nav>
         </header>
 
-        <details class="mp-betslip-calendar-wrap" open>
-            <summary class="mp-betslip-calendar-summary">
-                <i class="fa-regular fa-calendar" aria-hidden="true"></i>
-                @Model.CalendarMonth.ToString("MMMM yyyy")
-            </summary>
-            <div class="mp-betslip-calendar">
-                <div class="mp-betslip-calendar-nav">
-                    <a class="mp-betslip-calendar-nav-btn"
-                       href="@Model.RecordUrl(Model.RecordSection, month: prevMonth)"
-                       aria-label="Previous month">‹</a>
-                    <span class="mp-betslip-calendar-month">@Model.CalendarMonth.ToString("MMMM yyyy")</span>
-                    <a class="mp-betslip-calendar-nav-btn"
-                       href="@Model.RecordUrl(Model.RecordSection, month: nextMonth)"
-                       aria-label="Next month">›</a>
-                </div>
-                <div class="mp-betslip-calendar-weekdays" aria-hidden="true">
-                    <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
-                </div>
-                <div class="mp-betslip-calendar-grid">
-                    @foreach (var day in Model.CalendarDays)
-                    {
-                        var cellClass = "mp-betslip-calendar-day"
-                            + (day.IsInMonth ? "" : " is-outside")
-                            + (day.IsToday ? " is-today" : "")
-                            + (day.IsSelected ? " is-selected" : "")
-                            + (day.HasSlips ? " has-slips" : "");
-                        if (day.HasSlips)
-                        {
-                            <a class="@cellClass"
-                               href="@Model.RecordUrl(Model.RecordSection, day.Date)"
-                               aria-current="@(day.IsSelected ? "date" : null)"
-                               aria-label="@day.Date.ToString("dddd d MMMM yyyy")">@day.Date.Day</a>
-                        }
-                        else
-                        {
-                            <span class="@cellClass">@day.Date.Day</span>
-                        }
-                    }
-                </div>
+        <div class="mp-betslip-records-body">
+            <div id="betslip-record-calendar">
+                <partial name="_BetslipCalendar" model="Model.Calendar" />
             </div>
-        </details>
-
-        @if (!Model.HasRecordDateSelection)
-        {
-            <p class="mp-betslip-records-empty">Pick a highlighted date to see booked slips for that day.</p>
-        }
-        else if (Model.RecordRuns.Count == 0)
-        {
-            <p class="mp-betslip-records-empty">No @BetslipKinds.ToDisplayName(Model.RecordSection) slips were stored for @Model.RecordDate.ToString("dddd d MMMM yyyy").</p>
-        }
-        else
-        {
-            <p class="mp-betslip-records-date">@Model.RecordDate.ToString("dddd d MMMM yyyy")</p>
-            @foreach (var run in Model.RecordRuns)
-            {
-                <div class="mp-betslip-record-run">
-                    <h3 class="mp-betslip-record-run-title">
-                        @BetslipsModel.FormatRunLabel(run.RunLabel) run
-                        @if (!string.IsNullOrWhiteSpace(run.DayKind))
-                        {
-                            <span>· @run.DayKind</span>
-                        }
-                    </h3>
-                    <div class="@(run.Slips.Count == 1 ? "mp-betslip-banker-wrap" : "mp-betslip-grid")">
-                        @foreach (var card in run.Slips)
-                        {
-                            ViewData["SelectionHitStatusById"] = card.HitStatusBySelectionId;
-                            ViewData["ForceOpenSelections"] = true;
-                            <partial name="_BetslipCard" model="card.Slip" />
-                        }
-                    </div>
-                </div>
-            }
-        }
+            <div id="betslip-record-results">
+                <partial name="_BetslipRecordResults" model="Model.Results" />
+            </div>
+        </div>
     </section>
 </div>
 
 @section Scripts {
     <script>
-        document.querySelectorAll('[data-copy-target]').forEach(button => {
-            button.addEventListener('click', async () => {
-                const targetId = button.getAttribute('data-copy-target');
-                const codeEl = targetId ? document.getElementById(targetId) : null;
-                const text = codeEl?.textContent?.trim() ?? '';
-                if (!text) return;
-                try {
-                    await navigator.clipboard.writeText(text);
-                    const original = button.textContent;
-                    button.textContent = 'Copied';
-                    setTimeout(() => { button.textContent = original; }, 1200);
-                } catch {
-                    button.textContent = 'Failed';
-                    setTimeout(() => { button.textContent = 'Copy'; }, 1200);
+        (function () {
+            const root = document.querySelector('[data-betslip-records]');
+            if (!root) return;
+
+            const calendarHost = document.getElementById('betslip-record-calendar');
+            const resultsHost = document.getElementById('betslip-record-results');
+            const emptyResults = '<p class="mp-betslip-records-empty">Pick a highlighted date to see booked slips.</p>';
+            let section = root.getAttribute('data-record-section') || 'banker';
+            let month = root.getAttribute('data-record-month') || '';
+
+            function bindCopyButtons(scope) {
+                (scope || document).querySelectorAll('[data-copy-target]').forEach(button => {
+                    if (button.dataset.copyBound === '1') return;
+                    button.dataset.copyBound = '1';
+                    button.addEventListener('click', async () => {
+                        const targetId = button.getAttribute('data-copy-target');
+                        const codeEl = targetId ? document.getElementById(targetId) : null;
+                        const text = codeEl?.textContent?.trim() ?? '';
+                        if (!text) return;
+                        try {
+                            await navigator.clipboard.writeText(text);
+                            const original = button.textContent;
+                            button.textContent = 'Copied';
+                            setTimeout(() => { button.textContent = original; }, 1200);
+                        } catch {
+                            button.textContent = 'Failed';
+                            setTimeout(() => { button.textContent = 'Copy'; }, 1200);
+                        }
+                    });
+                });
+            }
+
+            function updateUrl(nextSection, nextMonth, nextDate) {
+                const url = new URL(window.location.href);
+                url.searchParams.set('record', nextSection);
+                if (nextDate) {
+                    url.searchParams.set('date', nextDate);
+                    url.searchParams.delete('month');
+                } else {
+                    url.searchParams.delete('date');
+                    if (nextMonth) {
+                        url.searchParams.set('month', nextMonth);
+                    } else {
+                        url.searchParams.delete('month');
+                    }
                 }
+                history.replaceState({}, '', url);
+            }
+
+            function setSelectedDate(date) {
+                calendarHost.querySelectorAll('[data-record-date]').forEach(day => {
+                    day.classList.toggle('is-selected', day.getAttribute('data-record-date') === date);
+                });
+            }
+
+            async function fetchHtml(url) {
+                const response = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                if (!response.ok) throw new Error('Request failed');
+                return await response.text();
+            }
+
+            async function loadDay(date) {
+                resultsHost.innerHTML = await fetchHtml(
+                    `/betslips?handler=RecordDay&record=${encodeURIComponent(section)}&date=${encodeURIComponent(date)}`);
+                setSelectedDate(date);
+                bindCopyButtons(resultsHost);
+                updateUrl(section, month, date);
+            }
+
+            async function loadCalendar(nextSection, nextMonth) {
+                section = nextSection;
+                month = nextMonth;
+                root.setAttribute('data-record-section', section);
+                root.setAttribute('data-record-month', month);
+                calendarHost.innerHTML = await fetchHtml(
+                    `/betslips?handler=RecordCalendar&record=${encodeURIComponent(section)}&month=${encodeURIComponent(month)}`);
+                resultsHost.innerHTML = emptyResults;
+                bindCalendar();
+                updateUrl(section, month, null);
+            }
+
+            function bindCalendar() {
+                calendarHost.querySelectorAll('[data-record-date]').forEach(link => {
+                    link.addEventListener('click', async event => {
+                        event.preventDefault();
+                        const date = link.getAttribute('data-record-date');
+                        if (!date) return;
+                        try { await loadDay(date); } catch { window.location.href = link.href; }
+                    });
+                });
+                calendarHost.querySelectorAll('[data-record-month]').forEach(link => {
+                    link.addEventListener('click', async event => {
+                        event.preventDefault();
+                        const nextMonth = link.getAttribute('data-record-month');
+                        if (!nextMonth) return;
+                        try { await loadCalendar(section, nextMonth); } catch { window.location.href = link.href; }
+                    });
+                });
+            }
+
+            root.querySelectorAll('[data-record-section]').forEach(tab => {
+                tab.addEventListener('click', async event => {
+                    event.preventDefault();
+                    const nextSection = tab.getAttribute('data-record-section');
+                    if (!nextSection) return;
+                    root.querySelectorAll('.mp-tab-btn').forEach(btn => btn.classList.remove('active'));
+                    tab.classList.add('active');
+                    try { await loadCalendar(nextSection, month); } catch { window.location.href = tab.href; }
+                });
             });
-        });
+
+            bindCalendar();
+            bindCopyButtons(document);
+        })();
     </script>
 }

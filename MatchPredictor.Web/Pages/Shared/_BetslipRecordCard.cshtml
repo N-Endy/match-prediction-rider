@@ -1,25 +1,26 @@
-@model MatchPredictor.Domain.Models.Betslip
-@using MatchPredictor.Domain.Models
+@model MatchPredictor.Web.Pages.BetslipRecordCardViewModel
 @using MatchPredictor.Application.Services
+@using MatchPredictor.Domain.Models
 @{
-    var isRollover = Model.SlipNumber == BetslipGenerationService.RolloverSlipNumber
-                     || Model.TierLabel.StartsWith("Rollover", StringComparison.OrdinalIgnoreCase);
-    var isBanker = Model.SlipNumber == BetslipGenerationService.BankerSlipNumber
-                   || Model.TierLabel.StartsWith("Banker", StringComparison.OrdinalIgnoreCase);
-    var isDrawSlip = string.Equals(Model.TierLabel, "AI Draws (5)", StringComparison.Ordinal);
-    var isMega = Model.TierLabel.StartsWith("Mega", StringComparison.OrdinalIgnoreCase);
-    var isPayoutBand = !isBanker && !isRollover && !isDrawSlip && Model.CombinedDecimalOdds is > 1;
+    var slip = Model.Slip;
+    var isRollover = slip.SlipNumber == BetslipGenerationService.RolloverSlipNumber
+                     || slip.TierLabel.StartsWith("Rollover", StringComparison.OrdinalIgnoreCase);
+    var isBanker = slip.SlipNumber == BetslipGenerationService.BankerSlipNumber
+                   || slip.TierLabel.StartsWith("Banker", StringComparison.OrdinalIgnoreCase);
+    var isDrawSlip = string.Equals(slip.TierLabel, "AI Draws (5)", StringComparison.Ordinal);
+    var isMega = slip.TierLabel.StartsWith("Mega", StringComparison.OrdinalIgnoreCase);
+    var isPayoutBand = !isBanker && !isRollover && !isDrawSlip && slip.CombinedDecimalOdds is > 1;
     var referenceStake = ViewData["ReferenceStakeNaira"] as decimal? ?? 100m;
     var estimatedReturn = isPayoutBand
-        ? referenceStake * (decimal)Model.CombinedDecimalOdds!.Value
+        ? referenceStake * (decimal)slip.CombinedDecimalOdds!.Value
         : (decimal?)null;
-    var statusClass = Model.BookingStatus switch
+    var statusClass = slip.BookingStatus switch
     {
         BetslipBookingStatuses.Booked => "mp-betslip-status-booked",
         BetslipBookingStatuses.Partial => "mp-betslip-status-partial",
         _ => "mp-betslip-status-failed"
     };
-    var bookedCount = Model.Selections.Count(s => s.WasBooked);
+    var bookedCount = slip.Selections.Count(s => s.WasBooked);
     var cardClass = isRollover
         ? "mp-betslip-card mp-betslip-card-rollover"
         : isBanker
@@ -44,21 +45,39 @@
 
         return $"₦{amount:0.##}";
     }
+
+    static string HitClass(BetslipSelectionHitStatus status) =>
+        status switch
+        {
+            BetslipSelectionHitStatus.Won => "mp-score-correct",
+            BetslipSelectionHitStatus.Lost => "mp-score-incorrect",
+            BetslipSelectionHitStatus.Live => "mp-score-live",
+            _ => "mp-betslip-hit-pending"
+        };
+
+    static string HitTitle(BetslipSelectionHitStatus status) =>
+        status switch
+        {
+            BetslipSelectionHitStatus.Won => "Won",
+            BetslipSelectionHitStatus.Lost => "Lost",
+            BetslipSelectionHitStatus.Live => "Live",
+            _ => "Pending"
+        };
 }
 
 <article class="@cardClass">
     <header class="mp-betslip-card-header">
         <div>
-            <span class="mp-betslip-tier">@Model.TierLabel</span>
-            <h2 class="mp-betslip-title">@Model.Title</h2>
+            <span class="mp-betslip-tier">@slip.TierLabel</span>
+            <h2 class="mp-betslip-title">@slip.Title</h2>
         </div>
-        <span class="mp-betslip-status @statusClass">@Model.BookingStatus</span>
+        <span class="mp-betslip-status @statusClass">@slip.BookingStatus</span>
     </header>
 
-    @if ((isBanker || isRollover) && Model.CombinedDecimalOdds is > 1)
+    @if ((isBanker || isRollover) && slip.CombinedDecimalOdds is > 1)
     {
         <div class="@(isRollover ? "mp-betslip-rollover-odds" : "mp-betslip-banker-odds")">
-            <span class="@(isRollover ? "mp-betslip-rollover-odds-value" : "mp-betslip-banker-odds-value")">@Model.CombinedDecimalOdds.Value.ToString("0.00")x</span>
+            <span class="@(isRollover ? "mp-betslip-rollover-odds-value" : "mp-betslip-banker-odds-value")">@slip.CombinedDecimalOdds.Value.ToString("0.00")x</span>
             <span class="@(isRollover ? "mp-betslip-rollover-odds-label" : "mp-betslip-banker-odds-label")">@(isRollover ? "single-leg odds" : "total odds")</span>
         </div>
     }
@@ -68,7 +87,7 @@
         <div class="mp-betslip-payout-strip">
             <div>
                 <span class="mp-betslip-metric-label">Combined odds</span>
-                <strong>@Model.CombinedDecimalOdds!.Value.ToString("0.00")x</strong>
+                <strong>@slip.CombinedDecimalOdds!.Value.ToString("0.00")x</strong>
             </div>
             <div>
                 <span class="mp-betslip-metric-label">Est. return @FormatNaira(referenceStake)</span>
@@ -80,68 +99,32 @@
     <div class="mp-betslip-metrics">
         <div>
             <span class="mp-betslip-metric-label">Picks</span>
-            <strong>@Model.SelectionCount</strong>
-            @if (!isBanker && !isRollover && !isPayoutBand)
-            {
-                <span class="mp-betslip-metric-hint">target @Model.TargetMinSelections–@Model.TargetMaxSelections</span>
-            }
-            else if (isPayoutBand)
-            {
-                <span class="mp-betslip-metric-hint">max @Model.TargetMaxSelections</span>
-            }
+            <strong>@slip.SelectionCount</strong>
         </div>
         <div>
             <span class="mp-betslip-metric-label">Booked</span>
             <strong>@bookedCount</strong>
         </div>
-        @if (!isBanker && !isRollover && !isPayoutBand && Model.CombinedDecimalOdds is > 1)
-        {
-            <div>
-                <span class="mp-betslip-metric-label">Est. odds</span>
-                <strong>@Model.CombinedDecimalOdds.Value.ToString("0.00")</strong>
-            </div>
-        }
     </div>
 
-    @if (isRollover)
+    @if (!string.IsNullOrWhiteSpace(slip.AiSummary))
     {
-        <p class="mp-betslip-rollover-disclaimer">
-            Single stack-it-all pick. The whole bankroll from this bet rolls into the next one. Odds verified against live SportyBet at generation time.
-        </p>
+        <p class="mp-betslip-ai-summary">@slip.AiSummary</p>
     }
 
-    @if (isBanker)
-    {
-        <p class="mp-betslip-banker-disclaimer">
-            High-stakes banker. Odds verified against live SportyBet at generation time; lines may drift before kickoff.
-        </p>
-    }
-
-    @if (isMega)
-    {
-        <p class="mp-betslip-mega-disclaimer">
-            Long-shot / lottery-tier ticket. Built from analysed picks, but hit rate is low by design.
-        </p>
-    }
-
-    @if (!string.IsNullOrWhiteSpace(Model.AiSummary))
-    {
-        <p class="mp-betslip-ai-summary">@Model.AiSummary</p>
-    }
-
-    @if (!string.IsNullOrWhiteSpace(Model.BookingCode))
+    @if (!string.IsNullOrWhiteSpace(slip.BookingCode))
     {
         <div class="mp-betslip-code-row">
-            <code class="mp-betslip-code" id="betslip-code-@Model.Id">@Model.BookingCode</code>
+            <code class="mp-betslip-code" id="record-betslip-code-@slip.Id">@slip.BookingCode</code>
             <button type="button"
                     class="mp-betslip-copy-btn"
-                    data-copy-target="betslip-code-@Model.Id">
+                    data-copy-target="record-betslip-code-@slip.Id">
                 Copy
             </button>
-            @if (!string.IsNullOrWhiteSpace(Model.BookingUrl))
+            @if (!string.IsNullOrWhiteSpace(slip.BookingUrl))
             {
                 <a class="mp-book-btn"
-                   href="@Model.BookingUrl"
+                   href="@slip.BookingUrl"
                    target="_blank"
                    rel="noopener noreferrer">
                     Open in SportyBet
@@ -149,27 +132,41 @@
             }
         </div>
     }
-    else
-    {
-        <p class="mp-betslip-warning">Booking code unavailable; retrying next run.</p>
-    }
 
-    @if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
-    {
-        <p class="mp-betslip-status-message">@Model.StatusMessage</p>
-    }
-
-    <details class="mp-betslip-details"@(isBanker || isRollover ? " open" : "")>
-        <summary>View @Model.SelectionCount selections</summary>
+    <details class="mp-betslip-details" open>
+        <summary>View @slip.SelectionCount selections</summary>
         <ul class="mp-betslip-selection-list">
-            @foreach (var selection in Model.Selections
+            @foreach (var selection in slip.Selections
                 .OrderBy(s => s.MatchDateTimeUtc ?? DateTime.MaxValue)
                 .ThenBy(s => s.League)
                 .ThenBy(s => s.HomeTeam))
             {
+                var hitStatus = Model.HitStatusBySelectionId.TryGetValue(selection.Id, out var mapped)
+                    ? mapped
+                    : BetslipSelectionHitStatus.Pending;
                 <li class="@(selection.WasBooked ? "" : "mp-betslip-selection-skipped")">
                     <div class="mp-betslip-selection-main">
-                        <span class="mp-betslip-selection-fixture">@selection.HomeTeam vs @selection.AwayTeam</span>
+                        <span class="mp-betslip-selection-fixture-row">
+                            <span class="mp-betslip-hit @HitClass(hitStatus)" title="@HitTitle(hitStatus)">
+                                @if (hitStatus == BetslipSelectionHitStatus.Won)
+                                {
+                                    <i class="fa-solid fa-check" aria-hidden="true"></i>
+                                }
+                                else if (hitStatus == BetslipSelectionHitStatus.Lost)
+                                {
+                                    <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                                }
+                                else if (hitStatus == BetslipSelectionHitStatus.Live)
+                                {
+                                    <span>LIVE</span>
+                                }
+                                else
+                                {
+                                    <span>—</span>
+                                }
+                            </span>
+                            <span class="mp-betslip-selection-fixture">@selection.HomeTeam vs @selection.AwayTeam</span>
+                        </span>
                         <span class="mp-prediction-badge mp-badge-@(selection.Market.ToLowerInvariant() switch {
                             "btts" => "btts",
                             "over2.5" => "over",
@@ -187,10 +184,6 @@
                         @if (selection.DecimalOdds is > 1)
                         {
                             <span>@selection.DecimalOdds.Value.ToString("0.00")</span>
-                        }
-                        @if (!selection.WasBooked)
-                        {
-                            <span>not booked</span>
                         }
                     </div>
                     @if (!string.IsNullOrWhiteSpace(selection.AiNote))

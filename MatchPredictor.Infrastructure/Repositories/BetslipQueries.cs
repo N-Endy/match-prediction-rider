@@ -2,6 +2,7 @@ using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 
 namespace MatchPredictor.Infrastructure.Repositories;
@@ -107,12 +108,27 @@ public class BetslipQueries : IBetslipQueries
                 .ToDictionaryAsync(prediction => prediction.Id, ct);
         }
 
+        var selections = runs.SelectMany(run => run.Slips).SelectMany(slip => slip.Selections).ToList();
+        var matchDates = selections
+            .Select(selection => selection.MatchDateTimeUtc is DateTime kickoffUtc
+                ? DateTimeProvider.ConvertUtcToLocalDate(kickoffUtc)
+                : date)
+            .Append(date)
+            .Distinct()
+            .ToList();
+
+        var fallbackPredictions = await _context.Predictions
+            .AsNoTracking()
+            .Where(prediction => matchDates.Contains(prediction.MatchLocalDate) && prediction.IsCurrentRevision)
+            .ToListAsync(ct);
+
         return new BetslipRecordsForDate
         {
             Date = date,
             Section = section,
             Runs = runs,
-            PredictionsById = predictions
+            PredictionsById = predictions,
+            FallbackPredictions = fallbackPredictions
         };
     }
 
