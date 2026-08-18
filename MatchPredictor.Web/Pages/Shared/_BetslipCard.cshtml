@@ -2,6 +2,8 @@
 @using MatchPredictor.Domain.Models
 @using MatchPredictor.Application.Services
 @{
+    var hitStatusById = ViewData["SelectionHitStatusById"] as IReadOnlyDictionary<int, BetslipSelectionHitStatus>;
+    var forceOpenSelections = ViewData["ForceOpenSelections"] as bool? == true;
     var isRollover = Model.SlipNumber == BetslipGenerationService.RolloverSlipNumber
                      || Model.TierLabel.StartsWith("Rollover", StringComparison.OrdinalIgnoreCase);
     var isBanker = Model.SlipNumber == BetslipGenerationService.BankerSlipNumber
@@ -44,6 +46,24 @@
 
         return $"₦{amount:0.##}";
     }
+
+    static string HitClass(BetslipSelectionHitStatus status) =>
+        status switch
+        {
+            BetslipSelectionHitStatus.Won => "mp-score-correct",
+            BetslipSelectionHitStatus.Lost => "mp-score-incorrect",
+            BetslipSelectionHitStatus.Live => "mp-score-live",
+            _ => "mp-betslip-hit-pending"
+        };
+
+    static string HitTitle(BetslipSelectionHitStatus status) =>
+        status switch
+        {
+            BetslipSelectionHitStatus.Won => "Won",
+            BetslipSelectionHitStatus.Lost => "Lost",
+            BetslipSelectionHitStatus.Live => "Live",
+            _ => "Pending"
+        };
 }
 
 <article class="@cardClass">
@@ -159,7 +179,7 @@
         <p class="mp-betslip-status-message">@Model.StatusMessage</p>
     }
 
-    <details class="mp-betslip-details"@(isBanker || isRollover ? " open" : "")>
+    <details class="mp-betslip-details"@(isBanker || isRollover || forceOpenSelections ? " open" : "")>
         <summary>View @Model.SelectionCount selections</summary>
         <ul class="mp-betslip-selection-list">
             @foreach (var selection in Model.Selections
@@ -167,9 +187,35 @@
                 .ThenBy(s => s.League)
                 .ThenBy(s => s.HomeTeam))
             {
+                var hitStatus = BetslipSelectionHitStatus.Pending;
+                var hasHit = hitStatusById is not null
+                    && hitStatusById.TryGetValue(selection.Id, out hitStatus);
                 <li class="@(selection.WasBooked ? "" : "mp-betslip-selection-skipped")">
                     <div class="mp-betslip-selection-main">
-                        <span class="mp-betslip-selection-fixture">@selection.HomeTeam vs @selection.AwayTeam</span>
+                        <span class="mp-betslip-selection-fixture-row">
+                            @if (hasHit)
+                            {
+                                <span class="mp-betslip-hit @HitClass(hitStatus)" title="@HitTitle(hitStatus)">
+                                    @if (hitStatus == BetslipSelectionHitStatus.Won)
+                                    {
+                                        <i class="fa-solid fa-check" aria-hidden="true"></i>
+                                    }
+                                    else if (hitStatus == BetslipSelectionHitStatus.Lost)
+                                    {
+                                        <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                                    }
+                                    else if (hitStatus == BetslipSelectionHitStatus.Live)
+                                    {
+                                        <span>LIVE</span>
+                                    }
+                                    else
+                                    {
+                                        <span>—</span>
+                                    }
+                                </span>
+                            }
+                            <span class="mp-betslip-selection-fixture">@selection.HomeTeam vs @selection.AwayTeam</span>
+                        </span>
                         <span class="mp-prediction-badge mp-badge-@(selection.Market.ToLowerInvariant() switch {
                             "btts" => "btts",
                             "over2.5" => "over",

@@ -1,7 +1,11 @@
 @page "/betslips"
 @model MatchPredictor.Web.Pages.BetslipsModel
+@using MatchPredictor.Domain.Helpers
+@using MatchPredictor.Domain.Models
 @{
     ViewData["Title"] = "Pre-booked Betslips";
+    var prevMonth = Model.CalendarMonth.AddMonths(-1);
+    var nextMonth = Model.CalendarMonth.AddMonths(1);
 }
 
 <div class="mp-container">
@@ -66,6 +70,100 @@
             </div>
         }
     }
+
+    <section class="mp-betslip-records" aria-labelledby="betslip-records-heading">
+        <header class="mp-betslip-records-header">
+            <h2 id="betslip-records-heading" class="mp-betslip-records-title">
+                <i class="fa-regular fa-calendar" aria-hidden="true"></i>
+                Records
+            </h2>
+            <nav class="mp-betslip-record-tabs" aria-label="Betslip type">
+                <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.Rollover ? "active" : "")"
+                   href="@Model.RecordUrl(BetslipRecordSection.Rollover, Model.HasRecordDateSelection ? Model.RecordDate : null)">Rollover</a>
+                <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.Banker ? "active" : "")"
+                   href="@Model.RecordUrl(BetslipRecordSection.Banker, Model.HasRecordDateSelection ? Model.RecordDate : null)">Banker</a>
+                <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.Ladder ? "active" : "")"
+                   href="@Model.RecordUrl(BetslipRecordSection.Ladder, Model.HasRecordDateSelection ? Model.RecordDate : null)">Ladder</a>
+                <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.AiDraws ? "active" : "")"
+                   href="@Model.RecordUrl(BetslipRecordSection.AiDraws, Model.HasRecordDateSelection ? Model.RecordDate : null)">AI Draws</a>
+            </nav>
+        </header>
+
+        <details class="mp-betslip-calendar-wrap" open>
+            <summary class="mp-betslip-calendar-summary">
+                <i class="fa-regular fa-calendar" aria-hidden="true"></i>
+                @Model.CalendarMonth.ToString("MMMM yyyy")
+            </summary>
+            <div class="mp-betslip-calendar">
+                <div class="mp-betslip-calendar-nav">
+                    <a class="mp-betslip-calendar-nav-btn"
+                       href="@Model.RecordUrl(Model.RecordSection, month: prevMonth)"
+                       aria-label="Previous month">‹</a>
+                    <span class="mp-betslip-calendar-month">@Model.CalendarMonth.ToString("MMMM yyyy")</span>
+                    <a class="mp-betslip-calendar-nav-btn"
+                       href="@Model.RecordUrl(Model.RecordSection, month: nextMonth)"
+                       aria-label="Next month">›</a>
+                </div>
+                <div class="mp-betslip-calendar-weekdays" aria-hidden="true">
+                    <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+                </div>
+                <div class="mp-betslip-calendar-grid">
+                    @foreach (var day in Model.CalendarDays)
+                    {
+                        var cellClass = "mp-betslip-calendar-day"
+                            + (day.IsInMonth ? "" : " is-outside")
+                            + (day.IsToday ? " is-today" : "")
+                            + (day.IsSelected ? " is-selected" : "")
+                            + (day.HasSlips ? " has-slips" : "");
+                        if (day.HasSlips)
+                        {
+                            <a class="@cellClass"
+                               href="@Model.RecordUrl(Model.RecordSection, day.Date)"
+                               aria-current="@(day.IsSelected ? "date" : null)"
+                               aria-label="@day.Date.ToString("dddd d MMMM yyyy")">@day.Date.Day</a>
+                        }
+                        else
+                        {
+                            <span class="@cellClass">@day.Date.Day</span>
+                        }
+                    }
+                </div>
+            </div>
+        </details>
+
+        @if (!Model.HasRecordDateSelection)
+        {
+            <p class="mp-betslip-records-empty">Pick a highlighted date to see booked slips for that day.</p>
+        }
+        else if (Model.RecordRuns.Count == 0)
+        {
+            <p class="mp-betslip-records-empty">No @BetslipKinds.ToDisplayName(Model.RecordSection) slips were stored for @Model.RecordDate.ToString("dddd d MMMM yyyy").</p>
+        }
+        else
+        {
+            <p class="mp-betslip-records-date">@Model.RecordDate.ToString("dddd d MMMM yyyy")</p>
+            @foreach (var run in Model.RecordRuns)
+            {
+                <div class="mp-betslip-record-run">
+                    <h3 class="mp-betslip-record-run-title">
+                        @BetslipsModel.FormatRunLabel(run.RunLabel) run
+                        @if (!string.IsNullOrWhiteSpace(run.DayKind))
+                        {
+                            <span>· @run.DayKind</span>
+                        }
+                    </h3>
+                    <div class="@(run.Slips.Count == 1 ? "mp-betslip-banker-wrap" : "mp-betslip-grid")">
+                        @foreach (var card in run.Slips)
+                        {
+                            ViewData["SelectionHitStatusById"] = card.HitStatusBySelectionId;
+                            ViewData["ForceOpenSelections"] = true;
+                            <partial name="_BetslipCard" model="card.Slip" />
+                        }
+                    </div>
+                </div>
+            }
+        }
+    </section>
 </div>
 
 @section Scripts {

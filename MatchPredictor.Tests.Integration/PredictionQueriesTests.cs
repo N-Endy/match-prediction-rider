@@ -75,61 +75,6 @@ public class PredictionQueriesTests
     }
 
     [Fact]
-    public async Task GetCombinedSampleAsync_UsesCurrentRevisionsWithoutInMemoryTimeRepair()
-    {
-        await using var context = CreateContext();
-        var matchLocalDate = new DateOnly(2030, 1, 2);
-        var fixtureKey = "2030-01-02|league|alpha|beta";
-
-        context.Predictions.AddRange(
-            new Prediction
-            {
-                Date = "02-01-2030",
-                Time = "09:00",
-                MatchLocalDate = matchLocalDate,
-                MatchLocalTime = new TimeOnly(9, 0),
-                FixtureKey = fixtureKey,
-                League = "League",
-                HomeTeam = "Alpha",
-                AwayTeam = "Beta",
-                PredictionCategory = "StraightWin",
-                PredictedOutcome = "Home Win",
-                PredictionRunId = Guid.NewGuid(),
-                RunLabel = "00:35 WAT",
-                RunReason = "initial",
-                IsCurrentRevision = true,
-                RevisionNumber = 1
-            },
-            new Prediction
-            {
-                Date = "02-01-2030",
-                Time = "09:15",
-                MatchLocalDate = matchLocalDate,
-                MatchLocalTime = new TimeOnly(9, 15),
-                FixtureKey = fixtureKey,
-                League = "League",
-                HomeTeam = "Alpha",
-                AwayTeam = "Beta",
-                PredictionCategory = "Over2.5Goals",
-                PredictedOutcome = "Over 2.5",
-                PredictionRunId = Guid.NewGuid(),
-                RunLabel = "00:35 WAT",
-                RunReason = "initial",
-                IsCurrentRevision = true,
-                RevisionNumber = 1
-            });
-
-        await context.SaveChangesAsync();
-        var queries = new PredictionQueries(context);
-
-        var results = await queries.GetCombinedSampleAsync(matchLocalDate.ToDateTime(new TimeOnly(0, 0)), 10);
-
-        var result = Assert.Single(results);
-        Assert.Equal("09:00", result.Time);
-        Assert.Equal(new TimeOnly(9, 0), result.MatchLocalTime);
-    }
-
-    [Fact]
     public async Task GetBTTSAsync_ExcludesBookingsFixtures()
     {
         await using var context = CreateContext();

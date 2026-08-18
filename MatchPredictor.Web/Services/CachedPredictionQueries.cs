@@ -37,9 +37,6 @@ public class CachedPredictionQueries : IPredictionQueries
     public Task<IReadOnlyList<Prediction>> GetDrawAsync(DateTime date) =>
         GetOrCreateAsync($"predictions:draw:{date:yyyy-MM-dd}", () => _inner.GetDrawAsync(date));
 
-    public Task<IReadOnlyList<Prediction>> GetCombinedSampleAsync(DateTime date, int count) =>
-        GetOrCreateAsync($"predictions:combined:{date:yyyy-MM-dd}:{count}", () => _inner.GetCombinedSampleAsync(date, count));
-
     private async Task<IReadOnlyList<Prediction>> GetOrCreateAsync(
         string cacheKey,
         Func<Task<IReadOnlyList<Prediction>>> factory)

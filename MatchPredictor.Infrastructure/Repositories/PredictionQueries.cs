@@ -31,30 +31,6 @@ public class PredictionQueries : IPredictionQueries
     public Task<IReadOnlyList<Prediction>> GetDrawAsync(DateTime date) =>
         GetByCategoryAsync(date, "Draw");
 
-    public async Task<IReadOnlyList<Prediction>> GetCombinedSampleAsync(DateTime date, int count)
-    {
-        var localDate = DateOnly.FromDateTime(date);
-
-        var predictionsForDay = await _context.Predictions
-            .AsNoTracking()
-            .Where(p => p.MatchLocalDate == localDate && p.IsCurrentRevision)
-            .ToListAsync();
-
-        var random = new Random();
-
-        return predictionsForDay
-            .Where(p => !UnsupportedFixtureFilter.IsBookingsFixture(p.HomeTeam, p.AwayTeam))
-            .DistinctBy(p => !string.IsNullOrWhiteSpace(p.FixtureKey)
-                ? p.FixtureKey
-                : $"{Normalize(p.League)}|{Normalize(p.HomeTeam)}|{Normalize(p.AwayTeam)}|{p.MatchLocalDate}")
-            .OrderBy(_ => random.Next())
-            .Take(count)
-            .OrderBy(p => p.MatchLocalTime ?? DateTimeProvider.ParseLocalTimeOrNull(p.Time))
-            .ThenBy(p => p.League)
-            .ThenBy(p => p.HomeTeam)
-            .ToList();
-    }
-
     private async Task<IReadOnlyList<Prediction>> GetByCategoryAsync(DateTime date, string category)
     {
         var localDate = DateOnly.FromDateTime(date);

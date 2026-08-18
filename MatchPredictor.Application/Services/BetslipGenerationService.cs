@@ -260,19 +260,13 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             .ToList();
     }
 
-    public static bool IsRolloverSlip(Betslip slip) =>
-        slip.SlipNumber == RolloverSlipNumber ||
-        slip.TierLabel.StartsWith("Rollover", StringComparison.OrdinalIgnoreCase);
+    public static bool IsRolloverSlip(Betslip slip) => BetslipKinds.IsRolloverSlip(slip);
 
-    public static bool IsBankerSlip(Betslip slip) =>
-        slip.SlipNumber == BankerSlipNumber ||
-        slip.TierLabel.StartsWith("Banker", StringComparison.OrdinalIgnoreCase);
+    public static bool IsBankerSlip(Betslip slip) => BetslipKinds.IsBankerSlip(slip);
 
-    public static bool IsDrawSlip(Betslip slip) =>
-        string.Equals(slip.TierLabel, DrawsTierLabel, StringComparison.Ordinal);
+    public static bool IsDrawSlip(Betslip slip) => BetslipKinds.IsDrawSlip(slip);
 
-    public static bool IsLadderSlip(Betslip slip) =>
-        !IsRolloverSlip(slip) && !IsBankerSlip(slip) && !IsDrawSlip(slip);
+    public static bool IsLadderSlip(Betslip slip) => BetslipKinds.IsLadderSlip(slip);
 
     private async Task<ComposedBetslip?> ComposeRolloverFromPassersAsync(
         IReadOnlyList<LiveQuotedCandidate> mainPool,

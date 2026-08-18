@@ -2321,3 +2321,190 @@ a:hover {
   color: var(--text-secondary);
   background: rgba(234, 179, 8, 0.05);
 }
+
+.mp-betslip-records {
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.mp-betslip-records-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.mp-betslip-records-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 1.25rem;
+}
+
+.mp-betslip-record-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.mp-betslip-record-tabs .mp-tab-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-muted, var(--text-secondary));
+  padding: 0.45rem 0.9rem;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.mp-betslip-record-tabs .mp-tab-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.mp-betslip-record-tabs .mp-tab-btn.active {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border-color: rgba(139, 92, 246, 0.5);
+}
+
+.mp-betslip-calendar-wrap {
+  margin-bottom: 1.5rem;
+}
+
+.mp-betslip-calendar-summary {
+  list-style: none;
+  cursor: pointer;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.mp-betslip-calendar-summary::-webkit-details-marker {
+  display: none;
+}
+
+.mp-betslip-calendar {
+  margin-top: 0.85rem;
+  max-width: 22rem;
+  padding: 0.85rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-card, rgba(255, 255, 255, 0.03));
+}
+
+.mp-betslip-calendar-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.mp-betslip-calendar-month {
+  font-weight: 700;
+}
+
+.mp-betslip-calendar-nav-btn {
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  text-decoration: none;
+  color: var(--text-primary);
+  font-size: 1.1rem;
+}
+
+.mp-betslip-calendar-weekdays,
+.mp-betslip-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.25rem;
+  text-align: center;
+}
+
+.mp-betslip-calendar-weekdays {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  margin-bottom: 0.35rem;
+}
+
+.mp-betslip-calendar-day {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2rem;
+  border-radius: var(--radius-sm, 8px);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.mp-betslip-calendar-day.is-outside {
+  opacity: 0.35;
+}
+
+.mp-betslip-calendar-day.has-slips {
+  color: var(--text-primary);
+  font-weight: 700;
+  text-decoration: none;
+  background: rgba(139, 92, 246, 0.12);
+}
+
+.mp-betslip-calendar-day.is-today:not(.is-selected) {
+  box-shadow: inset 0 0 0 1px rgba(139, 92, 246, 0.45);
+}
+
+.mp-betslip-calendar-day.is-selected {
+  background: rgba(139, 92, 246, 0.45);
+  color: #fff;
+}
+
+.mp-betslip-records-empty,
+.mp-betslip-records-date {
+  color: var(--text-secondary);
+  margin: 0 0 1rem;
+}
+
+.mp-betslip-records-date {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.mp-betslip-record-run {
+  margin-bottom: 1.75rem;
+}
+
+.mp-betslip-record-run-title {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}
+
+.mp-betslip-hit {
+  flex-shrink: 0;
+  min-width: 1.6rem;
+  height: 1.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.mp-betslip-selection-fixture-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}

@@ -101,8 +101,6 @@ public class WebApplicationFactorySmokeTests
 
         public Task<IReadOnlyList<Prediction>> GetDrawAsync(DateTime date) => Empty();
 
-        public Task<IReadOnlyList<Prediction>> GetCombinedSampleAsync(DateTime date, int count) => Empty();
-
         private static Task<IReadOnlyList<Prediction>> Empty()
         {
             return Task.FromResult<IReadOnlyList<Prediction>>([]);
