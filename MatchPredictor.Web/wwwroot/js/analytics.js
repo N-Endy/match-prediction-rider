@@ -5,12 +5,12 @@
 
     function setAnalyticsVisibility() {
         document.querySelectorAll(".mp-analytics-mode-view").forEach(view => {
-            view.style.display = view.id === currentAnalyticsMode + "-view" ? "block" : "none";
+            view.classList.toggle("active", view.id === currentAnalyticsMode + "-view");
         });
 
         const dateTabs = document.getElementById("analyticsDateTabs");
         if (dateTabs) {
-            dateTabs.style.display = tablessModes.has(currentAnalyticsMode) ? "none" : "flex";
+            dateTabs.classList.toggle("mp-analytics-tabs-hidden", tablessModes.has(currentAnalyticsMode));
         }
 
         if (tablessModes.has(currentAnalyticsMode)) {
@@ -18,7 +18,7 @@
         }
 
         document.querySelectorAll(`#${currentAnalyticsMode}-view .mp-analytics-section`).forEach(section => {
-            section.style.display = section.id === `${currentAnalyticsMode}-${currentAnalyticsTab}` ? "block" : "none";
+            section.classList.toggle("active", section.id === `${currentAnalyticsMode}-${currentAnalyticsTab}`);
         });
     }
 

@@ -38,8 +38,8 @@
 @if (betting.SettledBetCount > 0)
 {
     <div class="mp-market-analytics">
-        <h3 style="margin-bottom: 0.35rem; font-size: 1.1rem; color: white;">Realized Betting Performance</h3>
-        <p class="mp-switch-caption" style="margin-bottom: 1.2rem;">
+        <h3 class="mp-analytics-panel-title mp-analytics-panel-title-tight">Realized Betting Performance</h3>
+        <p class="mp-switch-caption mp-analytics-caption">
             Flat 1u staking at captured publish-time odds across @betting.SettledBetCount settled pick(s) that had a recorded price. Closing Line Value compares publish price to the closing market price.
         </p>
         <div class="mp-stat-grid">
@@ -80,7 +80,7 @@
 
         @if (betting.Markets.Any())
         {
-            <div class="mp-segment-table" style="margin-top: 0.5rem;">
+            <div class="mp-segment-table mp-segment-flush">
                 <div class="mp-segment-row mp-segment-row-head">
                     <span>Market</span>
                     <span class="mp-segment-metric">Bets</span>
@@ -113,7 +113,7 @@
 @if (Model.CategoryStats.Any())
 {
     <div class="mp-category-stats">
-        <h3 style="margin-bottom: 1.5rem; font-size: 1.1rem; color: white;">Published Picks by Concept</h3>
+        <h3 class="mp-analytics-panel-title">Published Picks by Concept</h3>
 
         @foreach (var cat in Model.CategoryStats.Values.OrderByDescending(c => c.Total))
         {

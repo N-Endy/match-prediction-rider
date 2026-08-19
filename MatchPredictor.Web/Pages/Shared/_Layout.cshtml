@@ -1,5 +1,16 @@
 ﻿@using Microsoft.Extensions.Configuration
 @inject IConfiguration Configuration
+@{
+    var currentPath = Context.Request.Path.Value ?? "/";
+    string NavClass(string href)
+    {
+        var isHome = href == "/";
+        var active = isHome
+            ? string.Equals(currentPath, "/", StringComparison.OrdinalIgnoreCase)
+            : currentPath.StartsWith(href, StringComparison.OrdinalIgnoreCase);
+        return active ? "mp-nav-link active" : "mp-nav-link";
+    }
+}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -51,15 +62,15 @@
         </button>
 
         <ul class="mp-nav-links" id="navLinks">
-            <li><a class="mp-nav-link" asp-page="/Index">Home</a></li>
-            <li><a class="mp-nav-link" href="/betslips">🎫 Betslips</a></li>
-            <li><a class="mp-nav-link" href="/predictions/btts">BTTS</a></li>
-            <li><a class="mp-nav-link" href="/predictions/straightwin">Straight Win</a></li>
-            <li><a class="mp-nav-link" href="/predictions/draw">Draw</a></li>
-            <li><a class="mp-nav-link" href="/predictions/over2">Over 2.5</a></li>
-            <li><a class="mp-nav-link" href="/predictions/under2">Under 2.5</a></li>
-            <li><a class="mp-nav-link" href="/aichat">🤖 AI Chat</a></li>
-            <li><a class="mp-nav-link" href="/analytics">📈 Analytics</a></li>
+            <li><a class="@NavClass("/")" asp-page="/Index">Home</a></li>
+            <li><a class="@NavClass("/betslips")" href="/betslips">Betslips</a></li>
+            <li><a class="@NavClass("/predictions/btts")" href="/predictions/btts">BTTS</a></li>
+            <li><a class="@NavClass("/predictions/straightwin")" href="/predictions/straightwin">Straight Win</a></li>
+            <li><a class="@NavClass("/predictions/draw")" href="/predictions/draw">Draw</a></li>
+            <li><a class="@NavClass("/predictions/over2")" href="/predictions/over2">Over 2.5</a></li>
+            <li><a class="@NavClass("/predictions/under2")" href="/predictions/under2">Under 2.5</a></li>
+            <li><a class="@NavClass("/aichat")" href="/aichat">AI Chat</a></li>
+            <li><a class="@NavClass("/analytics")" href="/analytics">Analytics</a></li>
         </ul>
     </div>
 </nav>
@@ -69,7 +80,7 @@
     @RenderBody()
 </main>
 
-<div class="mp-container" style="padding-top: 0; padding-bottom: 0; margin-top: 2rem;">
+<div class="mp-container mp-layout-ad">
     <partial name="_AdBanner" />
 </div>
 
@@ -83,7 +94,7 @@
         <a href="/predictions/over2">Over 2.5</a> ·
         <a href="/predictions/under2">Under 2.5</a>
     </div>
-    <p style="margin-top: 0.75rem;">&copy; @DateTime.Now.Year MatchPredictor · AI-Powered Football Predictions</p>
+    <p class="mp-footer-copy">&copy; @DateTime.Now.Year MatchPredictor · AI-Powered Football Predictions</p>
 </footer>
 
 <!-- Scroll to Top -->

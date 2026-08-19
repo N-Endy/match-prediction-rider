@@ -8,14 +8,15 @@
 
 <div class="mp-container">
     <div class="mp-page-header">
-        <div class="mp-page-title">
-            <div class="mp-page-title-icon" style="background: rgba(16, 185, 129, 0.1);">⚽</div>
-            <div>
+        <div>
+            <p class="mp-page-kicker">Today’s card</p>
+            <div class="mp-page-title">
+                <div class="mp-page-title-icon mp-icon-btts">⚽</div>
                 <h1>Both Teams to Score</h1>
-                <p class="mp-page-subtext">Filter the BTTS card by league, kickoff, status, and confidence before adding picks to the slip.</p>
             </div>
+            <p class="mp-page-subtext">Filter the BTTS card by league, kickoff, status, and confidence before adding picks to the slip.</p>
         </div>
-        <div class="mp-date-badge">📅 @today</div>
+        <div class="mp-date-badge">@today</div>
     </div>
 
     <partial name="_PredictionPageFilters" model="Model" />
@@ -41,7 +42,7 @@
         <div class="mp-empty-state">
             <div class="mp-empty-state-icon">⚽</div>
             <p>@(Model.TotalMatchCount > 0 ? "No BTTS predictions match the current filters." : "No BTTS predictions available for today yet.")</p>
-            <p style="font-size: 0.85rem; margin-top: 0.5rem;">
+            <p class="mp-empty-state-hint">
                 @(Model.TotalMatchCount > 0 ? "Try widening the confidence, league, or kickoff filters." : "Predictions are updated daily. Check back soon!")
             </p>
         </div>

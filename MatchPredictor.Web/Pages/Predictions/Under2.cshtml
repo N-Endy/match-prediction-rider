@@ -8,14 +8,15 @@
 
 <div class="mp-container">
     <div class="mp-page-header">
-        <div class="mp-page-title">
-            <div class="mp-page-title-icon" style="background: rgba(245, 158, 11, 0.1);">🧊</div>
-            <div>
+        <div>
+            <p class="mp-page-kicker">Today’s card</p>
+            <div class="mp-page-title">
+                <div class="mp-page-title-icon mp-icon-under">🧊</div>
                 <h1>Under 2.5 Goals</h1>
-                <p class="mp-page-subtext">Find the calmest fixtures where the totals model expects two goals or fewer.</p>
             </div>
+            <p class="mp-page-subtext">Find the calmest fixtures where the totals model expects two goals or fewer.</p>
         </div>
-        <div class="mp-date-badge">📅 @today</div>
+        <div class="mp-date-badge">@today</div>
     </div>
 
     <partial name="_PredictionPageFilters" model="Model" />
@@ -41,7 +42,7 @@
         <div class="mp-empty-state">
             <div class="mp-empty-state-icon">🧊</div>
             <p>@(Model.TotalMatchCount > 0 ? "No Under 2.5 predictions match the current filters." : "No Under 2.5 predictions available for today yet.")</p>
-            <p style="font-size: 0.85rem; margin-top: 0.5rem;">
+            <p class="mp-empty-state-hint">
                 @(Model.TotalMatchCount > 0 ? "Try widening the filters or checking another kickoff window." : "Predictions are updated daily. Check back soon!")
             </p>
         </div>

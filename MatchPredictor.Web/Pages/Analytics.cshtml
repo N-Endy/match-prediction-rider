@@ -9,12 +9,13 @@
 
 <div class="mp-container" data-analytics-default-tab="@defaultTab">
     <div class="mp-page-header">
-        <div class="mp-page-title">
-            <div class="mp-page-title-icon" style="background: rgba(139, 92, 246, 0.1);">📈</div>
-            <div>
+        <div>
+            <p class="mp-page-kicker">Board quality</p>
+            <div class="mp-page-title">
+                <div class="mp-page-title-icon mp-icon-analytics">📈</div>
                 <h1>Performance Analytics</h1>
-                <p class="mp-page-subtext">Switch between published results, probability quality, and the live model settings currently driving the app.</p>
             </div>
+            <p class="mp-page-subtext">Switch between published results, probability quality, and the live model settings currently driving the app.</p>
         </div>
     </div>
 
@@ -33,40 +34,40 @@
     </div>
 
     <section id="published-view" class="mp-analytics-mode-view active">
-        <div id="published-today" class="mp-analytics-section @(defaultTab == "today" ? "active" : "")" style="@(defaultTab == "today" ? "" : "display: none;")">
+        <div id="published-today" class="mp-analytics-section @(defaultTab == "today" ? "active" : "")">
             <partial name="_PublishedPicksAnalytics" model="Model.TodayStats" />
         </div>
-        <div id="published-yesterday" class="mp-analytics-section @(defaultTab == "yesterday" ? "active" : "")" style="@(defaultTab == "yesterday" ? "" : "display: none;")">
+        <div id="published-yesterday" class="mp-analytics-section @(defaultTab == "yesterday" ? "active" : "")">
             <partial name="_PublishedPicksAnalytics" model="Model.YesterdayStats" />
         </div>
-        <div id="published-3days" class="mp-analytics-section @(defaultTab == "3days" ? "active" : "")" style="@(defaultTab == "3days" ? "" : "display: none;")">
+        <div id="published-3days" class="mp-analytics-section @(defaultTab == "3days" ? "active" : "")">
             <partial name="_PublishedPicksAnalytics" model="Model.Last3DaysStats" />
         </div>
-        <div id="published-7days" class="mp-analytics-section @(defaultTab == "7days" ? "active" : "")" style="@(defaultTab == "7days" ? "" : "display: none;")">
+        <div id="published-7days" class="mp-analytics-section @(defaultTab == "7days" ? "active" : "")">
             <partial name="_PublishedPicksAnalytics" model="Model.Last7DaysStats" />
         </div>
     </section>
 
-    <section id="calibration-view" class="mp-analytics-mode-view" style="display: none;">
-        <div id="calibration-today" class="mp-analytics-section @(defaultTab == "today" ? "active" : "")" style="@(defaultTab == "today" ? "" : "display: none;")">
+    <section id="calibration-view" class="mp-analytics-mode-view">
+        <div id="calibration-today" class="mp-analytics-section @(defaultTab == "today" ? "active" : "")">
             <partial name="_ForecastCalibrationAnalytics" model="Model.TodayStats" />
         </div>
-        <div id="calibration-yesterday" class="mp-analytics-section @(defaultTab == "yesterday" ? "active" : "")" style="@(defaultTab == "yesterday" ? "" : "display: none;")">
+        <div id="calibration-yesterday" class="mp-analytics-section @(defaultTab == "yesterday" ? "active" : "")">
             <partial name="_ForecastCalibrationAnalytics" model="Model.YesterdayStats" />
         </div>
-        <div id="calibration-3days" class="mp-analytics-section @(defaultTab == "3days" ? "active" : "")" style="@(defaultTab == "3days" ? "" : "display: none;")">
+        <div id="calibration-3days" class="mp-analytics-section @(defaultTab == "3days" ? "active" : "")">
             <partial name="_ForecastCalibrationAnalytics" model="Model.Last3DaysStats" />
         </div>
-        <div id="calibration-7days" class="mp-analytics-section @(defaultTab == "7days" ? "active" : "")" style="@(defaultTab == "7days" ? "" : "display: none;")">
+        <div id="calibration-7days" class="mp-analytics-section @(defaultTab == "7days" ? "active" : "")">
             <partial name="_ForecastCalibrationAnalytics" model="Model.Last7DaysStats" />
         </div>
     </section>
 
-    <section id="config-view" class="mp-analytics-mode-view" style="display: none;">
+    <section id="config-view" class="mp-analytics-mode-view">
         <partial name="_CurrentLiveConfigAnalytics" model="Model.CurrentLiveConfig" />
     </section>
 
-    <section id="diagnostics-view" class="mp-analytics-mode-view" style="display: none;">
+    <section id="diagnostics-view" class="mp-analytics-mode-view">
         <div class="mp-analytics-note">
             Diagnostics combine recent feature contributions, feed/model promotion state, and real-history backtest trend so regressions are visible before they reach the public card.
         </div>
@@ -90,8 +91,8 @@
             </div>
         </div>
 
-        <div class="mp-category-stats" style="margin-bottom: 1.5rem;">
-            <h3>Recent Feature Contributions</h3>
+        <div class="mp-category-stats mp-analytics-panel-gap">
+            <h3 class="mp-analytics-panel-title">Recent Feature Contributions</h3>
             @if (Model.Last7DaysStats.FeatureDiagnostics.Any())
             {
                 @foreach (var diagnostic in Model.Last7DaysStats.FeatureDiagnostics.Take(8))
@@ -104,7 +105,7 @@
                         <div class="mp-read-detail">
                             @diagnostic.League · @diagnostic.PredictedOutcome · statistical signal @(diagnostic.StatisticalSignalApplied ? "applied" : "not applied")
                         </div>
-                        <div class="mp-read-strip" style="margin-top: 0.65rem;">
+                        <div class="mp-read-strip mp-read-strip-spaced">
                             @foreach (var contribution in diagnostic.Contributions.Take(5))
                             {
                                 <span class="mp-read-badge mp-read-badge-caution">@contribution.Label: @(contribution.Value?.ToString("0.000") ?? "--")</span>
@@ -119,8 +120,8 @@
             }
         </div>
 
-        <div class="mp-category-stats" style="margin-bottom: 1.5rem;">
-            <h3>Real-History Backtest Trend</h3>
+        <div class="mp-category-stats mp-analytics-panel-gap">
+            <h3 class="mp-analytics-panel-title">Real-History Backtest Trend</h3>
             @if (Model.BacktestTrend.Any())
             {
                 @foreach (var run in Model.BacktestTrend.Take(10))
@@ -147,8 +148,8 @@
             }
         </div>
 
-        <div class="mp-category-stats" style="margin-bottom: 1.5rem;">
-            <h3>ML Promotion Status</h3>
+        <div class="mp-category-stats mp-analytics-panel-gap">
+            <h3 class="mp-analytics-panel-title">ML Promotion Status</h3>
             @if (Model.MarketMlProfiles.Any())
             {
                 @foreach (var profile in Model.MarketMlProfiles)
@@ -173,7 +174,7 @@
         </div>
 
         <div class="mp-category-stats">
-            <h3>Isotonic Calibration Profiles</h3>
+            <h3 class="mp-analytics-panel-title">Isotonic Calibration Profiles</h3>
             @if (Model.IsotonicProfiles.Any())
             {
                 @foreach (var profile in Model.IsotonicProfiles.Values.OrderBy(profile => profile.Market))
@@ -313,6 +314,10 @@
         padding-bottom: 1rem;
     }
 
+    .mp-analytics-tabs.mp-analytics-tabs-hidden {
+        display: none;
+    }
+
     .mp-mode-btn,
     .mp-tab-btn {
         background: transparent;
@@ -335,8 +340,8 @@
     .mp-tab-btn.active {
         background: var(--bg-card);
         color: white;
-        border-color: rgba(139, 92, 246, 0.5);
-        box-shadow: 0 0 10px rgba(139, 92, 246, 0.1);
+        border-color: rgba(13, 148, 136, 0.55);
+        box-shadow: 0 0 10px rgba(13, 148, 136, 0.12);
     }
 
     .mp-analytics-note {

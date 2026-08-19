@@ -8,14 +8,15 @@
 
 <div class="mp-container">
     <div class="mp-page-header">
-        <div class="mp-page-title">
-            <div class="mp-page-title-icon" style="background: rgba(13, 148, 136, 0.14);">🏆</div>
-            <div>
+        <div>
+            <p class="mp-page-kicker">Today’s card</p>
+            <div class="mp-page-title">
+                <div class="mp-page-title-icon mp-icon-win">🏆</div>
                 <h1>Straight Win</h1>
-                <p class="mp-page-subtext">Spot the side-backed picks with enough confidence to clear the published win threshold.</p>
             </div>
+            <p class="mp-page-subtext">Spot the side-backed picks with enough confidence to clear the published win threshold.</p>
         </div>
-        <div class="mp-date-badge">📅 @today</div>
+        <div class="mp-date-badge">@today</div>
     </div>
 
     <partial name="_PredictionPageFilters" model="Model" />
@@ -41,10 +42,9 @@
         <div class="mp-empty-state">
             <div class="mp-empty-state-icon">🏆</div>
             <p>@(Model.TotalMatchCount > 0 ? "No straight-win predictions match the current filters." : "No straight-win predictions available for today yet.")</p>
-            <p style="font-size: 0.85rem; margin-top: 0.5rem;">
+            <p class="mp-empty-state-hint">
                 @(Model.TotalMatchCount > 0 ? "Try relaxing the league, confidence, or status filters." : "Predictions are updated daily. Check back soon!")
             </p>
         </div>
     }
 </div>
-

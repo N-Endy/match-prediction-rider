@@ -5,55 +5,58 @@
     ViewData["Title"] = "Smart Daily Football Predictions";
 }
 
-<!-- Hero Section -->
 <section class="mp-hero">
     <div class="mp-hero-badge">
         <span class="mp-live-dot"></span>
-        Updated Daily · AI-Powered
+        Updated daily
     </div>
     <h1>Smart Football<br>Predictions</h1>
-    <p>Daily AI-driven football tips backed by smart analysis. BTTS, Over 2.5, Under 2.5, Straight Win and more — updated every day.</p>
-    <a href="/predictions/btts" class="mp-hero-cta">
-        Explore Today's Tips →
-    </a>
+    <p>Today’s BTTS, Over 2.5, Under 2.5, Straight Win, and Draw card — analysed and published twice a day.</p>
+    <div class="mp-hero-actions">
+        <a href="/predictions/btts" class="mp-hero-cta">
+            Open today’s card
+        </a>
+        <a href="/betslips" class="mp-hero-cta mp-hero-cta-secondary">
+            Pre-booked betslips
+        </a>
+    </div>
 </section>
 
-<!-- Prediction Categories -->
 <div class="mp-container">
-    <h2 class="mp-section-heading">Today's Predictions</h2>
-    <p class="mp-section-subtitle">Choose a prediction category to see today's picks</p>
+    <h2 class="mp-section-heading">Today’s Predictions</h2>
+    <p class="mp-section-subtitle">Pick a market to see the published card</p>
 
     <div class="mp-category-grid">
         <a href="/predictions/btts" class="mp-category-card">
-            <div class="mp-category-icon" style="background: rgba(16, 185, 129, 0.1);">⚽</div>
+            <div class="mp-category-icon mp-icon-btts">⚽</div>
             <div class="mp-category-info">
                 <h3>Both Teams to Score</h3>
                 <p>Matches where both teams are likely to score</p>
             </div>
         </a>
         <a href="/predictions/over2" class="mp-category-card">
-            <div class="mp-category-icon" style="background: rgba(59, 130, 246, 0.1);">🎯</div>
+            <div class="mp-category-icon mp-icon-over">🎯</div>
             <div class="mp-category-info">
                 <h3>Over 2.5 Goals</h3>
                 <p>Matches likely to have 3 or more total goals</p>
             </div>
         </a>
         <a href="/predictions/straightwin" class="mp-category-card">
-            <div class="mp-category-icon" style="background: rgba(139, 92, 246, 0.1);">🏆</div>
+            <div class="mp-category-icon mp-icon-win">🏆</div>
             <div class="mp-category-info">
                 <h3>Straight Win</h3>
                 <p>Strong home or away win predictions</p>
             </div>
         </a>
         <a href="/predictions/draw" class="mp-category-card">
-            <div class="mp-category-icon" style="background: rgba(245, 158, 11, 0.1);">🤝</div>
+            <div class="mp-category-icon mp-icon-draw">🤝</div>
             <div class="mp-category-info">
                 <h3>Draw</h3>
                 <p>Low-separation fixtures where the model sees draw value</p>
             </div>
         </a>
         <a href="/predictions/under2" class="mp-category-card">
-            <div class="mp-category-icon" style="background: rgba(245, 158, 11, 0.1);">🧊</div>
+            <div class="mp-category-icon mp-icon-under">🧊</div>
             <div class="mp-category-info">
                 <h3>Under 2.5 Goals</h3>
                 <p>Matches likely to stay at two goals or fewer</p>
@@ -61,39 +64,36 @@
         </a>
     </div>
 
-    <!-- How It Works -->
-    <div style="margin-top: 4rem;">
+    <div class="mp-home-block">
         <h2 class="mp-section-heading">How It Works</h2>
-        <p class="mp-section-subtitle">Three steps to smarter predictions</p>
+        <p class="mp-section-subtitle">Three steps to the daily card</p>
 
         <div class="mp-features">
             <div class="mp-feature-card">
-                <div class="mp-feature-icon" style="background: rgba(59, 130, 246, 0.1);">🕵️</div>
+                <div class="mp-feature-icon mp-icon-over">🕵️</div>
                 <h3>Collect & Analyze</h3>
                 <p>We scrape AI-generated odds from a reliable source every day and run them through intelligent logic.</p>
             </div>
             <div class="mp-feature-card">
-                <div class="mp-feature-icon" style="background: rgba(16, 185, 129, 0.1);">🧠</div>
+                <div class="mp-feature-icon mp-icon-btts">🧠</div>
                 <h3>Smart Filtering</h3>
                 <p>Our algorithms filter for high-probability matches across multiple prediction categories.</p>
             </div>
             <div class="mp-feature-card">
-                <div class="mp-feature-icon" style="background: rgba(6, 182, 212, 0.1);">📲</div>
+                <div class="mp-feature-icon mp-icon-cyan">📲</div>
                 <h3>Publish Daily</h3>
                 <p>Get a clean, curated list of daily football tips with clearly labeled sponsored slots and no noisy clutter.</p>
             </div>
         </div>
     </div>
 
-    <!-- Ad Banner Slot -->
-    <div style="margin: 3rem 0;">
+    <div class="mp-home-ad">
         <partial name="_AdBanner" />
     </div>
 
-    <!-- CTA -->
-    <div style="text-align: center; margin: 4rem 0 2rem;">
+    <div class="mp-home-cta">
         <a href="/betslips" class="mp-hero-cta">
-            View Pre-booked Betslips →
+            View Pre-booked Betslips
         </a>
     </div>
 </div>

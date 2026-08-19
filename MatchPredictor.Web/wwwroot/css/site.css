@@ -150,13 +150,13 @@ a:hover {
 
 .mp-nav-link:hover,
 .mp-nav-link.active {
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(6, 182, 212, 0.1);
   color: var(--text-accent);
 }
 
 .mp-nav-link.active {
-  background: rgba(59, 130, 246, 0.15);
-  color: var(--accent-blue);
+  background: rgba(6, 182, 212, 0.15);
+  color: var(--accent-cyan);
 }
 
 /* Mobile hamburger */
@@ -221,7 +221,7 @@ a:hover {
   transform: translateX(-50%);
   width: min(600px, calc(100vw - 2rem));
   height: min(600px, calc(100vw - 2rem));
-  background: radial-gradient(circle, rgba(59, 130, 246, 0.08) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(6, 182, 212, 0.1) 0%, transparent 70%);
   pointer-events: none;
 }
 
@@ -229,12 +229,12 @@ a:hover {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: rgba(59, 130, 246, 0.1);
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: rgba(6, 182, 212, 0.1);
+  border: 1px solid rgba(6, 182, 212, 0.22);
   padding: 6px 16px;
   border-radius: var(--radius-full);
   font-size: 0.8rem;
-  color: var(--accent-blue);
+  color: var(--accent-cyan);
   font-weight: 500;
   margin-bottom: 1.5rem;
 }
@@ -277,6 +277,26 @@ a:hover {
   transform: translateY(-2px);
   box-shadow: 0 6px 30px rgba(59, 130, 246, 0.4);
   color: #fff;
+}
+
+.mp-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.mp-hero-cta-secondary {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  box-shadow: none;
+}
+
+.mp-hero-cta-secondary:hover {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  box-shadow: none;
 }
 
 /* ─── Feature Grid ─── */
@@ -364,6 +384,50 @@ a:hover {
   justify-content: center;
   font-size: 1.5rem;
   flex-shrink: 0;
+}
+
+.mp-icon-btts {
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.mp-icon-over {
+  background: rgba(6, 182, 212, 0.12);
+}
+
+.mp-icon-win {
+  background: rgba(13, 148, 136, 0.14);
+}
+
+.mp-icon-draw {
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.mp-icon-under {
+  background: rgba(148, 163, 184, 0.14);
+}
+
+.mp-icon-cyan,
+.mp-icon-analytics {
+  background: rgba(6, 182, 212, 0.12);
+}
+
+.mp-home-block {
+  margin-top: 4rem;
+}
+
+.mp-home-ad {
+  margin: 3rem 0;
+}
+
+.mp-home-cta {
+  text-align: center;
+  margin: 4rem 0 2rem;
+}
+
+.mp-layout-ad {
+  padding-top: 0;
+  padding-bottom: 0;
+  margin-top: 2rem;
 }
 
 .mp-category-info h3 {
@@ -493,20 +557,22 @@ a:hover {
 }
 
 .mp-match-league {
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: 0.7rem;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-muted);
-  margin-bottom: 4px;
+  margin-bottom: 6px;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
 .mp-match-league .mp-time {
-  color: var(--accent-cyan);
+  color: var(--text-muted);
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
 }
 
 .mp-state-pill {
@@ -539,8 +605,9 @@ a:hover {
 }
 
 .mp-match-teams {
-  font-size: 1.05rem;
-  font-weight: 600;
+  font-size: 1.18rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--text-primary);
   display: flex;
   align-items: center;
@@ -558,12 +625,13 @@ a:hover {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.35rem 0.6rem;
+  padding: 0.28rem 0.55rem;
   border-radius: var(--radius-full);
   background: rgba(148, 163, 184, 0.08);
   border: 1px solid rgba(148, 163, 184, 0.12);
-  color: var(--text-secondary);
-  font-size: 0.76rem;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
 }
@@ -571,8 +639,8 @@ a:hover {
 .mp-prediction-reason {
   margin: 0.75rem 0 0;
   color: var(--text-muted);
-  font-size: 0.86rem;
-  line-height: 1.55;
+  font-size: 0.8rem;
+  line-height: 1.5;
   max-width: 52rem;
 }
 
@@ -601,15 +669,15 @@ a:hover {
 }
 
 .mp-badge-over {
-  background: rgba(59, 130, 246, 0.12);
-  color: var(--accent-blue);
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: rgba(6, 182, 212, 0.12);
+  color: var(--accent-cyan);
+  border: 1px solid rgba(6, 182, 212, 0.2);
 }
 
 .mp-badge-under {
-  background: rgba(245, 158, 11, 0.12);
-  color: var(--accent-amber);
-  border: 1px solid rgba(245, 158, 11, 0.2);
+  background: rgba(148, 163, 184, 0.14);
+  color: var(--text-secondary);
+  border: 1px solid rgba(148, 163, 184, 0.18);
 }
 
 .mp-badge-draw {
@@ -982,6 +1050,11 @@ a:hover {
   color: var(--text-secondary);
 }
 
+.mp-empty-state .mp-empty-state-hint {
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+
 /* ─── Footer ─── */
 .mp-footer {
   border-top: 1px solid var(--border-color);
@@ -995,6 +1068,49 @@ a:hover {
 .mp-footer a {
   color: var(--text-secondary);
   margin: 0 8px;
+}
+
+.mp-footer-copy {
+  margin-top: 0.75rem;
+}
+
+.mp-analytics-section:not(.active),
+.mp-analytics-mode-view:not(.active) {
+  display: none;
+}
+
+.mp-analytics-panel-title {
+  margin: 0 0 1.5rem;
+  font-size: 1.1rem;
+  color: var(--text-primary);
+}
+
+.mp-analytics-panel-title-tight {
+  margin-bottom: 0.35rem;
+}
+
+.mp-analytics-block {
+  margin-top: 2rem;
+}
+
+.mp-analytics-caption {
+  margin-bottom: 1.2rem;
+}
+
+.mp-analytics-panel-gap {
+  margin-bottom: 1.5rem;
+}
+
+.mp-segment-flush {
+  margin-top: 0.5rem;
+}
+
+.mp-read-strip-spaced {
+  margin-top: 0.65rem;
+}
+
+.mp-analytics-tabs-hidden {
+  display: none;
 }
 
 /* ─── Section Headings ─── */
@@ -1111,7 +1227,7 @@ a:hover {
   }
 
   .mp-match-teams {
-    font-size: 0.95rem;
+    font-size: 1.05rem;
   }
 
   .mp-confidence {
