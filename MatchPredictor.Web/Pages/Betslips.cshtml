@@ -8,11 +8,12 @@
 <div class="mp-container">
     <div class="mp-page-header">
         <div>
-            <h1 class="mp-page-title">🎫 Pre-booked Betslips</h1>
+            <p class="mp-page-kicker">Today’s tickets</p>
+            <div class="mp-page-title">
+                <h1>Pre-booked Betslips</h1>
+            </div>
             <p class="mp-page-subtext">
-                Ready-to-play SportyBet slips from today's analysed Straight Win, BTTS, Over 2.5, and Under 2.5 picks.
-                The Rollover is a single 1.20–1.50x stack-it-all pick. Weekend tickets then add the Banker, payout bands at a ₦@((int)Model.ReferenceStakeNaira) stake (Small → Mega), and AI Draws.
-                Generated twice daily at 5:00 AM and 1:00 PM WAT.
+                Ready-to-play SportyBet slips from today’s analysed Straight Win, BTTS, Over 2.5, and Under 2.5 picks.
             </p>
         </div>
         @if (Model.CurrentSet is not null)
@@ -32,39 +33,49 @@
     else
     {
         <div class="mp-page-meta-strip">
-            <span>@Model.CurrentSet.DayKind · @Model.CurrentSet.RunLabel run</span>
+            <span>@Model.CurrentSet.DayKind · @BetslipsModel.FormatRunLabel(Model.CurrentSet.RunLabel) run</span>
             <span>@Model.CurrentSet.SlipCount slip@(Model.CurrentSet.SlipCount == 1 ? "" : "s")</span>
             <span>@Model.CurrentSet.SlipLocalDate.ToString("dddd d MMMM")</span>
+            <span>5:00 AM and 1:00 PM WAT</span>
         </div>
 
         @if (Model.RolloverSlip is not null)
         {
-            <div class="mp-betslip-banker-wrap">
-                <partial name="_BetslipCard" model="Model.RolloverSlip" />
-            </div>
+            <section class="mp-betslip-board-section" aria-label="Rollover">
+                <h2 class="mp-betslip-board-label">Rollover</h2>
+                <div class="mp-betslip-banker-wrap">
+                    <partial name="_BetslipCard" model="Model.RolloverSlip" />
+                </div>
+            </section>
         }
 
-        @if (Model.BankerSlip is null)
-        {
-            <div class="mp-betslip-no-banker">
-                No banker today — no combination met the quality and odds bar.
-            </div>
-        }
-        else
-        {
-            <div class="mp-betslip-banker-wrap">
-                <partial name="_BetslipCard" model="Model.BankerSlip" />
-            </div>
-        }
+        <section class="mp-betslip-board-section" aria-label="Banker">
+            <h2 class="mp-betslip-board-label">Banker</h2>
+            @if (Model.BankerSlip is null)
+            {
+                <div class="mp-betslip-no-banker">
+                    No banker today — no combination met the quality and odds bar.
+                </div>
+            }
+            else
+            {
+                <div class="mp-betslip-banker-wrap">
+                    <partial name="_BetslipCard" model="Model.BankerSlip" />
+                </div>
+            }
+        </section>
 
         @if (Model.OtherSlips.Count > 0)
         {
-            <div class="mp-betslip-grid">
-                @foreach (var slip in Model.OtherSlips)
-                {
-                    <partial name="_BetslipCard" model="slip" />
-                }
-            </div>
+            <section class="mp-betslip-board-section" aria-label="Ladder">
+                <h2 class="mp-betslip-board-label">Ladder</h2>
+                <div class="mp-betslip-grid">
+                    @foreach (var slip in Model.OtherSlips)
+                    {
+                        <partial name="_BetslipCard" model="slip" />
+                    }
+                </div>
+            </section>
         }
     }
 

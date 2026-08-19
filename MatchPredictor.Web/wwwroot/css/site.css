@@ -387,6 +387,15 @@ a:hover {
   margin-bottom: 2rem;
 }
 
+.mp-page-kicker {
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
 .mp-page-title {
   display: flex;
   align-items: center;
@@ -1587,6 +1596,76 @@ a:hover {
 }
 
 /* ─── AI Chat ─── */
+.mp-chat-title-icon {
+  background: rgba(6, 182, 212, 0.12);
+}
+
+.mp-chat-logout {
+  width: auto;
+  flex: none;
+  padding: 0.65rem 1rem;
+  border-radius: var(--radius-md);
+}
+
+.mp-chat-auth {
+  max-width: 24rem;
+  margin: 3rem auto 0;
+  padding: 1.75rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+}
+
+.mp-chat-auth-title {
+  margin: 0 0 0.4rem;
+  font-size: 1.2rem;
+}
+
+.mp-chat-auth-copy {
+  margin: 0 0 1.25rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.mp-chat-auth-error {
+  color: var(--accent-rose);
+  background: rgba(244, 63, 94, 0.1);
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+}
+
+.mp-chat-auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mp-chat-auth-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.mp-chat-auth .mp-chat-input {
+  width: 100%;
+  border-radius: var(--radius-md);
+  text-align: left;
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  padding: 12px 16px;
+}
+
+.mp-chat-auth-submit {
+  width: 100%;
+  flex: none;
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+}
+
 .mp-chat-container {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
@@ -1635,7 +1714,7 @@ a:hover {
 }
 
 .mp-chat-bubble {
-  background: var(--bg-secondary);
+  background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   padding: 0.75rem 1rem;
@@ -1645,14 +1724,31 @@ a:hover {
 }
 
 .mp-chat-user .mp-chat-bubble {
-  background: rgba(59, 130, 246, 0.12);
-  border-color: rgba(59, 130, 246, 0.2);
+  background: rgba(14, 165, 233, 0.22);
+  border-color: rgba(14, 165, 233, 0.4);
+}
+
+.mp-chat-hint {
+  margin: 0.65rem 0 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.mp-chat-composer {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  overflow: hidden;
+  width: 100%;
 }
 
 .mp-chat-input-area {
-  display: flex;
-  gap: 0.75rem;
-  padding: 1rem 1.5rem;
+  padding: 0.85rem 1rem;
   border-top: 1px solid var(--border-color);
   background: var(--bg-secondary);
 }
@@ -1660,24 +1756,27 @@ a:hover {
 .mp-chat-input {
   flex: 1;
   padding: 12px 16px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border-color);
-  background: var(--bg-input);
+  border: none;
+  border-radius: 0;
+  background: transparent;
   color: var(--text-primary);
   font-size: 0.9rem;
   font-family: var(--font-family);
   outline: none;
-  transition: var(--transition);
 }
 
 .mp-chat-input:focus {
-  border-color: var(--accent-blue);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  outline: none;
+}
+
+.mp-chat-composer:focus-within {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.12);
 }
 
 .mp-chat-send-btn {
-  padding: 12px 24px;
-  border-radius: var(--radius-full);
+  padding: 12px 22px;
+  border-radius: 0;
   background: var(--gradient-primary);
   color: #fff;
   border: none;
@@ -1688,14 +1787,233 @@ a:hover {
 }
 
 .mp-chat-send-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.3);
+  filter: brightness(1.08);
 }
 
 .mp-chat-send-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-  transform: none;
+  filter: none;
+}
+
+.mp-chat-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.35rem;
+}
+
+.mp-chat-chip {
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-radius: var(--radius-full);
+  padding: 0.45rem 0.75rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.mp-chat-chip:hover {
+  border-color: rgba(6, 182, 212, 0.45);
+  background: rgba(6, 182, 212, 0.1);
+}
+
+.mp-chat-warnings {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  display: grid;
+  gap: 0.25rem;
+}
+
+.mp-chat-action-list {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.85rem;
+}
+
+.mp-chat-action {
+  padding: 0.85rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.mp-chat-action-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.mp-chat-action-meta,
+.mp-chat-action-stats {
+  margin-top: 0.3rem;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.mp-chat-action-stats {
+  margin-top: 0.45rem;
+}
+
+.mp-chat-action-explanation {
+  margin-top: 0.55rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.mp-chat-insight {
+  margin-top: 0.7rem;
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(6, 182, 212, 0.22);
+  background: rgba(8, 47, 73, 0.28);
+}
+
+.mp-chat-insight-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.mp-chat-insight-title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.mp-chat-insight-chip {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: var(--radius-full);
+  background: rgba(6, 182, 212, 0.14);
+  border: 1px solid rgba(6, 182, 212, 0.28);
+}
+
+.mp-chat-insight-source {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.mp-chat-insight-summary {
+  margin-top: 0.45rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.mp-chat-insight-bullets {
+  display: grid;
+  gap: 0.28rem;
+  margin-top: 0.45rem;
+}
+
+.mp-chat-insight-bullet {
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.mp-chat-action-score {
+  margin-top: 0.55rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.mp-chat-action .mp-add-cart-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.7rem;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  border-radius: var(--radius-sm);
+  line-height: 1;
+}
+
+.mp-chat-book-footer {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.mp-chat-book-footer .mp-book-btn {
+  font-size: 0.85rem;
+  padding: 8px 16px;
+  width: auto;
+  flex: none;
+  border-radius: var(--radius-sm);
+}
+
+.mp-chat-working-slip {
+  margin-top: 0.8rem;
+  padding: 0.85rem;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(6, 182, 212, 0.28);
+  background: rgba(6, 182, 212, 0.08);
+}
+
+.mp-chat-working-slip-title {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.mp-chat-working-slip-stats {
+  margin-top: 0.4rem;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.mp-chat-knowledge-list {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.8rem;
+}
+
+.mp-chat-knowledge {
+  padding: 0.8rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.mp-chat-knowledge-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.mp-chat-knowledge-title {
+  font-weight: 700;
+  font-size: 0.88rem;
+}
+
+.mp-chat-knowledge-kind {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.mp-chat-knowledge-body {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mp-chat-send-btn,
+  .mp-chat-chip {
+    transition: none;
+  }
 }
 
 /* Typing indicator */
@@ -1733,6 +2051,12 @@ a:hover {
   40% {
     transform: translateY(-6px);
     opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mp-typing-dots span {
+    animation: none;
   }
 }
 
@@ -2049,8 +2373,8 @@ a:hover {
 }
 
 .mp-betslip-card-ai {
-  border-color: rgba(168, 85, 247, 0.45);
-  box-shadow: 0 0 0 1px rgba(168, 85, 247, 0.15);
+  border-color: rgba(6, 182, 212, 0.5);
+  box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.16);
 }
 
 .mp-betslip-card-header {
@@ -2070,7 +2394,9 @@ a:hover {
 
 .mp-betslip-title {
   margin: 0.2rem 0 0;
-  font-size: 1.15rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .mp-betslip-status {
@@ -2100,6 +2426,7 @@ a:hover {
   display: flex;
   flex-wrap: wrap;
   gap: 1rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .mp-betslip-metric-label {
@@ -2130,27 +2457,47 @@ a:hover {
 .mp-betslip-code-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: stretch;
   gap: 0.6rem;
 }
 
 .mp-betslip-code {
+  flex: 1 1 12rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 1rem;
-  padding: 0.45rem 0.7rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  padding: 0.65rem 0.85rem;
   border-radius: var(--radius-sm, 8px);
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px dashed var(--border-color);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+}
+
+.mp-betslip-code-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mp-betslip-code-actions .mp-book-btn {
+  width: auto;
+  flex: none;
+  padding: 0.55rem 1rem;
 }
 
 .mp-betslip-copy-btn {
   border: 1px solid var(--border-color);
   background: transparent;
   color: var(--text-primary);
-  border-radius: var(--radius-full);
-  padding: 0.4rem 0.9rem;
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.9rem;
   font-weight: 600;
   cursor: pointer;
+  min-height: 2.5rem;
 }
 
 .mp-betslip-copy-btn:hover {
@@ -2191,6 +2538,7 @@ a:hover {
 
 .mp-betslip-selection-fixture {
   font-weight: 600;
+  font-size: 0.95rem;
 }
 
 .mp-betslip-selection-meta {
@@ -2198,8 +2546,9 @@ a:hover {
   flex-wrap: wrap;
   gap: 0.55rem;
   margin-top: 0.3rem;
-  font-size: 0.8rem;
-  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }
 
 .mp-betslip-selection-note {
@@ -2229,10 +2578,12 @@ a:hover {
 }
 
 .mp-betslip-rollover-odds-value {
-  font-size: 1.75rem;
+  font-size: 2rem;
   font-weight: 800;
   color: #5eead4;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .mp-betslip-rollover-odds-label {
@@ -2266,10 +2617,12 @@ a:hover {
 }
 
 .mp-betslip-banker-odds-value {
-  font-size: 1.75rem;
+  font-size: 2rem;
   font-weight: 800;
   color: #fbbf24;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .mp-betslip-banker-odds-label {
@@ -2298,8 +2651,10 @@ a:hover {
 
 .mp-betslip-payout-strip strong {
   display: block;
-  font-size: 1.1rem;
+  font-size: 1.25rem;
   margin-top: 0.15rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
 .mp-betslip-mega-disclaimer {
@@ -2314,12 +2669,37 @@ a:hover {
 }
 
 .mp-betslip-no-banker {
-  margin: 1.25rem 0;
+  margin: 0;
   padding: 0.9rem 1.1rem;
   border-radius: var(--radius-md);
   border: 1px dashed rgba(234, 179, 8, 0.35);
   color: var(--text-secondary);
   background: rgba(234, 179, 8, 0.05);
+}
+
+.mp-betslip-board-section {
+  margin-bottom: 1.75rem;
+}
+
+.mp-betslip-board-label {
+  margin: 0 0 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.mp-betslip-board-section .mp-betslip-banker-wrap {
+  margin: 0;
+}
+
+.mp-betslip-board-section .mp-betslip-grid {
+  margin-top: 0;
+}
+
+.mp-betslip-board-section .mp-betslip-no-banker {
+  margin: 0;
 }
 
 .mp-betslip-records {
@@ -2370,7 +2750,7 @@ a:hover {
 .mp-betslip-record-tabs .mp-tab-btn.active {
   background: var(--bg-card);
   color: var(--text-primary);
-  border-color: rgba(139, 92, 246, 0.5);
+  border-color: rgba(45, 212, 191, 0.55);
 }
 
 .mp-betslip-records-body {
@@ -2398,6 +2778,28 @@ a:hover {
 
 #betslip-record-results .mp-betslip-banker-wrap {
   margin: 0 0 1.25rem;
+}
+
+#betslip-record-results .mp-betslip-card {
+  box-shadow: none;
+  background: var(--bg-card);
+}
+
+#betslip-record-results .mp-betslip-card-rollover,
+#betslip-record-results .mp-betslip-card-banker,
+#betslip-record-results .mp-betslip-card-ai,
+#betslip-record-results .mp-betslip-card-mega {
+  box-shadow: none;
+}
+
+#betslip-record-results .mp-betslip-card-rollover,
+#betslip-record-results .mp-betslip-card-banker {
+  background: var(--bg-card);
+}
+
+#betslip-record-results .mp-betslip-rollover-odds-value,
+#betslip-record-results .mp-betslip-banker-odds-value {
+  font-size: 1.5rem;
 }
 
 .mp-betslip-calendar-nav {
@@ -2457,15 +2859,15 @@ a:hover {
   color: var(--text-primary);
   font-weight: 700;
   text-decoration: none;
-  background: rgba(139, 92, 246, 0.12);
+  background: rgba(45, 212, 191, 0.14);
 }
 
 .mp-betslip-calendar-day.is-today:not(.is-selected) {
-  box-shadow: inset 0 0 0 1px rgba(139, 92, 246, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(45, 212, 191, 0.5);
 }
 
 .mp-betslip-calendar-day.is-selected {
-  background: rgba(139, 92, 246, 0.45);
+  background: rgba(13, 148, 136, 0.85);
   color: #fff;
 }
 

@@ -7,15 +7,18 @@
 
 <div class="mp-container">
     <div class="mp-page-header">
-        <div class="mp-page-title">
-            <div class="mp-page-title-icon" style="background: rgba(99, 102, 241, 0.1);">🤖</div>
-            <h1>AI Betting Companion</h1>
+        <div>
+            <p class="mp-page-kicker">Companion</p>
+            <div class="mp-page-title">
+                <div class="mp-page-title-icon mp-chat-title-icon" aria-hidden="true">🤖</div>
+                <h1>AI Betting Companion</h1>
+            </div>
         </div>
         @if (Model.IsAuthenticated)
         {
             <form method="post" asp-page-handler="Logout">
                 @Html.AntiForgeryToken()
-                <button type="submit" class="mp-book-btn" style="width: auto; padding: 0.65rem 1rem; border-radius: var(--radius-md);">
+                <button type="submit" class="mp-book-btn mp-chat-logout">
                     Log Out
                 </button>
             </form>
@@ -24,28 +27,27 @@
 
 @if (!Model.IsAuthenticated)
 {
-    <div class="mp-ai-auth-container" style="max-width: 400px; margin: 4rem auto; text-align: center; padding: 2rem; background: var(--bg-card); border-radius: var(--radius-lg); border: 1px solid var(--border-color);">
-        <div style="font-size: 3rem; margin-bottom: 1rem;">🔒</div>
-        <h2 style="margin-bottom: 0.5rem;">Access Restricted</h2>
-        <p style="color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem;">
-            Please enter the password to access the AI Prediction Advisor.
+    <div class="mp-chat-auth">
+        <h2 class="mp-chat-auth-title">Access restricted</h2>
+        <p class="mp-chat-auth-copy">
+            Enter the password to open the AI prediction advisor.
         </p>
-        
+
         @if (!string.IsNullOrEmpty(Model.ErrorMessage))
         {
-            <div style="color: var(--accent-rose); background: rgba(244, 63, 94, 0.1); padding: 0.75rem; border-radius: var(--radius-sm); margin-bottom: 1rem; font-size: 0.85rem;">
+            <div class="mp-chat-auth-error" role="alert">
                 @Model.ErrorMessage
             </div>
         }
 
-        <form method="post" style="display: flex; flex-direction: column; gap: 1rem;">
+        <form method="post" class="mp-chat-auth-form">
             @Html.AntiForgeryToken()
-            <input type="password" asp-for="Password" 
-                   class="mp-chat-input" 
-                   style="text-align: center; border-radius: var(--radius-md);" 
-                   placeholder="Enter Password" 
+            <label class="mp-chat-auth-label" asp-for="Password">Password</label>
+            <input type="password" asp-for="Password"
+                   class="mp-chat-input"
+                   autocomplete="current-password"
                    required autofocus />
-            <button type="submit" class="mp-book-btn" style="width: 100%; border-radius: var(--radius-md); padding: 0.75rem;">
+            <button type="submit" class="mp-book-btn mp-chat-auth-submit">
                 Unlock Chat
             </button>
         </form>
@@ -56,29 +58,31 @@ else
     <div class="mp-chat-container" id="chatContainer">
         <div class="mp-chat-messages" id="chatMessages">
             <div class="mp-chat-message mp-chat-ai">
-                <div class="mp-chat-avatar">🤖</div>
+                <div class="mp-chat-avatar" aria-hidden="true">🤖</div>
                 <div class="mp-chat-bubble">
                     <p>Hello! I'm Nelson, your grounded betting companion. I work from MatchPredictor's live card, recent published history, and the app's public analytics logic, so I can help you build slips, refine them, and explain what the app is showing without guessing.</p>
-                    <p style="margin-top: 0.5rem; font-size: 0.85rem; opacity: 0.7;">Try asking:</p>
-                    <ul style="font-size: 0.85rem; opacity: 0.7; margin: 0.25rem 0 0 1rem;">
-                        <li>"Give me 10 of the best BTTS predictions"</li>
-                        <li>"Give me a mixture of btts, over 2.5 and straight win"</li>
-                        <li>"Which draw games would you recommend?"</li>
-                        <li>"Which is riskiest?"</li>
-                        <li>"Why isn't this in value bets?"</li>
-                        <li>"What does reliability mean?"</li>
-                    </ul>
+                    <p class="mp-chat-hint">Try asking</p>
+                    <div class="mp-chat-chip-row">
+                        <button type="button" class="mp-chat-chip" data-chat-prompt="Give me 10 of the best BTTS predictions">Give me 10 of the best BTTS predictions</button>
+                        <button type="button" class="mp-chat-chip" data-chat-prompt="Give me a mixture of btts, over 2.5 and straight win">Give me a mixture of BTTS, Over 2.5 and Straight Win</button>
+                        <button type="button" class="mp-chat-chip" data-chat-prompt="Which draw games would you recommend?">Which draw games would you recommend?</button>
+                        <button type="button" class="mp-chat-chip" data-chat-prompt="Which is riskiest?">Which is riskiest?</button>
+                        <button type="button" class="mp-chat-chip" data-chat-prompt="Why isn't this in value bets?">Why isn't this in value bets?</button>
+                        <button type="button" class="mp-chat-chip" data-chat-prompt="What does reliability mean?">What does reliability mean?</button>
+                    </div>
                 </div>
             </div>
         </div>
 
         <div class="mp-chat-input-area">
-            <input type="text" id="chatInput" class="mp-chat-input"
-                   placeholder="Ask about today's picks or a recent settled match..."
-                   autocomplete="off" />
-            <button id="chatSendBtn" class="mp-chat-send-btn" onclick="sendChatMessage()">
-                Send
-            </button>
+            <div class="mp-chat-composer">
+                <input type="text" id="chatInput" class="mp-chat-input"
+                       placeholder="Ask about today's picks or a recent settled match..."
+                       autocomplete="off" />
+                <button type="button" id="chatSendBtn" class="mp-chat-send-btn" onclick="sendChatMessage()">
+                    Send
+                </button>
+            </div>
         </div>
     </div>
 }
@@ -137,9 +141,7 @@ else
 
         if (Array.isArray(response.warnings) && response.warnings.length > 0) {
             const warnings = document.createElement('div');
-            warnings.style.marginTop = '0.75rem';
-            warnings.style.fontSize = '0.8rem';
-            warnings.style.opacity = '0.75';
+            warnings.className = 'mp-chat-warnings';
             warnings.innerHTML = response.warnings
                 .map(warning => `<div>${escapeHtml(warning)}</div>`)
                 .join('');
@@ -152,200 +154,20 @@ else
 
         if (Array.isArray(response.actions) && response.actions.length > 0) {
             const actions = document.createElement('div');
-            actions.style.display = 'grid';
-            actions.style.gap = '0.75rem';
-            actions.style.marginTop = '0.85rem';
-
-            response.actions.forEach(action => {
-                const card = document.createElement('div');
-                card.style.padding = '0.85rem';
-                card.style.borderRadius = '12px';
-                card.style.border = '1px solid rgba(148, 163, 184, 0.16)';
-                card.style.background = 'rgba(15, 23, 42, 0.35)';
-
-                const title = document.createElement('div');
-                title.style.fontWeight = '600';
-                title.style.fontSize = '0.9rem';
-                title.textContent = `${action.homeTeam} vs ${action.awayTeam}`;
-                card.appendChild(title);
-
-                const meta = document.createElement('div');
-                meta.style.marginTop = '0.3rem';
-                meta.style.fontSize = '0.75rem';
-                meta.style.opacity = '0.72';
-                const metaParts = [
-                    action.matchDateLabel || 'Today',
-                    action.league || 'Card',
-                    action.market || 'Market',
-                    action.prediction || 'Pick'
-                ];
-                if (action.kickoffTime) {
-                    metaParts.push(action.kickoffTime);
-                }
-                if (action.status) {
-                    metaParts.push(action.status);
-                }
-                if (Number.isFinite(Number(action.estimatedOdds))) {
-                    metaParts.push(`~${Number(action.estimatedOdds).toFixed(2)} odds`);
-                }
-                meta.textContent = metaParts.join(' • ');
-                card.appendChild(meta);
-
-                const statParts = [];
-                if (Number.isFinite(Number(action.modelProbability))) {
-                    statParts.push(`Model ${(Number(action.modelProbability) * 100).toFixed(1)}%`);
-                }
-                if (Number.isFinite(Number(action.marketProbability))) {
-                    statParts.push(`Market ${(Number(action.marketProbability) * 100).toFixed(1)}%`);
-                }
-                if (Number.isFinite(Number(action.edgePoints))) {
-                    const edge = Number(action.edgePoints);
-                    statParts.push(`Edge ${edge >= 0 ? '+' : ''}${edge.toFixed(1)} pts`);
-                }
-
-                if (statParts.length > 0) {
-                    const stats = document.createElement('div');
-                    stats.style.marginTop = '0.45rem';
-                    stats.style.fontSize = '0.74rem';
-                    stats.style.opacity = '0.78';
-                    stats.textContent = statParts.join(' • ');
-                    card.appendChild(stats);
-                }
-
-                if (action.explanation) {
-                    const explanation = document.createElement('div');
-                    explanation.style.marginTop = '0.55rem';
-                    explanation.style.fontSize = '0.82rem';
-                    explanation.style.lineHeight = '1.5';
-                    explanation.innerHTML = formatMessageHtml(action.explanation);
-                    card.appendChild(explanation);
-                }
-
-                if (action.analysisSummary || (Array.isArray(action.insightBullets) && action.insightBullets.length > 0) || action.analysisConfidence || action.insightSource) {
-                    const insightPanel = document.createElement('div');
-                    insightPanel.style.marginTop = '0.7rem';
-                    insightPanel.style.padding = '0.75rem';
-                    insightPanel.style.borderRadius = '10px';
-                    insightPanel.style.border = '1px solid rgba(56, 189, 248, 0.18)';
-                    insightPanel.style.background = 'rgba(8, 47, 73, 0.22)';
-
-                    const insightHeader = document.createElement('div');
-                    insightHeader.style.display = 'flex';
-                    insightHeader.style.flexWrap = 'wrap';
-                    insightHeader.style.alignItems = 'center';
-                    insightHeader.style.gap = '0.45rem';
-
-                    const insightTitle = document.createElement('div');
-                    insightTitle.style.fontSize = '0.74rem';
-                    insightTitle.style.fontWeight = '700';
-                    insightTitle.style.letterSpacing = '0.05em';
-                    insightTitle.style.textTransform = 'uppercase';
-                    insightTitle.style.opacity = '0.78';
-                    insightTitle.textContent = 'Football Read';
-                    insightHeader.appendChild(insightTitle);
-
-                    if (action.analysisConfidence) {
-                        const confidenceChip = document.createElement('span');
-                        confidenceChip.style.fontSize = '0.7rem';
-                        confidenceChip.style.padding = '0.2rem 0.45rem';
-                        confidenceChip.style.borderRadius = '999px';
-                        confidenceChip.style.background = 'rgba(14, 165, 233, 0.14)';
-                        confidenceChip.style.border = '1px solid rgba(14, 165, 233, 0.22)';
-                        confidenceChip.textContent = `${action.analysisConfidence} sample`;
-                        insightHeader.appendChild(confidenceChip);
-                    }
-
-                    if (action.insightSource) {
-                        const source = document.createElement('span');
-                        source.style.fontSize = '0.7rem';
-                        source.style.opacity = '0.68';
-                        source.textContent = action.insightSource;
-                        insightHeader.appendChild(source);
-                    }
-
-                    insightPanel.appendChild(insightHeader);
-
-                    if (action.analysisSummary) {
-                        const summary = document.createElement('div');
-                        summary.style.marginTop = '0.45rem';
-                        summary.style.fontSize = '0.8rem';
-                        summary.style.lineHeight = '1.45';
-                        summary.innerHTML = formatMessageHtml(action.analysisSummary);
-                        insightPanel.appendChild(summary);
-                    }
-
-                    if (Array.isArray(action.insightBullets) && action.insightBullets.length > 0) {
-                        const bulletList = document.createElement('div');
-                        bulletList.style.display = 'grid';
-                        bulletList.style.gap = '0.28rem';
-                        bulletList.style.marginTop = action.analysisSummary ? '0.45rem' : '0.35rem';
-
-                        action.insightBullets.forEach(item => {
-                            const bullet = document.createElement('div');
-                            bullet.style.fontSize = '0.76rem';
-                            bullet.style.lineHeight = '1.45';
-                            bullet.style.opacity = '0.82';
-                            bullet.innerHTML = `• ${formatMessageHtml(item)}`;
-                            bulletList.appendChild(bullet);
-                        });
-
-                        insightPanel.appendChild(bulletList);
-                    }
-
-                    card.appendChild(insightPanel);
-                }
-
-                if (action.actualScore) {
-                    const settledScore = document.createElement('div');
-                    settledScore.style.marginTop = '0.55rem';
-                    settledScore.style.fontSize = '0.8rem';
-                    settledScore.style.opacity = '0.82';
-                    settledScore.textContent = `Final score: ${action.actualScore}`;
-                    card.appendChild(settledScore);
-                }
-
-                if (action.canBook !== false) {
-                    const btn = document.createElement('button');
-                    btn.className = 'mp-add-cart-btn mp-btn-sm';
-                    btn.style.display = 'inline-flex';
-                    btn.style.alignItems = 'center';
-                    btn.style.justifyContent = 'center';
-                    btn.style.marginTop = '0.7rem';
-                    btn.style.padding = '6px 12px';
-                    btn.style.fontSize = '0.78rem';
-                    btn.style.borderRadius = '8px';
-                    btn.style.lineHeight = '1';
-                    btn.textContent = `+ Add ${action.market}`;
-                    btn.dataset.home = action.homeTeam || '';
-                    btn.dataset.away = action.awayTeam || '';
-                    btn.dataset.league = action.league || '';
-                    btn.dataset.market = action.market || '';
-                    btn.dataset.prediction = action.prediction || '';
-                    btn.dataset.predictionId = action.predictionId ? String(action.predictionId) : '';
-                    btn.dataset.matchDatetimeUtc = action.matchDateTimeUtc || '';
-                    card.appendChild(btn);
-                }
-                actions.appendChild(card);
-            });
-
+            actions.className = 'mp-chat-action-list';
+            response.actions.forEach(action => actions.appendChild(buildActionCard(action)));
             bubble.appendChild(actions);
         }
 
         if (response.showBookAll && Array.isArray(response.actions) && response.actions.length > 0) {
             const footer = document.createElement('div');
-            footer.style.marginTop = '12px';
-            footer.style.paddingTop = '12px';
-            footer.style.borderTop = '1px solid rgba(255,255,255,0.1)';
+            footer.className = 'mp-chat-book-footer';
 
             const btn = document.createElement('button');
             btn.className = 'mp-book-btn';
-            btn.style.fontSize = '0.85rem';
-            btn.style.padding = '8px 16px';
-            btn.style.width = 'auto';
-            btn.style.borderRadius = '8px';
             btn.textContent = response.actions.length === 1
-                ? '🎫 Add & Open Slip'
-                : '🎫 Add All & Open Slip';
+                ? 'Add & Open Slip'
+                : 'Add All & Open Slip';
             btn.addEventListener('click', () => addAllAndBook(btn));
 
             footer.appendChild(btn);
@@ -371,27 +193,148 @@ else
         }
     }
 
-    function buildWorkingSlipSummary(summary) {
-        const shell = document.createElement('div');
-        shell.style.marginTop = '0.8rem';
-        shell.style.padding = '0.85rem';
-        shell.style.borderRadius = '12px';
-        shell.style.border = '1px solid rgba(59, 130, 246, 0.2)';
-        shell.style.background = 'rgba(59, 130, 246, 0.08)';
+    function buildActionCard(action) {
+        const card = document.createElement('div');
+        card.className = 'mp-chat-action';
 
         const title = document.createElement('div');
-        title.style.fontSize = '0.78rem';
-        title.style.textTransform = 'uppercase';
-        title.style.letterSpacing = '0.08em';
-        title.style.opacity = '0.7';
-        title.style.fontWeight = '700';
+        title.className = 'mp-chat-action-title';
+        title.textContent = `${action.homeTeam} vs ${action.awayTeam}`;
+        card.appendChild(title);
+
+        const meta = document.createElement('div');
+        meta.className = 'mp-chat-action-meta';
+        const metaParts = [
+            action.matchDateLabel || 'Today',
+            action.league || 'Card',
+            action.market || 'Market',
+            action.prediction || 'Pick'
+        ];
+        if (action.kickoffTime) {
+            metaParts.push(action.kickoffTime);
+        }
+        if (action.status) {
+            metaParts.push(action.status);
+        }
+        if (Number.isFinite(Number(action.estimatedOdds))) {
+            metaParts.push(`~${Number(action.estimatedOdds).toFixed(2)} odds`);
+        }
+        meta.textContent = metaParts.join(' • ');
+        card.appendChild(meta);
+
+        const statParts = [];
+        if (Number.isFinite(Number(action.modelProbability))) {
+            statParts.push(`Model ${(Number(action.modelProbability) * 100).toFixed(1)}%`);
+        }
+        if (Number.isFinite(Number(action.marketProbability))) {
+            statParts.push(`Market ${(Number(action.marketProbability) * 100).toFixed(1)}%`);
+        }
+        if (Number.isFinite(Number(action.edgePoints))) {
+            const edge = Number(action.edgePoints);
+            statParts.push(`Edge ${edge >= 0 ? '+' : ''}${edge.toFixed(1)} pts`);
+        }
+
+        if (statParts.length > 0) {
+            const stats = document.createElement('div');
+            stats.className = 'mp-chat-action-stats';
+            stats.textContent = statParts.join(' • ');
+            card.appendChild(stats);
+        }
+
+        if (action.explanation) {
+            const explanation = document.createElement('div');
+            explanation.className = 'mp-chat-action-explanation';
+            explanation.innerHTML = formatMessageHtml(action.explanation);
+            card.appendChild(explanation);
+        }
+
+        if (action.analysisSummary || (Array.isArray(action.insightBullets) && action.insightBullets.length > 0) || action.analysisConfidence || action.insightSource) {
+            const insightPanel = document.createElement('div');
+            insightPanel.className = 'mp-chat-insight';
+
+            const insightHeader = document.createElement('div');
+            insightHeader.className = 'mp-chat-insight-header';
+
+            const insightTitle = document.createElement('div');
+            insightTitle.className = 'mp-chat-insight-title';
+            insightTitle.textContent = 'Football Read';
+            insightHeader.appendChild(insightTitle);
+
+            if (action.analysisConfidence) {
+                const confidenceChip = document.createElement('span');
+                confidenceChip.className = 'mp-chat-insight-chip';
+                confidenceChip.textContent = `${action.analysisConfidence} sample`;
+                insightHeader.appendChild(confidenceChip);
+            }
+
+            if (action.insightSource) {
+                const source = document.createElement('span');
+                source.className = 'mp-chat-insight-source';
+                source.textContent = action.insightSource;
+                insightHeader.appendChild(source);
+            }
+
+            insightPanel.appendChild(insightHeader);
+
+            if (action.analysisSummary) {
+                const summary = document.createElement('div');
+                summary.className = 'mp-chat-insight-summary';
+                summary.innerHTML = formatMessageHtml(action.analysisSummary);
+                insightPanel.appendChild(summary);
+            }
+
+            if (Array.isArray(action.insightBullets) && action.insightBullets.length > 0) {
+                const bulletList = document.createElement('div');
+                bulletList.className = 'mp-chat-insight-bullets';
+
+                action.insightBullets.forEach(item => {
+                    const bullet = document.createElement('div');
+                    bullet.className = 'mp-chat-insight-bullet';
+                    bullet.innerHTML = `• ${formatMessageHtml(item)}`;
+                    bulletList.appendChild(bullet);
+                });
+
+                insightPanel.appendChild(bulletList);
+            }
+
+            card.appendChild(insightPanel);
+        }
+
+        if (action.actualScore) {
+            const settledScore = document.createElement('div');
+            settledScore.className = 'mp-chat-action-score';
+            settledScore.textContent = `Final score: ${action.actualScore}`;
+            card.appendChild(settledScore);
+        }
+
+        if (action.canBook !== false) {
+            const btn = document.createElement('button');
+            btn.className = 'mp-add-cart-btn mp-btn-sm';
+            btn.textContent = `+ Add ${action.market}`;
+            btn.dataset.home = action.homeTeam || '';
+            btn.dataset.away = action.awayTeam || '';
+            btn.dataset.league = action.league || '';
+            btn.dataset.market = action.market || '';
+            btn.dataset.prediction = action.prediction || '';
+            btn.dataset.predictionId = action.predictionId ? String(action.predictionId) : '';
+            btn.dataset.matchDatetimeUtc = action.matchDateTimeUtc || '';
+            card.appendChild(btn);
+        }
+
+        return card;
+    }
+
+    function buildWorkingSlipSummary(summary) {
+        const shell = document.createElement('div');
+        shell.className = 'mp-chat-working-slip';
+
+        const title = document.createElement('div');
+        title.className = 'mp-chat-working-slip-title';
         title.textContent = 'Working Slip';
         shell.appendChild(title);
 
         const stats = document.createElement('div');
-        stats.style.marginTop = '0.4rem';
-        stats.style.fontSize = '0.84rem';
-        stats.style.lineHeight = '1.5';
+        stats.className = 'mp-chat-working-slip-stats';
         const statParts = [
             `${Number(summary.count || 0)} leg${Number(summary.count || 0) === 1 ? '' : 's'}`,
             `${Number(summary.bookableCount || 0)} bookable`
@@ -410,35 +353,23 @@ else
 
     function buildKnowledgeCards(cards) {
         const shell = document.createElement('div');
-        shell.style.display = 'grid';
-        shell.style.gap = '0.65rem';
-        shell.style.marginTop = '0.8rem';
+        shell.className = 'mp-chat-knowledge-list';
 
         cards.forEach(card => {
             const article = document.createElement('div');
-            article.style.padding = '0.8rem';
-            article.style.borderRadius = '12px';
-            article.style.border = '1px solid rgba(148, 163, 184, 0.16)';
-            article.style.background = 'rgba(15, 23, 42, 0.32)';
+            article.className = 'mp-chat-knowledge';
 
             const header = document.createElement('div');
-            header.style.display = 'flex';
-            header.style.justifyContent = 'space-between';
-            header.style.alignItems = 'center';
-            header.style.gap = '0.75rem';
+            header.className = 'mp-chat-knowledge-header';
 
             const title = document.createElement('div');
-            title.style.fontWeight = '700';
-            title.style.fontSize = '0.88rem';
+            title.className = 'mp-chat-knowledge-title';
             title.textContent = card.title || 'Knowledge';
             header.appendChild(title);
 
             if (card.kind) {
                 const kind = document.createElement('span');
-                kind.style.fontSize = '0.72rem';
-                kind.style.opacity = '0.7';
-                kind.style.textTransform = 'uppercase';
-                kind.style.letterSpacing = '0.08em';
+                kind.className = 'mp-chat-knowledge-kind';
                 kind.textContent = card.kind;
                 header.appendChild(kind);
             }
@@ -446,9 +377,7 @@ else
             article.appendChild(header);
 
             const body = document.createElement('div');
-            body.style.marginTop = '0.5rem';
-            body.style.fontSize = '0.82rem';
-            body.style.lineHeight = '1.55';
+            body.className = 'mp-chat-knowledge-body';
             body.innerHTML = formatMessageHtml(card.body || '');
             article.appendChild(body);
 
@@ -460,21 +389,12 @@ else
 
     function buildSuggestedPromptChips(prompts) {
         const shell = document.createElement('div');
-        shell.style.display = 'flex';
-        shell.style.flexWrap = 'wrap';
-        shell.style.gap = '0.55rem';
-        shell.style.marginTop = '0.9rem';
+        shell.className = 'mp-chat-chip-row';
 
         prompts.forEach(prompt => {
             const button = document.createElement('button');
             button.type = 'button';
-            button.style.border = '1px solid rgba(148, 163, 184, 0.18)';
-            button.style.background = 'rgba(30, 41, 59, 0.5)';
-            button.style.color = 'var(--text-primary)';
-            button.style.borderRadius = '999px';
-            button.style.padding = '0.45rem 0.75rem';
-            button.style.fontSize = '0.78rem';
-            button.style.cursor = 'pointer';
+            button.className = 'mp-chat-chip';
             button.textContent = prompt;
             button.addEventListener('click', () => sendSuggestedPrompt(prompt));
             shell.appendChild(button);
@@ -511,7 +431,6 @@ else
 
         btn.textContent = `Added ${addedCount} picks!`;
         btn.disabled = true;
-        btn.style.opacity = '0.7';
     }
 
     function addAllAndBookFromBubble(bubble) {
@@ -613,5 +532,9 @@ else
             chatInput.focus();
         }
     }
+
+    document.querySelectorAll('[data-chat-prompt]').forEach(button => {
+        button.addEventListener('click', () => sendSuggestedPrompt(button.getAttribute('data-chat-prompt')));
+    });
 </script>
 }

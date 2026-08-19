@@ -116,20 +116,22 @@
     {
         <div class="mp-betslip-code-row">
             <code class="mp-betslip-code" id="record-betslip-code-@slip.Id">@slip.BookingCode</code>
-            <button type="button"
-                    class="mp-betslip-copy-btn"
-                    data-copy-target="record-betslip-code-@slip.Id">
-                Copy
-            </button>
-            @if (!string.IsNullOrWhiteSpace(slip.BookingUrl))
-            {
-                <a class="mp-book-btn"
-                   href="@slip.BookingUrl"
-                   target="_blank"
-                   rel="noopener noreferrer">
-                    Open in SportyBet
-                </a>
-            }
+            <div class="mp-betslip-code-actions">
+                <button type="button"
+                        class="mp-betslip-copy-btn"
+                        data-copy-target="record-betslip-code-@slip.Id">
+                    Copy
+                </button>
+                @if (!string.IsNullOrWhiteSpace(slip.BookingUrl))
+                {
+                    <a class="mp-book-btn"
+                       href="@slip.BookingUrl"
+                       target="_blank"
+                       rel="noopener noreferrer">
+                        Open in SportyBet
+                    </a>
+                }
+            </div>
         </div>
     }
 
