@@ -162,17 +162,20 @@ public class AnalyticsModel : PageModel
 
     private string SelectDefaultTab()
     {
-        if (TodayStats.SettledForecasts > 0 || TodayStats.ForecastMarketStats.Any())
+        if (HasWindowActivity(TodayStats))
             return "today";
 
-        if (YesterdayStats.SettledForecasts > 0 || YesterdayStats.ForecastMarketStats.Any())
+        if (HasWindowActivity(YesterdayStats))
             return "yesterday";
 
-        if (Last3DaysStats.SettledForecasts > 0 || Last3DaysStats.ForecastMarketStats.Any())
+        if (HasWindowActivity(Last3DaysStats))
             return "3days";
 
         return "7days";
     }
+
+    private static bool HasWindowActivity(AnalyticsStats stats) =>
+        stats.TotalPredictions > 0 || stats.SettledForecasts > 0;
 
     private AnalyticsLiveConfigSnapshot BuildLiveConfigSnapshot(
         IReadOnlyDictionary<PredictionMarket, ThresholdProfile> thresholdProfiles,

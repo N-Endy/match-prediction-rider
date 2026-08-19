@@ -246,6 +246,65 @@ public class ForecastEvaluationServiceTests
         Assert.Equal(PredictionMarket.Under25Goals, marketStats.Market);
     }
 
+    [Fact]
+    public void CalculateStats_IncludesUnpublishedSettledForecasts_InCalibrationMetrics()
+    {
+        var service = new ForecastEvaluationService();
+        var predictions = new[]
+        {
+            new Prediction
+            {
+                MatchLocalDate = new DateOnly(2026, 3, 12),
+                MatchLocalTime = new TimeOnly(18, 0),
+                MatchDateTime = new DateTime(2026, 3, 12, 17, 0, 0, DateTimeKind.Utc),
+                FixtureKey = "league|published-home|published-away",
+                League = "League",
+                HomeTeam = "Published Home",
+                AwayTeam = "Published Away",
+                PredictionCategory = "BothTeamsScore",
+                PredictedOutcome = "BTTS",
+                ActualOutcome = "BTTS",
+                IsLive = false,
+                ConfidenceScore = 0.80m,
+                CreatedAt = new DateTime(2026, 3, 12, 15, 0, 0, DateTimeKind.Utc)
+            }
+        };
+
+        var forecasts = new[]
+        {
+            CreateForecast(0.80, 0.80, occurred: true, calibratorUsed: "Bucket", thresholdSource: "Configured", isPublished: true),
+            CreateForecast(0.20, 0.20, occurred: false, calibratorUsed: "Bucket", thresholdSource: "Configured", isPublished: false)
+        };
+
+        var stats = service.CalculateStats(predictions, forecasts);
+
+        Assert.Equal(1, stats.CompletedPredictions);
+        Assert.Equal(1.0, stats.Precision, 5);
+        Assert.Equal(2, stats.SettledForecasts);
+        Assert.Equal(0.5, stats.ForecastHitRate, 5);
+        Assert.True(stats.BrierScore > 0);
+    }
+
+    [Fact]
+    public void CalculateStats_KeepsIsotonicAsItsOwnCalibratorEra()
+    {
+        var service = new ForecastEvaluationService();
+        var forecasts = new[]
+        {
+            CreateForecast(0.70, 0.68, occurred: true, calibratorUsed: "Isotonic", thresholdSource: "Configured", isPublished: false),
+            CreateForecast(0.40, 0.42, occurred: false, calibratorUsed: "Bucket", thresholdSource: "Configured", isPublished: false)
+        };
+
+        var stats = service.CalculateStats([], forecasts);
+        var market = Assert.Single(stats.ForecastMarketStats);
+
+        Assert.Contains(market.CalibratorEraStats, era => era.Era == "Isotonic" && era.Count == 1);
+        Assert.Contains(market.CalibratorEraStats, era => era.Era == "Bucket" && era.Count == 1);
+        Assert.DoesNotContain(
+            market.CalibratorEraStats,
+            era => era.Era == "Bucket" && era.Count == 2);
+    }
+
     private static ForecastObservation CreateForecast(
         double rawProbability,
         double calibratedProbability,

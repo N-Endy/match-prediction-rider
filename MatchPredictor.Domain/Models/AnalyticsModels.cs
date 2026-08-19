@@ -7,6 +7,7 @@ public class AnalyticsStats
     public int CorrectPredictions { get; set; }
     public double OverallAccuracy { get; set; }
     public int SettledForecasts { get; set; }
+    public double ForecastHitRate { get; set; }
     public double RawBrierScore { get; set; }
     public double BrierScore { get; set; }
     public double LogLoss { get; set; }
@@ -163,6 +164,8 @@ public class LeagueSegmentStat
     public double HitRate { get; set; }
     public double BrierScore { get; set; }
     public double LogLoss { get; set; }
+    public double ExpectedCalibrationError { get; set; }
+    public double Uncertainty { get; set; }
 }
 
 public class SourceSegmentStat
@@ -172,6 +175,8 @@ public class SourceSegmentStat
     public double HitRate { get; set; }
     public double BrierScore { get; set; }
     public double LogLoss { get; set; }
+    public double ExpectedCalibrationError { get; set; }
+    public double Uncertainty { get; set; }
 }
 
 public class BrierDecomposition

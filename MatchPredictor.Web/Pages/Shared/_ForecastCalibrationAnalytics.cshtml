@@ -42,28 +42,17 @@
         <div class="mp-stat-label">raw @(Model.SettledForecasts > 0 ? Model.RawExpectedCalibrationError.ToString("F3") : "0.000")</div>
     </div>
     <div class="mp-stat-card">
-        <div class="mp-stat-label">Precision</div>
+        <div class="mp-stat-label">Hit Rate</div>
         <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">
-            @(Model.SettledForecasts > 0 ? $"{Model.Precision * 100:F1}%" : "0.0%")
+            @(Model.SettledForecasts > 0 ? $"{Model.ForecastHitRate * 100:F1}%" : "0.0%")
         </div>
-    </div>
-    <div class="mp-stat-card">
-        <div class="mp-stat-label">Recall</div>
-        <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">
-            @(Model.SettledForecasts > 0 ? $"{Model.Recall * 100:F1}%" : "0.0%")
-        </div>
-    </div>
-    <div class="mp-stat-card">
-        <div class="mp-stat-label">F1 Score</div>
-        <div class="mp-stat-value mp-stat-figure mp-stat-value-compact">
-            @(Model.SettledForecasts > 0 ? Model.F1Score.ToString("F3") : "0.000")
-        </div>
+        <div class="mp-stat-label">event rate across settled forecasts</div>
     </div>
 </div>
 
 <div class="mp-analytics-note mp-note-with-read">
     <div>
-        <strong>Probability quality view.</strong> These labels grade every settled forecast probability, not just published picks. Lower Brier and Log Loss are better, and curves closer to the diagonal are better calibrated. BTTS and totals often have higher Brier than Home/Away because those probabilities sit nearer 50%.
+        <strong>Probability quality view.</strong> These labels grade every settled forecast probability, not just published picks. Draw forecasts are stored but excluded from this dashboard. Hit rate here is the event base rate (every fixture gets a market row), not published-pick precision. Lower Brier and Log Loss are better, and curves closer to the diagonal are better calibrated. BTTS and totals often have higher Brier than Home/Away because those probabilities sit nearer 50%.
     </div>
     <div class="mp-note-read">
         <span class="mp-read-badge @CalibrationReadEvaluator.CssClass(overallRead)">@overallRead.Label</span>
@@ -409,7 +398,12 @@
                 </div>
                 @foreach (var stat in Model.LeagueSegmentStats)
                 {
-                    var read = CalibrationReadEvaluator.Evaluate(stat.SampleCount, stat.BrierScore, stat.LogLoss);
+                    var read = CalibrationReadEvaluator.Evaluate(
+                        stat.SampleCount,
+                        stat.BrierScore,
+                        stat.LogLoss,
+                        stat.ExpectedCalibrationError,
+                        stat.Uncertainty);
                     <div class="mp-segment-row">
                         <div class="mp-segment-name">
                             <span class="mp-segment-title">@stat.League</span>
@@ -452,7 +446,12 @@
                 </div>
                 @foreach (var stat in Model.SourceSegmentStats)
                 {
-                    var read = CalibrationReadEvaluator.Evaluate(stat.SampleCount, stat.BrierScore, stat.LogLoss);
+                    var read = CalibrationReadEvaluator.Evaluate(
+                        stat.SampleCount,
+                        stat.BrierScore,
+                        stat.LogLoss,
+                        stat.ExpectedCalibrationError,
+                        stat.Uncertainty);
                     <div class="mp-segment-row">
                         <div class="mp-segment-name">
                             <span class="mp-segment-title">@stat.SourceName</span>

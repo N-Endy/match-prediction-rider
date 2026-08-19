@@ -92,6 +92,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
                 settledForecasts.Select(forecast => (forecast.CalibratedProbability, forecast.OutcomeOccurred!.Value)));
             var overallObservedRate = settledForecasts.Average(forecast => forecast.OutcomeOccurred == true ? 1.0 : 0.0);
             stats.Uncertainty = overallObservedRate * (1.0 - overallObservedRate);
+            stats.ForecastHitRate = overallObservedRate;
             stats.ConfidenceBandStats = BuildConfidenceBandStats(settledForecasts);
             stats.LeagueSegmentStats = BuildLeagueSegmentStats(settledForecasts);
             stats.SourceSegmentStats = BuildSourceSegmentStats(settledForecasts);
@@ -498,7 +499,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
             CalibratorEraStats = BuildEraStats(
                 settled,
                 forecast => NormalizeCalibrator(forecast.CalibratorUsed),
-                ["Bucket", "Beta", "Unknown"]),
+                ["Isotonic", "Beta", "Bucket", "Unknown"]),
             ThresholdEraStats = BuildEraStats(
                 settled.Where(forecast => forecast.IsPublished),
                 forecast => NormalizeThresholdSource(forecast.ThresholdSource),
@@ -543,13 +544,19 @@ public class ForecastEvaluationService : IForecastEvaluationService
             .Select(group =>
             {
                 var items = group.ToList();
+                var outcomes = items
+                    .Select(item => (Probability: item.CalibratedProbability, Outcome: item.OutcomeOccurred!.Value))
+                    .ToList();
+                var hitRate = items.Average(item => item.OutcomeOccurred == true ? 1.0 : 0.0);
                 return new LeagueSegmentStat
                 {
                     League = group.Key,
                     SampleCount = items.Count,
-                    HitRate = items.Average(item => item.OutcomeOccurred == true ? 1.0 : 0.0),
+                    HitRate = hitRate,
                     BrierScore = items.Average(item => SquaredError(item.CalibratedProbability, item.OutcomeOccurred!.Value)),
-                    LogLoss = items.Average(item => BinaryLogLoss(item.CalibratedProbability, item.OutcomeOccurred!.Value))
+                    LogLoss = items.Average(item => BinaryLogLoss(item.CalibratedProbability, item.OutcomeOccurred!.Value)),
+                    ExpectedCalibrationError = CalculateExpectedCalibrationError(outcomes),
+                    Uncertainty = hitRate * (1.0 - hitRate)
                 };
             })
             .OrderByDescending(stat => stat.SampleCount)
@@ -564,13 +571,19 @@ public class ForecastEvaluationService : IForecastEvaluationService
             .Select(group =>
             {
                 var items = group.ToList();
+                var outcomes = items
+                    .Select(item => (Probability: item.CalibratedProbability, Outcome: item.OutcomeOccurred!.Value))
+                    .ToList();
+                var hitRate = items.Average(item => item.OutcomeOccurred == true ? 1.0 : 0.0);
                 return new SourceSegmentStat
                 {
                     SourceName = group.Key,
                     SampleCount = items.Count,
-                    HitRate = items.Average(item => item.OutcomeOccurred == true ? 1.0 : 0.0),
+                    HitRate = hitRate,
                     BrierScore = items.Average(item => SquaredError(item.CalibratedProbability, item.OutcomeOccurred!.Value)),
-                    LogLoss = items.Average(item => BinaryLogLoss(item.CalibratedProbability, item.OutcomeOccurred!.Value))
+                    LogLoss = items.Average(item => BinaryLogLoss(item.CalibratedProbability, item.OutcomeOccurred!.Value)),
+                    ExpectedCalibrationError = CalculateExpectedCalibrationError(outcomes),
+                    Uncertainty = hitRate * (1.0 - hitRate)
                 };
             })
             .OrderByDescending(stat => stat.SampleCount)
@@ -719,7 +732,22 @@ public class ForecastEvaluationService : IForecastEvaluationService
             return "Unknown";
         }
 
-        return calibratorUsed.Equals("Beta", StringComparison.OrdinalIgnoreCase) ? "Beta" : "Bucket";
+        if (calibratorUsed.Equals("Isotonic", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Isotonic";
+        }
+
+        if (calibratorUsed.Equals("Beta", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Beta";
+        }
+
+        if (calibratorUsed.Equals("Bucket", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Bucket";
+        }
+
+        return calibratorUsed.Trim();
     }
 
     private static string NormalizeThresholdSource(string? thresholdSource)
