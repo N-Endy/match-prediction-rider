@@ -103,17 +103,31 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
             LogComposeFunnel(universe, mainPool, aiPassedCount);
 
-            var rollover = await ComposeRolloverFromPassersAsync(mainPool, settings);
+            var (morningRolloverFixtures, morningBankerFixtures) =
+                await LoadMorningUsedFixturesAsync(today, normalizedRunLabel);
+
+            var rolloverPool = ExcludeUsedFixtures(mainPool, morningRolloverFixtures);
+            var rollover = await ComposeRolloverFromPassersAsync(rolloverPool, settings);
             if (rollover is not null)
             {
                 composed.Add(rollover);
             }
 
             var usedFixtureKeys = CollectFixtureKeys(composed);
-            var bankerPassers = ExcludeUsedFixtures(
-                FilterByCategory(mainPool, MainCategories),
-                usedFixtureKeys);
-            var banker = await ComposeBankerFromPassersAsync(bankerPassers, settings);
+            UnionFixtureKeys(usedFixtureKeys, morningRolloverFixtures);
+
+            var mainPassers = FilterByCategory(mainPool, MainCategories);
+            var freshBankerKeys = new HashSet<string>(usedFixtureKeys, StringComparer.OrdinalIgnoreCase);
+            UnionFixtureKeys(freshBankerKeys, morningBankerFixtures);
+            var banker = await ComposeBankerFromPassersAsync(
+                ExcludeUsedFixtures(mainPassers, freshBankerKeys),
+                settings);
+            if (banker is null && morningBankerFixtures.Count > 0)
+            {
+                banker = await ComposeBankerFromPassersAsync(
+                    ExcludeUsedFixtures(mainPassers, usedFixtureKeys),
+                    settings);
+            }
             if (banker is not null)
             {
                 composed.Add(banker);
@@ -1431,11 +1445,106 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         return true;
     }
 
+    private async Task<(HashSet<string> Rollover, HashSet<string> Banker)> LoadMorningUsedFixturesAsync(
+        DateOnly today,
+        string currentRunLabel)
+    {
+        var rollover = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var banker = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.Equals(currentRunLabel, BetslipRunLabels.Midday, StringComparison.OrdinalIgnoreCase))
+        {
+            return (rollover, banker);
+        }
+
+        var morningSets = await _dbContext.BetslipSets
+            .AsNoTracking()
+            .Include(s => s.Slips)
+                .ThenInclude(s => s.Selections)
+            .Where(s => s.SlipLocalDate == today && s.RunLabel == BetslipRunLabels.Morning)
+            .ToListAsync();
+
+        var morningSelections = morningSets
+            .SelectMany(s => s.Slips)
+            .SelectMany(s => s.Selections)
+            .Where(s => s.PredictionId is > 0)
+            .Select(s => s.PredictionId!.Value)
+            .Distinct()
+            .ToList();
+
+        var fixtureByPredictionId = new Dictionary<int, string>();
+        if (morningSelections.Count > 0)
+        {
+            var rows = await _dbContext.Predictions
+                .AsNoTracking()
+                .Where(p => morningSelections.Contains(p.Id))
+                .Select(p => new { p.Id, p.FixtureKey, p.League, p.HomeTeam, p.AwayTeam, p.MatchLocalDate })
+                .ToListAsync();
+
+            foreach (var row in rows)
+            {
+                fixtureByPredictionId[row.Id] = string.IsNullOrWhiteSpace(row.FixtureKey)
+                    ? $"{row.League}|{row.HomeTeam}|{row.AwayTeam}|{row.MatchLocalDate}"
+                    : row.FixtureKey;
+            }
+        }
+
+        foreach (var slip in morningSets.SelectMany(s => s.Slips))
+        {
+            HashSet<string>? target = null;
+            if (IsRolloverSlip(slip))
+            {
+                target = rollover;
+            }
+            else if (IsBankerSlip(slip))
+            {
+                target = banker;
+            }
+
+            if (target is null)
+            {
+                continue;
+            }
+
+            foreach (var selection in slip.Selections)
+            {
+                if (selection.PredictionId is int predictionId &&
+                    fixtureByPredictionId.TryGetValue(predictionId, out var key))
+                {
+                    target.Add(key);
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(selection.HomeTeam) || string.IsNullOrWhiteSpace(selection.AwayTeam))
+                {
+                    continue;
+                }
+
+                var matchDate = selection.MatchDateTimeUtc is DateTime kickoffUtc
+                    ? DateTimeProvider.ConvertUtcToLocalDate(kickoffUtc)
+                    : today;
+                target.Add($"{selection.League}|{selection.HomeTeam}|{selection.AwayTeam}|{matchDate}");
+            }
+        }
+
+        return (rollover, banker);
+    }
+
     private static HashSet<string> CollectFixtureKeys(IEnumerable<ComposedBetslip> slips)
     {
         var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         AddFixtureKeys(keys, slips);
         return keys;
+    }
+
+    private static void UnionFixtureKeys(HashSet<string> keys, IEnumerable<string> extra)
+    {
+        foreach (var key in extra)
+        {
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                keys.Add(key);
+            }
+        }
     }
 
     private static void AddFixtureKeys(HashSet<string> keys, IEnumerable<ComposedBetslip> slips)

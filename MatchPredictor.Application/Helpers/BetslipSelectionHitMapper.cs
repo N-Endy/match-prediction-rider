@@ -57,12 +57,26 @@ public static class BetslipSelectionHitMapper
         IReadOnlyDictionary<int, Prediction> predictionsById,
         IReadOnlyList<Prediction> fallbackPredictions)
     {
-        if (selection.PredictionId is int predictionId &&
-            predictionsById.TryGetValue(predictionId, out var byId))
+        Prediction? stored = null;
+        if (selection.PredictionId is int predictionId)
         {
-            return byId;
+            predictionsById.TryGetValue(predictionId, out stored);
         }
 
+        if (stored is not null && IsSettled(stored))
+        {
+            return stored;
+        }
+
+        var fallback = FindFallback(selection, slipDate, fallbackPredictions);
+        return fallback ?? stored;
+    }
+
+    private static Prediction? FindFallback(
+        BetslipSelection selection,
+        DateOnly slipDate,
+        IReadOnlyList<Prediction> fallbackPredictions)
+    {
         if (fallbackPredictions.Count == 0)
         {
             return null;
@@ -84,6 +98,10 @@ public static class BetslipSelectionHitMapper
                    string.Equals(prediction.PredictedOutcome, selection.PredictedOutcome, StringComparison.OrdinalIgnoreCase))
                ?? candidates.FirstOrDefault();
     }
+
+    private static bool IsSettled(Prediction prediction) =>
+        !string.IsNullOrWhiteSpace(prediction.ActualScore)
+        || !string.IsNullOrWhiteSpace(prediction.ActualOutcome);
 
     private static string Normalize(string? value) =>
         (value ?? string.Empty).Trim().ToLowerInvariant();
