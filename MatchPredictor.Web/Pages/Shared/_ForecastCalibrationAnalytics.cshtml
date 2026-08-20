@@ -9,6 +9,10 @@
         Model.LogLoss,
         Model.ExpectedCalibrationError,
         Model.Uncertainty);
+    var hasPublishedSummary = Model.CompletedPredictions > 0;
+    var publishedWinRate = hasPublishedSummary
+        ? Model.OverallAccuracy * 100
+        : 0.0;
 }
 
 <div class="mp-stat-grid">
@@ -52,10 +56,30 @@
 
 <div class="mp-analytics-note mp-note-with-read">
     <div>
-        <strong>Probability quality view.</strong> These labels grade every settled forecast probability, not just published picks. Draw forecasts are stored but excluded from this dashboard. Hit rate here is the event base rate (every fixture gets a market row), not published-pick precision. Lower Brier and Log Loss are better, and curves closer to the diagonal are better calibrated. BTTS and totals often have higher Brier than Home/Away because those probabilities sit nearer 50%.
+        <strong>Probability quality view.</strong> Labels below grade every settled forecast probability — including fixtures that never made the card. This is not published-pick win rate. Hit rate here is the event base rate. Lower Brier, Log Loss, and ECE are better.
+        <div class="mp-calibration-compare mp-calibration-compare-overall" role="group" aria-label="Published picks versus all forecasts">
+            @if (hasPublishedSummary)
+            {
+                <div class="mp-calibration-compare-item">
+                    <span class="mp-calibration-compare-label">Published picks</span>
+                    <span class="mp-calibration-compare-value">@Model.CorrectPredictions / @Model.CompletedPredictions · @publishedWinRate.ToString("F1")% win rate</span>
+                </div>
+            }
+            else
+            {
+                <div class="mp-calibration-compare-item">
+                    <span class="mp-calibration-compare-label">Published picks</span>
+                    <span class="mp-calibration-compare-value">None settled in this window</span>
+                </div>
+            }
+            <div class="mp-calibration-compare-item">
+                <span class="mp-calibration-compare-label">All forecasts graded</span>
+                <span class="mp-calibration-compare-value">@Model.SettledForecasts settled</span>
+            </div>
+        </div>
     </div>
     <div class="mp-note-read">
-        <span class="mp-read-badge @CalibrationReadEvaluator.CssClass(overallRead)">@overallRead.Label</span>
+        <span class="mp-read-badge mp-read-badge-calibration @CalibrationReadEvaluator.CssClass(overallRead)">@overallRead.Label</span>
         <span class="mp-note-caption">@overallRead.Detail</span>
     </div>
 </div>
@@ -72,6 +96,8 @@
                     market.LogLoss,
                     market.CalibratedExpectedCalibrationError,
                     market.CalibratedDecomposition.Uncertainty);
+                var publishedCategoryKey = market.Market.ToCategory();
+                Model.CategoryStats.TryGetValue(publishedCategoryKey, out var publishedStat);
                 <article class="mp-market-card">
                     <div class="mp-market-header">
                         <div>
@@ -84,8 +110,31 @@
                         </div>
                     </div>
 
+                    @{
+                        var publishedBucketLabel = market.Market is PredictionMarket.HomeWin or PredictionMarket.AwayWin
+                            ? "Published Straight Win"
+                            : "Published picks";
+                    }
+                    <div class="mp-calibration-compare" role="group" aria-label="Published picks versus all @market.MarketName forecasts">
+                        <div class="mp-calibration-compare-item">
+                            <span class="mp-calibration-compare-label">@publishedBucketLabel</span>
+                            @if (publishedStat is { Total: > 0 })
+                            {
+                                <span class="mp-calibration-compare-value">@publishedStat.Correct / @publishedStat.Total · @((publishedStat.Accuracy * 100).ToString("F1"))%</span>
+                            }
+                            else
+                            {
+                                <span class="mp-calibration-compare-value">None settled in this window</span>
+                            }
+                        </div>
+                        <div class="mp-calibration-compare-item">
+                            <span class="mp-calibration-compare-label">All forecasts graded</span>
+                            <span class="mp-calibration-compare-value">@market.SettledCount settled</span>
+                        </div>
+                    </div>
+
                     <div class="mp-read-strip">
-                        <span class="mp-read-badge @CalibrationReadEvaluator.CssClass(marketRead)">@marketRead.Label</span>
+                        <span class="mp-read-badge mp-read-badge-calibration @CalibrationReadEvaluator.CssClass(marketRead)">@marketRead.Label</span>
                         <span class="mp-read-detail">@marketRead.Detail</span>
                     </div>
 
@@ -97,18 +146,6 @@
                         <div class="mp-market-metric-block">
                             <span class="mp-market-metric-label">Log Loss</span>
                             <strong>@market.LogLoss.ToString("F3")</strong>
-                        </div>
-                        <div class="mp-market-metric-block">
-                            <span class="mp-market-metric-label">Precision</span>
-                            <strong>@((market.Precision * 100).ToString("F1"))%</strong>
-                        </div>
-                        <div class="mp-market-metric-block">
-                            <span class="mp-market-metric-label">Recall</span>
-                            <strong>@((market.Recall * 100).ToString("F1"))%</strong>
-                        </div>
-                        <div class="mp-market-metric-block">
-                            <span class="mp-market-metric-label">F1</span>
-                            <strong>@market.F1Score.ToString("F3")</strong>
                         </div>
                         <div class="mp-market-metric-block">
                             <span class="mp-market-metric-label">Cal ECE</span>
@@ -303,18 +340,6 @@
                             <span class="mp-market-metric-label">Log Loss</span>
                             <strong>@band.LogLoss.ToString("F3")</strong>
                         </div>
-                        <div class="mp-market-metric-block">
-                            <span class="mp-market-metric-label">Precision</span>
-                            <strong>@((band.Precision * 100).ToString("F1"))%</strong>
-                        </div>
-                        <div class="mp-market-metric-block">
-                            <span class="mp-market-metric-label">Recall</span>
-                            <strong>@((band.Recall * 100).ToString("F1"))%</strong>
-                        </div>
-                        <div class="mp-market-metric-block">
-                            <span class="mp-market-metric-label">F1</span>
-                            <strong>@band.F1Score.ToString("F3")</strong>
-                        </div>
                     </div>
                 </article>
             }
@@ -409,7 +434,7 @@
                             <span class="mp-segment-title">@stat.League</span>
                             <span class="mp-segment-subtitle">@read.Detail</span>
                         </div>
-                        <span class="mp-read-badge @CalibrationReadEvaluator.CssClass(read)">@read.Label</span>
+                        <span class="mp-read-badge mp-read-badge-calibration @CalibrationReadEvaluator.CssClass(read)">@read.Label</span>
                         <span class="mp-segment-metric">@stat.SampleCount</span>
                         <span class="mp-segment-metric">@((stat.HitRate * 100).ToString("F1"))%</span>
                         <span class="mp-segment-metric">@stat.BrierScore.ToString("F3")</span>
@@ -457,7 +482,7 @@
                             <span class="mp-segment-title">@stat.SourceName</span>
                             <span class="mp-segment-subtitle">@read.Detail</span>
                         </div>
-                        <span class="mp-read-badge @CalibrationReadEvaluator.CssClass(read)">@read.Label</span>
+                        <span class="mp-read-badge mp-read-badge-calibration @CalibrationReadEvaluator.CssClass(read)">@read.Label</span>
                         <span class="mp-segment-metric">@stat.SampleCount</span>
                         <span class="mp-segment-metric">@((stat.HitRate * 100).ToString("F1"))%</span>
                         <span class="mp-segment-metric">@stat.BrierScore.ToString("F3")</span>

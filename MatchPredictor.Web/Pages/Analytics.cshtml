@@ -235,7 +235,7 @@
             </article>
             <article class="mp-glossary-card">
                 <h4>Forecast Calibration</h4>
-                <p>This is about probability quality, not just wins. A 70% forecast should land close to 70% over time. Every generated forecast is included here except Draw, which is stored but left off this dashboard.</p>
+                <p>This measures honesty of all generated probabilities, not card results. A 70% forecast should land near 70% over time. Every generated forecast is included except Draw. Strong published-pick win rates can sit next to mixed calibration if the full probability set is noisy.</p>
             </article>
             <article class="mp-glossary-card">
                 <h4>Brier Score</h4>
@@ -247,7 +247,7 @@
             </article>
             <article class="mp-glossary-card">
                 <h4>Precision / Recall / F1</h4>
-                <p>Published Picks reports how often the card was right as Win Rate. On Forecast Calibration, the market and band figures labeled Precision and Recall are the event hit rate — every fixture already has a row, so they are not a distinct classifier.</p>
+                <p>Published Picks reports how often the card was right as Win Rate. Forecast Calibration focuses on probability quality (Brier, ECE, Log Loss) rather than classifier-style precision/recall.</p>
             </article>
             <article class="mp-glossary-card">
                 <h4>REL / RES / UNC</h4>
@@ -282,8 +282,8 @@
                 <p>This is the worst bankroll drop from a previous peak. It tells you how rough the ride can get even when the strategy is profitable overall.</p>
             </article>
             <article class="mp-glossary-card">
-                <h4>Strong / Caution / Avoid</h4>
-                <p>These labels are shorthand for action. <strong>Strong</strong> means usable calibration, <strong>Caution</strong> means lighter staking, and <strong>Avoid</strong> means pass or wait. A high published hit rate on BTTS can still sit next to Caution if the full probability set is noisy or the sample is small.</p>
+                <h4>Well Calibrated / Mixed / Poorly Calibrated</h4>
+                <p>These labels describe probability quality, not card results. <strong>Well Calibrated</strong> means probabilities track outcomes closely. <strong>Mixed Calibration</strong> means the sample or alignment is in between. <strong>Poorly Calibrated</strong> means elevated ECE or log loss across all forecasts in that window. BTTS can be 14/19 on the card while calibration still flags mixed quality across all BTTS forecasts.</p>
             </article>
             <article class="mp-glossary-card">
                 <h4>Promotion Timeline</h4>
@@ -375,6 +375,70 @@
         max-width: 320px;
         text-align: right;
         line-height: 1.45;
+    }
+
+    .mp-calibration-compare {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.65rem 1rem;
+        margin-top: 0.85rem;
+        padding: 0.7rem 0.85rem;
+        border-radius: 2px;
+        background: rgba(148, 163, 184, 0.06);
+        border: 1px solid rgba(148, 163, 184, 0.14);
+        color: var(--text-secondary);
+        font-size: 0.82rem;
+        line-height: 1.4;
+    }
+
+    .mp-calibration-compare-overall {
+        margin-top: 0.9rem;
+    }
+
+    .mp-calibration-compare-item {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+        min-width: 0;
+    }
+
+    .mp-calibration-compare-label {
+        color: var(--text-muted);
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+
+    .mp-calibration-compare-value {
+        color: var(--text-primary);
+        font-weight: 600;
+        font-size: 0.86rem;
+    }
+
+    .mp-read-badge-calibration {
+        letter-spacing: 0.02em;
+        text-transform: none;
+        white-space: normal;
+        text-align: center;
+        line-height: 1.25;
+        max-width: 11.5rem;
+    }
+
+    @media (max-width: 640px) {
+        .mp-calibration-compare {
+            grid-template-columns: 1fr;
+        }
+
+        .mp-note-read {
+            align-items: flex-start;
+            width: 100%;
+        }
+
+        .mp-note-caption {
+            text-align: left;
+            max-width: none;
+        }
     }
 
     .mp-read-strip {

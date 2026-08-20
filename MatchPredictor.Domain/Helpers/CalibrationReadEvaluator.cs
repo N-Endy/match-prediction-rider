@@ -34,7 +34,7 @@ public static class CalibrationReadEvaluator
         {
             return new CalibrationRead(
                 CalibrationReadKind.Avoid,
-                "Too little settled history to trust this segment on its own yet.");
+                "Not enough settled forecasts for a reliable calibration read.");
         }
 
         var poorlyCalibrated = IsPoorlyCalibrated(brierScore, logLoss, expectedCalibrationError, uncertainty);
@@ -43,17 +43,17 @@ public static class CalibrationReadEvaluator
             return poorlyCalibrated
                 ? new CalibrationRead(
                     CalibrationReadKind.Caution,
-                    "Sample is still light, and the probabilities look noisier than this market's base rate.")
+                    "Sample is still light, and probabilities look noisier than this market's base rate.")
                 : new CalibrationRead(
                     CalibrationReadKind.Caution,
-                    "Signal is starting to form, but the sample is still light.");
+                    "Early signal is forming, but the sample is still too light for a firm read.");
         }
 
         if (poorlyCalibrated)
         {
             return new CalibrationRead(
                 CalibrationReadKind.Avoid,
-                "Forecast quality is currently too loose for normal staking.");
+                "Probabilities are misaligned with outcomes in this window (elevated ECE or log loss).");
         }
 
         if (IsCleanlyCalibrated(brierScore, logLoss, expectedCalibrationError, uncertainty))
@@ -61,7 +61,7 @@ public static class CalibrationReadEvaluator
             return sampleCount >= 40
                 ? new CalibrationRead(
                     CalibrationReadKind.Strong,
-                    "Healthy sample and clean enough probability quality to lean on.")
+                    "Healthy sample with probabilities that track outcomes closely.")
                 : new CalibrationRead(
                     CalibrationReadKind.Strong,
                     "Settled probabilities in this window look well calibrated.");
@@ -69,7 +69,7 @@ public static class CalibrationReadEvaluator
 
         return new CalibrationRead(
             CalibrationReadKind.Caution,
-            "Playable, but keep stake size measured until the edge looks cleaner.");
+            "Calibration is in between — probabilities are usable but not yet clean across the full sample.");
     }
 
     private static bool IsPoorlyCalibrated(

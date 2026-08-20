@@ -12,6 +12,8 @@ public class CalibrationReadEvaluatorTests
         var read = CalibrationReadEvaluator.Evaluate(4, brierScore: 0.03, logLoss: 0.10);
 
         Assert.Equal(CalibrationReadKind.Avoid, read.Kind);
+        Assert.Equal("Poorly Calibrated", read.Label);
+        Assert.Contains("Not enough settled forecasts", read.Detail, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(CalibrationReadEvaluator.AvoidCssClass, CalibrationReadEvaluator.CssClass(read));
     }
 
@@ -26,7 +28,8 @@ public class CalibrationReadEvaluatorTests
             uncertainty: 0.18);
 
         Assert.Equal(CalibrationReadKind.Caution, read.Kind);
-        Assert.Contains("sample is still light", read.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Mixed Calibration", read.Label);
+        Assert.Contains("sample is still too light", read.Detail, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -42,6 +45,7 @@ public class CalibrationReadEvaluatorTests
             uncertainty: 0.24);
 
         Assert.Equal(CalibrationReadKind.Strong, read.Kind);
+        Assert.Equal("Well Calibrated", read.Label);
     }
 
     [Fact]
@@ -84,6 +88,7 @@ public class CalibrationReadEvaluatorTests
             uncertainty: 0.22);
 
         Assert.Equal(CalibrationReadKind.Avoid, read.Kind);
+        Assert.Contains("misaligned with outcomes", read.Detail, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

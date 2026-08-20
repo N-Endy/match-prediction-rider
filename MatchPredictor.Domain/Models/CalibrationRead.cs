@@ -9,5 +9,11 @@ public enum CalibrationReadKind
 
 public sealed record CalibrationRead(CalibrationReadKind Kind, string Detail)
 {
-    public string Label => Kind.ToString();
+    public string Label => Kind switch
+    {
+        CalibrationReadKind.Strong => "Well Calibrated",
+        CalibrationReadKind.Caution => "Mixed Calibration",
+        CalibrationReadKind.Avoid => "Poorly Calibrated",
+        _ => Kind.ToString()
+    };
 }
