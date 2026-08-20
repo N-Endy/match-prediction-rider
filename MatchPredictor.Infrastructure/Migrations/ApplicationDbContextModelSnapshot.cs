@@ -79,6 +79,9 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("RegularTimeScore")
+                        .HasColumnType("text");
+
                     b.Property<string>("SourceEventId")
                         .HasColumnType("text");
 

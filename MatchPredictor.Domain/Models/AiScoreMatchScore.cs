@@ -7,6 +7,7 @@ public class AiScoreMatchScore
     public string HomeTeam { get; set; } = string.Empty;
     public string AwayTeam { get; set; } = string.Empty;
     public string Score { get; set; } = string.Empty;
+    public string? RegularTimeScore { get; set; }
     public DateTime MatchTime { get; set; }
     public DateOnly MatchLocalDate { get; set; }
     public string HomeTeamKey { get; set; } = string.Empty;

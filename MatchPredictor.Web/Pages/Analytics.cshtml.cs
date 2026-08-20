@@ -174,8 +174,9 @@ public class AnalyticsModel : PageModel
         return "7days";
     }
 
+    // Published Picks is the landing mode, so the shared date tab follows published-card activity.
     private static bool HasWindowActivity(AnalyticsStats stats) =>
-        stats.TotalPredictions > 0 || stats.SettledForecasts > 0;
+        stats.TotalPredictions > 0;
 
     private AnalyticsLiveConfigSnapshot BuildLiveConfigSnapshot(
         IReadOnlyDictionary<PredictionMarket, ThresholdProfile> thresholdProfiles,

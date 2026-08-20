@@ -390,7 +390,8 @@ public partial class AnalyzerService
                         aiMatch.BTTSLabel,
                         aiMatch.IsLive,
                         "AiScore",
-                        aiMatch.SourceEventId);
+                        aiMatch.SourceEventId,
+                        aiMatch.RegularTimeScore);
                     aiMatchedFixtures++;
                     unmatchedDiagnostics.Remove(fixture);
                 }
@@ -493,7 +494,8 @@ public partial class AnalyzerService
                             sofaMatch.BTTSLabel,
                             sofaMatch.IsLive,
                             "SofaScore",
-                            sofaMatch.EventId?.ToString(CultureInfo.InvariantCulture));
+                            sofaMatch.EventId?.ToString(CultureInfo.InvariantCulture),
+                            sofaMatch.RegularTimeScore);
                         sofaMatchedFixtures++;
                         unmatchedDiagnostics.Remove(fixture);
                     }
@@ -640,11 +642,12 @@ public partial class AnalyzerService
         bool bttsLabel,
         bool isLive,
         string? sourceName = null,
-        string? sourceEventId = null)
+        string? sourceEventId = null,
+        string? regularTimeScore = null)
     {
         foreach (var prediction in fixture.Predictions)
         {
-            UpdatePredictionSettlementState(prediction, score, bttsLabel, isLive);
+            UpdatePredictionSettlementState(prediction, score, bttsLabel, isLive, regularTimeScore);
             if (!string.IsNullOrWhiteSpace(sourceName))
             {
                 prediction.SettledSourceName = sourceName;
@@ -658,7 +661,7 @@ public partial class AnalyzerService
 
         foreach (var forecast in fixture.Forecasts)
         {
-            UpdateForecastObservationState(forecast, score, bttsLabel, isLive);
+            UpdateForecastObservationState(forecast, score, bttsLabel, isLive, regularTimeScore);
             if (!string.IsNullOrWhiteSpace(sourceName))
             {
                 forecast.SettledSourceName = sourceName;
@@ -815,7 +818,13 @@ public partial class AnalyzerService
                 _ => ((string?)null, (string?)null)
             };
 
-            ApplyFixtureSettlement(fixture, score, bttsLabel, false, sourceName, sourceEventId);
+            var regularTimeScore = resolved switch
+            {
+                AiScoreMatchScore aiScore => aiScore.RegularTimeScore,
+                _ => null
+            };
+
+            ApplyFixtureSettlement(fixture, score, bttsLabel, false, sourceName, sourceEventId, regularTimeScore);
         }
     }
 
@@ -930,7 +939,13 @@ public partial class AnalyzerService
                 _ => ((string?)null, (string?)null)
             };
 
-            ApplyFixtureSettlement(fixture, score, bttsLabel, true, sourceName, sourceEventId);
+            var regularTimeScore = resolved switch
+            {
+                AiScoreMatchScore aiScore => aiScore.RegularTimeScore,
+                _ => null
+            };
+
+            ApplyFixtureSettlement(fixture, score, bttsLabel, true, sourceName, sourceEventId, regularTimeScore);
         }
     }
 
@@ -1178,11 +1193,22 @@ public partial class AnalyzerService
         return h < a ? "Away Win" : "Draw";
     }
 
-    private void UpdatePredictionSettlementState(Prediction prediction, string score, bool bttsLabel, bool isLive)
+    private void UpdatePredictionSettlementState(
+        Prediction prediction,
+        string score,
+        bool bttsLabel,
+        bool isLive,
+        string? regularTimeScore = null)
     {
-        var effectiveIsLive = DetermineEffectivePredictionIsLive(prediction, score, bttsLabel, isLive);
+        var settlementScore = ResolveNinetyMinuteSettlementScore(score, regularTimeScore);
+        var sourceStillInPlay = isLive && !HasRegularTimeScore(regularTimeScore);
+        var effectiveIsLive = DetermineEffectivePredictionIsLive(
+            prediction,
+            settlementScore,
+            bttsLabel,
+            sourceStillInPlay);
 
-        prediction.ActualScore = score;
+        prediction.ActualScore = settlementScore;
         prediction.IsLive = effectiveIsLive;
 
         if (effectiveIsLive)
@@ -1193,7 +1219,7 @@ public partial class AnalyzerService
 
         prediction.ActualOutcome = DeterminePredictionActualOutcome(
             prediction.PredictionCategory,
-            score,
+            settlementScore,
             bttsLabel);
     }
 
@@ -1257,11 +1283,22 @@ public partial class AnalyzerService
         return sourceIsLive;
     }
 
-    private void UpdateForecastObservationState(ForecastObservation forecast, string score, bool bttsLabel, bool isLive)
+    private void UpdateForecastObservationState(
+        ForecastObservation forecast,
+        string score,
+        bool bttsLabel,
+        bool isLive,
+        string? regularTimeScore = null)
     {
-        var effectiveIsLive = DetermineEffectiveForecastIsLive(forecast, score, bttsLabel, isLive);
+        var settlementScore = ResolveNinetyMinuteSettlementScore(score, regularTimeScore);
+        var sourceStillInPlay = isLive && !HasRegularTimeScore(regularTimeScore);
+        var effectiveIsLive = DetermineEffectiveForecastIsLive(
+            forecast,
+            settlementScore,
+            bttsLabel,
+            sourceStillInPlay);
 
-        forecast.ActualScore = score;
+        forecast.ActualScore = settlementScore;
         forecast.IsLive = effectiveIsLive;
 
         if (effectiveIsLive)
@@ -1275,8 +1312,8 @@ public partial class AnalyzerService
 
         forecast.IsSettled = true;
         forecast.SettledAt = DateTime.UtcNow;
-        forecast.OutcomeOccurred = DetermineForecastOutcomeOccurred(forecast.Market, score, bttsLabel);
-        forecast.ActualOutcome = DetermineForecastActualOutcome(forecast.Market, score, bttsLabel);
+        forecast.OutcomeOccurred = DetermineForecastOutcomeOccurred(forecast.Market, settlementScore, bttsLabel);
+        forecast.ActualOutcome = DetermineForecastActualOutcome(forecast.Market, settlementScore, bttsLabel);
     }
 
     private bool? DetermineForecastOutcomeOccurred(PredictionMarket market, string score, bool bttsLabel)
@@ -1336,6 +1373,12 @@ public partial class AnalyzerService
             _ => null
         };
     }
+
+    private static bool HasRegularTimeScore(string? regularTimeScore) =>
+        !string.IsNullOrWhiteSpace(regularTimeScore);
+
+    private static string ResolveNinetyMinuteSettlementScore(string score, string? regularTimeScore) =>
+        HasRegularTimeScore(regularTimeScore) ? regularTimeScore! : score;
 
     private bool DetermineEffectivePredictionIsLive(Prediction prediction, string score, bool? bttsLabel, bool sourceIsLive)
     {
@@ -1473,6 +1516,7 @@ public partial class AnalyzerService
                     existingRecord.Score = incomingScore.Score;
                     existingRecord.IsLive = incomingScore.IsLive;
                     existingRecord.BTTSLabel = incomingScore.BTTSLabel;
+                    existingRecord.RegularTimeScore = incomingScore.RegularTimeScore;
                     existingRecord.HomeTeam = incomingScore.HomeTeam;
                     existingRecord.AwayTeam = incomingScore.AwayTeam;
                     existingRecord.League = incomingScore.League;

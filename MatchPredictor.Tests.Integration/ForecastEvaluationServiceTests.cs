@@ -239,6 +239,7 @@ public class ForecastEvaluationServiceTests
         Assert.Equal(1, stats.CompletedPredictions);
         Assert.Equal(1, stats.CorrectPredictions);
         Assert.Equal("Under2.5Goals", categoryStats.Category);
+        Assert.Equal("Under 2.5", categoryStats.DisplayName);
         Assert.Equal(1, categoryStats.Total);
         Assert.Equal(1, categoryStats.Correct);
         Assert.Equal(1.0, categoryStats.Accuracy, 5);
@@ -303,6 +304,191 @@ public class ForecastEvaluationServiceTests
         Assert.DoesNotContain(
             market.CalibratorEraStats,
             era => era.Era == "Bucket" && era.Count == 2);
+    }
+
+    [Fact]
+    public void CalculateStats_DoesNotSettleLivePicks_FromScoreAfterKickoffGrace()
+    {
+        var service = new ForecastEvaluationService();
+        var kickoff = DateTime.UtcNow.AddHours(-6);
+        var localDate = DateOnly.FromDateTime(kickoff);
+
+        var predictions = new[]
+        {
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|live-home|live-away",
+                League = "League",
+                HomeTeam = "Live Home",
+                AwayTeam = "Live Away",
+                PredictionCategory = "BothTeamsScore",
+                PredictedOutcome = "BTTS",
+                ActualScore = "1:1",
+                ActualOutcome = null,
+                IsLive = true,
+                WasPublished = true,
+                ConfidenceScore = 0.72m,
+                CreatedAt = kickoff.AddHours(-2)
+            }
+        };
+
+        var stats = service.CalculateStats(predictions, Array.Empty<ForecastObservation>());
+
+        Assert.Equal(1, stats.TotalPredictions);
+        Assert.Equal(0, stats.CompletedPredictions);
+        Assert.Equal(0, stats.CorrectPredictions);
+        Assert.Equal(0.0, stats.OverallAccuracy);
+        Assert.Empty(stats.CategoryStats);
+    }
+
+    [Fact]
+    public void CalculateStats_UsesCompletedPicksOnly_ForOverallAccuracyAndCategoryBrier()
+    {
+        var service = new ForecastEvaluationService();
+        var kickoff = DateTime.UtcNow.AddHours(-6);
+        var upcomingKickoff = DateTime.UtcNow.AddHours(3);
+        var localDate = DateOnly.FromDateTime(kickoff);
+
+        var predictions = new[]
+        {
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|settled-home|settled-away",
+                League = "League",
+                HomeTeam = "Settled Home",
+                AwayTeam = "Settled Away",
+                PredictionCategory = "BothTeamsScore",
+                PredictedOutcome = "BTTS",
+                ActualScore = "1:1",
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 0.80m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(upcomingKickoff),
+                MatchDateTime = upcomingKickoff,
+                FixtureKey = "league|pending-home|pending-away",
+                League = "League",
+                HomeTeam = "Pending Home",
+                AwayTeam = "Pending Away",
+                PredictionCategory = "BothTeamsScore",
+                PredictedOutcome = "BTTS",
+                ActualScore = null,
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 0.90m,
+                CreatedAt = upcomingKickoff.AddHours(-2)
+            }
+        };
+
+        var stats = service.CalculateStats(predictions, Array.Empty<ForecastObservation>());
+        var category = Assert.Single(stats.CategoryStats.Values);
+
+        Assert.Equal(2, stats.TotalPredictions);
+        Assert.Equal(1, stats.CompletedPredictions);
+        Assert.Equal(1, stats.CorrectPredictions);
+        Assert.Equal(1.0, stats.OverallAccuracy, 5);
+        Assert.Equal("BTTS", category.DisplayName);
+        Assert.Equal(1, category.Total);
+        Assert.Equal(0.04, category.BrierScore, 5);
+    }
+
+    [Fact]
+    public void CalculateStats_ClampsCategoryBrierProbability()
+    {
+        var service = new ForecastEvaluationService();
+        var kickoff = DateTime.UtcNow.AddHours(-6);
+        var localDate = DateOnly.FromDateTime(kickoff);
+
+        var predictions = new[]
+        {
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|clamp-home|clamp-away",
+                League = "League",
+                HomeTeam = "Clamp Home",
+                AwayTeam = "Clamp Away",
+                PredictionCategory = "Over2.5Goals",
+                PredictedOutcome = "Over 2.5",
+                ActualScore = "2:1",
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 1.50m,
+                CreatedAt = kickoff.AddHours(-2)
+            }
+        };
+
+        var stats = service.CalculateStats(predictions, Array.Empty<ForecastObservation>());
+        var category = Assert.Single(stats.CategoryStats.Values);
+
+        Assert.Equal(0.0, category.BrierScore, 5);
+        Assert.Equal("Over 2.5", category.DisplayName);
+    }
+
+    [Fact]
+    public void CalculateStats_ExcludesUnpublishedPredictions_FromPublishedPickStats()
+    {
+        var service = new ForecastEvaluationService();
+        var kickoff = DateTime.UtcNow.AddHours(-6);
+        var localDate = DateOnly.FromDateTime(kickoff);
+
+        var predictions = new[]
+        {
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|published-home|published-away",
+                League = "League",
+                HomeTeam = "Published Home",
+                AwayTeam = "Published Away",
+                PredictionCategory = "BothTeamsScore",
+                PredictedOutcome = "BTTS",
+                ActualScore = "1:1",
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 0.70m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|unpublished-home|unpublished-away",
+                League = "League",
+                HomeTeam = "Unpublished Home",
+                AwayTeam = "Unpublished Away",
+                PredictionCategory = "Over2.5Goals",
+                PredictedOutcome = "Over 2.5",
+                ActualScore = "2:1",
+                IsLive = false,
+                WasPublished = false,
+                ConfidenceScore = 0.80m,
+                CreatedAt = kickoff.AddHours(-2)
+            }
+        };
+
+        var stats = service.CalculateStats(predictions, Array.Empty<ForecastObservation>());
+
+        Assert.Equal(1, stats.TotalPredictions);
+        Assert.Equal(1, stats.CompletedPredictions);
+        Assert.Equal(1, stats.CorrectPredictions);
+        Assert.Single(stats.CategoryStats);
+        Assert.True(stats.CategoryStats.ContainsKey("BothTeamsScore"));
     }
 
     private static ForecastObservation CreateForecast(

@@ -110,6 +110,70 @@ public class BettingPerformanceStatsTests
         Assert.Empty(betting.Markets);
     }
 
+    [Fact]
+    public void CalculateStats_ComputesMaxDrawdownInKickoffOrder()
+    {
+        var service = new ForecastEvaluationService();
+        var lateKickoff = DateTime.UtcNow.AddHours(-2);
+        var midKickoff = DateTime.UtcNow.AddHours(-4);
+        var earlyKickoff = DateTime.UtcNow.AddHours(-6);
+        var localDate = DateOnly.FromDateTime(earlyKickoff);
+
+        // Enumeration order is lose, win, lose (drawdown 1u). Kickoff order is win, lose, lose (drawdown 2u).
+        var predictions = new[]
+        {
+            BuildPrediction(1, "fixture-late", "BothTeamsScore", "BTTS", "1:0", 0.60m, lateKickoff, localDate),
+            BuildPrediction(2, "fixture-early", "BothTeamsScore", "BTTS", "1:1", 0.60m, earlyKickoff, localDate),
+            BuildPrediction(3, "fixture-mid", "BothTeamsScore", "BTTS", "1:0", 0.60m, midKickoff, localDate)
+        };
+
+        var snapshots = new[]
+        {
+            BuildSnapshot(1, PredictionOddsSnapshotKind.Publish, 2.0, "BTTS"),
+            BuildSnapshot(2, PredictionOddsSnapshotKind.Publish, 2.0, "BTTS"),
+            BuildSnapshot(3, PredictionOddsSnapshotKind.Publish, 2.0, "BTTS")
+        };
+
+        var betting = service.CalculateStats(predictions, Array.Empty<ForecastObservation>(), snapshots).BettingPerformance;
+
+        Assert.Equal(3, betting.SettledBetCount);
+        Assert.Equal(2.0, betting.MaxDrawdownUnits, 6);
+    }
+
+    [Fact]
+    public void CalculateStats_AttachesCloseOddsFromSiblingRevision_ForClv()
+    {
+        var service = new ForecastEvaluationService();
+        var kickoff = DateTime.UtcNow.AddHours(-6);
+        var localDate = DateOnly.FromDateTime(kickoff);
+        const string fixtureKey = "fixture-revisioned";
+
+        var pitRevision = BuildPrediction(1, fixtureKey, "BothTeamsScore", "BTTS", "1:1", 0.60m, kickoff, localDate);
+        pitRevision.RevisionNumber = 1;
+        pitRevision.CreatedAt = kickoff.AddHours(-2);
+
+        var currentRevision = BuildPrediction(2, fixtureKey, "BothTeamsScore", "BTTS", "1:1", 0.90m, kickoff, localDate);
+        currentRevision.RevisionNumber = 2;
+        currentRevision.CreatedAt = kickoff.AddHours(1);
+        currentRevision.IsCurrentRevision = true;
+        pitRevision.IsCurrentRevision = false;
+
+        var snapshots = new[]
+        {
+            BuildSnapshot(1, PredictionOddsSnapshotKind.Publish, 2.0, "BTTS"),
+            BuildSnapshot(2, PredictionOddsSnapshotKind.Close, 1.8, "BTTS")
+        };
+
+        var betting = service.CalculateStats(
+            [pitRevision, currentRevision],
+            Array.Empty<ForecastObservation>(),
+            snapshots).BettingPerformance;
+
+        Assert.Equal(1, betting.SettledBetCount);
+        Assert.Equal(1, betting.ClosingLineSamples);
+        Assert.Equal(Math.Round((2.0 / 1.8) - 1.0, 6), betting.AverageClosingLineValuePercent, 6);
+    }
+
     private static Prediction BuildPrediction(
         int id,
         string fixtureKey,

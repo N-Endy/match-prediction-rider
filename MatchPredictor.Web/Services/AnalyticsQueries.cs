@@ -46,7 +46,7 @@ public sealed class AnalyticsQueries : IAnalyticsQueries
 
         var predictions = await _dbContext.Predictions
             .AsNoTracking()
-            .Where(prediction => windowDateSet.Contains(prediction.MatchLocalDate))
+            .Where(prediction => windowDateSet.Contains(prediction.MatchLocalDate) && prediction.WasPublished)
             .ToListAsync(cancellationToken);
 
         var forecasts = await _dbContext.ForecastObservations

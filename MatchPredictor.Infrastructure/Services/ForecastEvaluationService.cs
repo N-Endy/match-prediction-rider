@@ -12,14 +12,16 @@ public class ForecastEvaluationService : IForecastEvaluationService
     private const double KellyFraction = BetPricingMath.DefaultKellyFraction;
     // Cap on the number of per-forecast explainability rows surfaced per window.
     private const int MaxFeatureDiagnostics = 40;
-    private static readonly TimeSpan PredictionLiveGrace = TimeSpan.FromMinutes(200);
 
     public AnalyticsStats CalculateStats(
         IEnumerable<Prediction> predictions,
         IEnumerable<ForecastObservation> forecasts,
         IEnumerable<PredictionOddsSnapshot>? oddsSnapshots = null)
     {
-        var predictionList = PointInTimeBacktestingSelector.SelectPredictions(predictions)
+        var publishedPredictions = predictions
+            .Where(prediction => prediction.WasPublished)
+            .ToList();
+        var predictionList = PointInTimeBacktestingSelector.SelectPredictions(publishedPredictions)
             .Where(IsActiveAnalyticsPrediction)
             .ToList();
         var completedPredictions = predictionList
@@ -53,16 +55,15 @@ public class ForecastEvaluationService : IForecastEvaluationService
             stats.CategoryStats[group.Key] = new CategoryStat
             {
                 Category = group.Key,
+                DisplayName = MapCategoryToDisplayName(group.Key),
                 Total = total,
                 Correct = correct,
                 Accuracy = total > 0 ? (double)correct / total : 0.0,
                 BrierScore = scoredPredictions.Count > 0
                     ? scoredPredictions.Average(prediction =>
-                    {
-                        var outcome = IsPredictionCorrectForAnalytics(prediction) ? 1.0 : 0.0;
-                        var probability = (double)prediction.ConfidenceScore!.Value;
-                        return Math.Pow(probability - outcome, 2);
-                    })
+                        SquaredError(
+                            (double)prediction.ConfidenceScore!.Value,
+                            IsPredictionCorrectForAnalytics(prediction)))
                     : 0.0,
                 LogLoss = outcomes.Count > 0 ? outcomes.Average(item => BinaryLogLoss(item.Probability, item.Outcome)) : 0.0,
                 Precision = CalculatePrecision(group),
@@ -105,7 +106,10 @@ public class ForecastEvaluationService : IForecastEvaluationService
             stats.FeatureDiagnostics = BuildFeatureDiagnostics(settledForecasts);
         }
 
-        stats.BettingPerformance = BuildBettingPerformance(completedPredictions, oddsSnapshots);
+        stats.BettingPerformance = BuildBettingPerformance(
+            completedPredictions,
+            publishedPredictions,
+            oddsSnapshots);
 
         return stats;
     }
@@ -203,6 +207,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
 
     private static BettingPerformanceStats BuildBettingPerformance(
         IReadOnlyCollection<Prediction> completedPredictions,
+        IReadOnlyCollection<Prediction> publishedPredictions,
         IEnumerable<PredictionOddsSnapshot>? oddsSnapshots)
     {
         var performance = new BettingPerformanceStats { KellyFraction = KellyFraction };
@@ -216,21 +221,43 @@ public class ForecastEvaluationService : IForecastEvaluationService
             .GroupBy(snapshot => snapshot.PredictionId)
             .ToDictionary(group => group.Key, group => group.ToList());
 
-        var bets = new List<BetRecord>();
-        foreach (var prediction in completedPredictions)
+        var snapshotsByFixtureMarket = new Dictionary<(string FixtureKey, string Category), List<PredictionOddsSnapshot>>();
+        foreach (var prediction in publishedPredictions)
         {
             if (!snapshotsByPrediction.TryGetValue(prediction.Id, out var snapshots))
             {
                 continue;
             }
 
-            var publishOdds = ResolveSnapshotOdds(snapshots, prediction, PredictionOddsSnapshotKind.Publish);
+            var identity = (BuildPredictionFixtureKey(prediction), prediction.PredictionCategory);
+            if (!snapshotsByFixtureMarket.TryGetValue(identity, out var grouped))
+            {
+                grouped = [];
+                snapshotsByFixtureMarket[identity] = grouped;
+            }
+
+            grouped.AddRange(snapshots);
+        }
+
+        var bets = new List<BetRecord>();
+        foreach (var prediction in completedPredictions)
+        {
+            if (!snapshotsByPrediction.TryGetValue(prediction.Id, out var ownSnapshots))
+            {
+                continue;
+            }
+
+            var publishOdds = ResolveSnapshotOdds(ownSnapshots, prediction, PredictionOddsSnapshotKind.Publish);
             if (publishOdds is not > 1.0)
             {
                 continue;
             }
 
-            var closeOdds = ResolveSnapshotOdds(snapshots, prediction, PredictionOddsSnapshotKind.Close);
+            var identity = (BuildPredictionFixtureKey(prediction), prediction.PredictionCategory);
+            var closeSnapshots = snapshotsByFixtureMarket.TryGetValue(identity, out var fixtureSnapshots)
+                ? fixtureSnapshots
+                : ownSnapshots;
+            var closeOdds = ResolveSnapshotOdds(closeSnapshots, prediction, PredictionOddsSnapshotKind.Close);
             var won = IsPredictionCorrectForAnalytics(prediction);
             var modelProbability = prediction.ConfidenceScore.HasValue
                 ? (double)Math.Clamp(prediction.ConfidenceScore.Value, 0m, 1m)
@@ -241,7 +268,9 @@ public class ForecastEvaluationService : IForecastEvaluationService
                 DecimalOdds: publishOdds.Value,
                 Won: won,
                 ModelProbability: modelProbability,
-                Clv: BetPricingMath.CalculateClosingLineValuePercent(publishOdds, closeOdds)));
+                Clv: BetPricingMath.CalculateClosingLineValuePercent(publishOdds, closeOdds),
+                KickoffUtc: prediction.MatchDateTime,
+                CreatedAtUtc: prediction.CreatedAt));
         }
 
         if (bets.Count == 0)
@@ -249,7 +278,11 @@ public class ForecastEvaluationService : IForecastEvaluationService
             return performance;
         }
 
-        PopulateAggregate(performance, bets);
+        var chronologicalBets = bets
+            .OrderBy(bet => bet.KickoffUtc ?? DateTime.MaxValue)
+            .ThenBy(bet => bet.CreatedAtUtc)
+            .ToList();
+        PopulateAggregate(performance, chronologicalBets);
         performance.Markets = bets
             .GroupBy(bet => bet.MarketKey)
             .Select(group =>
@@ -340,7 +373,14 @@ public class ForecastEvaluationService : IForecastEvaluationService
         return maxDrawdown;
     }
 
-    private sealed record BetRecord(string MarketKey, double DecimalOdds, bool Won, double ModelProbability, double? Clv)
+    private sealed record BetRecord(
+        string MarketKey,
+        double DecimalOdds,
+        bool Won,
+        double ModelProbability,
+        double? Clv,
+        DateTime? KickoffUtc,
+        DateTime CreatedAtUtc)
     {
         public double FlatProfit => Won ? DecimalOdds - 1.0 : -1.0;
 
@@ -357,10 +397,25 @@ public class ForecastEvaluationService : IForecastEvaluationService
             "BothTeamsScore" => PredictionMarket.BothTeamsScore.ToDisplayName(),
             "Over2.5Goals" => PredictionMarket.Over25Goals.ToDisplayName(),
             "Under2.5Goals" => PredictionMarket.Under25Goals.ToDisplayName(),
-            "StraightWin" => "Match Result",
+            "StraightWin" => PredictionMarket.StraightWin.ToDisplayName(),
             "Draw" => PredictionMarket.Draw.ToDisplayName(),
             _ => category
         };
+    }
+
+    private static string BuildPredictionFixtureKey(Prediction prediction)
+    {
+        if (!string.IsNullOrWhiteSpace(prediction.FixtureKey))
+        {
+            return prediction.FixtureKey.Trim();
+        }
+
+        return string.Join(
+            "|",
+            prediction.MatchLocalDate.ToString("yyyy-MM-dd"),
+            (prediction.League ?? string.Empty).Trim().ToLowerInvariant(),
+            (prediction.HomeTeam ?? string.Empty).Trim().ToLowerInvariant(),
+            (prediction.AwayTeam ?? string.Empty).Trim().ToLowerInvariant());
     }
 
     private static double CalculateExpectedCalibrationError(IEnumerable<(double Probability, bool Outcome)> inputs)
@@ -395,7 +450,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
 
     private static bool IsPredictionCompletedForAnalytics(Prediction prediction)
     {
-        if (IsPredictionActuallyLive(prediction))
+        if (prediction.IsLive && !HasStoredActualOutcome(prediction))
         {
             return false;
         }
@@ -421,15 +476,20 @@ public class ForecastEvaluationService : IForecastEvaluationService
         return OutcomesMatch(prediction.PredictedOutcome, ResolvePredictionActualOutcome(prediction));
     }
 
+    private static bool HasStoredActualOutcome(Prediction prediction)
+    {
+        return !string.IsNullOrWhiteSpace(prediction.ActualOutcome) &&
+               !string.Equals(prediction.ActualOutcome, "Unknown", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string? ResolvePredictionActualOutcome(Prediction prediction)
     {
-        if (!string.IsNullOrWhiteSpace(prediction.ActualOutcome) &&
-            !string.Equals(prediction.ActualOutcome, "Unknown", StringComparison.OrdinalIgnoreCase))
+        if (HasStoredActualOutcome(prediction))
         {
             return prediction.ActualOutcome;
         }
 
-        if (IsPredictionActuallyLive(prediction))
+        if (prediction.IsLive)
         {
             return null;
         }
@@ -448,17 +508,6 @@ public class ForecastEvaluationService : IForecastEvaluationService
             "StraightWin" => homeGoals > awayGoals ? "Home Win" : awayGoals > homeGoals ? "Away Win" : "Draw",
             _ => null
         };
-    }
-
-    private static bool IsPredictionActuallyLive(Prediction prediction)
-    {
-        if (!prediction.IsLive)
-        {
-            return false;
-        }
-
-        return !prediction.MatchDateTime.HasValue ||
-               DateTime.UtcNow <= prediction.MatchDateTime.Value.Add(PredictionLiveGrace);
     }
 
     private static ForecastMarketStat BuildMarketStat(IGrouping<PredictionMarket, ForecastObservation> group)

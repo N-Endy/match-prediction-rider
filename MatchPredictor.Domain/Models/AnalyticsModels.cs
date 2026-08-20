@@ -95,6 +95,7 @@ public class AnalyticsLiveConfigSnapshot
 public class CategoryStat
 {
     public string Category { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
     public int Total { get; set; }
     public int Correct { get; set; }
     public double Accuracy { get; set; }

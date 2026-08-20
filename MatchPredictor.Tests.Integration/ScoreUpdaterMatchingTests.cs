@@ -678,6 +678,210 @@ public class ScoreUpdaterMatchingTests
     }
 
     [Fact]
+    public async Task RunScoreUpdaterAsync_FreezesNinetyMinuteMarketsOnRegularTimeScoreDuringExtraTime()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(19);
+        var date = kickoff.ToString("dd-MM-yyyy");
+        const string league = "UEFA Champions League";
+
+        context.Predictions.AddRange(
+            CreatePrediction(date, kickoff, "Home FC", "Away FC", "BothTeamsScore", "BTTS", league),
+            CreatePrediction(date, kickoff, "Home FC", "Away FC", "Under2.5Goals", "Under 2.5", league),
+            CreatePrediction(date, kickoff, "Home FC", "Away FC", "StraightWin", "Home Win", league));
+
+        context.ForecastObservations.AddRange(
+            CreateForecast(date, kickoff, "Home FC", "Away FC", PredictionMarket.BothTeamsScore, "BTTS", league),
+            CreateForecast(date, kickoff, "Home FC", "Away FC", PredictionMarket.Under25Goals, "Under 2.5", league),
+            CreateForecast(date, kickoff, "Home FC", "Away FC", PredictionMarket.StraightWin, "Home Win", league));
+
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                SofaScoreMatchScores =
+                [
+                    new SofaScoreMatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+                        League = league,
+                        HomeTeam = "Home FC",
+                        AwayTeam = "Away FC",
+                        Score = "1:0",
+                        DisplayedScore = "1:0",
+                        RegularTimeScore = "0:0",
+                        ExtraTimeScore = "1:0",
+                        StatusText = "ET",
+                        BTTSLabel = false,
+                        IsLive = true
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var predictions = await context.Predictions
+            .OrderBy(prediction => prediction.PredictionCategory)
+            .ToListAsync();
+        var forecasts = await context.ForecastObservations
+            .OrderBy(forecast => forecast.Market)
+            .ToListAsync();
+
+        Assert.Collection(
+            predictions,
+            prediction =>
+            {
+                Assert.Equal("BothTeamsScore", prediction.PredictionCategory);
+                Assert.Equal("0:0", prediction.ActualScore);
+                Assert.Equal("No BTTS", prediction.ActualOutcome);
+                Assert.False(prediction.IsLive);
+            },
+            prediction =>
+            {
+                Assert.Equal("StraightWin", prediction.PredictionCategory);
+                Assert.Equal("0:0", prediction.ActualScore);
+                Assert.Equal("Draw", prediction.ActualOutcome);
+                Assert.False(prediction.IsLive);
+            },
+            prediction =>
+            {
+                Assert.Equal("Under2.5Goals", prediction.PredictionCategory);
+                Assert.Equal("0:0", prediction.ActualScore);
+                Assert.Equal("Under 2.5", prediction.ActualOutcome);
+                Assert.False(prediction.IsLive);
+            });
+
+        Assert.All(forecasts, forecast =>
+        {
+            Assert.Equal("0:0", forecast.ActualScore);
+            Assert.True(forecast.IsSettled);
+            Assert.False(forecast.IsLive);
+        });
+        Assert.Equal("No BTTS", forecasts.Single(forecast => forecast.Market == PredictionMarket.BothTeamsScore).ActualOutcome);
+        Assert.Equal("Draw", forecasts.Single(forecast => forecast.Market == PredictionMarket.StraightWin).ActualOutcome);
+        Assert.Equal("Under 2.5", forecasts.Single(forecast => forecast.Market == PredictionMarket.Under25Goals).ActualOutcome);
+    }
+
+    [Fact]
+    public async Task RunScoreUpdaterAsync_DoesNotReopenFrozenNinetyMinuteResultFromLiveExtraTimeScore()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(19);
+        var date = kickoff.ToString("dd-MM-yyyy");
+        const string league = "League";
+
+        context.Predictions.Add(CreatePrediction(date, kickoff, "Home FC", "Away FC", "StraightWin", "Home Win", league));
+        await context.SaveChangesAsync();
+
+        var firstRun = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                SofaScoreMatchScores =
+                [
+                    new SofaScoreMatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+                        League = league,
+                        HomeTeam = "Home FC",
+                        AwayTeam = "Away FC",
+                        Score = "1:0",
+                        RegularTimeScore = "0:0",
+                        BTTSLabel = false,
+                        IsLive = true
+                    }
+                ]
+            });
+
+        await firstRun.RunScoreUpdaterAsync();
+
+        var frozen = await context.Predictions.SingleAsync();
+        Assert.Equal("0:0", frozen.ActualScore);
+        Assert.Equal("Draw", frozen.ActualOutcome);
+        Assert.False(frozen.IsLive);
+
+        var secondRun = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                AiScoreMatchScores =
+                [
+                    new AiScoreMatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+                        League = league,
+                        HomeTeam = "Home FC",
+                        AwayTeam = "Away FC",
+                        Score = "2:0",
+                        RegularTimeScore = "0:0",
+                        BTTSLabel = false,
+                        IsLive = true
+                    }
+                ]
+            });
+
+        await secondRun.RunScoreUpdaterAsync();
+
+        var stillFrozen = await context.Predictions.SingleAsync();
+        Assert.Equal("0:0", stillFrozen.ActualScore);
+        Assert.Equal("Draw", stillFrozen.ActualOutcome);
+        Assert.False(stillFrozen.IsLive);
+    }
+
+    [Fact]
+    public async Task RunScoreUpdaterAsync_UsesAiScoreRegularTimeScoreDuringLiveExtraTime()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetStartedKickoffForTodayOrYesterday(18);
+        var date = kickoff.ToString("dd-MM-yyyy");
+        const string league = "League";
+
+        context.Predictions.Add(CreatePrediction(date, kickoff, "Home FC", "Away FC", "Under2.5Goals", "Under 2.5", league));
+        await context.SaveChangesAsync();
+
+        var service = CreateAnalyzerService(
+            context,
+            new StubWebScraperService
+            {
+                AiScoreMatchScores =
+                [
+                    new AiScoreMatchScore
+                    {
+                        MatchTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+                        League = league,
+                        HomeTeam = "Home FC",
+                        AwayTeam = "Away FC",
+                        Score = "1:0",
+                        RegularTimeScore = "0:0",
+                        BTTSLabel = false,
+                        IsLive = true
+                    }
+                ]
+            });
+
+        await service.RunScoreUpdaterAsync();
+
+        var prediction = await context.Predictions.SingleAsync();
+        Assert.Equal("0:0", prediction.ActualScore);
+        Assert.Equal("Under 2.5", prediction.ActualOutcome);
+        Assert.False(prediction.IsLive);
+    }
+
+    [Fact]
     public async Task RunScoreUpdaterAsync_LeavesBttsAndOverLiveUntilIrreversibleConditionIsMet()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()

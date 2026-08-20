@@ -32,7 +32,7 @@
 </div>
 
 <div class="mp-analytics-note">
-    This section is about published picks only: how many went out, how many settled, and how often the pick itself was right.
+    This section is about published picks only: how many went out, how many settled, and how often the pick itself was right. Draw picks are stored but excluded from this dashboard.
 </div>
 
 @if (betting.SettledBetCount > 0)
@@ -123,7 +123,7 @@
 
             <div class="mp-category-row">
                 <div class="mp-cat-header">
-                    <span class="mp-cat-name">@cat.Category</span>
+                    <span class="mp-cat-name">@(string.IsNullOrWhiteSpace(cat.DisplayName) ? cat.Category : cat.DisplayName)</span>
                     <span class="mp-cat-details @catAccClass">
                         <span class="mp-cat-metric"><strong>@fillWidth</strong></span>
                         <span class="mp-cat-metric">(@cat.Correct / @cat.Total)</span>
@@ -135,6 +135,12 @@
                 </div>
             </div>
         }
+    </div>
+}
+else if (Model.TotalPredictions > 0)
+{
+    <div class="mp-market-empty">
+        Picks were published in this range, but none have settled yet.
     </div>
 }
 else

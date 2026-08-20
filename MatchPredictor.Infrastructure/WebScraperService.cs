@@ -790,6 +790,7 @@ public partial class WebScraperService : IWebScraperService
                     continue;
 
                 var score = $"{homeGoals.GetInt32()}:{awayGoals.GetInt32()}";
+                var regularTimeScore = ApiFootballScoreParser.TryReadRegularTimeScore(fixture);
                 var dateStr = fixtureInfo.GetProperty("date").GetString();
                 var matchTime = DateTime.TryParse(dateStr, out var parsed) ? parsed.ToUniversalTime() : DateTime.UtcNow;
                 var fixtureId = fixtureInfo.TryGetProperty("id", out var fixtureIdProp)
@@ -810,6 +811,7 @@ public partial class WebScraperService : IWebScraperService
                     HomeTeam = teams.GetProperty("home").GetProperty("name").GetString() ?? "",
                     AwayTeam = teams.GetProperty("away").GetProperty("name").GetString() ?? "",
                     Score = score,
+                    RegularTimeScore = regularTimeScore,
                     MatchTime = matchTime,
                     SourceEventId = string.IsNullOrWhiteSpace(fixtureId) ? null : fixtureId,
                     HomeTeamId = string.IsNullOrWhiteSpace(homeTeamId) ? null : homeTeamId,
