@@ -50,6 +50,5 @@ WORKDIR /app
 COPY --from=publish /app/publish .
 
 ENV ASPNETCORE_ENVIRONMENT=Production
-ENV ASPNETCORE_URLS=http://0.0.0.0:${PORT:-10000}
 
 ENTRYPOINT ["dotnet", "MatchPredictor.Web.dll"]
