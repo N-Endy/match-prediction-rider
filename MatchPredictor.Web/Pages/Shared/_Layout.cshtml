@@ -10,6 +10,28 @@
             : currentPath.StartsWith(href, StringComparison.OrdinalIgnoreCase);
         return active ? "mp-nav-link active" : "mp-nav-link";
     }
+
+    var request = Context.Request;
+    var origin = $"{request.Scheme}://{request.Host.Value}";
+    var canonicalPath = string.IsNullOrEmpty(currentPath) ? "/" : currentPath;
+    var canonicalUrl = $"{origin}{canonicalPath}{request.QueryString.Value}";
+    var pageTitle = ViewData["Title"] as string;
+    var ogTitle = string.IsNullOrWhiteSpace(pageTitle)
+        ? "MatchPredictor – Daily AI Football Predictions"
+        : $"{pageTitle} – MatchPredictor";
+    var defaultDescription = "Accurate daily football predictions using AI. Easy betslips. Simple design. Zero fluff.";
+    var ogDescription = ViewData["Description"] as string ?? defaultDescription;
+    var ogImageUrl = $"{origin}/og-preview.png";
+    var logoUrl = $"{origin}/img/logo-mark.png";
+    var jsonLd = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string>
+    {
+        ["@context"] = "https://schema.org",
+        ["@type"] = "Organization",
+        ["name"] = "MatchPredictor",
+        ["url"] = origin,
+        ["logo"] = logoUrl,
+        ["description"] = defaultDescription
+    });
 }
 <!DOCTYPE html>
 <html lang="en">
@@ -18,30 +40,42 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>@ViewData["Title"] - MatchPredictor</title>
 
-    <meta name="description" content="Get accurate daily football predictions like BTTS, Over 2.5, Under 2.5, and more. Powered by AI and updated daily.">
+    <meta name="description" content="@ogDescription">
     <meta name="keywords" content="football predictions, btts, over 2.5, betting tips, match predictor, AI football tips">
     <meta name="author" content="MatchPredictor">
+    <link rel="canonical" href="@canonicalUrl" />
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://match-predictor-qnpy.onrender.com/">
-    <meta property="og:title" content="MatchPredictor – Daily AI Football Predictions">
-    <meta property="og:description" content="Accurate daily football predictions using AI. Easy betslips. Simple design. Zero fluff.">
-    <meta property="og:image" content="https://match-predictor-qnpy.onrender.com/preview.jpg">
+    <meta property="og:site_name" content="MatchPredictor">
+    <meta property="og:url" content="@canonicalUrl">
+    <meta property="og:title" content="@ogTitle">
+    <meta property="og:description" content="@ogDescription">
+    <meta property="og:image" content="@ogImageUrl">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="MatchPredictor – Daily AI football predictions">
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:url" content="https://match-predictor-qnpy.onrender.com/">
-    <meta name="twitter:title" content="MatchPredictor – AI-Powered Football Tips">
-    <meta name="twitter:description" content="Daily tips like BTTS, Over 2.5, Under 2.5, and more. Streamlined. Trustable.">
-    <meta name="twitter:image" content="https://match-predictor-qnpy.onrender.com/preview.jpg">
+    <meta name="twitter:url" content="@canonicalUrl">
+    <meta name="twitter:title" content="@ogTitle">
+    <meta name="twitter:description" content="@ogDescription">
+    <meta name="twitter:image" content="@ogImageUrl">
+    <meta name="twitter:image:alt" content="MatchPredictor – Daily AI football predictions">
+
+    <script type="application/ld+json">
+    @Html.Raw(jsonLd)
+    </script>
 
     <!-- Google Analytics -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-ET4NE2RTGC"></script>
 
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="icon" href="~/favicon.svg" type="image/svg+xml" asp-append-version="true" />
+    <link rel="icon" href="~/favicon.ico" sizes="any" asp-append-version="true" />
+    <link rel="apple-touch-icon" href="~/apple-touch-icon.png" asp-append-version="true" />
 
     <!-- Google AdSense -->
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=@(Configuration["AdSense:ClientId"] ?? "ca-pub-123456789")"
@@ -53,8 +87,8 @@
 <nav class="mp-navbar">
     <div class="mp-navbar-inner">
         <a class="mp-logo" asp-page="/Index">
-            <span class="mp-logo-icon">⚽</span>
-            MatchPredictor
+            <img class="mp-logo-icon" src="~/img/logo-mark.svg" width="36" height="36" alt="MatchPredictor" asp-append-version="true" />
+            <span class="mp-logo-text">MatchPredictor</span>
         </a>
 
         <button class="mp-menu-toggle" id="menuToggle" aria-label="Toggle navigation">

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="MatchPredictor">
+  <defs>
+    <linearGradient id="mpGrad" x1="4" y1="4" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="1" fill="#0a0e17"/>
+  <path fill="url(#mpGrad)" d="M4 24V8h3.25L11 17l3.75-9H18v16h-3V14.25L11 23 7 14.25V24H4z"/>
+  <path fill="url(#mpGrad)" fill-rule="evenodd" d="M19 8h6c3.6 0 6 2.4 6 6s-2.4 6-6 6h-3v4h-3V8zm3 3v6h3c1.95 0 3-1.2 3-3s-1.05-3-3-3h-3z"/>
+</svg>

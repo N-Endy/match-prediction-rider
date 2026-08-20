@@ -121,15 +121,20 @@ a:hover {
   letter-spacing: -0.02em;
 }
 
+.mp-logo:hover {
+  color: var(--text-primary);
+}
+
 .mp-logo-icon {
   width: 36px;
   height: 36px;
-  background: var(--gradient-primary);
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.1rem;
+  border-radius: 2px;
+  display: block;
+  flex-shrink: 0;
+}
+
+.mp-logo-text {
+  line-height: 1;
 }
 
 .mp-nav-links {
