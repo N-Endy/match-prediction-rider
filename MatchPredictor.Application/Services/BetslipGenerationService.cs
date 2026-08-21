@@ -122,14 +122,20 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             var banker = await ComposeBankerFromPassersAsync(
                 ExcludeUsedFixtures(mainPassers, freshBankerKeys),
                 settings);
+            var bankerSource = banker is not null ? "fresh" : (string?)null;
             if (banker is null && morningBankerFixtures.Count > 0)
             {
                 banker = await ComposeBankerFromPassersAsync(
                     ExcludeUsedFixtures(mainPassers, usedFixtureKeys),
                     settings);
+                if (banker is not null)
+                {
+                    bankerSource = "reuse";
+                }
             }
             if (banker is not null)
             {
+                _logger.LogInformation("Banker composed with source={BankerSource}.", bankerSource);
                 composed.Add(banker);
             }
 
@@ -460,12 +466,13 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         if (deterministic.IsEmpty)
         {
             _logger.LogInformation(
-                "Banker skipped: no combination in {MinOdds:0.##}-{MaxOdds:0.##}x (fallback {FallbackMin:0.##}-{FallbackMax:0.##}x) from {EligibleCount} live-quoted picks.",
+                "Banker skipped: best achievable product {BestProduct:0.##}x from {EligibleCount} picks (band {MinOdds:0.##}-{MaxOdds:0.##}x, fallback {FallbackMin:0.##}-{FallbackMax:0.##}x).",
+                deterministic.BestAchievableProduct,
+                eligible.Count,
                 settings.BankerMinOdds,
                 settings.BankerMaxOdds,
                 settings.BankerFallbackMinOdds,
-                settings.BankerFallbackMaxOdds,
-                eligible.Count);
+                settings.BankerFallbackMaxOdds);
             return null;
         }
 

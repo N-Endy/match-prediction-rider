@@ -8,11 +8,20 @@ public sealed record BankerCompositionResult
     public double ActiveMinOdds { get; init; }
     public double ActiveMaxOdds { get; init; }
 
+    /// <summary>
+    /// Highest product found with &lt;= maxPicks legs that does not exceed the active max band.
+    /// Useful when the composer returns empty (product stayed below the floor).
+    /// </summary>
+    public double BestAchievableProduct { get; init; }
+
     public bool IsEmpty => Selections.Count == 0;
 }
 
 public static class BankerSlipComposer
 {
+    private const int CandidateShortlistSize = 40;
+    private const int MaxExploredNodes = 200_000;
+
     public static BankerCompositionResult Compose(
         IReadOnlyList<BetslipComposerCandidate> candidates,
         double minOdds,
@@ -59,7 +68,8 @@ public static class BankerSlipComposer
         {
             UsedFallbackRange = true,
             ActiveMinOdds = fallbackMinOdds,
-            ActiveMaxOdds = fallbackMaxOdds
+            ActiveMaxOdds = fallbackMaxOdds,
+            BestAchievableProduct = Math.Max(primary.BestAchievableProduct, fallback.BestAchievableProduct)
         };
     }
 
@@ -90,23 +100,158 @@ public static class BankerSlipComposer
         double maxOdds,
         int maxPicks)
     {
-        var ordered = priced
-            .OrderByDescending(c => c.Confidence)
-            .ThenBy(c => c.DecimalOdds)
+        var shortlist = BuildShortlist(priced);
+        if (shortlist.Count == 0)
+        {
+            return new BankerCompositionResult();
+        }
+
+        // Odds-descending so the band is reachable in fewer legs; confidence breaks ties.
+        var ordered = shortlist
+            .OrderByDescending(c => c.DecimalOdds!.Value)
+            .ThenByDescending(c => c.Confidence)
             .ThenBy(c => c.PredictionId)
             .ToList();
 
-        var selected = new List<BetslipComposerCandidate>();
-        var usedFixtures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var product = 1d;
+        var suffixMaxProduct = BuildSuffixMaxProducts(ordered);
+        var bestValid = (Selections: (List<BetslipComposerCandidate>?)null, Product: 0d, AvgConfidence: 0d);
+        var bestAchievable = 1d;
+        var nodes = 0;
 
-        foreach (var candidate in ordered)
+        Search(
+            index: 0,
+            product: 1d,
+            selected: [],
+            usedFixtures: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            ordered,
+            suffixMaxProduct,
+            minOdds,
+            maxOdds,
+            maxPicks,
+            ref bestValid,
+            ref bestAchievable,
+            ref nodes);
+
+        if (bestValid.Selections is null || bestValid.Selections.Count == 0)
         {
-            if (selected.Count >= maxPicks)
+            return new BankerCompositionResult
             {
-                break;
+                BestAchievableProduct = bestAchievable > 1d ? bestAchievable : 0d
+            };
+        }
+
+        return new BankerCompositionResult
+        {
+            Selections = bestValid.Selections
+                .OrderBy(c => c.MatchDateTimeUtc ?? DateTime.MaxValue)
+                .ThenBy(c => c.League)
+                .ThenBy(c => c.HomeTeam)
+                .ToList(),
+            CombinedOdds = bestValid.Product,
+            BestAchievableProduct = Math.Max(bestAchievable, bestValid.Product)
+        };
+    }
+
+    private static List<BetslipComposerCandidate> BuildShortlist(IReadOnlyList<BetslipComposerCandidate> priced)
+    {
+        // Highest confidence first, one market per fixture, then cap at top-N.
+        return priced
+            .OrderByDescending(c => c.Confidence)
+            .ThenBy(c => c.DecimalOdds)
+            .ThenBy(c => c.PredictionId)
+            .GroupBy(ResolveFixtureKey, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .OrderByDescending(c => c.Confidence)
+            .ThenBy(c => c.DecimalOdds)
+            .ThenBy(c => c.PredictionId)
+            .Take(CandidateShortlistSize)
+            .ToList();
+    }
+
+    private static double[] BuildSuffixMaxProducts(IReadOnlyList<BetslipComposerCandidate> ordered)
+    {
+        // suffixMaxProduct[i] = product of odds from i..end (inclusive), or 1 if i == Count.
+        var suffix = new double[ordered.Count + 1];
+        suffix[ordered.Count] = 1d;
+        for (var i = ordered.Count - 1; i >= 0; i--)
+        {
+            suffix[i] = suffix[i + 1] * ordered[i].DecimalOdds!.Value;
+        }
+
+        return suffix;
+    }
+
+    private static void Search(
+        int index,
+        double product,
+        List<BetslipComposerCandidate> selected,
+        HashSet<string> usedFixtures,
+        IReadOnlyList<BetslipComposerCandidate> ordered,
+        double[] suffixMaxProduct,
+        double minOdds,
+        double maxOdds,
+        int maxPicks,
+        ref (List<BetslipComposerCandidate>? Selections, double Product, double AvgConfidence) bestValid,
+        ref double bestAchievable,
+        ref int nodes)
+    {
+        if (nodes >= MaxExploredNodes)
+        {
+            return;
+        }
+
+        nodes++;
+
+        if (product <= maxOdds)
+        {
+            bestAchievable = Math.Max(bestAchievable, product);
+        }
+
+        if (selected.Count > 0 && product >= minOdds && product <= maxOdds)
+        {
+            var avgConfidence = selected.Average(c => (double)c.Confidence);
+            if (IsBetterCombination(
+                    selected.Count,
+                    avgConfidence,
+                    product,
+                    bestValid.Selections?.Count ?? int.MaxValue,
+                    bestValid.AvgConfidence,
+                    bestValid.Product))
+            {
+                bestValid = (selected.ToList(), product, avgConfidence);
             }
 
+            // Inside the band: do not add more legs (fewer legs preferred).
+            return;
+        }
+
+        if (selected.Count >= maxPicks || index >= ordered.Count)
+        {
+            return;
+        }
+
+        // Already have an L-leg solution in band; any continuation needs more legs and cannot improve.
+        if (bestValid.Selections is not null &&
+            selected.Count >= bestValid.Selections.Count &&
+            product < minOdds)
+        {
+            return;
+        }
+
+        // Even multiplying by every remaining leg cannot reach the floor.
+        if (product * suffixMaxProduct[index] < minOdds)
+        {
+            return;
+        }
+
+        for (var i = index; i < ordered.Count; i++)
+        {
+            if (nodes >= MaxExploredNodes)
+            {
+                return;
+            }
+
+            var candidate = ordered[i];
             var fixtureKey = ResolveFixtureKey(candidate);
             if (!usedFixtures.Add(fixtureKey))
             {
@@ -120,30 +265,53 @@ public static class BankerSlipComposer
                 continue;
             }
 
-            selected.Add(candidate);
-            product = nextProduct;
-
-            // Once we are inside the target band, stop — lower product is safer for a banker.
-            if (product >= minOdds)
+            // Remaining legs (after taking this one) cannot reach the floor.
+            if (selected.Count + 1 < maxPicks &&
+                nextProduct * suffixMaxProduct[i + 1] < minOdds &&
+                nextProduct < minOdds)
             {
-                break;
+                usedFixtures.Remove(fixtureKey);
+                continue;
             }
+
+            selected.Add(candidate);
+            Search(
+                i + 1,
+                nextProduct,
+                selected,
+                usedFixtures,
+                ordered,
+                suffixMaxProduct,
+                minOdds,
+                maxOdds,
+                maxPicks,
+                ref bestValid,
+                ref bestAchievable,
+                ref nodes);
+            selected.RemoveAt(selected.Count - 1);
+            usedFixtures.Remove(fixtureKey);
+        }
+    }
+
+    private static bool IsBetterCombination(
+        int legCount,
+        double avgConfidence,
+        double product,
+        int bestLegCount,
+        double bestAvgConfidence,
+        double bestProduct)
+    {
+        if (legCount != bestLegCount)
+        {
+            return legCount < bestLegCount;
         }
 
-        if (selected.Count == 0 || product < minOdds || product > maxOdds)
+        if (Math.Abs(avgConfidence - bestAvgConfidence) > 1e-9)
         {
-            return new BankerCompositionResult();
+            return avgConfidence > bestAvgConfidence;
         }
 
-        return new BankerCompositionResult
-        {
-            Selections = selected
-                .OrderBy(c => c.MatchDateTimeUtc ?? DateTime.MaxValue)
-                .ThenBy(c => c.League)
-                .ThenBy(c => c.HomeTeam)
-                .ToList(),
-            CombinedOdds = product
-        };
+        return product < bestProduct || bestProduct <= 0d;
     }
 
     private static string ResolveFixtureKey(BetslipComposerCandidate candidate) =>

@@ -173,6 +173,84 @@ public class BetslipGenerationServiceRunExclusivityTests
     }
 
     [Fact]
+    public async Task GenerateDailyBetslipsAsync_Midday_ReusesMorningBanker_WhenLeftoversCannotPack()
+    {
+        // Leftovers are short-priced favorites (1.12^8 ≈ 2.48) that cannot hit the 4x floor even
+        // with subset search. Morning banker legs stay open and must be reused at midday.
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var today = DateTimeProvider.GetLocalDate();
+        var kickoff = DateTime.UtcNow.AddHours(5);
+        var fixtures = new List<SourceMarketFixture>();
+        var predictions = new List<Prediction>();
+        var nextId = 1;
+        var isWeekend = today.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+
+        AddBtts(predictions, fixtures, ref nextId, today, kickoff, "RollHome", "RollAway", "roll-fx-1", 0.81m, 1.30);
+
+        for (var i = 1; i <= 4; i++)
+        {
+            AddBtts(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(10 + i),
+                $"BankerHome{i}",
+                $"BankerAway{i}",
+                $"banker-fx-{i}",
+                0.80m,
+                1.55);
+        }
+
+        for (var i = 1; i <= 10; i++)
+        {
+            AddBtts(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(60 + i),
+                $"ShortHome{i}",
+                $"ShortAway{i}",
+                $"short-fx-{i}",
+                0.93m - i * 0.001m,
+                1.12);
+        }
+
+        if (isWeekend)
+        {
+            AddWeekendDraws(predictions, fixtures, ref nextId, today, kickoff);
+        }
+
+        context.Predictions.AddRange(predictions);
+        await context.SaveChangesAsync();
+
+        var fixtureByPredictionId = predictions.ToDictionary(p => p.Id, p => p.FixtureKey);
+        var service = CreateService(context, fixtures);
+
+        await service.GenerateDailyBetslipsAsync("morning");
+        await service.GenerateDailyBetslipsAsync("midday");
+
+        var morning = await LoadSetAsync(context, BetslipRunLabels.Morning);
+        var midday = await LoadSetAsync(context, BetslipRunLabels.Midday);
+
+        var morningBanker = FixtureKeys(morning, BetslipGenerationService.IsBankerSlip, fixtureByPredictionId);
+        var middayBanker = FixtureKeys(midday, BetslipGenerationService.IsBankerSlip, fixtureByPredictionId);
+
+        Assert.NotEmpty(morningBanker);
+        Assert.NotEmpty(middayBanker);
+        Assert.True(morningBanker.IsSubsetOf(middayBanker) || morningBanker.SetEquals(middayBanker));
+        Assert.DoesNotContain(midday.Slips, BetslipGenerationService.IsRolloverSlip);
+        Assert.DoesNotContain(
+            FixtureKeys(midday, BetslipGenerationService.IsBankerSlip, fixtureByPredictionId),
+            key => key.StartsWith("short-fx-", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task GenerateDailyBetslipsAsync_Midday_Unchanged_WhenNoMorningSet()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
