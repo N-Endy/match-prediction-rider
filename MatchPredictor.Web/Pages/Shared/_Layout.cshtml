@@ -43,6 +43,10 @@
     <meta name="description" content="@ogDescription">
     <meta name="keywords" content="football predictions, btts, over 2.5, betting tips, match predictor, AI football tips">
     <meta name="author" content="MatchPredictor">
+    @if (!string.IsNullOrWhiteSpace(Configuration["AdSense:ClientId"]))
+    {
+        <meta name="google-adsense-account" content="@Configuration["AdSense:ClientId"]">
+    }
     <link rel="canonical" href="@canonicalUrl" />
 
     <!-- Open Graph / Facebook -->
