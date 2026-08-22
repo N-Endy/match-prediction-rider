@@ -25,6 +25,7 @@
   --accent-amber: #f59e0b;
   --accent-rose: #f43f5e;
   --accent-teal: #0d9488;
+  --accent-lime: #92d050;
   /* Teal replacing OldColor */
   --accent-pink: #0ea5e9;
   /* Sky Blue replacing Pink */
@@ -114,27 +115,50 @@ a:hover {
 .mp-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 1.2rem;
-  font-weight: 700;
-  color: var(--text-primary);
-  letter-spacing: -0.02em;
+  gap: 12px;
+  flex-shrink: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
 .mp-logo:hover {
-  color: var(--text-primary);
+  opacity: 0.92;
+  transform: scale(1.02);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mp-logo {
+    transition: opacity 0.2s ease;
+  }
+
+  .mp-logo:hover {
+    transform: none;
+  }
 }
 
 .mp-logo-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 2px;
+  width: 56px;
+  height: 56px;
   display: block;
   flex-shrink: 0;
+  object-fit: contain;
 }
 
 .mp-logo-text {
+  font-size: 1.05rem;
+  font-weight: 800;
+  font-style: italic;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   line-height: 1;
+  white-space: nowrap;
+}
+
+.mp-logo-match {
+  color: var(--text-primary);
+}
+
+.mp-logo-predictor {
+  color: var(--accent-lime);
 }
 
 .mp-nav-links {
@@ -178,6 +202,16 @@ a:hover {
 @media (max-width: 768px) {
   .mp-menu-toggle {
     display: block;
+  }
+
+  .mp-logo-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+  }
+
+  .mp-logo-text {
+    display: none;
   }
 
   .mp-nav-links {

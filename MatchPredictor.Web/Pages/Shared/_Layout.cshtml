@@ -19,10 +19,10 @@
     var ogTitle = string.IsNullOrWhiteSpace(pageTitle)
         ? "MatchPredictor – Daily AI Football Predictions"
         : $"{pageTitle} – MatchPredictor";
-    var defaultDescription = "Accurate daily football predictions using AI. Easy betslips. Simple design. Zero fluff.";
+    var defaultDescription = "Predict before kickoff. Results after the final whistle. Daily AI football predictions and betslips.";
     var ogDescription = ViewData["Description"] as string ?? defaultDescription;
     var ogImageUrl = $"{origin}/og-preview.png";
-    var logoUrl = $"{origin}/img/logo-mark.png";
+    var logoUrl = $"{origin}/img/logo.png";
     var jsonLd = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string>
     {
         ["@context"] = "https://schema.org",
@@ -54,7 +54,7 @@
     <meta property="og:image" content="@ogImageUrl">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
-    <meta property="og:image:alt" content="MatchPredictor – Daily AI football predictions">
+    <meta property="og:image:alt" content="MatchPredictor – Predict before kickoff. Results after the final whistle.">
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image">
@@ -62,7 +62,7 @@
     <meta name="twitter:title" content="@ogTitle">
     <meta name="twitter:description" content="@ogDescription">
     <meta name="twitter:image" content="@ogImageUrl">
-    <meta name="twitter:image:alt" content="MatchPredictor – Daily AI football predictions">
+    <meta name="twitter:image:alt" content="MatchPredictor – Predict before kickoff. Results after the final whistle.">
     @if (!string.IsNullOrWhiteSpace(Configuration["Social:TwitterHandle"]))
     {
         <meta name="twitter:site" content="@Configuration["Social:TwitterHandle"]">
@@ -104,9 +104,14 @@
 <!-- Navbar -->
 <nav class="mp-navbar">
     <div class="mp-navbar-inner">
-        <a class="mp-logo" asp-page="/Index">
-            <img class="mp-logo-icon" src="~/img/logo-mark.svg" width="36" height="36" alt="MatchPredictor" asp-append-version="true" />
-            <span class="mp-logo-text">MatchPredictor</span>
+        <a class="mp-logo" asp-page="/Index" aria-label="MatchPredictor">
+            <picture>
+                <source media="(min-width: 769px)" srcset="~/img/logo-mark-nav.png" asp-append-version="true" />
+                <img class="mp-logo-icon" src="~/img/logo-mark.png" width="56" height="56" alt="" aria-hidden="true" asp-append-version="true" />
+            </picture>
+            <span class="mp-logo-text" aria-hidden="true">
+                <span class="mp-logo-match">MATCH</span><span class="mp-logo-predictor">PREDICTOR</span>
+            </span>
         </a>
 
         <button class="mp-menu-toggle" id="menuToggle" aria-label="Toggle navigation">
