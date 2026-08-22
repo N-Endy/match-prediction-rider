@@ -87,6 +87,20 @@ public class UserTrackingServiceTests
     }
 
     [Fact]
+    public async Task TrackPageViewAsync_SkipsTracking_WhenAnalyticsConsentIsMissing()
+    {
+        await using var context = CreateContext();
+        var service = CreateService(context);
+        var httpContext = CreateHttpContext("/predictions/btts", analyticsConsentGranted: false);
+
+        await service.TrackPageViewAsync(httpContext);
+
+        Assert.Equal(0, await context.VisitorSessions.CountAsync());
+        Assert.Equal(0, await context.UserActivityEvents.CountAsync());
+        Assert.Empty(httpContext.Response.Headers.SetCookie);
+    }
+
+    [Fact]
     public async Task TrackPageViewAsync_DoesNotThrow_WhenRequestIsCanceled()
     {
         await using var context = CreateContext();
@@ -127,7 +141,8 @@ public class UserTrackingServiceTests
     private static DefaultHttpContext CreateHttpContext(
         string path,
         Microsoft.Extensions.Primitives.StringValues setCookies = default,
-        string userAgent = "Mozilla/5.0")
+        string userAgent = "Mozilla/5.0",
+        bool analyticsConsentGranted = true)
     {
         var httpContext = new DefaultHttpContext();
         httpContext.Request.Method = HttpMethods.Get;
@@ -135,13 +150,22 @@ public class UserTrackingServiceTests
         httpContext.Request.Headers.Accept = "text/html";
         httpContext.Request.Headers.UserAgent = userAgent;
 
+        var cookieParts = new List<string>();
+        if (analyticsConsentGranted)
+        {
+            cookieParts.Add($"{UserTrackingService.AnalyticsConsentCookieName}=granted");
+        }
+
         if (setCookies.Count > 0)
         {
-            httpContext.Request.Headers.Cookie = string.Join(
-                "; ",
-                setCookies
-                    .Select(cookie => cookie.Split(';', 2)[0])
-                    .Distinct(StringComparer.Ordinal));
+            cookieParts.AddRange(setCookies
+                .Select(cookie => cookie.Split(';', 2)[0])
+                .Distinct(StringComparer.Ordinal));
+        }
+
+        if (cookieParts.Count > 0)
+        {
+            httpContext.Request.Headers.Cookie = string.Join("; ", cookieParts);
         }
 
         return httpContext;

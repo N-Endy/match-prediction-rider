@@ -2,9 +2,10 @@
 @model PrivacyModel
 @{
     ViewData["Title"] = "Privacy Policy";
+    ViewData["Description"] = "How MatchPredictor collects, uses, and protects your data.";
 }
 
-<div class="mp-container">
+<div class="mp-container mp-legal">
     <div class="mp-page-header">
         <div>
             <p class="mp-page-kicker">Legal</p>
@@ -14,5 +15,210 @@
         </div>
     </div>
 
-    <p>Use this page to detail your site's privacy policy.</p>
+    <p class="mp-legal-meta">Effective date: 22 August 2026 · Contact: <a href="mailto:hello@matchpredictor.dev">hello@matchpredictor.dev</a></p>
+
+    <section class="mp-legal-section">
+        <h2>Overview</h2>
+        <p>
+            MatchPredictor ("we", "us") publishes daily football predictions and betslip tools at
+            <strong>matchpredictor.dev</strong>. This policy explains what information we collect,
+            why we collect it, and the choices you have.
+        </p>
+        <p>
+            We do <strong>not</strong> operate user accounts, sell personal data, or store email addresses.
+            We do not persist IP addresses or precise location data in our analytics database.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Information we collect</h2>
+
+        <h3>First-party analytics</h3>
+        <p>
+            When you accept cookies, we store pseudonymous usage data in our PostgreSQL database to
+            understand how the site is used and improve the product. This includes:
+        </p>
+        <ul>
+            <li>Opaque visitor and session identifiers (random GUIDs in cookies)</li>
+            <li>Pages visited (landing path and last path)</li>
+            <li>HTTP referrer and browser user agent (trimmed to 512 characters)</li>
+            <li>Whitelisted interaction events such as page views, cart adds, booking attempts, and AI chat request counts</li>
+        </ul>
+        <p>
+            Event metadata is limited — for example, AI chat events record prompt length only, not message text.
+            Automated bots and crawlers are excluded from tracking.
+        </p>
+        <p>
+            First-party analytics can be disabled by the site operator via the
+            <code>ENABLE_USER_TRACKING</code> environment variable. When disabled, no new analytics rows are written.
+        </p>
+
+        <h3>Browser storage</h3>
+        <ul>
+            <li><strong>localStorage — <code>cookieConsent</code>:</strong> remembers your cookie banner choice</li>
+            <li><strong>localStorage — <code>mp_cart</code>:</strong> stores your betslip selections on your device until you clear them</li>
+        </ul>
+
+        <h3>AI Chat</h3>
+        <p>
+            The password-protected AI Chat feature sends your message text and recent conversation history
+            (up to 12 turns, 1,000 characters per message) to third-party language model providers —
+            primarily <strong>OpenAI</strong>, with <strong>Google Gemini</strong> as a fallback.
+            Some requests may also use OpenAI web search, which forwards query context to OpenAI's search infrastructure.
+        </p>
+        <p>
+            Conversations are cached in Redis (or in-memory cache when Redis is unavailable) for up to
+            <strong>12 hours</strong>, then expire automatically. Chat messages are not stored in our
+            PostgreSQL database.
+        </p>
+
+        <h3>SportyBet booking</h3>
+        <p>
+            When you book games, our server sends match selection data (teams, league, market, prediction,
+            kickoff time) to SportyBet to generate a booking code. We do not send your name, email, or
+            account credentials.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Cookies we use</h2>
+        <div class="mp-legal-table-wrap">
+            <table class="mp-legal-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Purpose</th>
+                        <th>Duration</th>
+                        <th>Essential?</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>MP_ANALYTICS_CONSENT</code></td>
+                        <td>Records your analytics and advertising consent choice</td>
+                        <td>365 days</td>
+                        <td>No</td>
+                    </tr>
+                    <tr>
+                        <td><code>MP_VISITOR_ID</code></td>
+                        <td>Pseudonymous visitor identifier for first-party analytics</td>
+                        <td>180 days</td>
+                        <td>No</td>
+                    </tr>
+                    <tr>
+                        <td><code>MP_VISITOR_SESSION</code></td>
+                        <td>Session identifier for first-party analytics</td>
+                        <td>12 hours</td>
+                        <td>No</td>
+                    </tr>
+                    <tr>
+                        <td><code>MP_AI_AUTH</code> / <code>MP_AI_CHAT_SESSION</code></td>
+                        <td>AI Chat authentication (password-gated feature)</td>
+                        <td>12 hours</td>
+                        <td>Yes (for that feature)</td>
+                    </tr>
+                    <tr>
+                        <td><code>MP_ADMIN_UI</code></td>
+                        <td>Operator dashboard access after HTTP Basic Auth</td>
+                        <td>12 hours</td>
+                        <td>Yes (for operators)</td>
+                    </tr>
+                    <tr>
+                        <td><code>.AspNetCore.Antiforgery.*</code></td>
+                        <td>CSRF protection on form submissions</td>
+                        <td>Session</td>
+                        <td>Yes</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <p>
+            Third-party cookies may also be set by Google Analytics and Google AdSense when you accept cookies.
+            See Google's policies for details on those cookies.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Third-party services</h2>
+        <ul>
+            <li><strong>Google Analytics 4</strong> (measurement ID <code>G-ET4NE2RTGC</code>) — site usage analytics</li>
+            <li><strong>Google AdSense</strong> (publisher ID <code>ca-pub-2894269106561971</code>) — display advertising</li>
+            <li><strong>OpenAI / Google Gemini</strong> — AI Chat responses</li>
+            <li><strong>SportyBet</strong> — betslip booking codes</li>
+            <li><strong>SportSRC</strong> (<code>api.sportsrc.org</code>) — optional live stream embeds; your browser connects directly to their servers</li>
+            <li><strong>Cloudflare CDN</strong> — Font Awesome icon stylesheet</li>
+            <li><strong>Google Fonts</strong> — Inter typeface</li>
+        </ul>
+        <p>
+            Each third party processes data under its own privacy policy. We recommend reviewing:
+            <a href="https://policies.google.com/privacy" rel="noopener noreferrer" target="_blank">Google Privacy Policy</a>,
+            <a href="https://openai.com/policies/privacy-policy" rel="noopener noreferrer" target="_blank">OpenAI Privacy Policy</a>.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Cookie consent and your choices</h2>
+        <p>
+            When you first visit, a banner asks for your consent. Until you click <strong>Accept</strong>,
+            we do not set first-party analytics cookies, Google Analytics storage remains denied via
+            Google Consent Mode v2, and Google AdSense personalisation storage remains denied.
+        </p>
+        <p>
+            If you click <strong>Decline</strong>, those restrictions remain in place. You can clear
+            <code>localStorage</code> and cookies in your browser settings to see the banner again.
+        </p>
+        <p>You can also opt out of personalised Google ads at
+            <a href="https://adssettings.google.com" rel="noopener noreferrer" target="_blank">adssettings.google.com</a>
+            and install the
+            <a href="https://tools.google.com/dlpage/gaoptout" rel="noopener noreferrer" target="_blank">Google Analytics Opt-out Browser Add-on</a>.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Data retention</h2>
+        <ul>
+            <li>First-party analytics rows in PostgreSQL are retained until manually purged by operators</li>
+            <li>AI Chat session cache entries expire after 12 hours of inactivity</li>
+            <li>Betslip selections in <code>localStorage</code> remain until you clear them</li>
+        </ul>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Security</h2>
+        <p>
+            We use HTTPS, HttpOnly cookies for sensitive session tokens, CSRF protection on forms,
+            and rate limiting on API endpoints. No system is perfectly secure; use the site at your own discretion.
+        </p>
+    </section>
+
+    <section class="mp-legal-section" id="responsible-gambling">
+        <h2>Responsible gambling</h2>
+        <p>
+            MatchPredictor is intended for users aged <strong>18 and over</strong> only. Predictions are
+            statistical estimates, not guarantees. Past performance does not predict future results.
+        </p>
+        <p>
+            Only stake money you can afford to lose. If gambling is affecting you or someone you know,
+            seek help from a recognised support organisation in your country.
+        </p>
+        <p>
+            We are not a bookmaker. SportyBet booking codes link to a third-party betting platform
+            governed by its own terms and licensing.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Changes to this policy</h2>
+        <p>
+            We may update this page as the product evolves. The effective date at the top will change
+            when we do. Continued use of the site after changes constitutes acceptance of the updated policy.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Contact</h2>
+        <p>
+            Questions about this policy: <a href="mailto:hello@matchpredictor.dev">hello@matchpredictor.dev</a>
+        </p>
+    </section>
 </div>

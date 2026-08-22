@@ -63,9 +63,27 @@
     <meta name="twitter:description" content="@ogDescription">
     <meta name="twitter:image" content="@ogImageUrl">
     <meta name="twitter:image:alt" content="MatchPredictor – Daily AI football predictions">
+    @if (!string.IsNullOrWhiteSpace(Configuration["Social:TwitterHandle"]))
+    {
+        <meta name="twitter:site" content="@Configuration["Social:TwitterHandle"]">
+        <meta name="twitter:creator" content="@Configuration["Social:TwitterHandle"]">
+    }
 
     <script type="application/ld+json">
     @Html.Raw(jsonLd)
+    </script>
+
+    <!-- Google Consent Mode defaults (must run before gtag.js loads) -->
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag() { window.dataLayer.push(arguments); }
+        gtag('consent', 'default', {
+            ad_storage: 'denied',
+            ad_user_data: 'denied',
+            ad_personalization: 'denied',
+            analytics_storage: 'denied',
+            wait_for_update: 500
+        });
     </script>
 
     <!-- Google Analytics -->
@@ -104,7 +122,10 @@
             <li><a class="@NavClass("/predictions/over2")" href="/predictions/over2">Over 2.5</a></li>
             <li><a class="@NavClass("/predictions/under2")" href="/predictions/under2">Under 2.5</a></li>
             <li><a class="@NavClass("/aichat")" href="/aichat">AI Chat</a></li>
-            <li><a class="@NavClass("/analytics")" href="/analytics">Analytics</a></li>
+            @if (Context.IsAdminOperator())
+            {
+                <li><a class="@NavClass("/analytics")" href="/analytics">Analytics</a></li>
+            }
         </ul>
     </div>
 </nav>
@@ -126,7 +147,9 @@
         <a href="/predictions/straightwin">Straight Win</a> ·
         <a href="/predictions/draw">Draw</a> ·
         <a href="/predictions/over2">Over 2.5</a> ·
-        <a href="/predictions/under2">Under 2.5</a>
+        <a href="/predictions/under2">Under 2.5</a> ·
+        <a href="/Privacy">Privacy</a> ·
+        <a href="/Privacy#responsible-gambling">Responsible Gambling</a>
     </div>
     <p class="mp-footer-copy">&copy; @DateTime.Now.Year MatchPredictor · AI-Powered Football Predictions</p>
 </footer>
@@ -173,8 +196,8 @@
 <div id="cookieConsentBanner" class="mp-cookie-banner" style="display: none;">
     <div class="mp-cookie-content">
         <p>
-            We use cookies to personalize content, serve targeted ads, and analyze our traffic. 
-            By clicking "Accept", you consent to our use of cookies in accordance with our Privacy Policy.
+            We use cookies to personalize content, serve targeted ads, and analyze our traffic.
+            By clicking "Accept", you consent to our use of cookies in accordance with our <a href="/Privacy">Privacy Policy</a>.
         </p>
         <div class="mp-cookie-actions">
             <button id="acceptCookiesBtn" class="mp-cookie-btn mp-cookie-accept">Accept</button>

@@ -9,6 +9,8 @@ public class UserTrackingService : IUserTrackingService
 {
     private const string VisitorCookieName = "MP_VISITOR_ID";
     private const string SessionCookieName = "MP_VISITOR_SESSION";
+    public const string AnalyticsConsentCookieName = "MP_ANALYTICS_CONSENT";
+    private const string AnalyticsConsentGrantedValue = "granted";
     private const string ContextItemKey = "__mp_tracking_context";
     private static readonly TimeSpan VisitorCookieLifetime = TimeSpan.FromDays(180);
     private static readonly TimeSpan SessionCookieLifetime = TimeSpan.FromHours(12);
@@ -209,6 +211,13 @@ public class UserTrackingService : IUserTrackingService
             return skipped;
         }
 
+        if (!HasAnalyticsConsent(httpContext))
+        {
+            var skipped = new TrackingContext(skipTracking: true);
+            httpContext.Items[ContextItemKey] = skipped;
+            return skipped;
+        }
+
         var visitorId = ReadCookie(httpContext, VisitorCookieName);
         if (string.IsNullOrWhiteSpace(visitorId))
         {
@@ -322,8 +331,14 @@ public class UserTrackingService : IUserTrackingService
             HttpOnly = true,
             Secure = httpContext.Request.IsHttps,
             SameSite = SameSiteMode.Lax,
-            IsEssential = true
+            IsEssential = false
         };
+    }
+
+    private static bool HasAnalyticsConsent(HttpContext httpContext)
+    {
+        var consentValue = httpContext.Request.Cookies[AnalyticsConsentCookieName];
+        return string.Equals(consentValue, AnalyticsConsentGrantedValue, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsBot(string userAgent)
