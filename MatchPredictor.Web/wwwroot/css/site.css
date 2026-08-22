@@ -204,14 +204,20 @@ a:hover {
     display: block;
   }
 
+  .mp-logo {
+    gap: 8px;
+    min-width: 0;
+  }
+
   .mp-logo-icon {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
+    width: 40px;
+    height: 40px;
   }
 
   .mp-logo-text {
-    display: none;
+    display: inline;
+    font-size: 0.8rem;
+    letter-spacing: 0.02em;
   }
 
   .mp-nav-links {
