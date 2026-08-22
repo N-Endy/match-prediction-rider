@@ -26,6 +26,32 @@ public class WebApplicationFactorySmokeTests
     }
 
     [Fact]
+    public async Task OgPreview_ReturnsPng()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var response = await client.GetAsync("/og-preview.png");
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("image/png", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task HomePage_IncludesOgImageMetaTag()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var html = await client.GetStringAsync("/");
+
+        Assert.Contains("property=\"og:image\" content=\"https://localhost/og-preview.png\"", html);
+        Assert.Contains("property=\"og:image:secure_url\" content=\"https://localhost/og-preview.png\"", html);
+        Assert.Contains("property=\"og:image:type\" content=\"image/png\"", html);
+        Assert.Contains("name=\"twitter:card\" content=\"summary_large_image\"", html);
+    }
+
+    [Fact]
     public async Task Analytics_ReturnsUnauthorized_WithoutBasicAuth()
     {
         await using var factory = CreateFactory();
