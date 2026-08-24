@@ -2,6 +2,7 @@
 @inject IConfiguration Configuration
 @{
     var currentPath = Context.Request.Path.Value ?? "/";
+    var reviewSafePublicUi = Configuration.GetValue("AdSense:ReviewSafePublicUi", true);
     string NavClass(string href)
     {
         var isHome = href == "/";
@@ -105,7 +106,8 @@
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=@(Configuration["AdSense:ClientId"] ?? "ca-pub-123456789")"
          crossorigin="anonymous"></script>
 </head>
-<body data-max-booking-selections="@(Configuration.GetValue("SportyBet:MaxBookingSelections", 50))">
+<body data-max-booking-selections="@(Configuration.GetValue("SportyBet:MaxBookingSelections", 50))"
+      data-review-safe-public-ui="@(reviewSafePublicUi ? "true" : "false")">
 
 <!-- Navbar -->
 <nav class="mp-navbar">
@@ -160,7 +162,7 @@
         <a href="/predictions/over2">Over 2.5</a> ·
         <a href="/predictions/under2">Under 2.5</a> ·
         <a href="/Privacy">Privacy</a> ·
-        <a href="/Privacy#responsible-gambling">Responsible Gambling</a>
+        <a href="/Privacy#responsible-use">Responsible use</a>
     </div>
     <p class="mp-footer-copy">&copy; @DateTime.Now.Year MatchPredictor · AI-Powered Football Predictions</p>
 </footer>
@@ -181,7 +183,7 @@
     <div class="mp-cart-overlay" data-cart-action="close"></div>
     <div class="mp-cart-drawer">
         <div class="mp-cart-header">
-            <h2>🛒 Your Betslip</h2>
+            <h2>🛒 Your selections</h2>
             <button class="mp-cart-close" data-cart-action="close">✕</button>
         </div>
         <div class="mp-cart-items" id="cartItemsList"></div>
@@ -192,7 +194,7 @@
         <div id="bookingResult" style="display:none;"></div>
         <div class="mp-cart-footer" id="cartFooter" style="display:none;">
             <button class="mp-clear-cart-btn" data-cart-action="clear">Clear All</button>
-            <button class="mp-book-btn" id="bookGamesBtn" data-cart-action="book">🎫 Book Games</button>
+            <button class="mp-book-btn" id="bookGamesBtn" data-cart-action="book">@(reviewSafePublicUi ? "Show Games" : "🎫 Book Games")</button>
         </div>
     </div>
 </div>

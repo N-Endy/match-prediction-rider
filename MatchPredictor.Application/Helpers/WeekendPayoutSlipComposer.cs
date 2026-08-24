@@ -31,7 +31,6 @@ public static class WeekendPayoutSlipComposer
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        var stake = Math.Max(1m, settings.ReferenceStakeNaira);
         var specs = new List<PayoutBandSpec>();
         var slipNumber = 1;
 
@@ -46,8 +45,7 @@ public static class WeekendPayoutSlipComposer
             settings.SmallFallbackMinOdds,
             settings.SmallFallbackMaxOdds,
             settings.SmallMaxPicks,
-            preferHigherSingles: false,
-            stake);
+            preferHigherSingles: false);
 
         AddBandCopies(
             specs,
@@ -60,8 +58,7 @@ public static class WeekendPayoutSlipComposer
             settings.MediumFallbackMinOdds,
             settings.MediumFallbackMaxOdds,
             settings.MediumMaxPicks,
-            preferHigherSingles: false,
-            stake);
+            preferHigherSingles: false);
 
         AddBandCopies(
             specs,
@@ -74,8 +71,7 @@ public static class WeekendPayoutSlipComposer
             settings.BigFallbackMinOdds,
             settings.BigFallbackMaxOdds,
             settings.BigMaxPicks,
-            preferHigherSingles: true,
-            stake);
+            preferHigherSingles: true);
 
         AddBandCopies(
             specs,
@@ -88,8 +84,7 @@ public static class WeekendPayoutSlipComposer
             settings.MegaFallbackMinOdds,
             settings.MegaFallbackMaxOdds,
             Math.Min(settings.MegaMaxPicks, settings.MaxSelectionsPerSlip),
-            preferHigherSingles: true,
-            stake);
+            preferHigherSingles: true);
 
         return specs;
     }
@@ -98,7 +93,6 @@ public static class WeekendPayoutSlipComposer
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        var stake = Math.Max(1m, settings.ReferenceStakeNaira);
         return
         [
             CreateSpec(
@@ -111,8 +105,7 @@ public static class WeekendPayoutSlipComposer
                 settings.SmallFallbackMinOdds,
                 settings.SmallFallbackMaxOdds,
                 Math.Min(settings.DailyMaxPicks, settings.MaxSelectionsPerSlip),
-                preferHigherSingles: false,
-                stake)
+                preferHigherSingles: false)
         ];
     }
 
@@ -306,8 +299,7 @@ public static class WeekendPayoutSlipComposer
         double fallbackMinOdds,
         double fallbackMaxOdds,
         int maxPicks,
-        bool preferHigherSingles,
-        decimal stake)
+        bool preferHigherSingles)
     {
         for (var i = 0; i < count; i++)
         {
@@ -322,8 +314,7 @@ public static class WeekendPayoutSlipComposer
                 fallbackMinOdds,
                 fallbackMaxOdds,
                 maxPicks,
-                preferHigherSingles,
-                stake));
+                preferHigherSingles));
         }
     }
 
@@ -337,12 +328,9 @@ public static class WeekendPayoutSlipComposer
         double fallbackMinOdds,
         double fallbackMaxOdds,
         int maxPicks,
-        bool preferHigherSingles,
-        decimal stake)
+        bool preferHigherSingles)
     {
         var displayTitle = letter is null ? title : $"{title} {letter}";
-        var minPayout = stake * (decimal)minOdds;
-        var maxPayout = stake * (decimal)maxOdds;
         var labelPrefix = bandKey switch
         {
             "small" => "Small",
@@ -359,7 +347,7 @@ public static class WeekendPayoutSlipComposer
             Title = displayTitle,
             BandKey = bandKey,
             TierLabel =
-                $"{labelPrefix} ({FormatOdds(minOdds)}-{FormatOdds(maxOdds)}x · {FormatNaira(minPayout)}-{FormatNaira(maxPayout)} @ {FormatNaira(stake)})",
+                $"{labelPrefix} ({FormatOdds(minOdds)}-{FormatOdds(maxOdds)}x)",
             MinOdds = minOdds,
             MaxOdds = maxOdds,
             FallbackMinOdds = fallbackMinOdds,
@@ -371,21 +359,6 @@ public static class WeekendPayoutSlipComposer
 
     private static string FormatOdds(double odds) =>
         odds >= 1000 ? odds.ToString("0") : odds.ToString("0.##");
-
-    private static string FormatNaira(decimal amount)
-    {
-        if (amount >= 1_000_000m)
-        {
-            return $"₦{(amount / 1_000_000m):0.##}M";
-        }
-
-        if (amount >= 1000m)
-        {
-            return $"₦{(amount / 1000m):0.##}k";
-        }
-
-        return $"₦{amount:0.##}";
-    }
 
     private static double ResolvePackingScore(BetslipComposerCandidate candidate) =>
         candidate.ResearchScore ?? (double)candidate.Confidence;

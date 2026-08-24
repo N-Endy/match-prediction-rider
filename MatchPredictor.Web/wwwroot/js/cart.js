@@ -2,6 +2,14 @@
 const CART_KEY = 'mp_cart';
 const fixtureConfirmations = new Map();
 
+function isReviewSafePublicUi() {
+    return document.body?.dataset?.reviewSafePublicUi === 'true';
+}
+
+function getBookButtonLabel() {
+    return isReviewSafePublicUi() ? 'Show Games' : '🎫 Book Games';
+}
+
 function getMaxBookingSelections() {
     const raw = document.body?.dataset?.maxBookingSelections;
     const parsed = Number.parseInt(raw ?? '', 10);
@@ -180,7 +188,7 @@ async function bookGames() {
     } finally {
         if (bookBtn) {
             bookBtn.disabled = false;
-            bookBtn.textContent = '🎫 Book Games';
+            bookBtn.textContent = getBookButtonLabel();
         }
     }
 }
@@ -327,7 +335,7 @@ function confirmFixtureMatch(unresolvedIndex) {
 
     const identity = buildUnresolvedIdentity(unresolved);
     fixtureConfirmations.set(identity, unresolved.closestEventId);
-    showToast('Match confirmed — click Book Games again to include it');
+    showToast(`Match confirmed — click ${getBookButtonLabel()} again to include it`);
 
     const item = resultDiv?.querySelector(`[data-unresolved-index="${unresolvedIndex}"]`);
     if (item) {
@@ -356,7 +364,7 @@ function updatePendingConfirmationsHint() {
     }
 
     hint.style.display = 'block';
-    hint.textContent = `${count} match${count === 1 ? '' : 'es'} confirmed — click Book Games again to include ${count === 1 ? 'it' : 'them'}.`;
+    hint.textContent = `${count} match${count === 1 ? '' : 'es'} confirmed — click ${getBookButtonLabel()} again to include ${count === 1 ? 'it' : 'them'}.`;
 }
 
 function renderBookingResultHtml(result) {
@@ -366,13 +374,13 @@ function renderBookingResultHtml(result) {
 
     if (result.success) {
         const urlHtml = result.bookingUrl
-            ? `<button type="button" class="mp-booking-url-btn" onclick='openSportyBetBooking(${JSON.stringify(result.bookingUrl)})'>🔗 Open in SportyBet</button>`
+            ? `<button type="button" class="mp-booking-url-btn" onclick='openSportyBetBooking(${JSON.stringify(result.bookingUrl)})'>${isReviewSafePublicUi() ? 'Open slip' : '🔗 Open in SportyBet'}</button>`
             : '';
 
         return `
             <div class="mp-booking-success">
                 <button class="mp-booking-close" onclick="this.closest('.mp-booking-success').parentElement.style.display='none'">&times;</button>
-                <div class="mp-booking-code-label">Booking Code</div>
+                <div class="mp-booking-code-label">${isReviewSafePublicUi() ? 'Slip code' : 'Booking Code'}</div>
                 <div class="mp-booking-code">${escapeHtml(result.bookingCode || '')}</div>
                 <div class="mp-booking-actions">
                     <button class="mp-copy-code-btn" onclick="copyBookingCode('${result.bookingCode}')">📋 Copy</button>

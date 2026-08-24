@@ -1,7 +1,10 @@
 @model MatchPredictor.Domain.Models.Betslip
 @using MatchPredictor.Domain.Models
 @using MatchPredictor.Application.Services
+@using MatchPredictor.Web.Helpers
+@inject Microsoft.Extensions.Configuration.IConfiguration Configuration
 @{
+    var reviewSafe = Configuration.GetValue("AdSense:ReviewSafePublicUi", true);
     var isRollover = Model.SlipNumber == BetslipGenerationService.RolloverSlipNumber
                      || Model.TierLabel.StartsWith("Rollover", StringComparison.OrdinalIgnoreCase);
     var isBanker = Model.SlipNumber == BetslipGenerationService.BankerSlipNumber
@@ -13,6 +16,10 @@
     var estimatedReturn = isPayoutBand
         ? referenceStake * (decimal)Model.CombinedDecimalOdds!.Value
         : (decimal?)null;
+    var displayTierLabel = reviewSafe
+        ? BetslipDisplayHelper.SanitizeTierLabel(Model.TierLabel)
+        : Model.TierLabel;
+    var openSlipLabel = reviewSafe ? "Open slip" : "Open in SportyBet";
     var statusClass = Model.BookingStatus switch
     {
         BetslipBookingStatuses.Booked => "mp-betslip-status-booked",
@@ -49,7 +56,7 @@
 <article class="@cardClass">
     <header class="mp-betslip-card-header">
         <div>
-            <span class="mp-betslip-tier">@Model.TierLabel</span>
+            <span class="mp-betslip-tier">@displayTierLabel</span>
             <h2 class="mp-betslip-title">@Model.Title</h2>
         </div>
         <span class="mp-betslip-status @statusClass">@Model.BookingStatus</span>
@@ -71,8 +78,16 @@
                 <strong>@Model.CombinedDecimalOdds!.Value.ToString("0.00")x</strong>
             </div>
             <div>
-                <span class="mp-betslip-metric-label">Est. return @FormatNaira(referenceStake)</span>
-                <strong>@FormatNaira(estimatedReturn!.Value)</strong>
+                @if (reviewSafe)
+                {
+                    <span class="mp-betslip-metric-label">Projected multiplier</span>
+                    <strong>@Model.CombinedDecimalOdds!.Value.ToString("0.00")x</strong>
+                }
+                else
+                {
+                    <span class="mp-betslip-metric-label">Est. return @FormatNaira(referenceStake)</span>
+                    <strong>@FormatNaira(estimatedReturn!.Value)</strong>
+                }
             </div>
         </div>
     }
@@ -106,14 +121,14 @@
     @if (isRollover)
     {
         <p class="mp-betslip-rollover-disclaimer">
-            Single stack-it-all pick. The whole bankroll from this bet rolls into the next one. Odds verified against live SportyBet at generation time.
+            Single stack-it-all pick. The whole bankroll from this bet rolls into the next one. Odds may change before kickoff.
         </p>
     }
 
     @if (isBanker)
     {
         <p class="mp-betslip-banker-disclaimer">
-            High-stakes banker. Odds verified against live SportyBet at generation time; lines may drift before kickoff.
+            High-confidence banker. Odds may change before kickoff.
         </p>
     }
 
@@ -145,7 +160,7 @@
                        href="@Model.BookingUrl"
                        target="_blank"
                        rel="noopener noreferrer">
-                        Open in SportyBet
+                        @openSlipLabel
                     </a>
                 }
             </div>

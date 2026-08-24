@@ -1,7 +1,10 @@
 @model MatchPredictor.Web.Pages.BetslipRecordCardViewModel
 @using MatchPredictor.Application.Services
 @using MatchPredictor.Domain.Models
+@using MatchPredictor.Web.Helpers
+@inject Microsoft.Extensions.Configuration.IConfiguration Configuration
 @{
+    var reviewSafe = Configuration.GetValue("AdSense:ReviewSafePublicUi", true);
     var slip = Model.Slip;
     var isRollover = slip.SlipNumber == BetslipGenerationService.RolloverSlipNumber
                      || slip.TierLabel.StartsWith("Rollover", StringComparison.OrdinalIgnoreCase);
@@ -14,6 +17,10 @@
     var estimatedReturn = isPayoutBand
         ? referenceStake * (decimal)slip.CombinedDecimalOdds!.Value
         : (decimal?)null;
+    var displayTierLabel = reviewSafe
+        ? BetslipDisplayHelper.SanitizeTierLabel(slip.TierLabel)
+        : slip.TierLabel;
+    var openSlipLabel = reviewSafe ? "Open slip" : "Open in SportyBet";
     var statusClass = slip.BookingStatus switch
     {
         BetslipBookingStatuses.Booked => "mp-betslip-status-booked",
@@ -68,7 +75,7 @@
 <article class="@cardClass">
     <header class="mp-betslip-card-header">
         <div>
-            <span class="mp-betslip-tier">@slip.TierLabel</span>
+            <span class="mp-betslip-tier">@displayTierLabel</span>
             <h2 class="mp-betslip-title">@slip.Title</h2>
         </div>
         <span class="mp-betslip-status @statusClass">@slip.BookingStatus</span>
@@ -90,8 +97,16 @@
                 <strong>@slip.CombinedDecimalOdds!.Value.ToString("0.00")x</strong>
             </div>
             <div>
-                <span class="mp-betslip-metric-label">Est. return @FormatNaira(referenceStake)</span>
-                <strong>@FormatNaira(estimatedReturn!.Value)</strong>
+                @if (reviewSafe)
+                {
+                    <span class="mp-betslip-metric-label">Projected multiplier</span>
+                    <strong>@slip.CombinedDecimalOdds!.Value.ToString("0.00")x</strong>
+                }
+                else
+                {
+                    <span class="mp-betslip-metric-label">Est. return @FormatNaira(referenceStake)</span>
+                    <strong>@FormatNaira(estimatedReturn!.Value)</strong>
+                }
             </div>
         </div>
     }
@@ -128,7 +143,7 @@
                        href="@slip.BookingUrl"
                        target="_blank"
                        rel="noopener noreferrer">
-                        Open in SportyBet
+                        @openSlipLabel
                     </a>
                 }
             </div>

@@ -2,18 +2,18 @@
 @model MatchPredictor.Web.Pages.BetslipsModel
 @using MatchPredictor.Domain.Models
 @{
-    ViewData["Title"] = "Pre-booked Betslips";
+    ViewData["Title"] = "Today’s selection lists";
 }
 
 <div class="mp-container">
     <div class="mp-page-header">
         <div>
-            <p class="mp-page-kicker">Today’s tickets</p>
+            <p class="mp-page-kicker">Today’s lists</p>
             <div class="mp-page-title">
-                <h1>Pre-booked Betslips</h1>
+                <h1>Today’s selection lists</h1>
             </div>
             <p class="mp-page-subtext">
-                Ready-to-play SportyBet slips from today’s analysed Straight Win, BTTS, Over 2.5, and Under 2.5 picks.
+                Curated pick lists from today’s analysed Straight Win, BTTS, Over 2.5, and Under 2.5 markets.
             </p>
         </div>
         @if (Model.CurrentSet is not null)
@@ -26,8 +26,8 @@
     {
         <div class="mp-empty-state">
             <div class="mp-empty-state-icon">🎫</div>
-            <h2>No betslips yet</h2>
-            <p>Slips appear after the next scheduled generation run (5:00 AM or 1:00 PM WAT).</p>
+            <h2>No selection lists yet</h2>
+            <p>Lists appear after the next scheduled generation run (5:00 AM or 1:00 PM WAT).</p>
         </div>
     }
     else
