@@ -23,6 +23,8 @@ internal static class HangfireRecurringJobs
         "daily-analysis-job",
         "historical-backtest-job",
         "team-alias-seed-job",
+        "team-match-stats-sync-job",
+        "statistical-coverage-diagnostics-job",
         "cleanup-old-predictions",
         "betslip-generation-job"
     ];
@@ -135,6 +137,20 @@ internal static class HangfireRecurringJobs
                 "team-alias-seed-job",
                 service => service.SeedAliasesFromExistingDataAsync(CancellationToken.None),
                 "5 1 * * *",
+                new RecurringJobOptions { TimeZone = watTimeZone }));
+
+        TryWithLockRetry(logger, "register:team-match-stats-sync-job", () =>
+            recurringJobs.AddOrUpdate<ITeamMatchStatsSyncService>(
+                "team-match-stats-sync-job",
+                service => service.SyncFromMatchScoresAsync(600, CancellationToken.None),
+                "15 1 * * *",
+                new RecurringJobOptions { TimeZone = watTimeZone }));
+
+        TryWithLockRetry(logger, "register:statistical-coverage-diagnostics-job", () =>
+            recurringJobs.AddOrUpdate<IStatisticalCoverageDiagnostics>(
+                "statistical-coverage-diagnostics-job",
+                service => service.RunNightlyDiagnosticsAsync(CancellationToken.None),
+                "30 1 * * *",
                 new RecurringJobOptions { TimeZone = watTimeZone }));
 
         TryWithLockRetry(logger, "register:cleanup-old-predictions", () =>

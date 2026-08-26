@@ -306,22 +306,51 @@ public partial class AnalyzerService : IAnalyzerService
     [DisableConcurrentExecution(AnalyzerJobResource, 1800)]
     public async Task CleanupOldPredictionsAndMatchDataAsync()
     {
-        var cutoffDate = DateTimeProvider.GetLocalTime().AddDays(-90).Date;
-        var cutoffDateOnly = DateOnly.FromDateTime(cutoffDate);
-        var createdAtCutoffUtc = DateTime.SpecifyKind(cutoffDate, DateTimeKind.Utc);
+        // Retention aligned to model lookbacks (Dixon-Coles 540d, LightGBM 180d, features 365d).
+        const int predictionRetentionDays = 200;
+        const int settledForecastRetentionDays = 400;
+        const int unsettledForecastRetentionDays = 90;
+        const int matchDataRetentionDays = 90;
+        const int matchScoreRetentionDays = 600;
+        const int aiScoreRetentionDays = 120;
+        const int sofaScoreRetentionDays = 120;
+        const int fixtureFeatureRetentionDays = 400;
+
+        var localNow = DateTimeProvider.GetLocalTime();
+        var predictionCutoffLocal = localNow.AddDays(-predictionRetentionDays).Date;
+        var unsettledForecastCutoffLocal = localNow.AddDays(-unsettledForecastRetentionDays).Date;
+        var settledForecastCutoffLocal = localNow.AddDays(-settledForecastRetentionDays).Date;
+        var matchDataCutoffLocal = localNow.AddDays(-matchDataRetentionDays).Date;
+        var matchScoreCutoffLocal = localNow.AddDays(-matchScoreRetentionDays).Date;
+        var aiScoreCutoffLocal = localNow.AddDays(-aiScoreRetentionDays).Date;
+        var sofaScoreCutoffLocal = localNow.AddDays(-sofaScoreRetentionDays).Date;
+        var featureCutoffLocal = localNow.AddDays(-fixtureFeatureRetentionDays).Date;
+
+        var predictionCutoffUtc = DateTime.SpecifyKind(predictionCutoffLocal, DateTimeKind.Utc);
+        var unsettledForecastCutoffUtc = DateTime.SpecifyKind(unsettledForecastCutoffLocal, DateTimeKind.Utc);
+        var settledForecastCutoffUtc = DateTime.SpecifyKind(settledForecastCutoffLocal, DateTimeKind.Utc);
+        var matchDataCutoffDateOnly = DateOnly.FromDateTime(matchDataCutoffLocal);
+        var matchScoreCutoffUtc = DateTime.SpecifyKind(matchScoreCutoffLocal, DateTimeKind.Utc);
+        var aiScoreCutoffUtc = DateTime.SpecifyKind(aiScoreCutoffLocal, DateTimeKind.Utc);
+        var sofaScoreCutoffUtc = DateTime.SpecifyKind(sofaScoreCutoffLocal, DateTimeKind.Utc);
+        var featureCutoffDateOnly = DateOnly.FromDateTime(featureCutoffLocal);
 
         // Compare CreatedAt directly (no .Date) so the filter stays sargable in SQL.
         await _dbContext.Predictions
-            .Where(p => p.CreatedAt < createdAtCutoffUtc)
+            .Where(p => p.CreatedAt < predictionCutoffUtc)
             .ExecuteDeleteAsync();
 
+        // Settled forecasts feed LightGBM/calibration — keep longer. Unsettled rows stay short-lived.
         await _dbContext.ForecastObservations
-            .Where(f => f.CreatedAt < createdAtCutoffUtc)
+            .Where(f => f.IsSettled && f.CreatedAt < settledForecastCutoffUtc)
+            .ExecuteDeleteAsync();
+        await _dbContext.ForecastObservations
+            .Where(f => !f.IsSettled && f.CreatedAt < unsettledForecastCutoffUtc)
             .ExecuteDeleteAsync();
 
         // Delete old match data in the database via the indexed MatchLocalDate column.
         await _dbContext.MatchDatas
-            .Where(m => m.MatchLocalDate != null && m.MatchLocalDate < cutoffDateOnly)
+            .Where(m => m.MatchLocalDate != null && m.MatchLocalDate < matchDataCutoffDateOnly)
             .ExecuteDeleteAsync();
 
         // Legacy rows without a canonical MatchLocalDate only store a date string;
@@ -330,7 +359,7 @@ public partial class AnalyzerService : IAnalyzerService
             .Where(m => m.MatchLocalDate == null)
             .ToListAsync();
         var oldLegacyMatchData = legacyMatchData
-            .Where(m => DateTime.TryParse(m.Date, out var d) && d.Date < cutoffDate)
+            .Where(m => DateTime.TryParse(m.Date, out var d) && d.Date < matchDataCutoffLocal)
             .ToList();
 
         if (oldLegacyMatchData.Count > 0)
@@ -339,28 +368,32 @@ public partial class AnalyzerService : IAnalyzerService
             await _dbContext.SaveChangesAsync();
         }
 
-        // Cleanup old AiScore match scores
-        var cutoffUtc = DateTime.SpecifyKind(cutoffDate, DateTimeKind.Utc);
         await _dbContext.AiScoreMatchScores
-            .Where(s => s.MatchTime < cutoffUtc)
+            .Where(s => s.MatchTime < aiScoreCutoffUtc)
             .ExecuteDeleteAsync();
-    
-        // Cleanup old MatchScores — retain 90 days for calibration and regression.
-        var scoreCutoffDate = DateTimeProvider.GetLocalTime().AddDays(-90).Date;
-        var scoreCutoffUtc = DateTime.SpecifyKind(scoreCutoffDate, DateTimeKind.Utc);
+
+        await _dbContext.SofaScoreMatchScores
+            .Where(s => s.MatchTime < sofaScoreCutoffUtc)
+            .ExecuteDeleteAsync();
+
+        // MatchScores feed Dixon-Coles (540d) and feature form (365d) — retain ~600d with slack.
         await _dbContext.MatchScores
-            .Where(s => s.MatchTime < scoreCutoffUtc)
+            .Where(s => s.MatchTime < matchScoreCutoffUtc)
+            .ExecuteDeleteAsync();
+
+        await _dbContext.FixtureFeatureSnapshots
+            .Where(s => s.MatchLocalDate < featureCutoffDateOnly)
             .ExecuteDeleteAsync();
 
         // Cleanup scraping logs older than 2 days
-        var logCutoff = DateTimeProvider.GetLocalTime().AddDays(-2);
+        var logCutoff = localNow.AddDays(-2);
         var deletedLogs = await _dbContext.ScrapingLogs
             .Where(l => l.Timestamp < logCutoff)
             .ExecuteDeleteAsync();
 
         if (deletedLogs > 0)
         {
-            _logger.LogInformation("🧹 Deleted {Count} scraping logs older than 2 days.", deletedLogs);
+            _logger.LogInformation("Deleted {Count} scraping logs older than 2 days.", deletedLogs);
         }
     }
 }

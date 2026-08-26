@@ -98,25 +98,31 @@ public sealed class FixtureFeatureService : IFixtureFeatureService
         var cutoffUtc = fixture.MatchDateTime ?? capturedAtUtc;
         var homeHistory = history
             .Where(score => score.MatchTime < cutoffUtc)
-            .Where(score => TeamMatches(score.HomeTeam, fixture.HomeTeam) || TeamMatches(score.AwayTeam, fixture.HomeTeam))
+            .Where(score =>
+                TeamMatches(score.HomeTeam, fixture.HomeTeam, score.League, fixture.League) ||
+                TeamMatches(score.AwayTeam, fixture.HomeTeam, score.League, fixture.League))
             .Take(FormWindow)
             .ToList();
         var awayHistory = history
             .Where(score => score.MatchTime < cutoffUtc)
-            .Where(score => TeamMatches(score.HomeTeam, fixture.AwayTeam) || TeamMatches(score.AwayTeam, fixture.AwayTeam))
+            .Where(score =>
+                TeamMatches(score.HomeTeam, fixture.AwayTeam, score.League, fixture.League) ||
+                TeamMatches(score.AwayTeam, fixture.AwayTeam, score.League, fixture.League))
             .Take(FormWindow)
             .ToList();
         var h2h = history
             .Where(score => score.MatchTime < cutoffUtc)
             .Where(score =>
-                (TeamMatches(score.HomeTeam, fixture.HomeTeam) && TeamMatches(score.AwayTeam, fixture.AwayTeam)) ||
-                (TeamMatches(score.HomeTeam, fixture.AwayTeam) && TeamMatches(score.AwayTeam, fixture.HomeTeam)))
+                (TeamMatches(score.HomeTeam, fixture.HomeTeam, score.League, fixture.League) &&
+                 TeamMatches(score.AwayTeam, fixture.AwayTeam, score.League, fixture.League)) ||
+                (TeamMatches(score.HomeTeam, fixture.AwayTeam, score.League, fixture.League) &&
+                 TeamMatches(score.AwayTeam, fixture.HomeTeam, score.League, fixture.League)))
             .Take(FormWindow)
             .ToList();
 
-        var homeForm = SummarizeTeamForm(homeHistory, fixture.HomeTeam);
-        var awayForm = SummarizeTeamForm(awayHistory, fixture.AwayTeam);
-        var h2hSummary = SummarizeHeadToHead(h2h, fixture.HomeTeam, fixture.AwayTeam);
+        var homeForm = SummarizeTeamForm(homeHistory, fixture.HomeTeam, fixture.League);
+        var awayForm = SummarizeTeamForm(awayHistory, fixture.AwayTeam, fixture.League);
+        var h2hSummary = SummarizeHeadToHead(h2h, fixture.HomeTeam, fixture.AwayTeam, fixture.League);
 
         return new FixtureFeatureSnapshot
         {
@@ -323,7 +329,10 @@ public sealed class FixtureFeatureService : IFixtureFeatureService
     private string ResolveApiFootballBaseUrl() =>
         (_configuration["ApiFootball:BaseUrl"] ?? "https://v3.football.api-sports.io").TrimEnd('/');
 
-    private static TeamFormSummary SummarizeTeamForm(IReadOnlyCollection<MatchScore> matches, string? team)
+    private static TeamFormSummary SummarizeTeamForm(
+        IReadOnlyCollection<MatchScore> matches,
+        string? team,
+        string? league)
     {
         var points = 0;
         var goalsFor = 0;
@@ -336,7 +345,7 @@ public sealed class FixtureFeatureService : IFixtureFeatureService
                 continue;
             }
 
-            var isHome = TeamMatches(match.HomeTeam, team);
+            var isHome = TeamMatches(match.HomeTeam, team, match.League, league);
             var teamGoals = isHome ? homeGoals : awayGoals;
             var opponentGoals = isHome ? awayGoals : homeGoals;
             count++;
@@ -350,7 +359,11 @@ public sealed class FixtureFeatureService : IFixtureFeatureService
             : new TeamFormSummary(points / (double)count, goalsFor / (double)count, goalsAgainst / (double)count);
     }
 
-    private static HeadToHeadSummary SummarizeHeadToHead(IReadOnlyCollection<MatchScore> matches, string? homeTeam, string? awayTeam)
+    private static HeadToHeadSummary SummarizeHeadToHead(
+        IReadOnlyCollection<MatchScore> matches,
+        string? homeTeam,
+        string? awayTeam,
+        string? league)
     {
         var homeWins = 0;
         var draws = 0;
@@ -362,7 +375,7 @@ public sealed class FixtureFeatureService : IFixtureFeatureService
                 continue;
             }
 
-            var queriedHomeWasHome = TeamMatches(match.HomeTeam, homeTeam);
+            var queriedHomeWasHome = TeamMatches(match.HomeTeam, homeTeam, match.League, league);
             var queriedHomeGoals = queriedHomeWasHome ? homeGoals : awayGoals;
             var queriedAwayGoals = queriedHomeWasHome ? awayGoals : homeGoals;
             if (queriedHomeGoals > queriedAwayGoals) homeWins++;
@@ -376,25 +389,12 @@ public sealed class FixtureFeatureService : IFixtureFeatureService
     private static double? ResolveRestDays(IReadOnlyList<MatchScore> history, DateTime cutoffUtc) =>
         history.Count == 0 ? null : Math.Max((cutoffUtc - history[0].MatchTime).TotalDays, 0.0);
 
-    private static bool TeamMatches(string? left, string? right)
-    {
-        var leftNormalized = TeamNameNormalizer.NormalizeAlias(left);
-        var rightNormalized = TeamNameNormalizer.NormalizeAlias(right);
-        if (string.IsNullOrWhiteSpace(leftNormalized) || string.IsNullOrWhiteSpace(rightNormalized))
-        {
-            return false;
-        }
-
-        if (string.Equals(leftNormalized, rightNormalized, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        var leftCompact = leftNormalized.Replace(" ", string.Empty, StringComparison.Ordinal);
-        var rightCompact = rightNormalized.Replace(" ", string.Empty, StringComparison.Ordinal);
-        return leftCompact.Contains(rightCompact, StringComparison.OrdinalIgnoreCase) ||
-               rightCompact.Contains(leftCompact, StringComparison.OrdinalIgnoreCase);
-    }
+    /// <summary>
+    /// Strict qualifier-aware match (rejects Arsenal vs Arsenal W, Barcelona vs Barcelona B).
+    /// Uses the same gate as settlement — not the soft admin-hint variant.
+    /// </summary>
+    private static bool TeamMatches(string? left, string? right, string? leftLeague, string? rightLeague) =>
+        TeamIdentityMatcher.GetTeamMatchResult(left, right, leftLeague, rightLeague).IsMatch;
 
     private static bool TryParseScore(string? score, out int home, out int away)
     {

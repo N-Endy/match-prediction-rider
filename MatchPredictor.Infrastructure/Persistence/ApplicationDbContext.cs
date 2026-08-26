@@ -32,6 +32,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<PredictionOddsSnapshot> PredictionOddsSnapshots => Set<PredictionOddsSnapshot>();
     public DbSet<MarketOddsSnapshot> MarketOddsSnapshots => Set<MarketOddsSnapshot>();
     public DbSet<FixtureFeatureSnapshot> FixtureFeatureSnapshots => Set<FixtureFeatureSnapshot>();
+    public DbSet<TeamMatchStats> TeamMatchStats => Set<TeamMatchStats>();
     public DbSet<MarketMlModelProfile> MarketMlModelProfiles => Set<MarketMlModelProfile>();
     public DbSet<Team> Teams => Set<Team>();
     public DbSet<TeamAlias> TeamAliases => Set<TeamAlias>();
@@ -102,6 +103,11 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.Property(e => e.LeagueKey).HasMaxLength(512);
             entity.HasIndex(e => new { e.MatchLocalDate, e.HomeTeamKey, e.AwayTeamKey, e.LeagueKey });
             entity.HasIndex(e => new { e.MatchTime, e.IsLive });
+            // Finished scores only — empty keys excluded so incomplete scrapes do not collide.
+            entity.HasIndex(e => new { e.MatchLocalDate, e.HomeTeamKey, e.AwayTeamKey, e.LeagueKey })
+                .IsUnique()
+                .HasFilter("\"IsLive\" = false AND \"HomeTeamKey\" <> '' AND \"AwayTeamKey\" <> '' AND \"LeagueKey\" <> ''")
+                .HasDatabaseName("IX_MatchScores_FinishedFixture_Unique");
         });
 
         modelBuilder.Entity<AiScoreMatchScore>(entity =>
@@ -159,6 +165,20 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
         {
             entity.HasIndex(e => new { e.FixtureKey, e.CapturedAtUtc });
             entity.HasIndex(e => new { e.MatchLocalDate, e.FixtureKey });
+        });
+
+        modelBuilder.Entity<TeamMatchStats>(entity =>
+        {
+            entity.Property(e => e.LeagueKey).HasMaxLength(512);
+            entity.Property(e => e.TeamName).HasMaxLength(TeamNameNormalizer.MaxIndexedValueLength);
+            entity.Property(e => e.OpponentName).HasMaxLength(TeamNameNormalizer.MaxIndexedValueLength);
+            entity.Property(e => e.SourceName).HasMaxLength(64);
+            entity.Property(e => e.SourceMatchId).HasMaxLength(512);
+            entity.HasIndex(e => new { e.SourceName, e.SourceMatchId, e.IsHome })
+                .IsUnique()
+                .HasFilter("\"SourceMatchId\" IS NOT NULL");
+            entity.HasIndex(e => new { e.TeamName, e.KickoffUtc });
+            entity.HasIndex(e => new { e.KickoffUtc, e.AvailableFromUtc });
         });
 
         modelBuilder.Entity<MarketMlModelProfile>(entity =>

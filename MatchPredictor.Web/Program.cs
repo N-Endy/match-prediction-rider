@@ -92,6 +92,9 @@ builder.Services.AddScoped<ICalibrationService, CalibrationService>();
 builder.Services.AddScoped<IHistoricalBacktestService, HistoricalBacktestService>();
 builder.Services.AddScoped<ITeamResolutionService, TeamResolutionService>();
 builder.Services.AddScoped<IFixtureFeatureService, FixtureFeatureService>();
+builder.Services.AddScoped<ITeamMatchStatsSyncService, TeamMatchStatsSyncService>();
+builder.Services.AddScoped<IStatisticalCoverageDiagnostics, StatisticalCoverageDiagnostics>();
+builder.Services.AddScoped<IMlXgFeatureReadiness, MlXgFeatureReadiness>();
 builder.Services.AddScoped<IMarketPredictionModelService, MarketPredictionModelService>();
 builder.Services.AddScoped<IProbabilityCorrectionService, ProbabilityCorrectionService>();
 builder.Services.AddScoped<IThresholdTuningService, ThresholdTuningService>();
@@ -124,7 +127,8 @@ builder.Services.AddScoped<IBetslipGenerationService, BetslipGenerationService>(
 builder.Services.AddScoped<IManualScoreLinkService, ManualScoreLinkService>();
 builder.Services.AddScoped<IUserTrackingService, UserTrackingService>();
 builder.Services.AddScoped<IAiChatAuthTicketService, AiChatAuthTicketService>();
-builder.Services.AddScoped<IAdminUiTicketService, AdminUiTicketService>();
+// Singleton: cookie ticket protector has no request state; middleware resolves from root.
+builder.Services.AddSingleton<IAdminUiTicketService, AdminUiTicketService>();
 
 // Controllers for API endpoints (booking, AI chat)
 builder.Services.AddControllers();

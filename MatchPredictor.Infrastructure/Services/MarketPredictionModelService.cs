@@ -47,6 +47,9 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         nameof(MarketModelInput.HasStatistical),
         nameof(MarketModelInput.HasBookmaker),
         nameof(MarketModelInput.HasRestDays)
+        // Do NOT add ExpectedGoals columns until IMlXgFeatureReadiness reports
+        // MayBumpFeatureSchema == true (>=70% TeamMatchStats xG coverage). Changing
+        // this array invalidates FeatureSchemaJson and can permanently skip models.
     ];
     private static readonly string ExpectedFeatureSchemaJson = JsonSerializer.Serialize(FeatureColumns);
 

@@ -22,7 +22,10 @@ public class FixtureFeatureServiceTests
             new MatchScore { HomeTeam = "Aces", AwayTeam = "Bears", League = "League", Score = "2-1", MatchTime = kickoff.AddDays(-7) },
             new MatchScore { HomeTeam = "Cats", AwayTeam = "Aces", League = "League", Score = "0-3", MatchTime = kickoff.AddDays(-14) },
             new MatchScore { HomeTeam = "Bears", AwayTeam = "Dogs", League = "League", Score = "1-1", MatchTime = kickoff.AddDays(-8) },
-            new MatchScore { HomeTeam = "Aces", AwayTeam = "Bears", League = "League", Score = "1-0", MatchTime = kickoff.AddDays(-30) });
+            new MatchScore { HomeTeam = "Aces", AwayTeam = "Bears", League = "League", Score = "1-0", MatchTime = kickoff.AddDays(-30) },
+            // Contaminating women's / reserve results that substring matching used to absorb.
+            new MatchScore { HomeTeam = "Aces W", AwayTeam = "Bears W", League = "League Women", Score = "5-0", MatchTime = kickoff.AddDays(-3) },
+            new MatchScore { HomeTeam = "Aces B", AwayTeam = "Dogs", League = "League", Score = "4-0", MatchTime = kickoff.AddDays(-2) });
         await context.SaveChangesAsync();
 
         var configuration = new ConfigurationBuilder()
