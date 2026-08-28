@@ -77,6 +77,36 @@ public class AiChatAuthTicketServiceTests
         Assert.Contains(responseCookies, cookie => cookie.Contains($"{AiChatAuthDefaults.SessionCookieName}=;", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void IsLoginRequired_DefaultsToTrueWhenUnset()
+    {
+        var service = CreateService(new TestTimeProvider(DateTimeOffset.UtcNow));
+        Assert.True(service.IsLoginRequired);
+    }
+
+    [Fact]
+    public void IsLoginRequired_RespectsFalseConfig()
+    {
+        var service = CreateService(
+            new TestTimeProvider(DateTimeOffset.UtcNow),
+            new Dictionary<string, string?> { ["AiChatRequireLogin"] = "false" });
+        Assert.False(service.IsLoginRequired);
+    }
+
+    [Fact]
+    public void EnsureSession_WithoutTicket_MintsAndReturnsSession()
+    {
+        var service = CreateService(new TestTimeProvider(DateTimeOffset.UtcNow));
+        var context = CreateContext("Mozilla/5.0");
+
+        var sessionId = service.EnsureSession(context);
+        var followUp = CreateFollowUpContext(context, "Mozilla/5.0");
+
+        Assert.False(string.IsNullOrWhiteSpace(sessionId));
+        Assert.True(service.TryValidate(followUp, out var validated));
+        Assert.Equal(sessionId, validated);
+    }
+
     private static IAiChatAuthTicketService CreateService(TimeProvider timeProvider, IDictionary<string, string?>? settings = null)
     {
         var configuration = new ConfigurationBuilder()

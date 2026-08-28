@@ -16,6 +16,7 @@ public class AiChatPageScriptTests
             var document = {
                 body: { appendChild: function() {} },
                 getElementById: function() { return null; },
+                querySelectorAll: function() { return []; },
                 createElement: function() {
                     return {
                         style: {},

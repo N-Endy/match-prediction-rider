@@ -12,6 +12,7 @@ public class AiChatModel : PageModel
     private readonly IConfiguration _config;
     private readonly IAiChatAuthTicketService _authTicketService;
     public bool IsAuthenticated { get; set; }
+    public bool ShowLogout { get; set; }
     [BindProperty] public string? Password { get; set; }
     public string? ErrorMessage { get; set; }
 
@@ -23,13 +24,28 @@ public class AiChatModel : PageModel
 
     public void OnGet()
     {
+        if (!_authTicketService.IsLoginRequired)
+        {
+            _authTicketService.EnsureSession(HttpContext);
+            IsAuthenticated = true;
+            ShowLogout = false;
+            return;
+        }
+
         IsAuthenticated = _authTicketService.IsAuthenticated(HttpContext);
+        ShowLogout = IsAuthenticated;
     }
 
     public IActionResult OnPost()
     {
+        if (!_authTicketService.IsLoginRequired)
+        {
+            _authTicketService.EnsureSession(HttpContext);
+            return RedirectToPage();
+        }
+
         var validPassword = _config["AiChatPassword"];
-        
+
         if (!string.IsNullOrEmpty(validPassword) &&
             !string.IsNullOrEmpty(Password) &&
             AdminUsageBasicAuthMiddleware.FixedTimeEquals(Password, validPassword))
@@ -40,6 +56,7 @@ public class AiChatModel : PageModel
 
         ErrorMessage = "Incorrect password.";
         IsAuthenticated = false;
+        ShowLogout = false;
         return Page();
     }
 

@@ -31,9 +31,19 @@ public class AiChatController : ControllerBase
     [HttpPost("chat")]
     public async Task<IActionResult> Chat([FromBody] ChatRequest request, CancellationToken ct)
     {
-        if (!_authTicketService.TryValidate(HttpContext, out var sessionId))
+        string sessionId;
+        if (_authTicketService.IsLoginRequired)
         {
-            return Unauthorized(new { message = "Unauthorized. Please authenticate on the AI Chat page." });
+            if (!_authTicketService.TryValidate(HttpContext, out var authenticatedSessionId))
+            {
+                return Unauthorized(new { message = "Unauthorized. Please authenticate on the AI Chat page." });
+            }
+
+            sessionId = authenticatedSessionId!;
+        }
+        else
+        {
+            sessionId = _authTicketService.EnsureSession(HttpContext);
         }
 
         if (string.IsNullOrWhiteSpace(request.Message))
@@ -43,7 +53,7 @@ public class AiChatController : ControllerBase
 
         try
         {
-            var response = await _aiService.GetAdviceAsync(request.Message, sessionId!, ct);
+            var response = await _aiService.GetAdviceAsync(request.Message, sessionId, ct);
 
             await _userTrackingService.TrackEventAsync(
                 HttpContext,

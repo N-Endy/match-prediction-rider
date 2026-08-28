@@ -7,9 +7,14 @@ namespace MatchPredictor.Web.Services;
 
 public interface IAiChatAuthTicketService
 {
+    /// <summary>When true, visitors must enter AiChatPassword before using chat.</summary>
+    bool IsLoginRequired { get; }
+
     bool TryValidate(HttpContext httpContext, out string? sessionId);
     bool IsAuthenticated(HttpContext httpContext);
     string SignIn(HttpContext httpContext);
+    /// <summary>Returns an existing valid session, or mints cookies via SignIn.</summary>
+    string EnsureSession(HttpContext httpContext);
     void SignOut(HttpContext httpContext);
 }
 
@@ -34,7 +39,10 @@ public sealed class AiChatAuthTicketService : IAiChatAuthTicketService
         _protector = dataProtectionProvider.CreateProtector("MatchPredictor.Web.AiChat.AuthTicket.v1");
         _timeProvider = timeProvider;
         _ticketLifetime = ResolveTicketLifetime(configuration);
+        IsLoginRequired = ResolveRequireLogin(configuration);
     }
+
+    public bool IsLoginRequired { get; }
 
     public bool TryValidate(HttpContext httpContext, out string? sessionId)
     {
@@ -76,6 +84,9 @@ public sealed class AiChatAuthTicketService : IAiChatAuthTicketService
     }
 
     public bool IsAuthenticated(HttpContext httpContext) => TryValidate(httpContext, out _);
+
+    public string EnsureSession(HttpContext httpContext) =>
+        TryValidate(httpContext, out var sessionId) ? sessionId! : SignIn(httpContext);
 
     public string SignIn(HttpContext httpContext)
     {
@@ -147,6 +158,28 @@ public sealed class AiChatAuthTicketService : IAiChatAuthTicketService
         }
 
         return AiChatAuthDefaults.TicketLifetime;
+    }
+
+    /// <summary>Defaults to true (locked) when unset so production stays gated unless explicitly opened.</summary>
+    private static bool ResolveRequireLogin(IConfiguration configuration)
+    {
+        var rawValue = configuration["AiChatRequireLogin"];
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return true;
+        }
+
+        if (bool.TryParse(rawValue, out var parsed))
+        {
+            return parsed;
+        }
+
+        return rawValue.Trim().ToLowerInvariant() switch
+        {
+            "1" or "yes" or "on" => true,
+            "0" or "no" or "off" => false,
+            _ => true
+        };
     }
 
     private static string HashUserAgent(HttpContext httpContext)

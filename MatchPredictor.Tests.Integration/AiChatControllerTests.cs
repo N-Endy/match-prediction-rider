@@ -17,7 +17,7 @@ public class AiChatControllerTests
     {
         var controller = new AiChatController(
             new FakeAiAdvisorService(),
-            new FakeAiChatAuthTicketService(),
+            new FakeAiChatAuthTicketService { IsLoginRequired = true },
             new FakeUserTrackingService(),
             NullLogger<AiChatController>.Instance)
         {
@@ -35,13 +35,41 @@ public class AiChatControllerTests
     }
 
     [Fact]
+    public async Task Chat_WhenLoginNotRequired_AllowsChatWithoutPriorAuthCookie()
+    {
+        var advisor = new FakeAiAdvisorService();
+        var auth = new FakeAiChatAuthTicketService
+        {
+            IsLoginRequired = false,
+            SessionId = "anon-session"
+        };
+        var controller = new AiChatController(
+            advisor,
+            auth,
+            new FakeUserTrackingService(),
+            NullLogger<AiChatController>.Instance)
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext()
+            }
+        };
+
+        var result = await controller.Chat(new ChatRequest { Message = "Hello" }, CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.True(auth.EnsureSessionCalled);
+        Assert.Equal("anon-session", advisor.LastSessionId);
+    }
+
+    [Fact]
     public async Task Chat_WhenServiceThrows_ReturnsGeneric500WithoutInternalDetails()
     {
         var httpContext = new DefaultHttpContext();
 
         var controller = new AiChatController(
             new FakeAiAdvisorService { ExceptionToThrow = new InvalidOperationException("sensitive internals") },
-            new FakeAiChatAuthTicketService { IsValid = true, SessionId = "session-123" },
+            new FakeAiChatAuthTicketService { IsValid = true, SessionId = "session-123", IsLoginRequired = true },
             new FakeUserTrackingService(),
             NullLogger<AiChatController>.Instance)
         {
@@ -66,7 +94,7 @@ public class AiChatControllerTests
     {
         var controller = new AiChatController(
             new FakeAiAdvisorService(),
-            new FakeAiChatAuthTicketService { IsValid = false },
+            new FakeAiChatAuthTicketService { IsValid = false, IsLoginRequired = true },
             new FakeUserTrackingService(),
             NullLogger<AiChatController>.Instance)
         {
@@ -85,9 +113,11 @@ public class AiChatControllerTests
     private sealed class FakeAiAdvisorService : IAiAdvisorService
     {
         public Exception? ExceptionToThrow { get; init; }
+        public string? LastSessionId { get; private set; }
 
         public Task<AiChatResponse> GetAdviceAsync(string userPrompt, string sessionId, CancellationToken ct = default)
         {
+            LastSessionId = sessionId;
             if (ExceptionToThrow is not null)
             {
                 throw ExceptionToThrow;
@@ -163,6 +193,8 @@ public class AiChatControllerTests
     {
         public bool IsValid { get; init; }
         public string? SessionId { get; init; }
+        public bool IsLoginRequired { get; init; } = true;
+        public bool EnsureSessionCalled { get; private set; }
 
         public bool TryValidate(HttpContext httpContext, out string? sessionId)
         {
@@ -173,6 +205,12 @@ public class AiChatControllerTests
         public bool IsAuthenticated(HttpContext httpContext) => IsValid;
 
         public string SignIn(HttpContext httpContext) => SessionId ?? "session-1";
+
+        public string EnsureSession(HttpContext httpContext)
+        {
+            EnsureSessionCalled = true;
+            return SessionId ?? "session-1";
+        }
 
         public void SignOut(HttpContext httpContext)
         {

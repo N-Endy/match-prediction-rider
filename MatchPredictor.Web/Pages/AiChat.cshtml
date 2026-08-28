@@ -14,7 +14,7 @@
                 <h1>AI Betting Companion</h1>
             </div>
         </div>
-        @if (Model.IsAuthenticated)
+        @if (Model.ShowLogout)
         {
             <form method="post" asp-page-handler="Logout">
                 @Html.AntiForgeryToken()
