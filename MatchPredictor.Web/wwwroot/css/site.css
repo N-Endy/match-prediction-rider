@@ -2515,6 +2515,53 @@ a:hover {
   }
 }
 
+/* ─── PWA Install Banner ─── */
+.mp-pwa-install-banner {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  background: rgba(10, 14, 23, 0.95);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid var(--border-color);
+  z-index: 999;
+  padding: 1rem 1.5rem;
+  display: flex;
+  justify-content: center;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.mp-pwa-install-content {
+  max-width: 1200px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+}
+
+.mp-pwa-install-content p {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.mp-pwa-install-actions {
+  display: flex;
+  gap: 1rem;
+  flex-shrink: 0;
+}
+
+@media (max-width: 768px) {
+  .mp-pwa-install-content {
+    flex-direction: column;
+    text-align: center;
+    gap: 1.25rem;
+  }
+}
+
 /* ===== Pre-booked Betslips ===== */
 .mp-betslip-grid {
   display: grid;

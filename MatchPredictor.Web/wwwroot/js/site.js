@@ -5,6 +5,76 @@ function gtag() {
 
 const CONSENT_STORAGE_KEY = "cookieConsent";
 const ANALYTICS_CONSENT_COOKIE = "MP_ANALYTICS_CONSENT";
+const PWA_INSTALL_DISMISSED_KEY = "pwaInstallDismissed";
+
+let deferredPwaInstallPrompt = null;
+
+function registerServiceWorker() {
+    if (!("serviceWorker" in navigator)) {
+        return;
+    }
+
+    window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/service-worker.js").catch(() => {
+            // Service worker registration should never block page usage.
+        });
+    });
+}
+
+function initPwaInstallBanner() {
+    const banner = document.getElementById("pwaInstallBanner");
+    const installBtn = document.getElementById("pwaInstallBtn");
+    const dismissBtn = document.getElementById("pwaInstallDismissBtn");
+
+    if (!banner || !installBtn || !dismissBtn) {
+        return;
+    }
+
+    const hideBanner = () => {
+        banner.style.display = "none";
+        banner.hidden = true;
+    };
+
+    if (localStorage.getItem(PWA_INSTALL_DISMISSED_KEY) === "true") {
+        hideBanner();
+    }
+
+    window.addEventListener("beforeinstallprompt", (event) => {
+        event.preventDefault();
+        deferredPwaInstallPrompt = event;
+
+        if (localStorage.getItem(PWA_INSTALL_DISMISSED_KEY) === "true") {
+            return;
+        }
+
+        banner.style.display = "flex";
+        banner.hidden = false;
+    });
+
+    window.addEventListener("appinstalled", () => {
+        deferredPwaInstallPrompt = null;
+        localStorage.setItem(PWA_INSTALL_DISMISSED_KEY, "true");
+        hideBanner();
+    });
+
+    installBtn.addEventListener("click", async () => {
+        if (!deferredPwaInstallPrompt) {
+            return;
+        }
+
+        deferredPwaInstallPrompt.prompt();
+        await deferredPwaInstallPrompt.userChoice;
+        deferredPwaInstallPrompt = null;
+        hideBanner();
+    });
+
+    dismissBtn.addEventListener("click", () => {
+        localStorage.setItem(PWA_INSTALL_DISMISSED_KEY, "true");
+        hideBanner();
+    });
+}
+
+registerServiceWorker();
 
 function setAnalyticsConsentCookie(granted) {
     const value = granted ? "granted" : "denied";
@@ -70,6 +140,8 @@ window.matchPredictorTracking = {
 };
 
 document.addEventListener("DOMContentLoaded", function () {
+    initPwaInstallBanner();
+
     document.getElementById("menuToggle")?.addEventListener("click", function () {
         document.getElementById("navLinks")?.classList.toggle("show");
     });

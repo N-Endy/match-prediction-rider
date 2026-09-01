@@ -52,6 +52,69 @@ public class WebApplicationFactorySmokeTests
     }
 
     [Fact]
+    public async Task Manifest_ReturnsWebManifestJson()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var response = await client.GetAsync("/manifest.webmanifest");
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("application/manifest+json", response.Content.Headers.ContentType?.MediaType);
+
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("\"name\": \"MatchPredictor\"", body);
+        Assert.Contains("\"display\": \"standalone\"", body);
+        Assert.Contains("/icon-192.png", body);
+    }
+
+    [Fact]
+    public async Task ServiceWorker_ReturnsJavaScriptWithNoCache()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var response = await client.GetAsync("/service-worker.js");
+
+        response.EnsureSuccessStatusCode();
+        Assert.StartsWith("text/javascript", response.Content.Headers.ContentType?.MediaType);
+        Assert.Contains("no-cache", response.Headers.CacheControl?.ToString(), StringComparison.OrdinalIgnoreCase);
+
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("matchpredictor-v1", body);
+    }
+
+    [Fact]
+    public async Task OfflinePage_ReturnsHtml()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var response = await client.GetAsync("/offline.html");
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
+
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("You're offline", body);
+    }
+
+    [Fact]
+    public async Task HomePage_IncludesPwaMetaTags()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var html = await client.GetStringAsync("/");
+
+        Assert.Contains("rel=\"manifest\"", html);
+        Assert.Contains("manifest.webmanifest", html);
+        Assert.Contains("name=\"theme-color\" content=\"#0a0e17\"", html);
+        Assert.Contains("apple-mobile-web-app-capable", html);
+        Assert.Contains("pwaInstallBanner", html);
+    }
+
+    [Fact]
     public async Task Analytics_ReturnsUnauthorized_WithoutBasicAuth()
     {
         await using var factory = CreateFactory();

@@ -13,6 +13,7 @@ using MatchPredictor.Web.Configuration;
 using MatchPredictor.Web.Extensions;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using Polly;
@@ -379,7 +380,21 @@ app.Use(async (context, next) =>
 });
 
 app.UseHttpsRedirection();
-app.UseStaticFiles();
+
+var staticFileContentTypes = new FileExtensionContentTypeProvider();
+staticFileContentTypes.Mappings[".webmanifest"] = "application/manifest+json";
+
+app.UseStaticFiles(new StaticFileOptions
+{
+    ContentTypeProvider = staticFileContentTypes,
+    OnPrepareResponse = ctx =>
+    {
+        if (string.Equals(ctx.File.Name, "service-worker.js", StringComparison.OrdinalIgnoreCase))
+        {
+            ctx.Context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+        }
+    }
+});
 app.UseMiddleware<AdminUsageBasicAuthMiddleware>();
 app.UseRouting();
 app.UseRateLimiter();

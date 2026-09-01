@@ -101,6 +101,11 @@
     <link rel="icon" href="~/favicon.svg" type="image/svg+xml" asp-append-version="true" />
     <link rel="icon" href="~/favicon.ico" sizes="any" asp-append-version="true" />
     <link rel="apple-touch-icon" href="~/apple-touch-icon.png" asp-append-version="true" />
+    <link rel="manifest" href="~/manifest.webmanifest" asp-append-version="true" />
+    <meta name="theme-color" content="#0a0e17" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="MatchPredictor" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 
     <!-- Google AdSense -->
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=@(Configuration["AdSense:ClientId"] ?? "ca-pub-123456789")"
@@ -204,6 +209,17 @@
 
 <partial name="_StreamModal" />
 <script src="~/js/livestream.js" asp-append-version="true"></script>
+
+<!-- PWA Install Banner -->
+<div id="pwaInstallBanner" class="mp-pwa-install-banner" style="display: none;" hidden>
+    <div class="mp-pwa-install-content">
+        <p>Install MatchPredictor for quick access from your home screen.</p>
+        <div class="mp-pwa-install-actions">
+            <button id="pwaInstallBtn" type="button" class="mp-cookie-btn mp-cookie-accept">Install</button>
+            <button id="pwaInstallDismissBtn" type="button" class="mp-cookie-btn mp-cookie-decline">Not now</button>
+        </div>
+    </div>
+</div>
 
 <!-- Cookie Consent Banner -->
 <div id="cookieConsentBanner" class="mp-cookie-banner" style="display: none;">
