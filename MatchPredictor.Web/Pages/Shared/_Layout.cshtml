@@ -107,7 +107,11 @@
     <meta name="apple-mobile-web-app-title" content="MatchPredictor" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 
-    <!-- Google AdSense -->
+    <!-- Google AdSense (non-personalized only — set before script load) -->
+    <script>
+        window.adsbygoogle = window.adsbygoogle || [];
+        window.adsbygoogle.requestNonPersonalizedAds = 1;
+    </script>
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=@(Configuration["AdSense:ClientId"] ?? "ca-pub-123456789")"
          crossorigin="anonymous"></script>
 </head>
@@ -153,9 +157,12 @@
     @RenderBody()
 </main>
 
-<div class="mp-container mp-layout-ad">
-    <partial name="_AdBanner" />
-</div>
+@if (ViewData["HideAds"] as bool? != true)
+{
+    <div class="mp-container mp-layout-ad">
+        <partial name="_AdBanner" />
+    </div>
+}
 
 <!-- Footer -->
 <footer class="mp-footer">

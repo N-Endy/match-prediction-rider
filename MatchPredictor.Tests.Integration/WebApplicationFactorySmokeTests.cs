@@ -81,7 +81,7 @@ public class WebApplicationFactorySmokeTests
         Assert.Contains("no-cache", response.Headers.CacheControl?.ToString(), StringComparison.OrdinalIgnoreCase);
 
         var body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("matchpredictor-v1", body);
+        Assert.Contains("matchpredictor-v2", body);
     }
 
     [Fact]
@@ -112,6 +112,44 @@ public class WebApplicationFactorySmokeTests
         Assert.Contains("name=\"theme-color\" content=\"#0a0e17\"", html);
         Assert.Contains("apple-mobile-web-app-capable", html);
         Assert.Contains("pwaInstallBanner", html);
+    }
+
+    [Fact]
+    public async Task HomePage_RequestsNonPersonalizedAds()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var html = await client.GetStringAsync("/");
+
+        Assert.Contains("requestNonPersonalizedAds = 1", html);
+        Assert.Contains("data-npa=\"1\"", html);
+    }
+
+    [Fact]
+    public async Task PrivacyPage_DisclosesAdServingAndNonPersonalizedAds()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var html = await client.GetStringAsync("/Privacy");
+
+        Assert.Contains("policies.google.com/technologies/partner-sites", html);
+        Assert.Contains("non-personalized", html, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("web beacons", html, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("IP addresses", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ErrorPage_DoesNotRenderAdBanner()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var html = await client.GetStringAsync("/Error");
+
+        Assert.DoesNotContain("class=\"adsbygoogle", html);
+        Assert.DoesNotContain("data-ad-slot=", html);
     }
 
     [Fact]

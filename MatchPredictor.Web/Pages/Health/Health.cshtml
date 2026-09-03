@@ -4,6 +4,7 @@
 
 @{
     ViewData["Title"] = "Operational Health";
+    ViewData["HideAds"] = true;
     var roleLabel = Model.Snapshot.BackgroundJobsEnabled ? "Web + Worker" : "Web Only";
 
     string BadgeColors(HealthLevel level) => level switch

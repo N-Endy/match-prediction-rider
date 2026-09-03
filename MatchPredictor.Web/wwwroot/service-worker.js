@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_NAME = 'matchpredictor-v1';
+const CACHE_NAME = 'matchpredictor-v2';
 
 const PRECACHE_URLS = [
   '/offline.html',
