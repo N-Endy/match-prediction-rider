@@ -1648,6 +1648,154 @@ public class ScoreUpdaterMatchingTests
         Assert.Equal("Home Win", prediction.ActualOutcome);
     }
 
+    [Fact]
+    public async Task RunScoreUpdaterAsync_Recent_ScrapesWhenUnsettledFixtureIsInLiveWindow()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var nowLocal = DateTimeProvider.GetLocalTime();
+        var kickoff = nowLocal.AddMinutes(-30);
+        var date = kickoff.ToString("dd-MM-yyyy");
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(DateTime.SpecifyKind(kickoff, DateTimeKind.Unspecified));
+
+        context.Predictions.Add(CreatePrediction(date, kickoff, "Live FC", "Window United", "StraightWin", "Home Win"));
+        await context.SaveChangesAsync();
+
+        var scraper = new StubWebScraperService
+        {
+            MatchScores =
+            [
+                new MatchScore
+                {
+                    MatchTime = kickoffUtc,
+                    League = "Spain LaLiga",
+                    HomeTeam = "Live FC",
+                    AwayTeam = "Window United",
+                    Score = "1:0",
+                    BTTSLabel = false,
+                    IsLive = false
+                }
+            ]
+        };
+        var service = CreateAnalyzerService(context, scraper);
+
+        await service.RunScoreUpdaterAsync(1, "recent");
+
+        Assert.Equal(1, scraper.MatchScoresCallCount);
+        Assert.Equal(1, scraper.AiScoreCallCount);
+        var prediction = await context.Predictions.SingleAsync();
+        Assert.Equal("1:0", prediction.ActualScore);
+    }
+
+    [Fact]
+    public async Task RunScoreUpdaterAsync_Recent_SkipsScrapeWhenUnmatchedFixtureIsPastLiveWindow()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var nowLocal = DateTimeProvider.GetLocalTime();
+        var kickoff = nowLocal.AddHours(-5);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        context.Predictions.Add(CreatePrediction(date, kickoff, "Orphan FC", "Never Found", "StraightWin", "Home Win"));
+        await context.SaveChangesAsync();
+
+        var scraper = new StubWebScraperService
+        {
+            MatchScores =
+            [
+                new MatchScore
+                {
+                    MatchTime = DateTimeProvider.ConvertLocalToUtc(DateTime.SpecifyKind(kickoff, DateTimeKind.Unspecified)),
+                    League = "Spain LaLiga",
+                    HomeTeam = "Orphan FC",
+                    AwayTeam = "Never Found",
+                    Score = "2:1",
+                    BTTSLabel = true,
+                    IsLive = false
+                }
+            ]
+        };
+        var logger = new CapturingLogger();
+        var service = CreateAnalyzerService(context, scraper, logger: logger);
+
+        await service.RunScoreUpdaterAsync(1, "recent");
+
+        Assert.Equal(0, scraper.MatchScoresCallCount);
+        Assert.Equal(0, scraper.AiScoreCallCount);
+        Assert.Contains(
+            logger.Messages,
+            message => message.Contains("skipped", StringComparison.OrdinalIgnoreCase) &&
+                       message.Contains("live window", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task RunScoreUpdaterAsync_Recent_IdleStillSettlesFromStoredScores()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var nowLocal = DateTimeProvider.GetLocalTime();
+        var kickoff = nowLocal.AddHours(-5);
+        var date = kickoff.ToString("dd-MM-yyyy");
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(DateTime.SpecifyKind(kickoff, DateTimeKind.Unspecified));
+
+        context.Predictions.Add(CreatePrediction(date, kickoff, "Stored FC", "Already Scraped", "StraightWin", "Home Win"));
+        context.MatchScores.Add(new MatchScore
+        {
+            MatchTime = kickoffUtc,
+            League = "Spain LaLiga",
+            HomeTeam = "Stored FC",
+            AwayTeam = "Already Scraped",
+            Score = "2:0",
+            BTTSLabel = false,
+            IsLive = false
+        });
+        await context.SaveChangesAsync();
+
+        var scraper = new StubWebScraperService();
+        var service = CreateAnalyzerService(context, scraper);
+
+        await service.RunScoreUpdaterAsync(1, "recent");
+
+        Assert.Equal(0, scraper.MatchScoresCallCount);
+        Assert.Equal(0, scraper.AiScoreCallCount);
+        var prediction = await context.Predictions.SingleAsync();
+        Assert.Equal("2:0", prediction.ActualScore);
+        Assert.Equal("Home Win", prediction.ActualOutcome);
+    }
+
+    [Fact]
+    public async Task RunScoreUpdaterAsync_Backfill_AlwaysScrapesEvenOutsideLiveWindow()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var nowLocal = DateTimeProvider.GetLocalTime();
+        var kickoff = nowLocal.AddHours(-5);
+        var date = kickoff.ToString("dd-MM-yyyy");
+
+        context.Predictions.Add(CreatePrediction(date, kickoff, "Backfill FC", "Always Scraped", "StraightWin", "Home Win"));
+        await context.SaveChangesAsync();
+
+        var scraper = new StubWebScraperService();
+        var service = CreateAnalyzerService(context, scraper);
+
+        await service.RunScoreUpdaterAsync(14, "backfill");
+
+        Assert.Equal(1, scraper.MatchScoresCallCount);
+        Assert.Equal(1, scraper.AiScoreCallCount);
+    }
+
     private static Prediction CreatePrediction(
         string date,
         DateTime kickoff,
@@ -1842,10 +1990,23 @@ public class ScoreUpdaterMatchingTests
         public List<AiScoreMatchScore> AiScoreMatchScores { get; init; } = [];
         public List<SofaScoreMatchScore> SofaScoreMatchScores { get; init; } = [];
         public List<SofaScoreFixtureRequest> ReceivedSofaScoreRequests { get; } = [];
+        public int MatchScoresCallCount { get; private set; }
+        public int AiScoreCallCount { get; private set; }
 
         public Task ScrapeMatchDataAsync() => Task.CompletedTask;
-        public Task<List<MatchScore>> ScrapeMatchScoresAsync() => Task.FromResult(MatchScores);
-        public Task<List<AiScoreMatchScore>> ScrapeAiScoreMatchScoresAsync() => Task.FromResult(AiScoreMatchScores);
+
+        public Task<List<MatchScore>> ScrapeMatchScoresAsync()
+        {
+            MatchScoresCallCount++;
+            return Task.FromResult(MatchScores);
+        }
+
+        public Task<List<AiScoreMatchScore>> ScrapeAiScoreMatchScoresAsync()
+        {
+            AiScoreCallCount++;
+            return Task.FromResult(AiScoreMatchScores);
+        }
+
         public Task<List<SofaScoreMatchScore>> ScrapeSofaScoreMatchScoresAsync(IEnumerable<SofaScoreFixtureRequest> fixtures)
         {
             ReceivedSofaScoreRequests.AddRange(fixtures);

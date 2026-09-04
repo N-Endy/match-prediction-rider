@@ -2,7 +2,7 @@ namespace MatchPredictor.Web.Configuration;
 
 internal static class OperationalSchedule
 {
-    internal const int ScoreUpdateIntervalMinutes = 12;
+    internal const int ScoreUpdateIntervalMinutes = 15;
 
     /// <summary>
     /// Cron for the recent score-update job.

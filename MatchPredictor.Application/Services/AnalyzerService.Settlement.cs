@@ -16,12 +16,20 @@ namespace MatchPredictor.Application.Services;
 
 public partial class AnalyzerService
 {
+    /// <summary>
+    /// Recent score scrapes only run when an unsettled/live fixture has kickoff in
+    /// [now - trail, now + lead]. Outside that window, hourly backfill covers leftovers.
+    /// </summary>
+    private static readonly TimeSpan LiveScrapeLead = TimeSpan.FromMinutes(20);
+    private static readonly TimeSpan LiveScrapeTrail = TimeSpan.FromHours(3.5);
+
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
     [DisableConcurrentExecution(AnalyzerJobResource, 1800)]
     public async Task RunScoreUpdaterAsync(int lookbackDays = RecentScoreUpdaterLookbackDays, string runLabel = "recent")
     {
         var normalizedLookbackDays = Math.Clamp(lookbackDays, 0, HistoricalScoreBackfillLookbackDays);
         var normalizedRunLabel = string.IsNullOrWhiteSpace(runLabel) ? "recent" : runLabel.Trim();
+        var isRecentRun = string.Equals(normalizedRunLabel, "recent", StringComparison.OrdinalIgnoreCase);
 
         _logger.LogInformation(
             "Starting {RunLabel} score updating process for the last {LookbackDays} day(s).",
@@ -29,32 +37,44 @@ public partial class AnalyzerService
             normalizedLookbackDays);
         try
         {
-            // Score scraping is non-blocking
-            try
+            var shouldScrape = !isRecentRun || await HasFixturesInLiveScrapeWindowAsync(normalizedLookbackDays);
+            if (!shouldScrape)
             {
-                var scores = await _webScraperService.ScrapeMatchScoresAsync();
-                _logger.LogInformation("Scraped {Count} match scores from primary source.", scores.Count);
-                await SaveMatchScores(scores);
-            }
-            catch (Exception scoreEx)
-            {
-                _logger.LogWarning(scoreEx, "❌ Primary score scraping failed.");
-            }
-
-            // Secondary score source (AiScore)
-            try
-            {
-                var aiScores = await _webScraperService.ScrapeAiScoreMatchScoresAsync();
-                await SaveAiScoreMatchScores(aiScores);
-                var aiScoreSnapshot = _aiScoreSourceHealthTracker.GetSnapshot();
                 _logger.LogInformation(
-                    "AiScore stage finished with status {Status} at stage {Stage}. SofaScore stage will run for unresolved fixtures.",
-                    aiScoreSnapshot.Status,
-                    aiScoreSnapshot.LastStage ?? "unknown");
+                    "Idle: skipped {RunLabel} score scrape (0 fixtures in live window {LeadMinutes}m before kickoff to {TrailHours}h after).",
+                    normalizedRunLabel,
+                    LiveScrapeLead.TotalMinutes,
+                    LiveScrapeTrail.TotalHours);
             }
-            catch (Exception aiScoreEx)
+            else
             {
-                _logger.LogWarning(aiScoreEx, "❌ AiScore scraping failed.");
+                // Score scraping is non-blocking
+                try
+                {
+                    var scores = await _webScraperService.ScrapeMatchScoresAsync();
+                    _logger.LogInformation("Scraped {Count} match scores from primary source.", scores.Count);
+                    await SaveMatchScores(scores);
+                }
+                catch (Exception scoreEx)
+                {
+                    _logger.LogWarning(scoreEx, "❌ Primary score scraping failed.");
+                }
+
+                // Secondary score source (AiScore)
+                try
+                {
+                    var aiScores = await _webScraperService.ScrapeAiScoreMatchScoresAsync();
+                    await SaveAiScoreMatchScores(aiScores);
+                    var aiScoreSnapshot = _aiScoreSourceHealthTracker.GetSnapshot();
+                    _logger.LogInformation(
+                        "AiScore stage finished with status {Status} at stage {Stage}. SofaScore stage will run for unresolved fixtures.",
+                        aiScoreSnapshot.Status,
+                        aiScoreSnapshot.LastStage ?? "unknown");
+                }
+                catch (Exception aiScoreEx)
+                {
+                    _logger.LogWarning(aiScoreEx, "❌ AiScore scraping failed.");
+                }
             }
 
             await UpdatePredictionsWithActualResults(normalizedLookbackDays, normalizedRunLabel);
@@ -62,10 +82,13 @@ public partial class AnalyzerService
                 "✅ Predictions updated with actual results for the {RunLabel} window.",
                 normalizedRunLabel);
 
+            var statusMessage = shouldScrape
+                ? $"✅ {normalizedRunLabel} score updating completed successfully for the last {normalizedLookbackDays} day(s)."
+                : $"Idle: skipped scrape (0 fixtures in live window). Settled from stored scores for the last {normalizedLookbackDays} day(s).";
             await LogScrapingStatus(
                 GetScoreUpdateEventName(normalizedRunLabel),
                 "Success",
-                $"✅ {normalizedRunLabel} score updating completed successfully for the last {normalizedLookbackDays} day(s).");
+                statusMessage);
         }
         catch (Exception ex)
         {
@@ -81,6 +104,120 @@ public partial class AnalyzerService
             await PersistSourceRuntimeHealthSafelyAsync();
         }
     }
+
+    /// <summary>
+    /// True when any unsettled/live prediction or forecast has kickoff in
+    /// [now - LiveScrapeTrail, now + LiveScrapeLead].
+    /// </summary>
+    private async Task<bool> HasFixturesInLiveScrapeWindowAsync(int lookbackDays)
+    {
+        var nowUtc = DateTime.UtcNow;
+        var windowStartUtc = nowUtc - LiveScrapeTrail;
+        var windowEndUtc = nowUtc + LiveScrapeLead;
+
+        var today = DateOnly.FromDateTime(DateTimeProvider.GetLocalTime());
+        var earliestSettlementDate = today.AddDays(-lookbackDays);
+        var settlementDates = Enumerable.Range(0, lookbackDays + 1)
+            .Select(offset => earliestSettlementDate.AddDays(offset))
+            .ToHashSet();
+
+        var predictions = await _dbContext.Predictions
+            .AsNoTracking()
+            .Where(p => settlementDates.Contains(p.MatchLocalDate) && p.IsCurrentRevision)
+            .Where(p =>
+                p.IsLive ||
+                p.ActualScore == null ||
+                p.ActualScore == "" ||
+                p.ActualOutcome == null ||
+                p.ActualOutcome == "" ||
+                p.ActualOutcome == "Unknown")
+            .Select(p => new
+            {
+                p.MatchLocalDate,
+                p.MatchLocalTime,
+                p.MatchDateTime,
+                p.Date,
+                p.Time,
+                p.IsLive,
+                p.ActualScore,
+                p.ActualOutcome
+            })
+            .ToListAsync();
+
+        foreach (var prediction in predictions)
+        {
+            if (!NeedsPredictionSettlementRepair(new Prediction
+                {
+                    IsLive = prediction.IsLive,
+                    ActualScore = prediction.ActualScore,
+                    ActualOutcome = prediction.ActualOutcome
+                }))
+            {
+                continue;
+            }
+
+            var kickoffUtc = ResolveScheduledMatchTime(
+                prediction.MatchLocalDate == default ? DateTimeProvider.ParseLocalDateOrNull(prediction.Date) : prediction.MatchLocalDate,
+                prediction.MatchLocalTime ?? DateTimeProvider.ParseLocalTimeOrNull(prediction.Time),
+                prediction.MatchDateTime);
+
+            if (kickoffUtc is DateTime kickoff &&
+                kickoff >= windowStartUtc &&
+                kickoff <= windowEndUtc)
+            {
+                return true;
+            }
+        }
+
+        var forecasts = await _dbContext.ForecastObservations
+            .AsNoTracking()
+            .Where(f => settlementDates.Contains(f.MatchLocalDate) && f.IsCurrentRevision)
+            .Where(f =>
+                f.IsLive ||
+                !f.IsSettled ||
+                f.ActualScore == null ||
+                f.ActualScore == "")
+            .Select(f => new
+            {
+                f.MatchLocalDate,
+                f.MatchLocalTime,
+                f.MatchDateTime,
+                f.Date,
+                f.Time,
+                f.IsLive,
+                f.IsSettled,
+                f.ActualScore
+            })
+            .ToListAsync();
+
+        foreach (var forecast in forecasts)
+        {
+            if (!NeedsForecastSettlementRepair(new ForecastObservation
+                {
+                    IsLive = forecast.IsLive,
+                    IsSettled = forecast.IsSettled,
+                    ActualScore = forecast.ActualScore
+                }))
+            {
+                continue;
+            }
+
+            var kickoffUtc = ResolveScheduledMatchTime(
+                forecast.MatchLocalDate == default ? DateTimeProvider.ParseLocalDateOrNull(forecast.Date) : forecast.MatchLocalDate,
+                forecast.MatchLocalTime ?? DateTimeProvider.ParseLocalTimeOrNull(forecast.Time),
+                forecast.MatchDateTime);
+
+            if (kickoffUtc is DateTime kickoff &&
+                kickoff >= windowStartUtc &&
+                kickoff <= windowEndUtc)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static string GetScoreUpdateEventName(string runLabel) =>
         ScrapingEventNames.ScoreUpdate(runLabel);
 
