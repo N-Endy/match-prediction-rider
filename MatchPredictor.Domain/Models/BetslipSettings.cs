@@ -32,7 +32,19 @@ public class BetslipSettings
 
     public double RolloverMinOdds { get; set; } = 1.20;
     public double RolloverMaxOdds { get; set; } = 1.50;
+    public double RolloverFallbackMinOdds { get; set; } = 1.15;
+    public double RolloverFallbackMaxOdds { get; set; } = 1.80;
     public int RolloverShortlistSize { get; set; } = 15;
+
+    /// <summary>
+    /// Last-resort combined-odds floor when primary and fallback ladder bands cannot be packed.
+    /// </summary>
+    public double LadderLastResortMinOdds { get; set; } = 10;
+
+    /// <summary>
+    /// Last-resort combined-odds ceiling when primary and fallback ladder bands cannot be packed.
+    /// </summary>
+    public double LadderLastResortMaxOdds { get; set; } = 150;
 
     /// <summary>Stake used to translate combined odds into estimated Naira payout on cards.</summary>
     public decimal ReferenceStakeNaira { get; set; } = 100m;

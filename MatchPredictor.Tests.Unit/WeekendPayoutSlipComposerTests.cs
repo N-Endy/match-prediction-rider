@@ -185,7 +185,55 @@ public class WeekendPayoutSlipComposerTests
         var settings = new BetslipSettings();
         Assert.Equal(1.20, settings.RolloverMinOdds);
         Assert.Equal(1.50, settings.RolloverMaxOdds);
+        Assert.Equal(1.15, settings.RolloverFallbackMinOdds);
+        Assert.Equal(1.80, settings.RolloverFallbackMaxOdds);
         Assert.Equal(15, settings.RolloverShortlistSize);
+    }
+
+    [Fact]
+    public void BetslipSettings_DefaultsLadderLastResortBandToTenThroughOneFifty()
+    {
+        var settings = new BetslipSettings();
+        Assert.Equal(10, settings.LadderLastResortMinOdds);
+        Assert.Equal(150, settings.LadderLastResortMaxOdds);
+    }
+
+    [Fact]
+    public void Compose_UsesLastResortRange_WhenFallbackImpossible()
+    {
+        // 1.35^8 ≈ 11.0 — below Small fallback 20 but above last-resort 10.
+        var candidates = BuildLadder(40, odds: 1.35);
+        var settings = new BetslipSettings
+        {
+            WeekendSmallSlipCount = 1,
+            WeekendMediumSlipCount = 0,
+            WeekendBigSlipCount = 0,
+            WeekendMegaSlipCount = 0,
+            SmallMinOdds = 30,
+            SmallMaxOdds = 100,
+            SmallFallbackMinOdds = 20,
+            SmallFallbackMaxOdds = 120,
+            SmallMaxPicks = 8,
+            LadderLastResortMinOdds = 10,
+            LadderLastResortMaxOdds = 150
+        };
+
+        var primaryBands = WeekendPayoutSlipComposer.BuildWeekendPlan(settings);
+        var primary = WeekendPayoutSlipComposer.Compose(candidates, primaryBands);
+        Assert.Empty(primary);
+
+        var lastResortBands = primaryBands
+            .Select(band => band with
+            {
+                MinOdds = settings.LadderLastResortMinOdds,
+                MaxOdds = Math.Max(band.MaxOdds, settings.LadderLastResortMaxOdds),
+                FallbackMinOdds = settings.LadderLastResortMinOdds,
+                FallbackMaxOdds = Math.Max(band.FallbackMaxOdds, settings.LadderLastResortMaxOdds)
+            })
+            .ToList();
+        var slips = WeekendPayoutSlipComposer.Compose(candidates, lastResortBands);
+        var slip = Assert.Single(slips);
+        Assert.InRange(slip.TargetCombinedOdds!.Value, 10, 150);
     }
 
     [Fact]

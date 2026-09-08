@@ -41,13 +41,13 @@ public class BetslipsModel : PageModel
     {
         ApplyStake();
         await LoadCurrentSetAsync(ct);
-        await LoadRecordsAsync(record, date, month, loadResults: date is not null, ct);
+        await LoadRecordsAsync(record, date, month, loadResults: true, autoSelectLatest: date is null, ct);
     }
 
     public async Task<IActionResult> OnGetRecordDayAsync(string? record, DateOnly date, CancellationToken ct)
     {
         ApplyStake();
-        await LoadRecordsAsync(record, date, month: null, loadResults: true, ct);
+        await LoadRecordsAsync(record, date, month: null, loadResults: true, autoSelectLatest: false, ct);
         return Partial("_BetslipRecordResults", Results);
     }
 
@@ -58,8 +58,15 @@ public class BetslipsModel : PageModel
         CancellationToken ct)
     {
         ApplyStake();
-        await LoadRecordsAsync(record, date, month, loadResults: false, ct);
+        await LoadRecordsAsync(record, date, month, loadResults: false, autoSelectLatest: false, ct);
         return Partial("_BetslipCalendar", Calendar);
+    }
+
+    public async Task<IActionResult> OnGetLatestRecordDateAsync(string? record, CancellationToken ct)
+    {
+        var section = BetslipKinds.ParseSectionOrDefault(record);
+        var latest = await _betslipQueries.GetLatestSlipDateAsync(section, ct);
+        return new JsonResult(new { date = latest?.ToString("yyyy-MM-dd") });
     }
 
     public static string RecordUrl(BetslipRecordSection section, DateOnly? date = null, DateOnly? month = null)
@@ -120,17 +127,24 @@ public class BetslipsModel : PageModel
         DateOnly? date,
         string? month,
         bool loadResults,
+        bool autoSelectLatest,
         CancellationToken ct)
     {
         RecordSection = BetslipKinds.ParseSectionOrDefault(record);
         var today = DateTimeProvider.GetLocalDate();
         var monthStart = ParseMonth(month);
 
-        HasRecordDateSelection = date is not null;
-        RecordDate = date ?? today;
+        DateOnly? effectiveDate = date;
+        if (effectiveDate is null && autoSelectLatest)
+        {
+            effectiveDate = await _betslipQueries.GetLatestSlipDateAsync(RecordSection, ct);
+        }
+
+        HasRecordDateSelection = effectiveDate is not null;
+        RecordDate = effectiveDate ?? today;
         CalendarMonth = monthStart
-                        ?? (date is not null
-                            ? new DateOnly(date.Value.Year, date.Value.Month, 1)
+                        ?? (effectiveDate is not null
+                            ? new DateOnly(effectiveDate.Value.Year, effectiveDate.Value.Month, 1)
                             : new DateOnly(today.Year, today.Month, 1));
 
         var datesWithSlips = await _betslipQueries.GetSlipDatesAsync(

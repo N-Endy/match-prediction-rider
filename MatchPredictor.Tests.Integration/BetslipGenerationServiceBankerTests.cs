@@ -360,7 +360,11 @@ public class BetslipGenerationServiceBankerTests
                 BankerFallbackMinOdds = 4.0,
                 BankerFallbackMaxOdds = 12.0,
                 BankerShortlistSize = 20,
-                BankerMaxPicks = 8
+                BankerMaxPicks = 8,
+                RolloverMinOdds = 1.20,
+                RolloverMaxOdds = 1.50,
+                RolloverFallbackMinOdds = 1.15,
+                RolloverFallbackMaxOdds = 1.20
             }),
             NullLogger<BetslipGenerationService>.Instance);
 
@@ -448,7 +452,11 @@ public class BetslipGenerationServiceBankerTests
                 BankerFallbackMinOdds = 4.0,
                 BankerFallbackMaxOdds = 12.0,
                 BankerShortlistSize = 20,
-                ScreenBatchSize = 25
+                ScreenBatchSize = 25,
+                RolloverMinOdds = 1.20,
+                RolloverMaxOdds = 1.50,
+                RolloverFallbackMinOdds = 1.15,
+                RolloverFallbackMaxOdds = 1.20
             }),
             NullLogger<BetslipGenerationService>.Instance);
 
@@ -529,7 +537,11 @@ public class BetslipGenerationServiceBankerTests
                 BankerMaxOdds = 10.0,
                 BankerFallbackMinOdds = 4.0,
                 BankerFallbackMaxOdds = 12.0,
-                BankerMaxPicks = 8
+                BankerMaxPicks = 8,
+                RolloverMinOdds = 1.20,
+                RolloverMaxOdds = 1.50,
+                RolloverFallbackMinOdds = 1.15,
+                RolloverFallbackMaxOdds = 1.20
             }),
             NullLogger<BetslipGenerationService>.Instance,
             Options.Create(new PredictionSettings { ValueBetMinimumEdge = 0.03 }));

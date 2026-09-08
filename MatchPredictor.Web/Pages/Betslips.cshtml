@@ -194,9 +194,38 @@
                 root.setAttribute('data-record-month', month);
                 calendarHost.innerHTML = await fetchHtml(
                     `/betslips?handler=RecordCalendar&record=${encodeURIComponent(section)}&month=${encodeURIComponent(month)}`);
-                resultsHost.innerHTML = emptyResults;
                 bindCalendar();
                 updateUrl(section, month, null);
+            }
+
+            async function loadSection(nextSection) {
+                section = nextSection;
+                root.setAttribute('data-record-section', section);
+                let latestDate = null;
+                try {
+                    const latestResponse = await fetch(
+                        `/betslips?handler=LatestRecordDate&record=${encodeURIComponent(section)}`,
+                        { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                    if (latestResponse.ok) {
+                        const payload = await latestResponse.json();
+                        latestDate = payload?.date || null;
+                    }
+                } catch {
+                    latestDate = null;
+                }
+
+                if (latestDate) {
+                    month = latestDate.slice(0, 7);
+                    root.setAttribute('data-record-month', month);
+                    calendarHost.innerHTML = await fetchHtml(
+                        `/betslips?handler=RecordCalendar&record=${encodeURIComponent(section)}&month=${encodeURIComponent(month)}&date=${encodeURIComponent(latestDate)}`);
+                    bindCalendar();
+                    await loadDay(latestDate);
+                    return;
+                }
+
+                await loadCalendar(nextSection, month || root.getAttribute('data-record-month') || '');
+                resultsHost.innerHTML = emptyResults;
             }
 
             function bindCalendar() {
@@ -213,7 +242,12 @@
                         event.preventDefault();
                         const nextMonth = link.getAttribute('data-record-month');
                         if (!nextMonth) return;
-                        try { await loadCalendar(section, nextMonth); } catch { window.location.href = link.href; }
+                        try {
+                            await loadCalendar(section, nextMonth);
+                            resultsHost.innerHTML = emptyResults;
+                        } catch {
+                            window.location.href = link.href;
+                        }
                     });
                 });
             }
@@ -225,7 +259,7 @@
                     if (!nextSection) return;
                     root.querySelectorAll('.mp-tab-btn').forEach(btn => btn.classList.remove('active'));
                     tab.classList.add('active');
-                    try { await loadCalendar(nextSection, month); } catch { window.location.href = tab.href; }
+                    try { await loadSection(nextSection); } catch { window.location.href = tab.href; }
                 });
             });
 

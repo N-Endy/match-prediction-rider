@@ -146,7 +146,7 @@ public class BetslipGenerationServiceLadderPoolTests
                 $"ThinAway{i}",
                 $"thin-card-fx-{i}",
                 confidence: 0.52m,
-                bttsOdds: 1.55);
+                bttsOdds: 1.90);
         }
 
         context.Predictions.AddRange(predictions);
@@ -518,6 +518,85 @@ public class BetslipGenerationServiceLadderPoolTests
         var ladder = set.Slips.Where(BetslipGenerationService.IsLadderSlip).ToList();
         Assert.NotEmpty(ladder);
         Assert.Contains(ladder, s => s.Selections.Count > 1);
+    }
+
+    [Fact]
+    public async Task GenerateDailyBetslipsAsync_PacksLadderViaLastResort_WhenFallbackBandImpossible()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var today = DateTimeProvider.GetLocalDate();
+        var kickoff = DateTime.UtcNow.AddHours(5);
+        var fixtures = new List<SourceMarketFixture>();
+        var predictions = new List<Prediction>();
+        var nextId = 1;
+
+        // Outside rollover bands; product of eight 1.35s ≈ 11 — below Small fallback 20, above last-resort 10.
+        for (var i = 1; i <= 12; i++)
+        {
+            AddBttsPrediction(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(i),
+                $"LastResortHome{i}",
+                $"LastResortAway{i}",
+                $"last-resort-fx-{i}",
+                confidence: 0.80m,
+                bttsOdds: 1.35);
+        }
+
+        context.Predictions.AddRange(predictions);
+        await context.SaveChangesAsync();
+
+        var service = new BetslipGenerationService(
+            context,
+            new FakeBooking(),
+            new FakePricing { Fixtures = fixtures },
+            new FakeAdvisor(),
+            Options.Create(new BetslipSettings
+            {
+                BookingDelayMilliseconds = 0,
+                MaxSlipsPerPrediction = 1,
+                MaxSingleMarketShare = 1.0,
+                BankerMinOdds = 50.0,
+                BankerMaxOdds = 60.0,
+                BankerFallbackMinOdds = 40.0,
+                BankerFallbackMaxOdds = 70.0,
+                BankerMaxPicks = 8,
+                RolloverMinOdds = 1.20,
+                RolloverMaxOdds = 1.50,
+                RolloverFallbackMinOdds = 1.15,
+                RolloverFallbackMaxOdds = 1.20,
+                WeekendSmallSlipCount = 1,
+                WeekendMediumSlipCount = 0,
+                WeekendBigSlipCount = 0,
+                WeekendMegaSlipCount = 0,
+                SmallMinOdds = 30,
+                SmallMaxOdds = 100,
+                SmallFallbackMinOdds = 20,
+                SmallFallbackMaxOdds = 120,
+                SmallMaxPicks = 8,
+                DailyMaxPicks = 8,
+                LadderLastResortMinOdds = 10,
+                LadderLastResortMaxOdds = 150
+            }),
+            NullLogger<BetslipGenerationService>.Instance);
+
+        await service.GenerateDailyBetslipsAsync("morning");
+
+        var set = await context.BetslipSets
+            .Include(s => s.Slips)
+            .ThenInclude(s => s.Selections)
+            .SingleAsync(s => s.IsCurrent);
+
+        var ladder = Assert.Single(set.Slips.Where(BetslipGenerationService.IsLadderSlip));
+        Assert.InRange(ladder.CombinedDecimalOdds ?? 0d, 10, 150);
+        Assert.Contains("Last-resort", ladder.StatusMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

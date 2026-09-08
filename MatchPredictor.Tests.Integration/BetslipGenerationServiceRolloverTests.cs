@@ -146,6 +146,73 @@ public class BetslipGenerationServiceRolloverTests
     }
 
     [Fact]
+    public async Task GenerateDailyBetslipsAsync_UsesRolloverFallbackBand_WhenPrimaryEmpty()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var today = DateTimeProvider.GetLocalDate();
+        var kickoff = DateTime.UtcNow.AddHours(5);
+        var fixtures = new List<SourceMarketFixture>();
+        var predictions = new List<Prediction>();
+        var nextId = 1;
+
+        // 1.55 is outside primary 1.20-1.50 but inside fallback 1.15-1.80.
+        AddBtts(
+            predictions,
+            fixtures,
+            ref nextId,
+            today,
+            kickoff,
+            "FallbackHome",
+            "FallbackAway",
+            "fallback-fx-1",
+            confidence: 0.81m,
+            bttsOdds: 1.55);
+
+        for (var i = 1; i <= 6; i++)
+        {
+            AddBtts(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(i),
+                $"BankerHome{i}",
+                $"BankerAway{i}",
+                $"banker-fx-{i}",
+                confidence: 0.80m,
+                bttsOdds: 1.60);
+        }
+
+        context.Predictions.AddRange(predictions);
+        await context.SaveChangesAsync();
+
+        var service = new BetslipGenerationService(
+            context,
+            new RecordingBooking(),
+            new FakePricing { Fixtures = fixtures },
+            new FakeAdvisor(),
+            Options.Create(CreateSettings()),
+            NullLogger<BetslipGenerationService>.Instance,
+            Options.Create(new PredictionSettings { ValueBetMinimumEdge = 0.03 }));
+
+        await service.GenerateDailyBetslipsAsync("morning");
+
+        var set = await context.BetslipSets
+            .Include(s => s.Slips)
+            .ThenInclude(s => s.Selections)
+            .SingleAsync(s => s.IsCurrent);
+
+        var rollover = Assert.Single(set.Slips, BetslipGenerationService.IsRolloverSlip);
+        Assert.Equal("FallbackHome", Assert.Single(rollover.Selections).HomeTeam);
+        Assert.Contains("Widened rollover range", rollover.StatusMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.InRange(rollover.CombinedDecimalOdds ?? 0d, 1.15, 1.80);
+    }
+
+    [Fact]
     public async Task GenerateDailyBetslipsAsync_OmitsRollover_WhenNoPickInOddsBand()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
@@ -171,7 +238,7 @@ public class BetslipGenerationServiceRolloverTests
                 $"BankerAway{i}",
                 $"banker-fx-{i}",
                 confidence: 0.80m,
-                bttsOdds: 1.55);
+                bttsOdds: 2.10);
         }
 
         context.Predictions.AddRange(predictions);
@@ -299,7 +366,11 @@ public class BetslipGenerationServiceRolloverTests
             LadderMinimumEdge = 0.01,
             RolloverMinOdds = 1.20,
             RolloverMaxOdds = 1.50,
+            RolloverFallbackMinOdds = 1.15,
+            RolloverFallbackMaxOdds = 1.80,
             RolloverShortlistSize = 15,
+            LadderLastResortMinOdds = 10,
+            LadderLastResortMaxOdds = 150,
             WeekendSmallSlipCount = 1,
             WeekendMediumSlipCount = 0,
             WeekendBigSlipCount = 0,

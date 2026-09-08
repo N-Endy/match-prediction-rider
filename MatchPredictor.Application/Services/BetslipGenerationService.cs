@@ -103,13 +103,23 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
             LogComposeFunnel(universe, mainPool, aiPassedCount);
 
-            var (morningRolloverFixtures, morningBankerFixtures) =
+            var (morningRolloverFixtures, morningBankerFixtures, morningLadderFixtures) =
                 await LoadMorningUsedFixturesAsync(today, normalizedRunLabel);
 
             var rolloverPool = ExcludeUsedFixtures(mainPool, morningRolloverFixtures);
             var rollover = await ComposeRolloverFromPassersAsync(rolloverPool, settings);
+            var rolloverSource = rollover is not null ? "fresh" : (string?)null;
+            if (rollover is null && morningRolloverFixtures.Count > 0)
+            {
+                rollover = await ComposeRolloverFromPassersAsync(mainPool, settings);
+                if (rollover is not null)
+                {
+                    rolloverSource = "reuse";
+                }
+            }
             if (rollover is not null)
             {
+                _logger.LogInformation("Rollover composed with source={RolloverSource}.", rolloverSource);
                 composed.Add(rollover);
             }
 
@@ -144,9 +154,11 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 ? WeekendPayoutSlipComposer.BuildWeekendPlan(settings)
                 : WeekendPayoutSlipComposer.BuildWeekdayPlan(settings);
 
+            var freshLadderKeys = new HashSet<string>(usedFixtureKeys, StringComparer.OrdinalIgnoreCase);
+            UnionFixtureKeys(freshLadderKeys, morningLadderFixtures);
             var ladderPassers = ExcludeUsedFixtures(
                 FilterByCategory(mainPool, MainCategories),
-                usedFixtureKeys);
+                freshLadderKeys);
 
             _logger.LogInformation(
                 "Ladder pool after exclusivity: {PoolCount} live-quoted picks ({RemovedCount} removed).",
@@ -158,7 +170,32 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 ladderPassers.Count,
                 bands.Count);
 
-            var ladderSlips = await ComposeLadderFromPassersAsync(ladderPassers, bands, settings);
+            var ladderSlips = await ComposeLadderWithResilienceAsync(ladderPassers, bands, settings);
+            var ladderSource = ladderSlips.Count > 0 ? "fresh" : (string?)null;
+            if (ladderSlips.Count == 0 && morningLadderFixtures.Count > 0)
+            {
+                var reusePassers = IncludeOnlyFixtures(
+                    ExcludeUsedFixtures(FilterByCategory(mainPool, MainCategories), usedFixtureKeys),
+                    morningLadderFixtures);
+                if (reusePassers.Count == 0)
+                {
+                    reusePassers = ExcludeUsedFixtures(
+                        FilterByCategory(mainPool, MainCategories),
+                        usedFixtureKeys);
+                }
+
+                ladderSlips = await ComposeLadderWithResilienceAsync(reusePassers, bands, settings);
+                if (ladderSlips.Count > 0)
+                {
+                    ladderSource = "reuse";
+                }
+            }
+
+            if (ladderSlips.Count > 0)
+            {
+                _logger.LogInformation("Ladder composed with source={LadderSource}.", ladderSource);
+            }
+
             composed.AddRange(ladderSlips);
             AddFixtureKeys(usedFixtureKeys, ladderSlips);
 
@@ -301,13 +338,40 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             .ThenBy(p => p.Prediction.Id)
             .ToList();
 
+        var usedFallback = false;
+        if (pool.Count == 0)
+        {
+            minOdds = settings.RolloverFallbackMinOdds;
+            maxOdds = settings.RolloverFallbackMaxOdds;
+            pool = FilterByCategory(mainPool, MainCategories)
+                .Where(p => p.Candidate.DecimalOdds is double odds &&
+                            BankerSlipComposer.IsWithinOddsRange(odds, minOdds, maxOdds))
+                .OrderBy(p => p.Candidate.DecimalOdds ?? double.MaxValue)
+                .ThenByDescending(p => p.Candidate.ResearchScore ?? (double)p.Candidate.Confidence)
+                .ThenBy(p => p.Prediction.Id)
+                .ToList();
+            usedFallback = pool.Count > 0;
+        }
+
         if (pool.Count == 0)
         {
             _logger.LogInformation(
-                "Rollover skipped: no live-quoted main-market pick in {MinOdds:0.##}-{MaxOdds:0.##}x.",
-                minOdds,
-                maxOdds);
+                "Rollover skipped: no live-quoted main-market pick in {MinOdds:0.##}-{MaxOdds:0.##}x (primary {PrimaryMin:0.##}-{PrimaryMax:0.##}x).",
+                settings.RolloverFallbackMinOdds,
+                settings.RolloverFallbackMaxOdds,
+                settings.RolloverMinOdds,
+                settings.RolloverMaxOdds);
             return null;
+        }
+
+        if (usedFallback)
+        {
+            _logger.LogInformation(
+                "Rollover using fallback band {MinOdds:0.##}-{MaxOdds:0.##}x (primary {PrimaryMin:0.##}-{PrimaryMax:0.##}x empty).",
+                minOdds,
+                maxOdds,
+                settings.RolloverMinOdds,
+                settings.RolloverMaxOdds);
         }
 
         var shortlistSize = Math.Clamp(settings.RolloverShortlistSize, 1, 50);
@@ -324,6 +388,10 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         var aiVetted = false;
         var riskNote = string.Empty;
         var shortfallNotes = new List<string>();
+        if (usedFallback)
+        {
+            shortfallNotes.Add($"Widened rollover range to {minOdds:0.##}-{maxOdds:0.##}x.");
+        }
 
         try
         {
@@ -1056,6 +1124,94 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         return aiSlips.Concat(packed).OrderBy(s => s.SlipNumber).ToList();
     }
 
+    private async Task<List<ComposedBetslip>> ComposeLadderWithResilienceAsync(
+        IReadOnlyList<LiveQuotedCandidate> passers,
+        IReadOnlyList<PayoutBandSpec> bands,
+        BetslipSettings settings)
+    {
+        var slips = await ComposeLadderFromPassersAsync(passers, bands, settings);
+        var missingBands = bands.Where(b => slips.All(s => s.SlipNumber != b.SlipNumber)).ToList();
+        if (missingBands.Count == 0 || passers.Count == 0)
+        {
+            return slips;
+        }
+
+        var usedPredictionIds = slips.SelectMany(s => s.Selections).Select(s => s.PredictionId).ToHashSet();
+        var usedFixtures = new HashSet<string>(
+            slips.SelectMany(s => s.Selections)
+                .Select(s => s.FixtureKey)
+                .Where(k => !string.IsNullOrWhiteSpace(k))!,
+            StringComparer.OrdinalIgnoreCase);
+
+        var leftover = passers
+            .Select(p => p.Candidate)
+            .Where(c => !usedPredictionIds.Contains(c.PredictionId) && !IsFixtureUsed(c.FixtureKey, usedFixtures))
+            .OrderByDescending(c => c.ResearchScore ?? (double)c.Confidence)
+            .ThenBy(c => c.PredictionId)
+            .ToList();
+
+        if (leftover.Count == 0)
+        {
+            return slips;
+        }
+
+        var lastResortMin = Math.Max(1.01, settings.LadderLastResortMinOdds);
+        var lastResortMax = Math.Max(lastResortMin, settings.LadderLastResortMaxOdds);
+        var lastResortBands = missingBands
+            .Select(band => band with
+            {
+                MinOdds = lastResortMin,
+                MaxOdds = Math.Max(band.MaxOdds, lastResortMax),
+                FallbackMinOdds = lastResortMin,
+                FallbackMaxOdds = Math.Max(band.FallbackMaxOdds, lastResortMax)
+            })
+            .ToList();
+
+        var packed = WeekendPayoutSlipComposer.Compose(
+            leftover,
+            lastResortBands,
+            settings.MaxSlipsPerPrediction,
+            settings.MaxSingleMarketShare,
+            settings.OverlapPenalty);
+
+        if (packed.Count == 0)
+        {
+            return slips;
+        }
+
+        packed = packed
+            .Select(slip => new ComposedBetslip
+            {
+                SlipNumber = slip.SlipNumber,
+                Title = slip.Title,
+                TierLabel = slip.TierLabel,
+                TargetMinSelections = slip.TargetMinSelections,
+                TargetMaxSelections = slip.TargetMaxSelections,
+                Selections = slip.Selections,
+                ShortfallNote = string.IsNullOrWhiteSpace(slip.ShortfallNote)
+                    ? $"Last-resort payout range {lastResortMin:0.##}-{lastResortMax:0.##}x."
+                    : $"{slip.ShortfallNote} Last-resort payout range {lastResortMin:0.##}-{lastResortMax:0.##}x.",
+                AiSummary = slip.AiSummary,
+                TargetCombinedOdds = slip.TargetCombinedOdds,
+                IsBanker = slip.IsBanker,
+                IsRollover = slip.IsRollover,
+                IsPayoutBand = slip.IsPayoutBand,
+                IsMega = slip.IsMega,
+                ActiveMinOdds = slip.ActiveMinOdds,
+                ActiveMaxOdds = slip.ActiveMaxOdds
+            })
+            .ToList();
+
+        _logger.LogInformation(
+            "Ladder last-resort packed {PackedCount} band(s) at {MinOdds:0.##}-{MaxOdds:0.##}x: {Titles}.",
+            packed.Count,
+            lastResortMin,
+            lastResortMax,
+            string.Join(", ", packed.Select(s => s.Title)));
+
+        return slips.Concat(packed).OrderBy(s => s.SlipNumber).ToList();
+    }
+
     private static ComposedBetslip? TryValidateAiLadderSlip(
         IReadOnlyList<int> predictionIds,
         PayoutBandSpec band,
@@ -1452,15 +1608,16 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         return true;
     }
 
-    private async Task<(HashSet<string> Rollover, HashSet<string> Banker)> LoadMorningUsedFixturesAsync(
+    private async Task<(HashSet<string> Rollover, HashSet<string> Banker, HashSet<string> Ladder)> LoadMorningUsedFixturesAsync(
         DateOnly today,
         string currentRunLabel)
     {
         var rollover = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var banker = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ladder = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (!string.Equals(currentRunLabel, BetslipRunLabels.Midday, StringComparison.OrdinalIgnoreCase))
         {
-            return (rollover, banker);
+            return (rollover, banker, ladder);
         }
 
         var morningSets = await _dbContext.BetslipSets
@@ -1506,6 +1663,10 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             {
                 target = banker;
             }
+            else if (IsLadderSlip(slip))
+            {
+                target = ladder;
+            }
 
             if (target is null)
             {
@@ -1533,7 +1694,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             }
         }
 
-        return (rollover, banker);
+        return (rollover, banker, ladder);
     }
 
     private static HashSet<string> CollectFixtureKeys(IEnumerable<ComposedBetslip> slips)
@@ -1579,6 +1740,21 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
         return candidates
             .Where(c => !IsFixtureUsed(c.Candidate.FixtureKey, usedFixtureKeys))
+            .ToList();
+    }
+
+    private static List<LiveQuotedCandidate> IncludeOnlyFixtures(
+        IReadOnlyList<LiveQuotedCandidate> candidates,
+        IReadOnlySet<string> fixtureKeys)
+    {
+        if (fixtureKeys.Count == 0)
+        {
+            return [];
+        }
+
+        return candidates
+            .Where(c => !string.IsNullOrWhiteSpace(c.Candidate.FixtureKey) &&
+                        fixtureKeys.Contains(c.Candidate.FixtureKey))
             .ToList();
     }
 

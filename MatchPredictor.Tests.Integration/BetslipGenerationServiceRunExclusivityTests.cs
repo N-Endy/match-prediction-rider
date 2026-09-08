@@ -109,7 +109,7 @@ public class BetslipGenerationServiceRunExclusivityTests
     }
 
     [Fact]
-    public async Task GenerateDailyBetslipsAsync_Midday_OmitsRolloverAndMayReuseBanker_WhenNoFreshCombo()
+    public async Task GenerateDailyBetslipsAsync_Midday_ReusesRolloverAndMayReuseBanker_WhenNoFreshCombo()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
@@ -137,7 +137,7 @@ public class BetslipGenerationServiceRunExclusivityTests
                 $"BankerAway{i}",
                 $"banker-fx-{i}",
                 0.80m,
-                1.55);
+                1.85);
         }
 
         if (isWeekend)
@@ -158,18 +158,13 @@ public class BetslipGenerationServiceRunExclusivityTests
         var midday = await LoadSetAsync(context, BetslipRunLabels.Midday);
 
         Assert.Contains(morning.Slips, BetslipGenerationService.IsRolloverSlip);
-        Assert.DoesNotContain(midday.Slips, BetslipGenerationService.IsRolloverSlip);
+        var middayRollover = Assert.Single(midday.Slips, BetslipGenerationService.IsRolloverSlip);
+        Assert.Equal("roll-fx-1", fixtureByPredictionId[middayRollover.Selections.Single().PredictionId!.Value]);
 
         var morningBanker = FixtureKeys(morning, BetslipGenerationService.IsBankerSlip, fixtureByPredictionId);
         var middayBanker = FixtureKeys(midday, BetslipGenerationService.IsBankerSlip, fixtureByPredictionId);
         Assert.NotEmpty(morningBanker);
         Assert.True(morningBanker.SetEquals(middayBanker));
-
-        var middayLater = FixtureKeys(
-            midday,
-            s => !BetslipGenerationService.IsRolloverSlip(s),
-            fixtureByPredictionId);
-        Assert.DoesNotContain("roll-fx-1", middayLater);
     }
 
     [Fact]
@@ -203,7 +198,7 @@ public class BetslipGenerationServiceRunExclusivityTests
                 $"BankerAway{i}",
                 $"banker-fx-{i}",
                 0.80m,
-                1.55);
+                1.85);
         }
 
         for (var i = 1; i <= 10; i++)
@@ -218,7 +213,7 @@ public class BetslipGenerationServiceRunExclusivityTests
                 $"ShortAway{i}",
                 $"short-fx-{i}",
                 0.93m - i * 0.001m,
-                1.12);
+                1.05);
         }
 
         if (isWeekend)
@@ -244,10 +239,89 @@ public class BetslipGenerationServiceRunExclusivityTests
         Assert.NotEmpty(morningBanker);
         Assert.NotEmpty(middayBanker);
         Assert.True(morningBanker.IsSubsetOf(middayBanker) || morningBanker.SetEquals(middayBanker));
-        Assert.DoesNotContain(midday.Slips, BetslipGenerationService.IsRolloverSlip);
+        Assert.Contains(midday.Slips, BetslipGenerationService.IsRolloverSlip);
         Assert.DoesNotContain(
             FixtureKeys(midday, BetslipGenerationService.IsBankerSlip, fixtureByPredictionId),
             key => key.StartsWith("short-fx-", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task GenerateDailyBetslipsAsync_Midday_ReusesMorningLadder_WhenNoFreshCombo()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var today = DateTimeProvider.GetLocalDate();
+        var kickoff = DateTime.UtcNow.AddHours(5);
+        var fixtures = new List<SourceMarketFixture>();
+        var predictions = new List<Prediction>();
+        var nextId = 1;
+        var isWeekend = today.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+
+        AddBtts(predictions, fixtures, ref nextId, today, kickoff, "RollHome", "RollAway", "roll-fx-1", 0.81m, 1.30);
+
+        // Exactly three banker legs (1.85^3 ≈ 6.3) so no banker leftovers spill into ladder.
+        for (var i = 1; i <= 3; i++)
+        {
+            AddBtts(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(10 + i),
+                $"BankerHome{i}",
+                $"BankerAway{i}",
+                $"banker-fx-{i}",
+                0.80m,
+                1.85);
+        }
+
+        // Barely enough ladder legs for one weekday band so midday has no fresh leftovers.
+        for (var i = 1; i <= 7; i++)
+        {
+            AddBtts(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(100 + i),
+                $"LadderHome{i}",
+                $"LadderAway{i}",
+                $"ladder-fx-{i}",
+                0.72m,
+                1.85);
+        }
+
+        if (isWeekend)
+        {
+            AddWeekendDraws(predictions, fixtures, ref nextId, today, kickoff);
+        }
+
+        context.Predictions.AddRange(predictions);
+        await context.SaveChangesAsync();
+
+        var fixtureByPredictionId = predictions.ToDictionary(p => p.Id, p => p.FixtureKey);
+        var settings = CreateSettings();
+        settings.MaxSingleMarketShare = 1.0;
+        settings.SmallMaxPicks = 7;
+        settings.DailyMaxPicks = 7;
+        settings.SmallMinOdds = 20;
+        settings.SmallFallbackMinOdds = 10;
+        var service = CreateService(context, fixtures, settings);
+
+        await service.GenerateDailyBetslipsAsync("morning");
+        await service.GenerateDailyBetslipsAsync("midday");
+
+        var morning = await LoadSetAsync(context, BetslipRunLabels.Morning);
+        var midday = await LoadSetAsync(context, BetslipRunLabels.Midday);
+
+        var morningLadder = FixtureKeys(morning, BetslipGenerationService.IsLadderSlip, fixtureByPredictionId);
+        var middayLadder = FixtureKeys(midday, BetslipGenerationService.IsLadderSlip, fixtureByPredictionId);
+        Assert.NotEmpty(morningLadder);
+        Assert.NotEmpty(middayLadder);
+        Assert.Contains(midday.Slips, BetslipGenerationService.IsLadderSlip);
     }
 
     [Fact]
@@ -350,13 +424,14 @@ public class BetslipGenerationServiceRunExclusivityTests
 
     private static BetslipGenerationService CreateService(
         ApplicationDbContext context,
-        IReadOnlyList<SourceMarketFixture> fixtures) =>
+        IReadOnlyList<SourceMarketFixture> fixtures,
+        BetslipSettings? settings = null) =>
         new(
             context,
             new FakeBooking(),
             new FakePricing { Fixtures = fixtures },
             new FakeAdvisor(),
-            Options.Create(CreateSettings()),
+            Options.Create(settings ?? CreateSettings()),
             NullLogger<BetslipGenerationService>.Instance,
             Options.Create(new PredictionSettings { ValueBetMinimumEdge = 0.03 }));
 
@@ -373,7 +448,11 @@ public class BetslipGenerationServiceRunExclusivityTests
             LadderMinimumEdge = 0.01,
             RolloverMinOdds = 1.20,
             RolloverMaxOdds = 1.50,
+            RolloverFallbackMinOdds = 1.15,
+            RolloverFallbackMaxOdds = 1.80,
             RolloverShortlistSize = 15,
+            LadderLastResortMinOdds = 10,
+            LadderLastResortMaxOdds = 150,
             WeekendSmallSlipCount = 1,
             WeekendMediumSlipCount = 0,
             WeekendBigSlipCount = 0,

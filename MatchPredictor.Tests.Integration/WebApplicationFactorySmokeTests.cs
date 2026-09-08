@@ -52,6 +52,18 @@ public class WebApplicationFactorySmokeTests
     }
 
     [Fact]
+    public async Task HomePage_IncludesAnalyticsNavLink_WithoutAdminAuth()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var html = await client.GetStringAsync("/");
+
+        Assert.Contains("href=\"/analytics\"", html);
+        Assert.Contains(">Analytics</a>", html);
+    }
+
+    [Fact]
     public async Task Manifest_ReturnsWebManifestJson()
     {
         await using var factory = CreateFactory();
