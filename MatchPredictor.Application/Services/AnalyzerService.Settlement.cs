@@ -22,6 +22,8 @@ public partial class AnalyzerService
     /// </summary>
     private static readonly TimeSpan LiveScrapeLead = TimeSpan.FromMinutes(20);
     private static readonly TimeSpan LiveScrapeTrail = TimeSpan.FromHours(3.5);
+    private static readonly TimeSpan AdjacentDateKickoffTolerance = TimeSpan.FromHours(4);
+    private const int MaxFlashScoreListingPagesPerRun = 7;
 
     [AutomaticRetry(OnAttemptsExceeded = AttemptsExceededAction.Delete)]
     [DisableConcurrentExecution(AnalyzerJobResource, 1800)]
@@ -51,8 +53,12 @@ public partial class AnalyzerService
                 // Score scraping is non-blocking
                 try
                 {
-                    var scores = await _webScraperService.ScrapeMatchScoresAsync();
-                    _logger.LogInformation("Scraped {Count} match scores from primary source.", scores.Count);
+                    var listingDates = await ResolveFlashScoreListingDatesAsync(normalizedLookbackDays);
+                    var scores = await _webScraperService.ScrapeMatchScoresAsync(listingDates);
+                    _logger.LogInformation(
+                        "Scraped {Count} match scores from primary source across {ListingDateCount} listing day(s).",
+                        scores.Count,
+                        listingDates.Count);
                     await SaveMatchScores(scores);
                 }
                 catch (Exception scoreEx)
@@ -216,6 +222,60 @@ public partial class AnalyzerService
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// FlashScore listing days to scrape for unsettled/live fixtures in the settlement window.
+    /// Caps navigations so a long backfill lookback does not open every historical day.
+    /// </summary>
+    private async Task<IReadOnlyList<DateOnly>> ResolveFlashScoreListingDatesAsync(int lookbackDays)
+    {
+        var today = DateOnly.FromDateTime(DateTimeProvider.GetLocalTime());
+        var earliestSettlementDate = today.AddDays(-lookbackDays);
+        var settlementDates = Enumerable.Range(0, lookbackDays + 1)
+            .Select(offset => earliestSettlementDate.AddDays(offset))
+            .ToHashSet();
+
+        var predictionDates = await _dbContext.Predictions
+            .AsNoTracking()
+            .Where(p => settlementDates.Contains(p.MatchLocalDate) && p.IsCurrentRevision)
+            .Where(p =>
+                p.IsLive ||
+                p.ActualScore == null ||
+                p.ActualScore == "" ||
+                p.ActualOutcome == null ||
+                p.ActualOutcome == "" ||
+                p.ActualOutcome == "Unknown")
+            .Select(p => p.MatchLocalDate)
+            .Distinct()
+            .ToListAsync();
+
+        var forecastDates = await _dbContext.ForecastObservations
+            .AsNoTracking()
+            .Where(f => settlementDates.Contains(f.MatchLocalDate) && f.IsCurrentRevision)
+            .Where(f =>
+                f.IsLive ||
+                !f.IsSettled ||
+                f.ActualScore == null ||
+                f.ActualScore == "")
+            .Select(f => f.MatchLocalDate)
+            .Distinct()
+            .ToListAsync();
+
+        var dates = predictionDates
+            .Concat(forecastDates)
+            .Where(date => date != default && date >= earliestSettlementDate && date <= today)
+            .Distinct()
+            .OrderByDescending(date => date)
+            .Take(MaxFlashScoreListingPagesPerRun)
+            .ToList();
+
+        if (dates.Count == 0)
+        {
+            dates.Add(today);
+        }
+
+        return dates;
     }
 
     private static string GetScoreUpdateEventName(string runLabel) =>
@@ -1800,6 +1860,39 @@ public partial class AnalyzerService
 
         if (exactCandidates.Count > 0 && !string.IsNullOrWhiteSpace(targetDate) && scopedExactCandidates.Count == 0)
         {
+            var adjacentExactCandidates = exactCandidates
+                .Where(candidate => ExactCandidateMatchesAdjacentDate(
+                    candidate,
+                    targetDate,
+                    targetMatchTime,
+                    matchTimeSelector))
+                .ToList();
+
+            if (adjacentExactCandidates.Count == 1)
+            {
+                rejectionReason = FixtureMatchRejectionReason.None;
+                return adjacentExactCandidates[0];
+            }
+
+            if (adjacentExactCandidates.Count > 1)
+            {
+                return SelectBestFixtureCandidate(
+                    adjacentExactCandidates,
+                    homeTeam,
+                    awayTeam,
+                    league,
+                    targetMatchTime,
+                    homeSelector,
+                    awaySelector,
+                    leagueSelector,
+                    matchTimeSelector,
+                    isLiveSelector,
+                    qualityScoreSelector,
+                    aliasLookup,
+                    out rejectionReason,
+                    out rejectionDetail);
+            }
+
             rejectionReason = FixtureMatchRejectionReason.DateMiss;
             rejectionDetail = $"exact pair exists outside target date {targetDate}";
         }
@@ -1952,6 +2045,49 @@ public partial class AnalyzerService
             DateTimeProvider.ConvertUtcToLocal(matchTime.Value).ToString("dd-MM-yyyy"),
             targetDate,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Accepts an exact home/away pair stamped on the adjacent local calendar day when kickoff
+    /// times are within <see cref="AdjacentDateKickoffTolerance"/> (WAT midnight / listing drift).
+    /// </summary>
+    private static bool ExactCandidateMatchesAdjacentDate<T>(
+        T candidate,
+        string? targetDate,
+        DateTime? targetMatchTime,
+        Func<T, DateTime?> matchTimeSelector)
+        where T : class
+    {
+        if (string.IsNullOrWhiteSpace(targetDate))
+        {
+            return false;
+        }
+
+        var matchTime = matchTimeSelector(candidate);
+        if (!matchTime.HasValue)
+        {
+            return false;
+        }
+
+        var targetLocalDate = DateTimeProvider.ParseLocalDateOrNull(targetDate);
+        if (!targetLocalDate.HasValue)
+        {
+            return false;
+        }
+
+        var candidateLocalDate = DateOnly.FromDateTime(DateTimeProvider.ConvertUtcToLocal(matchTime.Value));
+        if (Math.Abs(candidateLocalDate.DayNumber - targetLocalDate.Value.DayNumber) != 1)
+        {
+            return false;
+        }
+
+        if (!targetMatchTime.HasValue)
+        {
+            return true;
+        }
+
+        return Math.Abs((matchTime.Value - targetMatchTime.Value).TotalMinutes) <=
+               AdjacentDateKickoffTolerance.TotalMinutes;
     }
 
     private static List<T> ConsolidateFixtureSnapshots<T>(

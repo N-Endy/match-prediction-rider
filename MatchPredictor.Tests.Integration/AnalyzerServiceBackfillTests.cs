@@ -996,7 +996,7 @@ public class AnalyzerServiceBackfillTests
     private sealed class StubWebScraperService : IWebScraperService
     {
         public Task ScrapeMatchDataAsync() => Task.CompletedTask;
-        public Task<List<MatchScore>> ScrapeMatchScoresAsync() => Task.FromResult(new List<MatchScore>());
+        public Task<List<MatchScore>> ScrapeMatchScoresAsync(IEnumerable<DateOnly>? listingDates = null) => Task.FromResult(new List<MatchScore>());
         public Task<List<AiScoreMatchScore>> ScrapeAiScoreMatchScoresAsync() => Task.FromResult(new List<AiScoreMatchScore>());
         public Task<List<SofaScoreMatchScore>> ScrapeSofaScoreMatchScoresAsync(IEnumerable<SofaScoreFixtureRequest> fixtures) => Task.FromResult(new List<SofaScoreMatchScore>());
     }

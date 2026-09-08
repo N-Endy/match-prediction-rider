@@ -38,6 +38,7 @@ public partial class WebScraperService : IWebScraperService
     private const int DefaultSofaScoreMaxEventPagesPerRun = 24;
     private const int DefaultSofaScoreBrowserScrollRounds = 6;
     private const int DefaultSofaScoreBrowserListingPagesPerRun = 2;
+    private const int MaxFlashScoreListingPagesPerRun = 7;
     private static readonly ConcurrentDictionary<string, SofaScoreDiscoveryCacheEntry> SofaScoreEventUrlCache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object SofaScoreSitemapPoolGate = new();
     private static SofaScoreSitemapPoolCacheEntry? _sofaScoreSitemapPoolCache;
@@ -88,7 +89,7 @@ public partial class WebScraperService : IWebScraperService
         await _sportsAiExcelScraper.ScrapeMatchDataAsync();
     }
 
-    public async Task<List<MatchScore>> ScrapeMatchScoresAsync()
+    public async Task<List<MatchScore>> ScrapeMatchScoresAsync(IEnumerable<DateOnly>? listingDates = null)
     {
         EnsureBrowserScrapingEnabled("primary score scraping");
 
@@ -106,50 +107,73 @@ public partial class WebScraperService : IWebScraperService
 
         try
         {
+            var today = DateOnly.FromDateTime(DateTimeProvider.GetLocalTime());
+            var datesToScrape = (listingDates ?? [])
+                .Where(date => date != default)
+                .Distinct()
+                .OrderByDescending(date => date)
+                .Take(MaxFlashScoreListingPagesPerRun)
+                .ToList();
+            if (datesToScrape.Count == 0)
+            {
+                datesToScrape.Add(today);
+            }
+
             var scores = await RunWithChromeSessionAsync(
                 async driver =>
                 {
-                    var downloadUrl = _configuration["ScrapingValues:ScoresWebsite"] ??
-                                      throw new InvalidOperationException("Download URL for scores is not configured in appsettings.json");
-
-                    _logger.LogInformation("Checking URL for scores...");
+                    var baseUrl = _configuration["ScrapingValues:ScoresWebsite"] ??
+                                  throw new InvalidOperationException("Download URL for scores is not configured in appsettings.json");
 
                     var js = (IJavaScriptExecutor)driver;
                     js.ExecuteScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
 
-                    await driver.Navigate().GoToUrlAsync(downloadUrl);
-
-                    var pageSource = driver.PageSource;
-                    var title = driver.Title;
-                    if (LooksLikeSofaScoreChallengePage(pageSource, title))
+                    var allScores = new List<MatchScore>();
+                    foreach (var listingDate in datesToScrape)
                     {
-                        _logger.LogWarning("Primary scraper browser was blocked by a challenge page ('{Title}').", title);
-                        throw new WebDriverException($"Blocked by Cloudflare challenge page: {title}");
-                    }
+                        var dayOffset = listingDate.DayNumber - today.DayNumber;
+                        var listingUrl = BuildFlashScoreListingUrl(baseUrl, dayOffset);
+                        _logger.LogInformation(
+                            "Checking FlashScore listing for {ListingDate} (d={DayOffset}): {Url}",
+                            listingDate,
+                            dayOffset,
+                            listingUrl);
 
-                    _logger.LogInformation("Commencing scrapping for scores in inner HTML...");
+                        await driver.Navigate().GoToUrlAsync(listingUrl);
 
-                    var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(15));
-                    IWebElement container;
-                    try
-                    {
-                        container = wait.Until(d => d.FindElement(By.Id("score-data")));
-                    }
-                    catch (WebDriverTimeoutException)
-                    {
-                        pageSource = driver.PageSource;
-                        title = driver.Title;
+                        var pageSource = driver.PageSource;
+                        var title = driver.Title;
                         if (LooksLikeSofaScoreChallengePage(pageSource, title))
                         {
-                            _logger.LogWarning("Primary scraper browser was blocked by a challenge page ('{Title}') during wait.", title);
+                            _logger.LogWarning("Primary scraper browser was blocked by a challenge page ('{Title}').", title);
                             throw new WebDriverException($"Blocked by Cloudflare challenge page: {title}");
                         }
-                        throw;
+
+                        _logger.LogInformation("Commencing scrapping for scores in inner HTML...");
+
+                        var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(15));
+                        IWebElement container;
+                        try
+                        {
+                            container = wait.Until(d => d.FindElement(By.Id("score-data")));
+                        }
+                        catch (WebDriverTimeoutException)
+                        {
+                            pageSource = driver.PageSource;
+                            title = driver.Title;
+                            if (LooksLikeSofaScoreChallengePage(pageSource, title))
+                            {
+                                _logger.LogWarning("Primary scraper browser was blocked by a challenge page ('{Title}') during wait.", title);
+                                throw new WebDriverException($"Blocked by Cloudflare challenge page: {title}");
+                            }
+                            throw;
+                        }
+
+                        var rawHtml = container.GetAttribute("innerHTML");
+                        allScores.AddRange(ParseScoreDataHtml(rawHtml, listingDate));
                     }
 
-                    var rawHtml = container.GetAttribute("innerHTML");
-
-                    return ParseScoreDataHtml(rawHtml);
+                    return allScores;
                 },
                 configureOptions: ConfigurePrimaryScraperBrowserOptions,
                 purpose: "score scraping");
@@ -163,6 +187,17 @@ public partial class WebScraperService : IWebScraperService
             _logger.LogError(e, "❌ An error occurred while scraping match score.");
             throw;
         }
+    }
+
+    internal static string BuildFlashScoreListingUrl(string baseUrl, int dayOffset)
+    {
+        var trimmed = (baseUrl ?? string.Empty).TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            throw new ArgumentException("FlashScore base URL is required.", nameof(baseUrl));
+        }
+
+        return dayOffset == 0 ? trimmed : $"{trimmed}/?d={dayOffset}";
     }
 
     public async Task<List<AiScoreMatchScore>> ScrapeAiScoreMatchScoresAsync()
@@ -2002,7 +2037,7 @@ public partial class WebScraperService : IWebScraperService
     }
 
     
-    internal static List<MatchScore> ParseScoreDataHtml(string rawHtml)
+    internal static List<MatchScore> ParseScoreDataHtml(string rawHtml, DateOnly? listingDate = null)
     {
         var matchScores = new List<MatchScore>();
         if (string.IsNullOrWhiteSpace(rawHtml))
@@ -2032,7 +2067,7 @@ public partial class WebScraperService : IWebScraperService
                     var currentTime = node.InnerText.Trim();
                     var isLive = node.GetAttributeValue("class", "") == "live";
 
-                    // Look ahead for teams (text node) and score (a.fin or live score link)
+                    // Look ahead for teams (text node) and score link
                     string? teams = null;
                     string? score = null;
 
@@ -2040,41 +2075,50 @@ public partial class WebScraperService : IWebScraperService
                     {
                         var next = nodes[i + j];
 
-                        if (next.Name == "#text" && next.InnerText.Contains(" - "))
+                        if (next.Name == "#text")
                         {
-                            teams = HtmlEntity.DeEntitize(next.InnerText).Trim();
+                            var candidateTeams = HtmlEntity.DeEntitize(next.InnerText).Trim();
+                            if (TrySplitTeamPair(candidateTeams, out _, out _))
+                            {
+                                teams = candidateTeams;
+                            }
                         }
                         else if (next.Name == "a")
                         {
                             var anchorClass = next.GetAttributeValue("class", "");
-                            var isLiveAnchor = anchorClass == "live";
-                            // Accept both finished ("fin") and live scores
-                            if (anchorClass == "fin" || isLive || isLiveAnchor)
+                            if (string.Equals(anchorClass, "sched", StringComparison.OrdinalIgnoreCase))
                             {
-                                var rawString = HtmlEntity.DeEntitize(next.InnerText).Trim();
-                                var m = MyRegex().Match(rawString);
-                                if (m.Success)
+                                continue;
+                            }
+
+                            var rawString = HtmlEntity.DeEntitize(next.InnerText).Trim();
+                            if (rawString.Contains("Postponed", StringComparison.OrdinalIgnoreCase) ||
+                                rawString is "-" or "–" or "—")
+                            {
+                                continue;
+                            }
+
+                            var m = MyRegex().Match(rawString);
+                            if (m.Success)
+                            {
+                                // FlashScore mobile renders scores with a hyphen (e.g. "2-1");
+                                // also accepts "1-3aet" / "1-1 (Pen: 5-6)" via leading digits.
+                                // Normalize to the colon format the rest of the pipeline expects.
+                                score = $"{m.Groups["home"].Value}:{m.Groups["away"].Value}";
+                                if (string.Equals(anchorClass, "live", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    // FlashScore mobile renders scores with a hyphen (e.g. "2-1");
-                                    // normalize to the colon format the rest of the pipeline expects.
-                                    score = $"{m.Groups["home"].Value}:{m.Groups["away"].Value}";
-                                    if (isLiveAnchor)
-                                    {
-                                        isLive = true;
-                                    }
+                                    isLive = true;
                                 }
                             }
                         }
                     }
 
-                    if (!string.IsNullOrWhiteSpace(score) && !string.IsNullOrWhiteSpace(teams) && teams.Contains(" - "))
+                    if (!string.IsNullOrWhiteSpace(score) &&
+                        !string.IsNullOrWhiteSpace(teams) &&
+                        TrySplitTeamPair(teams, out var home, out var away))
                     {
-                        var split = teams.Split(" - ");
-                        var home = split[0].Trim();
-                        var away = split[1].Trim();
-
                         DateTime matchTime;
-                        try { matchTime = ParseScoreMatchTime(currentTime, isLive); }
+                        try { matchTime = ParseScoreMatchTime(currentTime, isLive, listingDate); }
                         catch { matchTime = DateTime.UtcNow; } // Live matches may not expose a kickoff time in the listing
 
                         matchScores.Add(new MatchScore
@@ -2097,6 +2141,43 @@ public partial class WebScraperService : IWebScraperService
         return matchScores;
     }
 
+    /// <summary>
+    /// Splits FlashScore team text on the last hyphen that has whitespace on at least one side,
+    /// so "Getafe- Celta Vigo" and "Home - Away" work while "Weston-super-Mare - AFC Totton"
+    /// still splits on the spaced separator.
+    /// </summary>
+    internal static bool TrySplitTeamPair(string? teamsText, out string home, out string away)
+    {
+        home = string.Empty;
+        away = string.Empty;
+        if (string.IsNullOrWhiteSpace(teamsText))
+        {
+            return false;
+        }
+
+        var text = teamsText.Trim();
+        for (var i = text.Length - 1; i >= 0; i--)
+        {
+            if (text[i] != '-')
+            {
+                continue;
+            }
+
+            var leftSpace = i > 0 && char.IsWhiteSpace(text[i - 1]);
+            var rightSpace = i + 1 < text.Length && char.IsWhiteSpace(text[i + 1]);
+            if (!leftSpace && !rightSpace)
+            {
+                continue;
+            }
+
+            home = text[..i].Trim();
+            away = text[(i + 1)..].Trim();
+            return home.Length > 0 && away.Length > 0;
+        }
+
+        return false;
+    }
+
     private static bool IsBtts(string score)
     {
         var parts = score.Split(":"); // Split "2:1" into ["2", "1"]
@@ -2106,7 +2187,7 @@ public partial class WebScraperService : IWebScraperService
                h > 0 && a > 0; // Check that both teams scored
     }
     
-    private static DateTime ParseScoreMatchTime(string rawTime, bool isLive)
+    internal static DateTime ParseScoreMatchTime(string rawTime, bool isLive, DateOnly? listingDate = null)
     {
         if (isLive)
         {
@@ -2114,14 +2195,18 @@ public partial class WebScraperService : IWebScraperService
         }
 
         var nowLocal = DateTimeProvider.GetLocalTime();
+        var today = DateOnly.FromDateTime(nowLocal);
+        var listing = listingDate ?? today;
         var extractedTime = ExtractClockTime(rawTime);
         var parsedLocal = DateTime.ParseExact(
-            $"{nowLocal:dd-MM-yyyy} {extractedTime}",
-            "dd-MM-yyyy HH:mm",
-            CultureInfo.InvariantCulture);
+            $"{listing:dd-MM-yyyy} {extractedTime}",
+            ["dd-MM-yyyy HH:mm", "dd-MM-yyyy H:mm"],
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None);
 
-        // FlashScore's mobile summary mixes prior-day finished rows with today's slate.
-        if (parsedLocal > nowLocal.AddHours(2))
+        // Today's mixed summary may still include prior-day finished rows; dated ?d=N pages
+        // must keep the listing calendar day.
+        if (listing == today && parsedLocal > nowLocal.AddHours(2))
         {
             parsedLocal = parsedLocal.AddDays(-1);
         }
