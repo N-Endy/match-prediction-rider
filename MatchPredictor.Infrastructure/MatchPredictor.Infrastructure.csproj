@@ -32,4 +32,8 @@
       <Folder Include="Persistence\Migrations\" />
     </ItemGroup>
 
+    <ItemGroup>
+      <InternalsVisibleTo Include="MatchPredictor.Tests.Integration" />
+    </ItemGroup>
+
 </Project>

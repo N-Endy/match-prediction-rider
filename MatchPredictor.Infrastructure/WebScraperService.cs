@@ -4,6 +4,7 @@ using HtmlAgilityPack;
 using Jint;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OpenQA.Selenium;
@@ -14,6 +15,7 @@ namespace MatchPredictor.Infrastructure;
 
 public partial class WebScraperService : IWebScraperService
 {
+    private const int MaxFlashScoreListingPagesPerRun = 7;
     private readonly string _downloadFolder;
     private readonly IConfiguration _configuration;
     private readonly ILogger<WebScraperService> _logger;
@@ -86,111 +88,202 @@ public partial class WebScraperService : IWebScraperService
         }
     }
 
-    public async Task<List<MatchScore>> ScrapeMatchScoresAsync()
+    public async Task<List<MatchScore>> ScrapeMatchScoresAsync(IEnumerable<DateOnly>? listingDates = null)
     {
         try
         {
             var chromeOptions = GetChromeOptions();
+            var baseUrl = _configuration["ScrapingValues:ScoresWebsite"] ??
+                          throw new InvalidOperationException("Download URL for scores is not configured in appsettings.json");
 
-            var downloadUrl = _configuration["ScrapingValues:ScoresWebsite"] ?? 
-                              throw new InvalidOperationException("Download URL for scores is not configured in appsettings.json");
-            
-            using var driver = new ChromeDriver(chromeOptions);
-            _logger.LogInformation("Checking URL for scores...");
-            await driver.Navigate().GoToUrlAsync(downloadUrl);
-            
-            _logger.LogInformation("Commencing scrapping for scores in inner HTML...");
-            
-            // Wait for dynamic content to render
-            await Task.Delay(3000);
-            
-            var container = driver.FindElement(By.Id("score-data"));
-            var rawHtml = container.GetAttribute("innerHTML");
-
-            var doc = new HtmlDocument();
-            doc.LoadHtml($"<div>{rawHtml}</div>");
-
-            var currentLeague = "";
-
-            // Use direct ChildNodes — NOT recursive Nodes() which flattens the tree
-            var nodes = doc.DocumentNode.FirstChild.ChildNodes.ToList();
-            
-          var matchScores = new List<MatchScore>();
-
-            for (var i = 0; i < nodes.Count; i++)
+            var today = DateOnly.FromDateTime(DateTimeProvider.GetLocalTime());
+            var datesToScrape = (listingDates ?? [])
+                .Where(date => date != default)
+                .Distinct()
+                .OrderByDescending(date => date)
+                .Take(MaxFlashScoreListingPagesPerRun)
+                .ToList();
+            if (datesToScrape.Count == 0)
             {
-                var node = nodes[i];
-
-                switch (node.Name)
-                {
-                    case "h4":
-                        currentLeague = node.InnerText.Split("Standings")[0].Trim();
-                        break;
-                    case "span":
-                    {
-                        var currentTime = node.InnerText.Trim();
-                        var isLive = node.GetAttributeValue("class", "") == "live";
-
-                        // Look ahead for teams (text node) and score (a.fin or live score link)
-                        string? teams = null;
-                        string? score = null;
-
-                        for (var j = 1; j <= 4 && i + j < nodes.Count; j++)
-                        {
-                            var next = nodes[i + j];
-                            
-                            if (next.Name == "#text" && next.InnerText.Contains(" - "))
-                            {
-                                teams = next.InnerText.Trim();
-                            }
-                            else if (next.Name == "a")
-                            {
-                                var cls = next.GetAttributeValue("class", "");
-                                // Accept both finished ("fin") and live scores
-                                if (cls == "fin" || isLive || cls == "")
-                                {
-                                    var rawString = next.InnerText.Trim();
-                                    var m = MyRegex().Match(rawString);
-                                    if (m.Success)
-                                        score = m.Value;
-                                }
-                            }
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(score) && !string.IsNullOrWhiteSpace(teams) && teams.Contains(" - "))
-                        {
-                            var split = teams.Split(" - ");
-                            var home = split[0].Trim();
-                            var away = split[1].Trim();
-
-                            DateTime matchTime;
-                            try { matchTime = ParseTime(currentTime); }
-                            catch { matchTime = DateTime.UtcNow; } // Live matches may not have a parseable time
-                            
-                            matchScores.Add(new MatchScore
-                            {
-                                League = currentLeague,
-                                HomeTeam = home,
-                                AwayTeam = away,
-                                Score = score,
-                                MatchTime = matchTime,
-                                BTTSLabel = IsBtts(score),
-                                IsLive = isLive
-                            });
-                        }
-
-                        break;
-                    }
-                }
+                datesToScrape.Add(today);
             }
-            
-            return matchScores;
+
+            using var driver = new ChromeDriver(chromeOptions);
+            var allScores = new List<MatchScore>();
+
+            foreach (var listingDate in datesToScrape)
+            {
+                var dayOffset = listingDate.DayNumber - today.DayNumber;
+                var listingUrl = BuildFlashScoreListingUrl(baseUrl, dayOffset);
+                _logger.LogInformation(
+                    "Checking FlashScore listing for {ListingDate} (d={DayOffset}): {Url}",
+                    listingDate,
+                    dayOffset,
+                    listingUrl);
+
+                await driver.Navigate().GoToUrlAsync(listingUrl);
+                await Task.Delay(3000);
+
+                _logger.LogInformation("Commencing scrapping for scores in inner HTML...");
+                var container = driver.FindElement(By.Id("score-data"));
+                var rawHtml = container.GetAttribute("innerHTML");
+                allScores.AddRange(ParseScoreDataHtml(rawHtml, listingDate));
+            }
+
+            return allScores;
         }
         catch (Exception e)
         {
             _logger.LogError(e, "❌ An error occurred while scraping match score.");
             throw;
         }
+    }
+
+    internal static string BuildFlashScoreListingUrl(string baseUrl, int dayOffset)
+    {
+        var trimmed = (baseUrl ?? string.Empty).TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            throw new ArgumentException("FlashScore base URL is required.", nameof(baseUrl));
+        }
+
+        return dayOffset == 0 ? trimmed : $"{trimmed}/?d={dayOffset}";
+    }
+
+    internal static List<MatchScore> ParseScoreDataHtml(string rawHtml, DateOnly? listingDate = null)
+    {
+        var matchScores = new List<MatchScore>();
+        if (string.IsNullOrWhiteSpace(rawHtml))
+        {
+            return matchScores;
+        }
+
+        var doc = new HtmlDocument();
+        doc.LoadHtml($"<div>{rawHtml}</div>");
+
+        var currentLeague = "";
+        var nodes = doc.DocumentNode.FirstChild.ChildNodes.ToList();
+
+        for (var i = 0; i < nodes.Count; i++)
+        {
+            var node = nodes[i];
+
+            switch (node.Name)
+            {
+                case "h4":
+                    currentLeague = node.InnerText.Split("Standings")[0].Trim();
+                    break;
+                case "span":
+                {
+                    var currentTime = node.InnerText.Trim();
+                    var isLive = node.GetAttributeValue("class", "") == "live";
+
+                    string? teams = null;
+                    string? score = null;
+
+                    for (var j = 1; j <= 4 && i + j < nodes.Count; j++)
+                    {
+                        var next = nodes[i + j];
+
+                        if (next.Name == "#text")
+                        {
+                            var candidateTeams = HtmlEntity.DeEntitize(next.InnerText).Trim();
+                            if (TrySplitTeamPair(candidateTeams, out _, out _))
+                            {
+                                teams = candidateTeams;
+                            }
+                        }
+                        else if (next.Name == "a")
+                        {
+                            var anchorClass = next.GetAttributeValue("class", "");
+                            if (string.Equals(anchorClass, "sched", StringComparison.OrdinalIgnoreCase))
+                            {
+                                continue;
+                            }
+
+                            var rawString = HtmlEntity.DeEntitize(next.InnerText).Trim();
+                            if (rawString.Contains("Postponed", StringComparison.OrdinalIgnoreCase) ||
+                                rawString is "-" or "–" or "—")
+                            {
+                                continue;
+                            }
+
+                            var m = MyRegex().Match(rawString);
+                            if (m.Success)
+                            {
+                                // FlashScore mobile uses hyphen scores ("2-1"); normalize to colon.
+                                score = $"{m.Groups["home"].Value}:{m.Groups["away"].Value}";
+                                if (string.Equals(anchorClass, "live", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    isLive = true;
+                                }
+                            }
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(score) &&
+                        !string.IsNullOrWhiteSpace(teams) &&
+                        TrySplitTeamPair(teams, out var home, out var away))
+                    {
+                        DateTime matchTime;
+                        try { matchTime = ParseScoreMatchTime(currentTime, isLive, listingDate); }
+                        catch { matchTime = DateTime.UtcNow; }
+
+                        matchScores.Add(new MatchScore
+                        {
+                            League = currentLeague,
+                            HomeTeam = home,
+                            AwayTeam = away,
+                            Score = score,
+                            MatchTime = matchTime,
+                            BTTSLabel = IsBtts(score),
+                            IsLive = isLive
+                        });
+                    }
+
+                    break;
+                }
+            }
+        }
+
+        return matchScores;
+    }
+
+    /// <summary>
+    /// Splits FlashScore team text on the last hyphen that has whitespace on at least one side,
+    /// so "Getafe- Celta Vigo" and "Home - Away" work while "Weston-super-Mare - AFC Totton"
+    /// still splits on the spaced separator.
+    /// </summary>
+    internal static bool TrySplitTeamPair(string? teamsText, out string home, out string away)
+    {
+        home = string.Empty;
+        away = string.Empty;
+        if (string.IsNullOrWhiteSpace(teamsText))
+        {
+            return false;
+        }
+
+        var text = teamsText.Trim();
+        for (var i = text.Length - 1; i >= 0; i--)
+        {
+            if (text[i] != '-')
+            {
+                continue;
+            }
+
+            var leftSpace = i > 0 && char.IsWhiteSpace(text[i - 1]);
+            var rightSpace = i + 1 < text.Length && char.IsWhiteSpace(text[i + 1]);
+            if (!leftSpace && !rightSpace)
+            {
+                continue;
+            }
+
+            home = text[..i].Trim();
+            away = text[(i + 1)..].Trim();
+            return home.Length > 0 && away.Length > 0;
+        }
+
+        return false;
     }
 
     public async Task<List<AiScoreMatchScore>> ScrapeAiScoreMatchScoresAsync()
@@ -776,16 +869,50 @@ public partial class WebScraperService : IWebScraperService
                int.TryParse(parts[1], out var a) && // Convert "1" to integer a = 1
                h > 0 && a > 0; // Check that both teams scored
     }
-    
-    private DateTime ParseTime(string time)
+
+    internal static DateTime ParseScoreMatchTime(string rawTime, bool isLive, DateOnly? listingDate = null)
     {
-        var today = DateTime.UtcNow.Date;
-        var parsed = DateTime.ParseExact($"{today:dd-MM-yyyy} {time}", "dd-MM-yyyy HH:mm", CultureInfo.InvariantCulture);
-        return DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
+        if (isLive)
+        {
+            return DateTime.UtcNow;
+        }
+
+        var nowLocal = DateTimeProvider.GetLocalTime();
+        var today = DateOnly.FromDateTime(nowLocal);
+        var listing = listingDate ?? today;
+        var extractedTime = ExtractClockTime(rawTime);
+        var parsedLocal = DateTime.ParseExact(
+            $"{listing:dd-MM-yyyy} {extractedTime}",
+            ["dd-MM-yyyy HH:mm", "dd-MM-yyyy H:mm"],
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None);
+
+        // Today's mixed summary may still include prior-day finished rows; dated ?d=N pages
+        // must keep the listing calendar day.
+        if (listing == today && parsedLocal > nowLocal.AddHours(2))
+        {
+            parsedLocal = parsedLocal.AddDays(-1);
+        }
+
+        return DateTimeProvider.ConvertLocalToUtc(parsedLocal);
     }
 
-    [GeneratedRegex(@"^\d{1,2}:\d{1,2}")]
+    private static string ExtractClockTime(string rawTime)
+    {
+        var match = ClockRegex().Match(rawTime ?? string.Empty);
+        if (!match.Success)
+        {
+            throw new FormatException($"Could not extract a kickoff time from '{rawTime}'.");
+        }
+
+        return match.Value;
+    }
+
+    [GeneratedRegex(@"^(?<home>\d{1,2})\s*[-:]\s*(?<away>\d{1,2})")]
     private static partial Regex MyRegex();
+
+    [GeneratedRegex(@"\d{1,2}:\d{2}")]
+    private static partial Regex ClockRegex();
     
     private static void SetHeadlessViewport(ChromeOptions options)
     {
