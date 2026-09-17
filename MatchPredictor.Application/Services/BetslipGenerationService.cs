@@ -18,7 +18,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
     public const int BankerSlipNumber = 0;
     public const string BankerTierLabel = "Banker (5-10x)";
     public const int RolloverSlipNumber = 10;
-    public const string RolloverTierLabel = "Rollover (1.20-1.50x)";
+    public const string RolloverTierLabel = "Rollover (1.30-1.50x)";
     public const string DrawsTierLabel = "AI Draws (5)";
 
     private static readonly string[] MainCategories =

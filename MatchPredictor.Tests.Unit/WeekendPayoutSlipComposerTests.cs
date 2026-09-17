@@ -183,7 +183,7 @@ public class WeekendPayoutSlipComposerTests
     public void BetslipSettings_DefaultsRolloverOddsBandToOneTwentyThroughOneFifty()
     {
         var settings = new BetslipSettings();
-        Assert.Equal(1.20, settings.RolloverMinOdds);
+        Assert.Equal(1.30, settings.RolloverMinOdds);
         Assert.Equal(1.50, settings.RolloverMaxOdds);
         Assert.Equal(1.15, settings.RolloverFallbackMinOdds);
         Assert.Equal(1.80, settings.RolloverFallbackMaxOdds);

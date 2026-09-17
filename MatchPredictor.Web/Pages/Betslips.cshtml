@@ -79,11 +79,16 @@
         }
     }
 
+    @{
+        var recordTabDate = Model.HasRecordDateSelection ? Model.RecordDate : (DateOnly?)null;
+        var recordTabMonth = recordTabDate is null ? Model.CalendarMonth : (DateOnly?)null;
+    }
     <section class="mp-betslip-records"
              aria-labelledby="betslip-records-heading"
              data-betslip-records
              data-record-section="@Model.RecordSectionSlug"
-             data-record-month="@Model.CalendarMonth.ToString("yyyy-MM")">
+             data-record-month="@Model.CalendarMonth.ToString("yyyy-MM")"
+             data-record-date="@(Model.HasRecordDateSelection ? Model.RecordDate.ToString("yyyy-MM-dd") : "")">
         <header class="mp-betslip-records-header">
             <h2 id="betslip-records-heading" class="mp-betslip-records-title">
                 <i class="fa-regular fa-calendar" aria-hidden="true"></i>
@@ -92,16 +97,16 @@
             <nav class="mp-betslip-record-tabs" aria-label="Betslip type">
                 <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.Rollover ? "active" : "")"
                    data-record-section="rollover"
-                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Rollover)">Rollover</a>
+                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Rollover, recordTabDate, recordTabMonth)">Rollover</a>
                 <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.Banker ? "active" : "")"
                    data-record-section="banker"
-                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Banker)">Banker</a>
+                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Banker, recordTabDate, recordTabMonth)">Banker</a>
                 <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.Ladder ? "active" : "")"
                    data-record-section="ladder"
-                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Ladder)">Ladder</a>
+                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Ladder, recordTabDate, recordTabMonth)">Ladder</a>
                 <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.AiDraws ? "active" : "")"
                    data-record-section="draws"
-                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.AiDraws)">AI Draws</a>
+                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.AiDraws, recordTabDate, recordTabMonth)">AI Draws</a>
             </nav>
         </header>
 
@@ -127,6 +132,9 @@
             const emptyResults = '<p class="mp-betslip-records-empty">Pick a highlighted date to see booked slips.</p>';
             let section = root.getAttribute('data-record-section') || 'banker';
             let month = root.getAttribute('data-record-month') || '';
+            let selectedDate = root.getAttribute('data-record-date')
+                || new URL(window.location.href).searchParams.get('date')
+                || null;
 
             function bindCopyButtons(scope) {
                 (scope || document).querySelectorAll('[data-copy-target]').forEach(button => {
@@ -150,6 +158,21 @@
                 });
             }
 
+            function updateTabHrefs(nextSection, nextMonth, nextDate) {
+                root.querySelectorAll('.mp-tab-btn[data-record-section]').forEach(tab => {
+                    const tabSection = tab.getAttribute('data-record-section');
+                    if (!tabSection) return;
+                    const url = new URL('/betslips', window.location.origin);
+                    url.searchParams.set('record', tabSection);
+                    if (nextDate) {
+                        url.searchParams.set('date', nextDate);
+                    } else if (nextMonth) {
+                        url.searchParams.set('month', nextMonth);
+                    }
+                    tab.setAttribute('href', url.pathname + url.search);
+                });
+            }
+
             function updateUrl(nextSection, nextMonth, nextDate) {
                 const url = new URL(window.location.href);
                 url.searchParams.set('record', nextSection);
@@ -165,6 +188,7 @@
                     }
                 }
                 history.replaceState({}, '', url);
+                updateTabHrefs(nextSection, nextMonth, nextDate);
             }
 
             function setSelectedDate(date) {
@@ -180,6 +204,10 @@
             }
 
             async function loadDay(date) {
+                selectedDate = date;
+                month = date.slice(0, 7);
+                root.setAttribute('data-record-date', date);
+                root.setAttribute('data-record-month', month);
                 resultsHost.innerHTML = await fetchHtml(
                     `/betslips?handler=RecordDay&record=${encodeURIComponent(section)}&date=${encodeURIComponent(date)}`);
                 setSelectedDate(date);
@@ -190,8 +218,10 @@
             async function loadCalendar(nextSection, nextMonth) {
                 section = nextSection;
                 month = nextMonth;
+                selectedDate = null;
                 root.setAttribute('data-record-section', section);
                 root.setAttribute('data-record-month', month);
+                root.setAttribute('data-record-date', '');
                 calendarHost.innerHTML = await fetchHtml(
                     `/betslips?handler=RecordCalendar&record=${encodeURIComponent(section)}&month=${encodeURIComponent(month)}`);
                 bindCalendar();
@@ -201,26 +231,15 @@
             async function loadSection(nextSection) {
                 section = nextSection;
                 root.setAttribute('data-record-section', section);
-                let latestDate = null;
-                try {
-                    const latestResponse = await fetch(
-                        `/betslips?handler=LatestRecordDate&record=${encodeURIComponent(section)}`,
-                        { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
-                    if (latestResponse.ok) {
-                        const payload = await latestResponse.json();
-                        latestDate = payload?.date || null;
-                    }
-                } catch {
-                    latestDate = null;
-                }
 
-                if (latestDate) {
-                    month = latestDate.slice(0, 7);
+                if (selectedDate) {
+                    month = selectedDate.slice(0, 7);
                     root.setAttribute('data-record-month', month);
+                    root.setAttribute('data-record-date', selectedDate);
                     calendarHost.innerHTML = await fetchHtml(
-                        `/betslips?handler=RecordCalendar&record=${encodeURIComponent(section)}&month=${encodeURIComponent(month)}&date=${encodeURIComponent(latestDate)}`);
+                        `/betslips?handler=RecordCalendar&record=${encodeURIComponent(section)}&month=${encodeURIComponent(month)}&date=${encodeURIComponent(selectedDate)}`);
                     bindCalendar();
-                    await loadDay(latestDate);
+                    await loadDay(selectedDate);
                     return;
                 }
 
@@ -252,7 +271,7 @@
                 });
             }
 
-            root.querySelectorAll('[data-record-section]').forEach(tab => {
+            root.querySelectorAll('.mp-tab-btn[data-record-section]').forEach(tab => {
                 tab.addEventListener('click', async event => {
                     event.preventDefault();
                     const nextSection = tab.getAttribute('data-record-section');
@@ -265,6 +284,7 @@
 
             bindCalendar();
             bindCopyButtons(document);
+            updateTabHrefs(section, month, selectedDate);
         })();
     </script>
 }

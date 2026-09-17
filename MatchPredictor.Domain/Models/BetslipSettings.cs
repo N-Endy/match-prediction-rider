@@ -30,7 +30,7 @@ public class BetslipSettings
     /// <summary>How many live-quoted picks are sent to the AI screener per request.</summary>
     public int ScreenBatchSize { get; set; } = 25;
 
-    public double RolloverMinOdds { get; set; } = 1.20;
+    public double RolloverMinOdds { get; set; } = 1.30;
     public double RolloverMaxOdds { get; set; } = 1.50;
     public double RolloverFallbackMinOdds { get; set; } = 1.15;
     public double RolloverFallbackMaxOdds { get; set; } = 1.80;

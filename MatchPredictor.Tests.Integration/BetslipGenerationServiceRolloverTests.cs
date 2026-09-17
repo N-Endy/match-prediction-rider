@@ -126,8 +126,8 @@ public class BetslipGenerationServiceRolloverTests
         var rolloverPick = Assert.Single(rollover.Selections);
         Assert.Equal("BTTS", rolloverPick.Market);
         Assert.Equal("roll-fx-1", predictions.Single(p => p.Id == rolloverPick.PredictionId).FixtureKey);
-        Assert.InRange(rolloverPick.DecimalOdds ?? 0d, 1.20, 1.50);
-        Assert.InRange(rollover.CombinedDecimalOdds ?? 0d, 1.20, 1.50);
+        Assert.InRange(rolloverPick.DecimalOdds ?? 0d, 1.30, 1.50);
+        Assert.InRange(rollover.CombinedDecimalOdds ?? 0d, 1.30, 1.50);
         Assert.Contains("stack-it-all", rollover.AiSummary, StringComparison.OrdinalIgnoreCase);
 
         var banker = Assert.Single(set.Slips, BetslipGenerationService.IsBankerSlip);
@@ -159,7 +159,7 @@ public class BetslipGenerationServiceRolloverTests
         var predictions = new List<Prediction>();
         var nextId = 1;
 
-        // 1.55 is outside primary 1.20-1.50 but inside fallback 1.15-1.80.
+        // 1.55 is outside primary 1.30-1.50 but inside fallback 1.15-1.80.
         AddBtts(
             predictions,
             fixtures,
@@ -287,7 +287,7 @@ public class BetslipGenerationServiceRolloverTests
             "AwayA",
             "roll-a",
             confidence: 0.85m,
-            bttsOdds: 1.25);
+            bttsOdds: 1.32);
 
         AddBtts(
             predictions,
@@ -364,7 +364,7 @@ public class BetslipGenerationServiceRolloverTests
             BankerFallbackMaxOdds = 12.0,
             BankerMaxPicks = 8,
             LadderMinimumEdge = 0.01,
-            RolloverMinOdds = 1.20,
+            RolloverMinOdds = 1.30,
             RolloverMaxOdds = 1.50,
             RolloverFallbackMinOdds = 1.15,
             RolloverFallbackMaxOdds = 1.80,
