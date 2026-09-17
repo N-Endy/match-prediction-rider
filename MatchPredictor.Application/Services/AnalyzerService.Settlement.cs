@@ -719,13 +719,25 @@ public partial class AnalyzerService
             .Where(p => string.IsNullOrEmpty(p.ActualScore))
             .ToList();
 
+        var matchRate = eligiblePredictionsForSettlement.Count > 0
+            ? matchedCount / (double)eligiblePredictionsForSettlement.Count
+            : 0d;
+        var matchPercentage = (int)Math.Round(matchRate * 100d);
+
         _logger.LogInformation(
             "📊 Score matching summary: {Matched}/{Total} predictions matched ({Percentage}%) in the {LookbackDays}-day settlement window, {Unmatched} unmatched.",
             matchedCount,
             eligiblePredictionsForSettlement.Count,
-            eligiblePredictionsForSettlement.Count > 0 ? (matchedCount * 100 / eligiblePredictionsForSettlement.Count) : 0,
+            matchPercentage,
             lookbackDays,
             unmatchedPredictions.Count);
+
+        var rejectionHistogram = unmatchedDiagnostics.Values
+            .GroupBy(diagnostic => TeamAliasMatchHelper.FormatRejectionReason(diagnostic.Reason))
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group => $"{group.Key}={group.Count()}")
+            .ToList();
 
         if (unmatchedPredictions.Count > 0)
         {
@@ -748,6 +760,16 @@ public partial class AnalyzerService
                     unmatchedPredictions.Count - 15);
             }
         }
+
+        _dbContext.ScrapingLogs.Add(new ScrapingLog
+        {
+            EventName = ScrapingEventNames.SettlementMatchRate,
+            Timestamp = DateTime.UtcNow,
+            Status = matchRate >= 0.7d ? "Success" : matchRate >= 0.4d ? "Degraded" : "Failed",
+            Message =
+                $"matchRate={matchRate:P0}; matched={matchedCount}; total={eligiblePredictionsForSettlement.Count}; unmatched={unmatchedPredictions.Count}; lookbackDays={lookbackDays}" +
+                (rejectionHistogram.Count > 0 ? $"; reasons={string.Join(',', rejectionHistogram)}" : string.Empty)
+        });
 
         _logger.LogInformation(
             "✅ Predictions updated successfully for the {RunLabel} window.",

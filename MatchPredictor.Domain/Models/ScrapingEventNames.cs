@@ -17,6 +17,9 @@ public static class ScrapingEventNames
     public const string ScoreUpdateRecent = "score_update_recent";
     public const string ScoreUpdateBackfill = "score_update_backfill";
     public const string BetslipGeneration = "betslip_generation";
+    public const string BetslipMatchRate = "betslip_match_rate";
+    public const string SettlementMatchRate = "settlement_match_rate";
+    public const string ExcelFeedQuality = "excel-feed-quality";
 
     public static string ScoreUpdate(string? runLabel) =>
         $"score_update_{(string.IsNullOrWhiteSpace(runLabel) ? "recent" : runLabel.Trim().ToLowerInvariant())}";

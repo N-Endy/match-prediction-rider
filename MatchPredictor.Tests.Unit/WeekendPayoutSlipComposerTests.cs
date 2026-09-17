@@ -191,6 +191,13 @@ public class WeekendPayoutSlipComposerTests
     }
 
     [Fact]
+    public void BetslipSettings_DefaultsOmitLadderLastResortToTrue()
+    {
+        Assert.True(new BetslipSettings().OmitLadderLastResort);
+        Assert.Equal(40d, new BetslipSettings().ScreenMinScore);
+    }
+
+    [Fact]
     public void BetslipSettings_DefaultsLadderLastResortBandToTenThroughOneFifty()
     {
         var settings = new BetslipSettings();

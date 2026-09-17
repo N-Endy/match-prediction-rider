@@ -33,7 +33,9 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
     private readonly ISportyBetBookingService _bookingService;
     private readonly ISourceMarketPricingService _pricingService;
     private readonly IAiAdvisorService _aiAdvisorService;
+    private readonly ITeamResolutionService? _teamResolutionService;
     private readonly BetslipSettings _settings;
+    private readonly PredictionSettings _predictionSettings;
     private readonly double _minimumEdge;
     private readonly double _ladderMinimumEdge;
     private readonly ILogger<BetslipGenerationService> _logger;
@@ -45,15 +47,18 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         IAiAdvisorService aiAdvisorService,
         IOptions<BetslipSettings> options,
         ILogger<BetslipGenerationService> logger,
-        IOptions<PredictionSettings>? predictionOptions = null)
+        IOptions<PredictionSettings>? predictionOptions = null,
+        ITeamResolutionService? teamResolutionService = null)
     {
         _dbContext = dbContext;
         _bookingService = bookingService;
         _pricingService = pricingService;
         _aiAdvisorService = aiAdvisorService;
+        _teamResolutionService = teamResolutionService;
         _settings = options.Value;
+        _predictionSettings = predictionOptions?.Value ?? new PredictionSettings();
         _logger = logger;
-        _minimumEdge = predictionOptions?.Value.ValueBetMinimumEdge ?? 0.03;
+        _minimumEdge = _predictionSettings.ValueBetMinimumEdge;
         _ladderMinimumEdge = Math.Clamp(_settings.LadderMinimumEdge, 0d, 1d);
     }
 
@@ -73,6 +78,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         {
             var kickoffCutoff = nowUtc.AddMinutes(settings.MinMinutesBeforeKickoff);
             var predictions = await LoadTodayPredictionsAsync(today, kickoffCutoff);
+            predictions = await FilterSuppressedCategoriesAsync(predictions);
 
             _logger.LogInformation(
                 "Betslip generation started for {Date} ({DayKind}/{RunLabel}): {PredictionCount} published predictions past kickoff cutoff ({CutoffMinutes} min).",
@@ -93,7 +99,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 _logger.LogWarning(ex, "Live SportyBet pricing unavailable; banker and ladder slips will be skipped.");
             }
 
-            var universe = BuildLiveQuotedUniverse(predictions, sourceFixtures);
+            var universe = await BuildLiveQuotedUniverseAsync(predictions, sourceFixtures);
             var (ranked, aiPassedCount) = await ScreenLiveQuotedUniverseAsync(universe);
             var mainPool = CollapseOnePerFixture(
                 ranked.Where(p => MainCategories.Contains(p.Candidate.PredictionCategory)).ToList());
@@ -156,12 +162,16 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
             var freshLadderKeys = new HashSet<string>(usedFixtureKeys, StringComparer.OrdinalIgnoreCase);
             UnionFixtureKeys(freshLadderKeys, morningLadderFixtures);
-            var ladderPassers = ExcludeUsedFixtures(
+            var             ladderPassers = ExcludeUsedFixtures(
                 FilterByCategory(mainPool, MainCategories),
                 freshLadderKeys);
+            if (_ladderMinimumEdge > 0d)
+            {
+                ladderPassers = FilterByMinimumEdge(ladderPassers, _ladderMinimumEdge);
+            }
 
             _logger.LogInformation(
-                "Ladder pool after exclusivity: {PoolCount} live-quoted picks ({RemovedCount} removed).",
+                "Ladder pool after exclusivity and edge gate: {PoolCount} live-quoted picks ({RemovedCount} removed from main).",
                 ladderPassers.Count,
                 FilterByCategory(mainPool, MainCategories).Count - ladderPassers.Count);
 
@@ -182,6 +192,11 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                     reusePassers = ExcludeUsedFixtures(
                         FilterByCategory(mainPool, MainCategories),
                         usedFixtureKeys);
+                }
+
+                if (_ladderMinimumEdge > 0d)
+                {
+                    reusePassers = FilterByMinimumEdge(reusePassers, _ladderMinimumEdge);
                 }
 
                 ladderSlips = await ComposeLadderWithResilienceAsync(reusePassers, bands, settings);
@@ -250,6 +265,15 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             foreach (var slip in composed.Where(s => s.Selections.Count > 0))
             {
                 var entity = await BookAndBuildSlipAsync(slip, settings);
+                if (entity is null)
+                {
+                    _logger.LogInformation(
+                        "Dropped slip {SlipNumber} '{Title}' after booking left the advertised odds band.",
+                        slip.SlipNumber,
+                        slip.Title);
+                    continue;
+                }
+
                 betslipSet.Slips.Add(entity);
 
                 var bookedCount = entity.Selections.Count(s => s.WasBooked);
@@ -299,6 +323,36 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             await LogStatusAsync("Failed", ex.Message);
             throw;
         }
+    }
+
+    private async Task<List<Prediction>> FilterSuppressedCategoriesAsync(List<Prediction> predictions)
+    {
+        if (predictions.Count == 0)
+        {
+            return predictions;
+        }
+
+        var suppressed = await PublishedMarketSuppressor.EvaluateAsync(_dbContext, _predictionSettings);
+        if (suppressed.Count == 0)
+        {
+            return predictions;
+        }
+
+        var kept = predictions
+            .Where(prediction => !suppressed.ContainsKey(prediction.PredictionCategory))
+            .ToList();
+
+        foreach (var entry in suppressed.Values)
+        {
+            _logger.LogWarning(
+                "Betslip soft-suppress for {Category}: {Reason} (settled={Settled}, clvSamples={ClvSamples}).",
+                entry.Category,
+                entry.Reason,
+                entry.SettledCount,
+                entry.ClvSampleCount);
+        }
+
+        return kept;
     }
 
     private async Task<List<Prediction>> LoadTodayPredictionsAsync(DateOnly today, DateTime kickoffCutoffUtc)
@@ -464,7 +518,9 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         {
             SlipNumber = RolloverSlipNumber,
             Title = "Rollover",
-            TierLabel = RolloverTierLabel,
+            TierLabel = usedFallback
+                ? $"Rollover (wide {minOdds:0.##}-{maxOdds:0.##}x)"
+                : RolloverTierLabel,
             TargetMinSelections = 1,
             TargetMaxSelections = 1,
             Selections = [selected],
@@ -515,13 +571,23 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
         var eligible = passers
             .Select(p => p.Candidate)
+            .Where(c => (double)c.Confidence >= settings.BankerMinConfidence)
             .OrderByDescending(c => c.ResearchScore ?? (double)c.Confidence)
             .ThenBy(c => c.PredictionId)
             .ToList();
 
+        if (eligible.Count == 0)
+        {
+            _logger.LogInformation(
+                "Banker skipped: no live-quoted picks met BankerMinConfidence {MinConfidence:0.##}.",
+                settings.BankerMinConfidence);
+            return null;
+        }
+
         _logger.LogInformation(
-            "Banker compose pool: {PasserCount} live-quoted picks.",
-            eligible.Count);
+            "Banker compose pool: {PasserCount} live-quoted picks (min confidence {MinConfidence:0.##}).",
+            eligible.Count,
+            settings.BankerMinConfidence);
 
         var deterministic = BankerSlipComposer.Compose(
             eligible,
@@ -529,7 +595,9 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             settings.BankerMaxOdds,
             settings.BankerFallbackMinOdds,
             settings.BankerFallbackMaxOdds,
-            settings.BankerMaxPicks);
+            settings.BankerMaxPicks,
+            settings.BankerMinConfidence,
+            settings.BankerShortlistSize);
 
         if (deterministic.IsEmpty)
         {
@@ -803,15 +871,18 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             return null;
         }
 
-        _logger.LogInformation(
-            "AI Draws pool: {CandidateCount} live-quoted draw pick(s); targeting {DrawSlipSize} pick(s).",
-            drawPassers.Count,
-            settings.DrawSlipSize);
-
         var orderedPassers = drawPassers
             .OrderByDescending(p => p.Candidate.ResearchScore ?? (double)p.Candidate.Confidence)
             .ThenBy(p => p.Prediction.Id)
+            .Take(Math.Clamp(settings.DrawCandidatePoolSize, settings.DrawSlipSize, 50))
             .ToList();
+
+        _logger.LogInformation(
+            "AI Draws pool trimmed to {CandidateCount} of {AvailableCount} (DrawCandidatePoolSize={PoolSize}); targeting {DrawSlipSize} pick(s).",
+            orderedPassers.Count,
+            drawPassers.Count,
+            settings.DrawCandidatePoolSize,
+            settings.DrawSlipSize);
 
         var requests = orderedPassers.Select(p => new BetslipDrawPickRequest
         {
@@ -874,7 +945,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         };
     }
 
-    private async Task<Betslip> BookAndBuildSlipAsync(ComposedBetslip composed, BetslipSettings settings)
+    private async Task<Betslip?> BookAndBuildSlipAsync(ComposedBetslip composed, BetslipSettings settings)
     {
         var selections = composed.Selections.Select(c => new BetslipSelection
         {
@@ -993,9 +1064,14 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             composed.ActiveMaxOdds is double featuredMax &&
             !BankerSlipComposer.IsWithinOddsRange(combinedOdds.Value, featuredMin, featuredMax))
         {
-            var rangeKind = composed.IsRollover ? "rollover" : "banker";
-            statusParts.Add(
-                $"After booking skips, total odds {combinedOdds.Value:0.00}x fell outside the {featuredMin:0.##}-{featuredMax:0.##}x {rangeKind} range.");
+            _logger.LogWarning(
+                "Dropping {Kind} slip {SlipNumber}: after booking skips, {CombinedOdds:0.00}x left {MinOdds:0.##}-{MaxOdds:0.##}x.",
+                composed.IsRollover ? "rollover" : "banker",
+                composed.SlipNumber,
+                combinedOdds.Value,
+                featuredMin,
+                featuredMax);
+            return null;
         }
 
         if (composed.IsPayoutBand &&
@@ -1004,8 +1080,14 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             composed.ActiveMaxOdds is double bandMax &&
             !BankerSlipComposer.IsWithinOddsRange(combinedOdds.Value, bandMin, bandMax))
         {
-            statusParts.Add(
-                $"After booking skips, total odds {combinedOdds.Value:0.00}x fell outside the {bandMin:0.##}-{bandMax:0.##}x payout band.");
+            _logger.LogWarning(
+                "Dropping ladder slip {SlipNumber} '{Title}': after booking skips, {CombinedOdds:0.00}x left {MinOdds:0.##}-{MaxOdds:0.##}x.",
+                composed.SlipNumber,
+                composed.Title,
+                combinedOdds.Value,
+                bandMin,
+                bandMax);
+            return null;
         }
 
         return new Betslip
@@ -1152,6 +1234,15 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
         if (leftover.Count == 0)
         {
+            return slips;
+        }
+
+        if (settings.OmitLadderLastResort)
+        {
+            _logger.LogInformation(
+                "Ladder omitted {MissingCount} band(s) rather than last-resort packing: {Titles}.",
+                missingBands.Count,
+                string.Join(", ", missingBands.Select(b => b.Title)));
             return slips;
         }
 
@@ -1347,7 +1438,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             ResearchScore = candidate.ResearchScore
         };
 
-    private List<LiveQuotedCandidate> BuildLiveQuotedUniverse(
+    private async Task<List<LiveQuotedCandidate>> BuildLiveQuotedUniverseAsync(
         IReadOnlyList<Prediction> predictions,
         IReadOnlyList<SourceMarketFixture> fixtures)
     {
@@ -1357,6 +1448,19 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             return [];
         }
 
+        IReadOnlyDictionary<string, int>? aliasLookup = null;
+        if (_teamResolutionService is not null)
+        {
+            try
+            {
+                aliasLookup = await _teamResolutionService.LoadAliasLookupAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Team alias lookup unavailable for SportyBet matching; continuing without DB aliases.");
+            }
+        }
+
         var screenable = predictions
             .Where(p => MainCategories.Contains(p.PredictionCategory) || p.PredictionCategory == "Draw")
             .ToList();
@@ -1364,6 +1468,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         var unmatched = 0;
         var noLiveQuote = 0;
         var unmatchedSample = new List<string>();
+        var unmatchedReasons = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var prediction in screenable)
         {
@@ -1372,14 +1477,17 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 prediction.HomeTeam,
                 prediction.AwayTeam,
                 prediction.League,
-                prediction.MatchDateTime);
+                prediction.MatchDateTime,
+                aliasLookup);
 
             if (fixture is null)
             {
                 unmatched++;
+                unmatchedReasons["NoTeamMatch"] = unmatchedReasons.GetValueOrDefault("NoTeamMatch") + 1;
                 if (unmatchedSample.Count < 8)
                 {
-                    unmatchedSample.Add($"{prediction.HomeTeam} vs {prediction.AwayTeam} ({prediction.League})");
+                    unmatchedSample.Add(
+                        $"NoTeamMatch: {prediction.HomeTeam} vs {prediction.AwayTeam} ({prediction.League})");
                 }
 
                 continue;
@@ -1388,6 +1496,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             if (!TryGetLiveQuote(prediction, fixture, out var liveOdds, out var marketProbability))
             {
                 noLiveQuote++;
+                unmatchedReasons["NoLiveQuote"] = unmatchedReasons.GetValueOrDefault("NoLiveQuote") + 1;
                 continue;
             }
 
@@ -1414,17 +1523,33 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         }
 
         _logger.LogInformation(
-            "Live-quoted universe: {Published} published main/draw picks, {SportyBetFixtures} SportyBet fixtures; unmatched={Unmatched}, noLiveQuote={NoLiveQuote}, liveQuoted={LiveQuoted}.",
+            "Live-quoted universe: {Published} published main/draw picks, {SportyBetFixtures} SportyBet fixtures; unmatched={Unmatched}, noLiveQuote={NoLiveQuote}, liveQuoted={LiveQuoted}, aliasKeys={AliasKeys}.",
             screenable.Count,
             fixtures.Count,
             unmatched,
             noLiveQuote,
-            liveQuoted.Count);
+            liveQuoted.Count,
+            aliasLookup?.Count ?? 0);
 
         if (unmatchedSample.Count > 0)
         {
             _logger.LogInformation("Live-quoted unmatched sample: {UnmatchedSample}.", string.Join("; ", unmatchedSample));
         }
+
+        var matchRate = screenable.Count == 0
+            ? 0d
+            : (screenable.Count - unmatched) / (double)screenable.Count;
+        var reasonSummary = unmatchedReasons.Count == 0
+            ? string.Empty
+            : $"; reasons={string.Join(',', unmatchedReasons.OrderByDescending(pair => pair.Value).Select(pair => $"{pair.Key}={pair.Value}"))}";
+        _dbContext.ScrapingLogs.Add(new ScrapingLog
+        {
+            EventName = ScrapingEventNames.BetslipMatchRate,
+            Timestamp = DateTime.UtcNow,
+            Status = matchRate >= 0.7d ? "Success" : matchRate >= 0.4d ? "Degraded" : "Failed",
+            Message =
+                $"matchRate={matchRate:P0}; published={screenable.Count}; sportyBet={fixtures.Count}; unmatched={unmatched}; noLiveQuote={noLiveQuote}; liveQuoted={liveQuoted.Count}; aliasKeys={aliasLookup?.Count ?? 0}{reasonSummary}"
+        });
 
         return liveQuoted;
     }
@@ -1500,24 +1625,30 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
         var ranked = new List<LiveQuotedCandidate>(universe.Count);
         var weakSample = new List<string>();
-        const double weakScoreThreshold = 40d;
+        var excludedWeak = 0;
+        var weakScoreThreshold = Math.Clamp(_settings.ScreenMinScore, 0d, 100d);
         foreach (var candidate in universe)
         {
             if (scoredById.TryGetValue(candidate.Prediction.Id, out var pick))
             {
+                if (pick.Score < weakScoreThreshold)
+                {
+                    excludedWeak++;
+                    if (weakSample.Count < 8)
+                    {
+                        weakSample.Add(
+                            $"{candidate.Candidate.HomeTeam} vs {candidate.Candidate.AwayTeam} ({candidate.Candidate.Market}, {pick.Score:0})");
+                    }
+
+                    continue;
+                }
+
                 ranked.Add(candidate with
                 {
                     Candidate = WithResearchScore(
                         WithAiNote(candidate.Candidate, pick.Reason),
                         pick.Score)
                 });
-
-                if (pick.Score < weakScoreThreshold && weakSample.Count < 8)
-                {
-                    weakSample.Add(
-                        $"{candidate.Candidate.HomeTeam} vs {candidate.Candidate.AwayTeam} ({candidate.Candidate.Market}, {pick.Score:0})");
-                }
-
                 continue;
             }
 
@@ -1533,21 +1664,32 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             .ToList();
 
         _logger.LogInformation(
-            "Betslip screening: {BatchCount} batch(es) of {BatchSize}; liveQuoted={LiveQuoted}, scored={Scored}, fallback={Fallback}, weak={Weak}.",
+            "Betslip screening: {BatchCount} batch(es) of {BatchSize}; liveQuoted={LiveQuoted}, scored={Scored}, fallback={Fallback}, weakExcluded={Weak} (floor {Floor:0}).",
             batchCount,
             batchSize,
             universe.Count,
             scoredById.Count,
             fallbackIds.Count,
-            weakSample.Count);
+            excludedWeak,
+            weakScoreThreshold);
 
         if (weakSample.Count > 0)
         {
-            _logger.LogInformation("Betslip screening weak sample: {WeakSample}.", string.Join("; ", weakSample));
+            _logger.LogInformation("Betslip screening weak sample excluded: {WeakSample}.", string.Join("; ", weakSample));
         }
 
         return (ranked, scoredById.Count);
     }
+
+    private static List<LiveQuotedCandidate> FilterByMinimumEdge(
+        IReadOnlyList<LiveQuotedCandidate> passers,
+        double minimumEdge) =>
+        passers
+            .Where(p => BetPricingMath.MeetsMinimumEdge(
+                (double)p.Candidate.Confidence,
+                p.MarketProbability,
+                minimumEdge))
+            .ToList();
 
     private static List<LiveQuotedCandidate> CollapseOnePerFixture(IReadOnlyList<LiveQuotedCandidate> passers) =>
         passers

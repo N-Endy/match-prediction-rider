@@ -22,13 +22,24 @@ public class BetslipSettings
     public int BankerShortlistSize { get; set; } = 20;
     public int BankerMaxPicks { get; set; } = 8;
 
-    /// <summary>Logged in the compose funnel only. Betslip packing no longer gates on this floor.
-    /// Value bets still use <see cref="PredictionSettings.ValueBetMinimumEdge"/> (3%).
+    /// <summary>
+    /// Minimum model-vs-market edge required for a main-market pick to enter ladder packing.
+    /// Value bets still use <see cref="PredictionSettings.ValueBetMinimumEdge"/> (3%) as the preferred floor when higher.
     /// </summary>
     public double LadderMinimumEdge { get; set; } = 0.01;
 
     /// <summary>How many live-quoted picks are sent to the AI screener per request.</summary>
     public int ScreenBatchSize { get; set; } = 25;
+
+    /// <summary>
+    /// AI screen scores below this (0–100) are excluded from packing. Unscored confidence fallbacks still pack.
+    /// </summary>
+    public double ScreenMinScore { get; set; } = 40d;
+
+    /// <summary>
+    /// When true, omit ladder bands that cannot pack in primary/fallback ranges instead of shipping last-resort 10–150x cards.
+    /// </summary>
+    public bool OmitLadderLastResort { get; set; } = true;
 
     public double RolloverMinOdds { get; set; } = 1.30;
     public double RolloverMaxOdds { get; set; } = 1.50;

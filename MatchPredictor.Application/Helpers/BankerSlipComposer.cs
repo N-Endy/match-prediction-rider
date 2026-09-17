@@ -1,3 +1,5 @@
+using MatchPredictor.Domain.Models;
+
 namespace MatchPredictor.Application.Helpers;
 
 public sealed record BankerCompositionResult
@@ -28,7 +30,9 @@ public static class BankerSlipComposer
         double maxOdds,
         double fallbackMinOdds,
         double fallbackMaxOdds,
-        int maxPicks = 8)
+        int maxPicks = 8,
+        double minConfidence = 0d,
+        int shortlistSize = CandidateShortlistSize)
     {
         ArgumentNullException.ThrowIfNull(candidates);
 
@@ -37,12 +41,14 @@ public static class BankerSlipComposer
         maxOdds = Math.Max(minOdds, maxOdds);
         fallbackMinOdds = Math.Max(1.01, fallbackMinOdds);
         fallbackMaxOdds = Math.Max(fallbackMinOdds, fallbackMaxOdds);
+        shortlistSize = Math.Clamp(shortlistSize, 1, 100);
 
         var priced = candidates
             .Where(c => c.DecimalOdds is > 1d)
+            .Where(c => (double)c.Confidence >= minConfidence)
             .ToList();
 
-        var primary = TryCompose(priced, minOdds, maxOdds, maxPicks);
+        var primary = TryCompose(priced, minOdds, maxOdds, maxPicks, shortlistSize);
         if (!primary.IsEmpty)
         {
             return primary with
@@ -53,7 +59,7 @@ public static class BankerSlipComposer
             };
         }
 
-        var fallback = TryCompose(priced, fallbackMinOdds, fallbackMaxOdds, maxPicks);
+        var fallback = TryCompose(priced, fallbackMinOdds, fallbackMaxOdds, maxPicks, shortlistSize);
         if (!fallback.IsEmpty)
         {
             return fallback with
@@ -98,9 +104,10 @@ public static class BankerSlipComposer
         IReadOnlyList<BetslipComposerCandidate> priced,
         double minOdds,
         double maxOdds,
-        int maxPicks)
+        int maxPicks,
+        int shortlistSize)
     {
-        var shortlist = BuildShortlist(priced);
+        var shortlist = BuildShortlist(priced, shortlistSize);
         if (shortlist.Count == 0)
         {
             return new BankerCompositionResult();
@@ -152,20 +159,30 @@ public static class BankerSlipComposer
         };
     }
 
-    private static List<BetslipComposerCandidate> BuildShortlist(IReadOnlyList<BetslipComposerCandidate> priced)
+    private static List<BetslipComposerCandidate> BuildShortlist(
+        IReadOnlyList<BetslipComposerCandidate> priced,
+        int shortlistSize)
     {
         // Highest confidence first, one market per fixture, then cap at top-N.
+        // Prefer expected value when research score is present for denser quality packing.
         return priced
-            .OrderByDescending(c => c.Confidence)
+            .OrderByDescending(c => ScoreForShortlist(c))
             .ThenBy(c => c.DecimalOdds)
             .ThenBy(c => c.PredictionId)
             .GroupBy(ResolveFixtureKey, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.First())
-            .OrderByDescending(c => c.Confidence)
+            .OrderByDescending(c => ScoreForShortlist(c))
             .ThenBy(c => c.DecimalOdds)
             .ThenBy(c => c.PredictionId)
-            .Take(CandidateShortlistSize)
+            .Take(shortlistSize)
             .ToList();
+    }
+
+    private static double ScoreForShortlist(BetslipComposerCandidate candidate)
+    {
+        var baseScore = candidate.ResearchScore ?? ((double)candidate.Confidence * 100d);
+        var ev = BetPricingMath.CalculateExpectedValuePercent((double)candidate.Confidence, candidate.DecimalOdds) ?? 0d;
+        return baseScore + (Math.Max(ev, -0.5d) * 5d);
     }
 
     private static double[] BuildSuffixMaxProducts(IReadOnlyList<BetslipComposerCandidate> ordered)

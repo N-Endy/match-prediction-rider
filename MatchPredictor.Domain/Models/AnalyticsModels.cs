@@ -90,6 +90,23 @@ public class AnalyticsLiveConfigSnapshot
     public DateTime GeneratedAtLocal { get; set; }
     public List<LiveMarketConfigStat> Markets { get; set; } = [];
     public List<PromotionTimelineItem> PromotionTimeline { get; set; } = [];
+    public OpsQualitySnapshot OpsQuality { get; set; } = new();
+}
+
+public class OpsQualitySnapshot
+{
+    public string ExcelFeedStatus { get; set; } = "Unknown";
+    public string ExcelFeedMessage { get; set; } = string.Empty;
+    public DateTime? ExcelFeedCheckedAtUtc { get; set; }
+    public string BetslipMatchRateStatus { get; set; } = "Unknown";
+    public string BetslipMatchRateMessage { get; set; } = string.Empty;
+    public DateTime? BetslipMatchRateCheckedAtUtc { get; set; }
+    public string SettlementMatchRateStatus { get; set; } = "Unknown";
+    public string SettlementMatchRateMessage { get; set; } = string.Empty;
+    public DateTime? SettlementMatchRateCheckedAtUtc { get; set; }
+    public double? LatestStakeableRoiPercent { get; set; }
+    public double? LatestAverageClvPercent { get; set; }
+    public IReadOnlyList<string> SuppressedMarkets { get; set; } = [];
 }
 
 public class CategoryStat

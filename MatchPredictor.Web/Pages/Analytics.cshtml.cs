@@ -114,7 +114,12 @@ public class AnalyticsModel : PageModel
             thresholdProfiles,
             betaProfiles,
             recentPromotionHistory,
-            DateTimeProvider.GetLocalTime());
+            DateTimeProvider.GetLocalTime(),
+            snapshot.LatestExcelFeedLog,
+            snapshot.LatestBetslipMatchRateLog,
+            snapshot.LatestSettlementMatchRateLog,
+            snapshot.BacktestTrend.FirstOrDefault(),
+            Last7DaysStats.BettingPerformance);
 
         DefaultTabId = SelectDefaultTab();
     }
@@ -182,7 +187,12 @@ public class AnalyticsModel : PageModel
         IReadOnlyDictionary<PredictionMarket, ThresholdProfile> thresholdProfiles,
         IReadOnlyDictionary<PredictionMarket, BetaCalibrationProfile> betaProfiles,
         IReadOnlyList<PromotionHistory> recentPromotionHistory,
-        DateTime generatedAtLocal)
+        DateTime generatedAtLocal,
+        ScrapingLog? excelFeedLog,
+        ScrapingLog? betslipMatchRateLog,
+        ScrapingLog? settlementMatchRateLog,
+        HistoricalBacktestSummary? latestBacktest,
+        BettingPerformanceStats bettingPerformance)
     {
         var markets = Enum.GetValues<PredictionMarket>()
             .Where(market => market is not (PredictionMarket.Draw or PredictionMarket.StraightWin))
@@ -224,6 +234,31 @@ public class AnalyticsModel : PageModel
             .Where(date => date >= timelineStartDate)
             .ToHashSet();
 
+        // BettingPerformance ROI/CLV are stored as fractions (0.05 = 5%).
+        var suppressed = bettingPerformance.Markets
+            .Where(market =>
+                market.SettledBetCount >= 20 &&
+                (market.RoiPercent < -0.05 ||
+                 (market.ClosingLineSamples >= 20 && market.AverageClosingLineValuePercent < -0.02)))
+            .Select(market =>
+            {
+                var reasons = new List<string>();
+                if (market.RoiPercent < -0.05)
+                {
+                    reasons.Add($"ROI {market.RoiPercent * 100:F1}%");
+                }
+
+                if (market.ClosingLineSamples >= 20 && market.AverageClosingLineValuePercent < -0.02)
+                {
+                    reasons.Add($"CLV {market.AverageClosingLineValuePercent * 100:F1}%");
+                }
+
+                return $"{market.MarketName} ({string.Join(", ", reasons)})";
+            })
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name)
+            .ToList();
+
         return new AnalyticsLiveConfigSnapshot
         {
             GeneratedAtLocal = generatedAtLocal,
@@ -232,7 +267,22 @@ public class AnalyticsModel : PageModel
                 recentPromotionHistory,
                 liveConfigTimelineDates)
                 .Take(18)
-                .ToList()
+                .ToList(),
+            OpsQuality = new OpsQualitySnapshot
+            {
+                ExcelFeedStatus = excelFeedLog?.Status ?? "Unknown",
+                ExcelFeedMessage = excelFeedLog?.Message ?? "No excel-feed-quality log yet.",
+                ExcelFeedCheckedAtUtc = excelFeedLog?.Timestamp,
+                BetslipMatchRateStatus = betslipMatchRateLog?.Status ?? "Unknown",
+                BetslipMatchRateMessage = betslipMatchRateLog?.Message ?? "No betslip match-rate log yet.",
+                BetslipMatchRateCheckedAtUtc = betslipMatchRateLog?.Timestamp,
+                SettlementMatchRateStatus = settlementMatchRateLog?.Status ?? "Unknown",
+                SettlementMatchRateMessage = settlementMatchRateLog?.Message ?? "No settlement match-rate log yet.",
+                SettlementMatchRateCheckedAtUtc = settlementMatchRateLog?.Timestamp,
+                LatestStakeableRoiPercent = latestBacktest?.StakeableFlatStakeRoiPercent,
+                LatestAverageClvPercent = latestBacktest?.StakeableAverageClvPercent,
+                SuppressedMarkets = suppressed
+            }
         };
     }
 

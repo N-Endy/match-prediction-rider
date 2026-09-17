@@ -1,8 +1,73 @@
 @model MatchPredictor.Domain.Models.AnalyticsLiveConfigSnapshot
 
 <div class="mp-analytics-note">
-    This section is about the configuration currently driving the app right now: active thresholds, active calibrators, and recent promotions.
+    This section is about the configuration currently driving the app right now: active thresholds, active calibrators, recent promotions, and ops feed health.
 </div>
+
+<section class="mp-ops-quality" aria-label="Ops quality">
+    <div class="mp-market-grid">
+        <article class="mp-market-card">
+            <div class="mp-market-header">
+                <div>
+                    <h4>Excel feed</h4>
+                    <p>sports-ai.dev ingest health</p>
+                </div>
+                <strong class="@(Model.OpsQuality.ExcelFeedStatus == "Success" ? "acc-high" : Model.OpsQuality.ExcelFeedStatus == "Degraded" ? "acc-med" : "acc-low")">
+                    @Model.OpsQuality.ExcelFeedStatus
+                </strong>
+            </div>
+            <p class="mp-market-beta-empty">@Model.OpsQuality.ExcelFeedMessage</p>
+        </article>
+        <article class="mp-market-card">
+            <div class="mp-market-header">
+                <div>
+                    <h4>SportyBet match rate</h4>
+                    <p>published picks matched to live quotes</p>
+                </div>
+                <strong class="@(Model.OpsQuality.BetslipMatchRateStatus == "Success" ? "acc-high" : Model.OpsQuality.BetslipMatchRateStatus == "Degraded" ? "acc-med" : "acc-low")">
+                    @Model.OpsQuality.BetslipMatchRateStatus
+                </strong>
+            </div>
+            <p class="mp-market-beta-empty">@Model.OpsQuality.BetslipMatchRateMessage</p>
+        </article>
+        <article class="mp-market-card">
+            <div class="mp-market-header">
+                <div>
+                    <h4>Settlement match rate</h4>
+                    <p>finished scores linked in settlement window</p>
+                </div>
+                <strong class="@(Model.OpsQuality.SettlementMatchRateStatus == "Success" ? "acc-high" : Model.OpsQuality.SettlementMatchRateStatus == "Degraded" ? "acc-med" : "acc-low")">
+                    @Model.OpsQuality.SettlementMatchRateStatus
+                </strong>
+            </div>
+            <p class="mp-market-beta-empty">@Model.OpsQuality.SettlementMatchRateMessage</p>
+        </article>
+        <article class="mp-market-card">
+            <div class="mp-market-header">
+                <div>
+                    <h4>Backtest stakeable ROI / CLV</h4>
+                    <p>latest nightly walk-forward</p>
+                </div>
+            </div>
+            <div class="mp-market-metrics">
+                <div class="mp-market-metric-block">
+                    <span class="mp-market-metric-label">ROI</span>
+                    <strong>@(Model.OpsQuality.LatestStakeableRoiPercent is double roi ? $"{roi:F1}%" : "--")</strong>
+                </div>
+                <div class="mp-market-metric-block">
+                    <span class="mp-market-metric-label">Avg CLV</span>
+                    <strong>@(Model.OpsQuality.LatestAverageClvPercent is double clv ? $"{clv:F1}%" : "--")</strong>
+                </div>
+            </div>
+            @if (Model.OpsQuality.SuppressedMarkets.Count > 0)
+            {
+                <p class="mp-market-beta-empty">
+                    Soft-suppress (ROI ≤ −5% or CLV ≤ −2%, ≥20 settled): @string.Join(", ", Model.OpsQuality.SuppressedMarkets)
+                </p>
+            }
+        </article>
+    </div>
+</section>
 
 <div class="mp-market-grid">
     @foreach (var market in Model.Markets)

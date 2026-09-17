@@ -165,7 +165,10 @@ public class BetslipGenerationServiceLadderPoolTests
                 BankerMaxOdds = 10.0,
                 BankerFallbackMinOdds = 4.0,
                 BankerFallbackMaxOdds = 12.0,
+                BankerMinConfidence = 0.50,
                 BankerMaxPicks = 8,
+                LadderMinimumEdge = 0,
+                ScreenMinScore = 0,
                 WeekendSmallSlipCount = 1,
                 WeekendMediumSlipCount = 0,
                 WeekendBigSlipCount = 0,
@@ -583,9 +586,13 @@ public class BetslipGenerationServiceLadderPoolTests
                 SmallMaxPicks = 8,
                 DailyMaxPicks = 8,
                 LadderLastResortMinOdds = 10,
-                LadderLastResortMaxOdds = 150
+                LadderLastResortMaxOdds = 150,
+                OmitLadderLastResort = false,
+                LadderMinimumEdge = 0,
+                ScreenMinScore = 0
             }),
-            NullLogger<BetslipGenerationService>.Instance);
+            NullLogger<BetslipGenerationService>.Instance,
+            Options.Create(new PredictionSettings { ValueBetMinimumEdge = 0 }));
 
         await service.GenerateDailyBetslipsAsync("morning");
 
@@ -935,7 +942,11 @@ public class BetslipGenerationServiceLadderPoolTests
                 Scores = candidates.Select(c => new BetslipScreenPick
                 {
                     PredictionId = c.PredictionId,
-                    Score = c.PredictionCategory == "Over2.5Goals" ? 99 : 10
+                    Score = c.PredictionCategory == "Over2.5Goals"
+                        ? 99
+                        : c.HomeTeam == "DualHome"
+                            ? 10
+                            : 80
                 }).ToList()
             });
 

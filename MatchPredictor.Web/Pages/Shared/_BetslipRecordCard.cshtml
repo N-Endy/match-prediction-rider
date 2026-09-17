@@ -70,6 +70,26 @@
             BetslipSelectionHitStatus.Live => "Live",
             _ => "Pending"
         };
+
+    static string SlipHitLabel(BetslipHitStatus status) =>
+        status switch
+        {
+            BetslipHitStatus.Won => "Slip won",
+            BetslipHitStatus.Lost => "Slip lost",
+            BetslipHitStatus.Live => "Slip live",
+            BetslipHitStatus.Partial => "Partial",
+            _ => "Pending"
+        };
+
+    static string SlipHitClass(BetslipHitStatus status) =>
+        status switch
+        {
+            BetslipHitStatus.Won => "mp-score-correct",
+            BetslipHitStatus.Lost => "mp-score-incorrect",
+            BetslipHitStatus.Live => "mp-score-live",
+            BetslipHitStatus.Partial => "mp-betslip-status-partial",
+            _ => "mp-betslip-hit-pending"
+        };
 }
 
 <article class="@cardClass">
@@ -78,7 +98,10 @@
             <span class="mp-betslip-tier">@displayTierLabel</span>
             <h2 class="mp-betslip-title">@slip.Title</h2>
         </div>
-        <span class="mp-betslip-status @statusClass">@slip.BookingStatus</span>
+        <div class="mp-betslip-status-stack">
+            <span class="mp-betslip-status @statusClass">@slip.BookingStatus</span>
+            <span class="mp-betslip-status @SlipHitClass(Model.SlipHitStatus)">@SlipHitLabel(Model.SlipHitStatus)</span>
+        </div>
     </header>
 
     @if ((isBanker || isRollover) && slip.CombinedDecimalOdds is > 1)

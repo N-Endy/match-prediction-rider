@@ -1,4 +1,5 @@
 using MatchPredictor.Application.Helpers;
+using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Models;
 using Xunit;
 
@@ -87,5 +88,36 @@ public class SourceMarketFixtureMatcherTests
 
         Assert.NotNull(matched);
         Assert.Equal("evt-near", matched.EventId);
+    }
+
+    [Fact]
+    public void FindBestFixture_UsesDbAliasLookup_WhenCanonicalNamesDiffer()
+    {
+        var fixture = new SourceMarketFixture
+        {
+            EventId = "evt-alias",
+            HomeTeam = "Paris Saint-Germain",
+            AwayTeam = "Olympique Marseille",
+            League = "France Ligue 1"
+        };
+
+        var aliasLookup = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            [TeamNameNormalizer.BuildAliasKey("PSG", "France Ligue 1")] = 7,
+            [TeamNameNormalizer.BuildAliasKey("Paris Saint-Germain", "France Ligue 1")] = 7,
+            [TeamNameNormalizer.BuildAliasKey("OM", "France Ligue 1")] = 9,
+            [TeamNameNormalizer.BuildAliasKey("Olympique Marseille", "France Ligue 1")] = 9
+        };
+
+        var matched = SourceMarketFixtureMatcher.FindBestFixture(
+            [fixture],
+            "PSG",
+            "OM",
+            "France Ligue 1",
+            scheduledUtc: null,
+            aliasLookup);
+
+        Assert.NotNull(matched);
+        Assert.Equal("evt-alias", matched.EventId);
     }
 }

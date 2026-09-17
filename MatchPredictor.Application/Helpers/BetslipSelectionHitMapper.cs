@@ -51,6 +51,37 @@ public static class BetslipSelectionHitMapper
         return Map(Resolve(selection, slipDate, predictionsById, fallbackPredictions), utcNow);
     }
 
+    public static BetslipHitStatus MapSlip(IReadOnlyCollection<BetslipSelectionHitStatus> legStatuses)
+    {
+        if (legStatuses.Count == 0)
+        {
+            return BetslipHitStatus.Pending;
+        }
+
+        if (legStatuses.Any(status => status == BetslipSelectionHitStatus.Lost))
+        {
+            return BetslipHitStatus.Lost;
+        }
+
+        if (legStatuses.Any(status => status == BetslipSelectionHitStatus.Live))
+        {
+            return BetslipHitStatus.Live;
+        }
+
+        if (legStatuses.All(status => status == BetslipSelectionHitStatus.Won))
+        {
+            return BetslipHitStatus.Won;
+        }
+
+        if (legStatuses.Any(status => status == BetslipSelectionHitStatus.Won) &&
+            legStatuses.Any(status => status == BetslipSelectionHitStatus.Pending))
+        {
+            return BetslipHitStatus.Partial;
+        }
+
+        return BetslipHitStatus.Pending;
+    }
+
     public static Prediction? Resolve(
         BetslipSelection selection,
         DateOnly slipDate,
@@ -87,6 +118,8 @@ public static class BetslipSelectionHitMapper
             : slipDate;
         var home = Normalize(selection.HomeTeam);
         var away = Normalize(selection.AwayTeam);
+        var market = Normalize(selection.Market);
+        var category = InferCategory(selection);
         var candidates = fallbackPredictions
             .Where(prediction =>
                 prediction.MatchLocalDate == matchDate &&
@@ -94,9 +127,57 @@ public static class BetslipSelectionHitMapper
                 Normalize(prediction.AwayTeam) == away)
             .ToList();
 
-        return candidates.FirstOrDefault(prediction =>
-                   string.Equals(prediction.PredictedOutcome, selection.PredictedOutcome, StringComparison.OrdinalIgnoreCase))
-               ?? candidates.FirstOrDefault();
+        var outcomeMatch = candidates.FirstOrDefault(prediction =>
+            string.Equals(prediction.PredictedOutcome, selection.PredictedOutcome, StringComparison.OrdinalIgnoreCase));
+        if (outcomeMatch is not null)
+        {
+            return outcomeMatch;
+        }
+
+        var categoryMatch = candidates.FirstOrDefault(prediction =>
+            !string.IsNullOrWhiteSpace(category) &&
+            string.Equals(prediction.PredictionCategory, category, StringComparison.OrdinalIgnoreCase));
+
+        // Never fall back to an unrelated market on the same fixture.
+        return categoryMatch;
+    }
+
+    private static string InferCategory(BetslipSelection selection)
+    {
+        var market = selection.Market ?? string.Empty;
+        var outcome = selection.PredictedOutcome ?? string.Empty;
+        if (market.Contains("BTTS", StringComparison.OrdinalIgnoreCase) ||
+            outcome.Contains("BTTS", StringComparison.OrdinalIgnoreCase))
+        {
+            return "BothTeamsScore";
+        }
+
+        if (market.Contains("Over 2.5", StringComparison.OrdinalIgnoreCase) ||
+            outcome.Contains("Over 2.5", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Over2.5Goals";
+        }
+
+        if (market.Contains("Under 2.5", StringComparison.OrdinalIgnoreCase) ||
+            outcome.Contains("Under 2.5", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Under2.5Goals";
+        }
+
+        if (market.Contains("Draw", StringComparison.OrdinalIgnoreCase) ||
+            outcome.Equals("Draw", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Draw";
+        }
+
+        if (market.Contains("1X2", StringComparison.OrdinalIgnoreCase) ||
+            market.Contains("Straight", StringComparison.OrdinalIgnoreCase) ||
+            outcome.Contains("Win", StringComparison.OrdinalIgnoreCase))
+        {
+            return "StraightWin";
+        }
+
+        return string.Empty;
     }
 
     private static bool IsSettled(Prediction prediction) =>

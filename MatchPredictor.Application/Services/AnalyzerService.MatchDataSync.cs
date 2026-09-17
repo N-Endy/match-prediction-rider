@@ -68,8 +68,12 @@ public partial class AnalyzerService
             }
 
             await LogScrapingStatus(
-                "excel-feed-quality",
-                feedQuality.Status == ExcelFeedQualityValidator.FailedStatus ? "Failed" : "Success",
+                ScrapingEventNames.ExcelFeedQuality,
+                scraped.Count > 0 && feedQuality.Status == ExcelFeedQualityValidator.HealthyStatus
+                    ? "Success"
+                    : feedQuality.Status == ExcelFeedQualityValidator.FailedStatus
+                        ? "Failed"
+                        : "Degraded",
                 feedQuality.Message);
 
             try

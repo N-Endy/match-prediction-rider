@@ -95,6 +95,7 @@ public partial class AnalyzerService
             forecastCandidates = DeduplicateForecastCandidates(forecastCandidates, targetDateString);
 
             var publishedCandidates = _dataAnalyzerService.SelectPublishedPredictions(forecastCandidates).ToList();
+            publishedCandidates = await ApplyNegativeRoiPublishGateAsync(publishedCandidates);
             foreach (var candidate in publishedCandidates)
             {
                 ApplyCanonicalFixtureIdentity(candidate);
@@ -151,6 +152,38 @@ public partial class AnalyzerService
     {
         return DateOnly.ParseExact(targetDate, "dd-MM-yyyy", CultureInfo.InvariantCulture);
     }
+
+    private async Task<List<PredictionCandidate>> ApplyNegativeRoiPublishGateAsync(
+        List<PredictionCandidate> publishedCandidates)
+    {
+        if (publishedCandidates.Count == 0)
+        {
+            return publishedCandidates;
+        }
+
+        var suppressed = await PublishedMarketSuppressor.EvaluateAsync(_dbContext, _predictionSettings);
+        if (suppressed.Count == 0)
+        {
+            return publishedCandidates;
+        }
+
+        var kept = publishedCandidates
+            .Where(candidate => !suppressed.ContainsKey(candidate.PredictionCategory))
+            .ToList();
+
+        foreach (var entry in suppressed.Values)
+        {
+            _logger.LogWarning(
+                "Publish soft-suppress for {Category}: {Reason} (settled={Settled}, clvSamples={ClvSamples}).",
+                entry.Category,
+                entry.Reason,
+                entry.SettledCount,
+                entry.ClvSampleCount);
+        }
+
+        return kept;
+    }
+
     private async Task<IReadOnlyList<Prediction>> SavePredictions(
         IEnumerable<PredictionCandidate> forecastCandidates,
         IEnumerable<PredictionCandidate> candidates,

@@ -192,17 +192,22 @@ public class BetslipsModel : PageModel
                 GeneratedAtUtc = run.GeneratedAtUtc,
                 DayKind = run.DayKind,
                 Slips = run.Slips
-                    .Select(slip => new BetslipRecordCardViewModel
+                    .Select(slip =>
                     {
-                        Slip = slip,
-                        HitStatusBySelectionId = slip.Selections.ToDictionary(
+                        var hitStatusBySelectionId = slip.Selections.ToDictionary(
                             selection => selection.Id,
                             selection => BetslipSelectionHitMapper.MapSelection(
                                 selection,
                                 records.Date,
                                 records.PredictionsById,
                                 records.FallbackPredictions,
-                                utcNow))
+                                utcNow));
+                        return new BetslipRecordCardViewModel
+                        {
+                            Slip = slip,
+                            HitStatusBySelectionId = hitStatusBySelectionId,
+                            SlipHitStatus = BetslipSelectionHitMapper.MapSlip(hitStatusBySelectionId.Values.ToList())
+                        };
                     })
                     .ToList()
             })
@@ -308,4 +313,5 @@ public sealed class BetslipRecordCardViewModel
     public required Betslip Slip { get; init; }
     public IReadOnlyDictionary<int, BetslipSelectionHitStatus> HitStatusBySelectionId { get; init; } =
         new Dictionary<int, BetslipSelectionHitStatus>();
+    public BetslipHitStatus SlipHitStatus { get; init; } = BetslipHitStatus.Pending;
 }

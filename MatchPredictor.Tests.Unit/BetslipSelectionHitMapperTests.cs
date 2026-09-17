@@ -181,6 +181,57 @@ public class BetslipSelectionHitMapperTests
         Assert.Equal(BetslipSelectionHitStatus.Lost, status);
     }
 
+    [Fact]
+    public void MapSelection_DoesNotFallBackToUnrelatedMarketOnSameFixture()
+    {
+        var date = new DateOnly(2026, 8, 19);
+        var selection = new BetslipSelection
+        {
+            HomeTeam = "Home",
+            AwayTeam = "Away",
+            Market = "BTTS",
+            PredictedOutcome = "BTTS"
+        };
+        var wrongMarket = CreatePrediction("StraightWin", "Home Win", actualScore: "2-1", actualOutcome: "Home Win");
+        wrongMarket.MatchLocalDate = date;
+        wrongMarket.HomeTeam = "Home";
+        wrongMarket.AwayTeam = "Away";
+
+        var status = BetslipSelectionHitMapper.MapSelection(
+            selection,
+            date,
+            new Dictionary<int, Prediction>(),
+            [wrongMarket],
+            DateTime.UtcNow);
+
+        Assert.Equal(BetslipSelectionHitStatus.Pending, status);
+    }
+
+    [Fact]
+    public void MapSlip_ReturnsLost_WhenAnyLegLost()
+    {
+        var status = BetslipSelectionHitMapper.MapSlip(
+        [
+            BetslipSelectionHitStatus.Won,
+            BetslipSelectionHitStatus.Lost,
+            BetslipSelectionHitStatus.Pending
+        ]);
+
+        Assert.Equal(BetslipHitStatus.Lost, status);
+    }
+
+    [Fact]
+    public void MapSlip_ReturnsWon_WhenAllLegsWon()
+    {
+        var status = BetslipSelectionHitMapper.MapSlip(
+        [
+            BetslipSelectionHitStatus.Won,
+            BetslipSelectionHitStatus.Won
+        ]);
+
+        Assert.Equal(BetslipHitStatus.Won, status);
+    }
+
     private static Prediction CreatePrediction(
         string category,
         string predictedOutcome,

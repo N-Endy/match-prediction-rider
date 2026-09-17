@@ -18,6 +18,9 @@ public sealed class AnalyticsDataSnapshot
     public IReadOnlyList<HistoricalBacktestSummary> BacktestTrend { get; init; } = [];
     public IReadOnlyList<MarketMlModelProfile> MarketMlProfiles { get; init; } = [];
     public IReadOnlyList<PromotionHistory> RecentPromotionHistory { get; init; } = [];
+    public ScrapingLog? LatestExcelFeedLog { get; init; }
+    public ScrapingLog? LatestBetslipMatchRateLog { get; init; }
+    public ScrapingLog? LatestSettlementMatchRateLog { get; init; }
 }
 
 public interface IAnalyticsQueries
@@ -92,6 +95,24 @@ public sealed class AnalyticsQueries : IAnalyticsQueries
             .OrderByDescending(history => history.EffectiveAt)
             .ToListAsync(cancellationToken);
 
+        var latestExcelFeedLog = await _dbContext.ScrapingLogs
+            .AsNoTracking()
+            .Where(log => log.EventName == ScrapingEventNames.ExcelFeedQuality)
+            .OrderByDescending(log => log.Timestamp)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var latestBetslipMatchRateLog = await _dbContext.ScrapingLogs
+            .AsNoTracking()
+            .Where(log => log.EventName == ScrapingEventNames.BetslipMatchRate)
+            .OrderByDescending(log => log.Timestamp)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var latestSettlementMatchRateLog = await _dbContext.ScrapingLogs
+            .AsNoTracking()
+            .Where(log => log.EventName == ScrapingEventNames.SettlementMatchRate)
+            .OrderByDescending(log => log.Timestamp)
+            .FirstOrDefaultAsync(cancellationToken);
+
         return new AnalyticsDataSnapshot
         {
             Predictions = predictions,
@@ -102,7 +123,10 @@ public sealed class AnalyticsQueries : IAnalyticsQueries
             IsotonicProfiles = isotonicProfiles,
             BacktestTrend = backtestTrend,
             MarketMlProfiles = marketMlProfiles,
-            RecentPromotionHistory = recentPromotionHistory
+            RecentPromotionHistory = recentPromotionHistory,
+            LatestExcelFeedLog = latestExcelFeedLog,
+            LatestBetslipMatchRateLog = latestBetslipMatchRateLog,
+            LatestSettlementMatchRateLog = latestSettlementMatchRateLog
         };
     }
 }

@@ -360,8 +360,13 @@ public static class WeekendPayoutSlipComposer
     private static string FormatOdds(double odds) =>
         odds >= 1000 ? odds.ToString("0") : odds.ToString("0.##");
 
-    private static double ResolvePackingScore(BetslipComposerCandidate candidate) =>
-        candidate.ResearchScore ?? (double)candidate.Confidence;
+    private static double ResolvePackingScore(BetslipComposerCandidate candidate)
+    {
+        // ResearchScore is 0–100 when present; Confidence is 0–1. Keep that scale so screened picks win.
+        var baseScore = candidate.ResearchScore ?? (double)candidate.Confidence;
+        var ev = BetPricingMath.CalculateExpectedValuePercent((double)candidate.Confidence, candidate.DecimalOdds) ?? 0d;
+        return baseScore + (Math.Max(ev, -0.5d) * 0.01d);
+    }
 
     private static string ResolveFixtureKey(BetslipComposerCandidate candidate) =>
         string.IsNullOrWhiteSpace(candidate.FixtureKey)

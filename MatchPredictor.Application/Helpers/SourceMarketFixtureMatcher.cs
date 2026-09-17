@@ -1,5 +1,4 @@
 using MatchPredictor.Domain.Models;
-using MatchPredictor.Domain.Helpers;
 
 namespace MatchPredictor.Application.Helpers;
 
@@ -14,22 +13,29 @@ public static class SourceMarketFixtureMatcher
         string? homeTeam,
         string? awayTeam,
         string? league,
-        DateTime? scheduledUtc)
+        DateTime? scheduledUtc,
+        IReadOnlyDictionary<string, int>? aliasLookup = null)
     {
         SourceMarketFixture? bestFixture = null;
         var bestScore = 0.0;
 
         foreach (var fixture in fixtures)
         {
-            var homeMatch = AreCanonicalAliasesEqual(homeTeam, fixture.HomeTeam, league, fixture.League)
-                ? new ScoreMatchingHelper.TeamMatchResult(true, 1.0, true, false)
-                : ScoreMatchingHelper.GetTeamMatchResult(homeTeam ?? string.Empty, fixture.HomeTeam, league, fixture.League);
+            var homeMatch = TeamAliasMatchHelper.GetTeamMatchResult(
+                homeTeam ?? string.Empty,
+                fixture.HomeTeam,
+                league,
+                fixture.League,
+                aliasLookup);
             if (!homeMatch.IsMatch)
                 continue;
 
-            var awayMatch = AreCanonicalAliasesEqual(awayTeam, fixture.AwayTeam, league, fixture.League)
-                ? new ScoreMatchingHelper.TeamMatchResult(true, 1.0, true, false)
-                : ScoreMatchingHelper.GetTeamMatchResult(awayTeam ?? string.Empty, fixture.AwayTeam, league, fixture.League);
+            var awayMatch = TeamAliasMatchHelper.GetTeamMatchResult(
+                awayTeam ?? string.Empty,
+                fixture.AwayTeam,
+                league,
+                fixture.League,
+                aliasLookup);
             if (!awayMatch.IsMatch)
                 continue;
 
@@ -64,20 +70,5 @@ public static class SourceMarketFixtureMatcher
 
         // Both teams already passed IsMatch; combined score only ranks candidates.
         return bestFixture;
-    }
-
-    private static bool AreCanonicalAliasesEqual(string? leftTeam, string? rightTeam, string? leftLeague, string? rightLeague)
-    {
-        var leftKey = TeamNameNormalizer.BuildAliasKey(leftTeam, leftLeague);
-        var rightKey = TeamNameNormalizer.BuildAliasKey(rightTeam, rightLeague);
-        if (!string.IsNullOrWhiteSpace(leftKey) && string.Equals(leftKey, rightKey, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return string.Equals(
-            TeamNameNormalizer.NormalizeAlias(leftTeam),
-            TeamNameNormalizer.NormalizeAlias(rightTeam),
-            StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -89,6 +89,7 @@ public class DataAnalyzerService : IDataAnalyzerService
 
         published.AddRange(MarkPublished(forecasts.Where(candidate =>
             candidate.Market == PredictionMarket.Draw &&
+            HasExplicitDrawMarket(candidate) &&
             candidate.CalibratedProbability >= candidate.ThresholdUsed)));
 
         foreach (var totalsGroup in forecasts
@@ -261,6 +262,16 @@ public class DataAnalyzerService : IDataAnalyzerService
 
     private static bool HasExplicitBttsMarket(PredictionCandidate candidate)
     {
+        return HasExplicitMarketFlag(candidate, "explicitBttsMarket");
+    }
+
+    private static bool HasExplicitDrawMarket(PredictionCandidate candidate)
+    {
+        return HasExplicitMarketFlag(candidate, "explicitDrawMarket");
+    }
+
+    private static bool HasExplicitMarketFlag(PredictionCandidate candidate, string propertyName)
+    {
         if (string.IsNullOrWhiteSpace(candidate.FeatureContributionsJson) ||
             candidate.FeatureContributionsJson == "{}")
         {
@@ -270,7 +281,7 @@ public class DataAnalyzerService : IDataAnalyzerService
         try
         {
             using var document = System.Text.Json.JsonDocument.Parse(candidate.FeatureContributionsJson);
-            if (document.RootElement.TryGetProperty("explicitBttsMarket", out var flag) &&
+            if (document.RootElement.TryGetProperty(propertyName, out var flag) &&
                 flag.ValueKind == System.Text.Json.JsonValueKind.True)
             {
                 return true;
@@ -374,9 +385,16 @@ public class DataAnalyzerService : IDataAnalyzerService
         {
             var weights = ResolveWeights(market);
             var mlValue = _marketPredictionModelService?.TryPredict(match, market, calculatorValue, statisticalValue, bookmakerValue);
+            var marketWeight = weights.Market;
+            if (_settings.RetireProbabilityCalculatorWhenMlPromoted && mlValue is > 0)
+            {
+                // Promoted ML is live for this market — stop leaning on the hand-tuned calculator.
+                marketWeight = 0d;
+            }
+
             return EnsembleProbabilityBlender.BlendLogit(
                 (bookmakerValue, weights.Bookmaker),
-                (calculatorValue, weights.Market),
+                (calculatorValue, marketWeight),
                 (statisticalValue, weights.DixonColes),
                 (mlValue, weights.Ml));
         }
@@ -471,7 +489,8 @@ public class DataAnalyzerService : IDataAnalyzerService
             ["bookmakerSignalApplied"] = bookmakerSignal is not null,
             ["mlSignal"] = mlSignal,
             ["mlSignalApplied"] = mlSignal is not null,
-            ["explicitBttsMarket"] = match.TryGetNormalizedBttsPair(out _) || bookmakerSignal?.Btts is > 0
+            ["explicitBttsMarket"] = match.TryGetNormalizedBttsPair(out _) || bookmakerSignal?.Btts is > 0,
+            ["explicitDrawMarket"] = bookmakerSignal?.Draw is > 0
         };
 
         return JsonSerializer.Serialize(summary);

@@ -26,7 +26,7 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         PredictionMarket.AwayWin,
         PredictionMarket.Draw
     ];
-    private static readonly string[] FeatureColumns =
+    private static readonly string[] BaseFeatureColumns =
     [
         nameof(MarketModelInput.CalculatorProbability),
         nameof(MarketModelInput.StatisticalProbability),
@@ -47,21 +47,31 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         nameof(MarketModelInput.HasStatistical),
         nameof(MarketModelInput.HasBookmaker),
         nameof(MarketModelInput.HasRestDays)
-        // Do NOT add ExpectedGoals columns until IMlXgFeatureReadiness reports
-        // MayBumpFeatureSchema == true (>=70% TeamMatchStats xG coverage). Changing
-        // this array invalidates FeatureSchemaJson and can permanently skip models.
     ];
-    private static readonly string ExpectedFeatureSchemaJson = JsonSerializer.Serialize(FeatureColumns);
+
+    private static readonly string[] XgFeatureColumns =
+    [
+        nameof(MarketModelInput.HomeExpectedGoalsFor),
+        nameof(MarketModelInput.AwayExpectedGoalsFor),
+        nameof(MarketModelInput.HasExpectedGoals)
+    ];
 
     private readonly ApplicationDbContext _dbContext;
     private readonly ILogger<MarketPredictionModelService> _logger;
+    private readonly IMlXgFeatureReadiness? _xgFeatureReadiness;
     private readonly MLContext _mlContext = new(seed: 42);
     private Dictionary<PredictionMarket, PredictionEngine<MarketModelInput, MarketModelOutput>>? _engines;
+    private string[] _activeFeatureColumns = BaseFeatureColumns;
+    private string _expectedFeatureSchemaJson = JsonSerializer.Serialize(BaseFeatureColumns);
 
-    public MarketPredictionModelService(ApplicationDbContext dbContext, ILogger<MarketPredictionModelService> logger)
+    public MarketPredictionModelService(
+        ApplicationDbContext dbContext,
+        ILogger<MarketPredictionModelService> logger,
+        IMlXgFeatureReadiness? xgFeatureReadiness = null)
     {
         _dbContext = dbContext;
         _logger = logger;
+        _xgFeatureReadiness = xgFeatureReadiness;
     }
 
     public double? TryPredict(
@@ -89,6 +99,7 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
 
     public async Task RebuildProfilesAsync(CancellationToken cancellationToken = default)
     {
+        await ResolveActiveFeatureColumnsAsync(cancellationToken);
         var cutoff = DateTime.UtcNow.AddDays(-180);
         var forecasts = await _dbContext.ForecastObservations
             .AsNoTracking()
@@ -127,7 +138,7 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
 
             var training = rows.Take(splitIndex).ToList();
             var holdout = rows.Skip(splitIndex).ToList();
-            var pipeline = _mlContext.Transforms.Concatenate("Features", FeatureColumns)
+            var pipeline = _mlContext.Transforms.Concatenate("Features", _activeFeatureColumns)
                 .Append(_mlContext.BinaryClassification.Trainers.LightGbm(
                     labelColumnName: nameof(MarketModelInput.Label),
                     featureColumnName: "Features",
@@ -161,7 +172,7 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
                 CandidateBrierScore = candidateBrier,
                 Improvement = improvement,
                 IsPromoted = true,
-                FeatureSchemaJson = JsonSerializer.Serialize(FeatureColumns),
+                FeatureSchemaJson = _expectedFeatureSchemaJson,
                 UpdatedAtUtc = DateTime.UtcNow
             });
         }
@@ -190,10 +201,11 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
 
     private Dictionary<PredictionMarket, PredictionEngine<MarketModelInput, MarketModelOutput>> LoadPromotedEngines()
     {
+        ResolveActiveFeatureColumnsAsync(CancellationToken.None).GetAwaiter().GetResult();
         var engines = new Dictionary<PredictionMarket, PredictionEngine<MarketModelInput, MarketModelOutput>>();
         foreach (var profile in _dbContext.MarketMlModelProfiles.AsNoTracking().Where(profile => profile.IsPromoted))
         {
-            if (!string.Equals(profile.FeatureSchemaJson, ExpectedFeatureSchemaJson, StringComparison.Ordinal))
+            if (!string.Equals(profile.FeatureSchemaJson, _expectedFeatureSchemaJson, StringComparison.Ordinal))
             {
                 _logger.LogInformation(
                     "Skipping promoted ML model for {Market} because feature schema changed.",
@@ -278,8 +290,37 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
             HasSnapshot = hasSnapshot ? 1f : 0f,
             HasStatistical = statisticalProbability is not null ? 1f : 0f,
             HasBookmaker = bookmakerProbability is not null ? 1f : 0f,
-            HasRestDays = hasRestDays ? 1f : 0f
+            HasRestDays = hasRestDays ? 1f : 0f,
+            HomeExpectedGoalsFor = ToFeature(featureSnapshot?.HomeExpectedGoalsFor),
+            AwayExpectedGoalsFor = ToFeature(featureSnapshot?.AwayExpectedGoalsFor),
+            HasExpectedGoals = featureSnapshot?.HomeExpectedGoalsFor is not null &&
+                               featureSnapshot.AwayExpectedGoalsFor is not null
+                ? 1f
+                : 0f
         };
+    }
+
+    private async Task ResolveActiveFeatureColumnsAsync(CancellationToken cancellationToken)
+    {
+        _activeFeatureColumns = BaseFeatureColumns;
+        if (_xgFeatureReadiness is not null)
+        {
+            var readiness = await _xgFeatureReadiness.EvaluateAsync(cancellationToken);
+            if (readiness.MayBumpFeatureSchema)
+            {
+                _activeFeatureColumns = BaseFeatureColumns.Concat(XgFeatureColumns).ToArray();
+                _logger.LogInformation(
+                    "ML xG feature schema enabled: coverage {Coverage:P1} over {SampleSize} TeamMatchStats rows.",
+                    readiness.XgCoverage,
+                    readiness.SampleSize);
+            }
+            else
+            {
+                _logger.LogInformation("ML xG feature schema deferred: {Reason}", readiness.Reason);
+            }
+        }
+
+        _expectedFeatureSchemaJson = JsonSerializer.Serialize(_activeFeatureColumns);
     }
 
     private static float ToFeature(double? value) => value is double number ? (float)number : float.NaN;
@@ -386,6 +427,9 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         public float HasStatistical { get; set; }
         public float HasBookmaker { get; set; }
         public float HasRestDays { get; set; }
+        public float HomeExpectedGoalsFor { get; set; }
+        public float AwayExpectedGoalsFor { get; set; }
+        public float HasExpectedGoals { get; set; }
     }
 
     private sealed class MarketModelOutput

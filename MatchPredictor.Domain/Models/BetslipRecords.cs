@@ -16,6 +16,16 @@ public enum BetslipSelectionHitStatus
     Live
 }
 
+/// <summary>Aggregate settlement for a whole slip from its leg hit statuses.</summary>
+public enum BetslipHitStatus
+{
+    Pending,
+    Live,
+    Won,
+    Lost,
+    Partial
+}
+
 public sealed class BetslipRecordsForDate
 {
     public DateOnly Date { get; init; }
