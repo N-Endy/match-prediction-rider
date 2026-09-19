@@ -3,6 +3,7 @@
 
 @{
     ViewData["Title"] = "Over 2.5 Goals";
+    ViewData["Description"] = "Today’s calibrated Over 2.5 Goals card from MatchPredictor — filter totals picks by league and confidence, and learn how overs are published and settled.";
     var today = MatchPredictor.Infrastructure.Utils.DateTimeProvider.GetLocalTime().ToString("dd MMM yyyy");
 }
 
@@ -47,4 +48,6 @@
             </p>
         </div>
     }
+
+    <partial name="_ExplainerOver2" />
 </div>

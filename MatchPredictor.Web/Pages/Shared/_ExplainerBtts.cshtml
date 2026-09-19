@@ -1,0 +1,61 @@
+<section class="mp-market-explainer" aria-labelledby="btts-explainer-heading">
+    <h2 id="btts-explainer-heading">How Both Teams to Score picks are built</h2>
+    <p>
+        Both Teams to Score (BTTS) asks a narrow question: will each side find the net at least once
+        in regular time? It ignores who wins. That makes it useful on open games where both attacks
+        are credible, and risky when one side parks a deep block or when goalkeepers are in rare form.
+        MatchPredictor only publishes a BTTS pick when the calibrated probability clears the live
+        BTTS threshold — and when an explicit BTTS market quote exists. A goals-model estimate alone
+        is not enough to appear on this card.
+    </p>
+
+    <h3>What the card shows</h3>
+    <p>
+        Each row is a fixture the ensemble is willing to publish today. You will see league, teams,
+        kickoff (West Africa Time), a confidence band derived from the calibrated probability, and
+        a short reason chip when the pipeline recorded one. Filters let you narrow by league, morning
+        through late kickoffs, upcoming/live/finished status, and confidence bands such as watch,
+        strong, or elite. Adding a pick to the selection cart does not place a stake — it only builds
+        a personal list you can review or optionally export.
+    </p>
+
+    <h3>How the probability is formed</h3>
+    <p>
+        BTTS blends bookmaker-implied probabilities (margin removed), statistical scoreline models
+        (Dixon-Coles with Elo context), and a checked third-party probability feed when available.
+        An optional LightGBM signal may join the blend only after it beats the incumbent on holdout
+        Brier score. The combined probability is corrected and calibrated so that a stated 65% is
+        meant to land near 65% over a large sample — not to feel like a tipster “lock.”
+    </p>
+    <ul>
+        <li>Publish gate: calibrated probability must exceed the current BTTS threshold.</li>
+        <li>Quote gate: an explicit BTTS market price must be present for the fixture.</li>
+        <li>Settlement: after full time, both teams scoring decides correct vs incorrect.</li>
+    </ul>
+
+    <h3>How to read confidence on BTTS</h3>
+    <p>
+        Higher confidence means the model is more certain both attacks clear the bar, not that the
+        match will be a goal fest. A 58% BTTS pick can still fail when one side blanks. Likewise, a
+        75% pick can fail on a single clinical miss or a red card that changes the game state. Use
+        confidence to compare published options on the same day; do not treat it as a stake size
+        formula unless you already have a bankroll plan you trust.
+    </p>
+
+    <h3>When this page looks empty</h3>
+    <p>
+        Empty is intentional. Quiet midweek schedules, missing BTTS quotes, or a day when few fixtures
+        clear the threshold will leave this list thin. We would rather show an empty state than pad
+        the card with below-threshold angles. Check <a href="/results">Results</a> for how recent
+        published BTTS picks actually settled, and read the full pipeline on
+        <a href="/methodology">Methodology</a>. Selection lists that include BTTS legs appear on
+        <a href="/betslips">Betslips</a> after the scheduled generation runs.
+    </p>
+
+    <h3>Responsible use</h3>
+    <p>
+        BTTS markets are still uncertain football outcomes. MatchPredictor is informational, 18+ only,
+        and not a bookmaker. Past hit rate does not guarantee future results. See
+        <a href="/Privacy#responsible-use">responsible use</a> and the <a href="/faq">FAQ</a>.
+    </p>
+</section>

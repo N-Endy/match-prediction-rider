@@ -1,0 +1,132 @@
+@page
+@model FaqModel
+@{
+    ViewData["Title"] = "Frequently asked questions";
+    ViewData["Description"] = "Answers about MatchPredictor update times, confidence scores, empty cards, selection lists, ads, cookies, and responsible use.";
+}
+
+<div class="mp-container mp-legal">
+    <div class="mp-page-header">
+        <div>
+            <p class="mp-page-kicker">Help</p>
+            <div class="mp-page-title">
+                <h1>Frequently asked questions</h1>
+            </div>
+        </div>
+    </div>
+
+    <p class="mp-legal-meta">
+        Still stuck? <a href="/contact">Contact us</a> or email
+        <a href="mailto:hello@matchpredictor.dev">hello@matchpredictor.dev</a>.
+    </p>
+
+    <section class="mp-legal-section">
+        <h2>What does MatchPredictor publish?</h2>
+        <p>
+            A daily card of football picks across BTTS, Over 2.5, Under 2.5, Straight Win, and Draw,
+            plus curated selection lists and a public settled-results record. See
+            <a href="/about">About</a> and <a href="/methodology">Methodology</a> for detail.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>How often is the card updated?</h2>
+        <p>
+            Predictions are generated and refreshed on a twice-daily schedule in West Africa Time
+            (including morning and early-afternoon runs). Selection lists typically appear after the
+            5:00 AM or 1:00 PM WAT generation windows. Live scores update during the day as matches
+            progress and finish.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>What does “confidence” mean?</h2>
+        <p>
+            Confidence is a calibrated probability estimate for the published outcome — not a tipster
+            star rating. A higher number means the model is more certain after blending bookmaker
+            prices, statistical models, and calibration. It does not mean the pick is guaranteed.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Why are some days empty?</h2>
+        <p>
+            Picks only appear when they clear a market-specific publish threshold. Quiet fixture lists,
+            missing market quotes (especially for BTTS), or temporary data gaps can produce a thin or
+            empty card for a market. Empty states are intentional — we prefer silence over padding the
+            page with low-quality picks.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Where can I see past performance?</h2>
+        <p>
+            Open <a href="/results">Results</a> for recent settled published picks, including losses.
+            The Betslips page also keeps a calendar of historical selection-list records.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>What are selection lists / betslips?</h2>
+        <p>
+            They are curated multi-leg combinations built from the day’s analysed card (for example
+            Banker, Rollover, and Ladder styles). They are informational tools — optional export to a
+            third-party sportsbook is available where configured, and is governed by that sportsbook’s
+            own terms.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Do you guarantee wins?</h2>
+        <p>
+            No. Football outcomes are uncertain. Past hit rate does not predict future results.
+            MatchPredictor is an informational statistics product, not financial advice and not a
+            bookmaker.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Is the site for adults only?</h2>
+        <p>
+            Yes. The site is intended for users aged <strong>18 and over</strong>. See
+            <a href="/Privacy#responsible-use">responsible use</a> and our
+            <a href="/terms">Terms of Use</a>.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Do I need an account?</h2>
+        <p>
+            No. There are no public user accounts. Cart selections stay in your browser’s local storage
+            until you clear them. Optional AI Chat may require an operator password when that feature
+            is gated.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>How do ads and cookies work?</h2>
+        <p>
+            We serve non-personalized Google AdSense ads. Analytics and advertising cookies stay denied
+            until you accept the cookie banner. Declining keeps first-party analytics and ad storage
+            off. Full detail is in the <a href="/Privacy">Privacy Policy</a>.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Why doesn’t every fixture appear?</h2>
+        <p>
+            Coverage follows the fixtures available in the daily input feeds and the markets we
+            support. Unsupported specials (for example bookings-only fixtures) are filtered out.
+            Threshold gating further reduces the list to picks the model is willing to publish.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>How can I get help or report a score error?</h2>
+        <p>
+            Email <a href="mailto:hello@matchpredictor.dev">hello@matchpredictor.dev</a> with the
+            fixture, market, and what looks wrong. Use the <a href="/contact">Contact</a> page for
+            other topics (privacy, press, or general feedback).
+        </p>
+    </section>
+</div>

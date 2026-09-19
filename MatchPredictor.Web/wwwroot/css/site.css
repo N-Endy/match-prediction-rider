@@ -460,6 +460,11 @@ a:hover {
   margin-top: 4rem;
 }
 
+.mp-home-block .mp-section-subtitle a,
+.mp-feature-card a {
+  color: var(--text-accent);
+}
+
 .mp-home-ad {
   margin: 3rem 0;
 }
@@ -1115,8 +1120,110 @@ a:hover {
   margin: 0 8px;
 }
 
+.mp-footer-legal {
+  margin-top: 0.75rem;
+}
+
 .mp-footer-copy {
   margin-top: 0.75rem;
+}
+
+.mp-market-explainer {
+  margin: 2.5rem 0 1rem;
+  padding: 1.5rem 1.25rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+}
+
+.mp-market-explainer h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.25rem;
+  color: var(--text-primary);
+}
+
+.mp-market-explainer h3 {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 1.05rem;
+  color: var(--text-primary);
+}
+
+.mp-market-explainer p,
+.mp-market-explainer li {
+  color: var(--text-secondary);
+  line-height: 1.65;
+  font-size: 0.95rem;
+}
+
+.mp-market-explainer ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.mp-market-explainer a {
+  color: var(--text-accent);
+}
+
+.mp-results-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin: 1.25rem 0 1.75rem;
+}
+
+.mp-results-stat {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+}
+
+.mp-results-stat strong {
+  display: block;
+  font-size: 1.35rem;
+  color: var(--text-primary);
+}
+
+.mp-results-stat span {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.mp-results-table-wrap {
+  overflow-x: auto;
+  margin: 1rem 0 2rem;
+}
+
+.mp-results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.mp-results-table th,
+.mp-results-table td {
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  text-align: left;
+  color: var(--text-secondary);
+}
+
+.mp-results-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mp-results-win {
+  color: var(--accent-emerald);
+  font-weight: 600;
+}
+
+.mp-results-loss {
+  color: var(--accent-rose);
+  font-weight: 600;
 }
 
 .mp-analytics-section:not(.active),

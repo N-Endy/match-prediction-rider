@@ -1,0 +1,140 @@
+@page
+@model ResultsModel
+@{
+    ViewData["Title"] = "Settled results";
+    ViewData["Description"] = "Honest recent track record of MatchPredictor published football picks — wins and losses for the last 30 days, by market.";
+}
+
+<div class="mp-container">
+    <div class="mp-page-header">
+        <div>
+            <p class="mp-page-kicker">Track record</p>
+            <div class="mp-page-title">
+                <h1>Settled published results</h1>
+            </div>
+            <p class="mp-page-subtext">
+                Last @Model.WindowDays days of published picks that have a final score.
+                Losses are included — this is not a highlights reel.
+            </p>
+        </div>
+        @if (Model.FromLocalDate.HasValue && Model.ToLocalDate.HasValue)
+        {
+            <div class="mp-date-badge">@Model.FromLocalDate.Value.ToString("dd MMM") – @Model.ToLocalDate.Value.ToString("dd MMM yyyy")</div>
+        }
+    </div>
+
+    <div class="mp-results-summary">
+        <div class="mp-results-stat">
+            <strong>@Model.TotalCount</strong>
+            <span>Settled picks</span>
+        </div>
+        <div class="mp-results-stat">
+            <strong>@Model.WinCount</strong>
+            <span>Correct</span>
+        </div>
+        <div class="mp-results-stat">
+            <strong>@Model.LossCount</strong>
+            <span>Incorrect</span>
+        </div>
+        <div class="mp-results-stat">
+            <strong>@(Model.TotalCount == 0 ? "—" : $"{Model.OverallHitRate:P0}")</strong>
+            <span>Hit rate</span>
+        </div>
+    </div>
+
+    @if (Model.MarketSummaries.Count > 0)
+    {
+        <section class="mp-legal-section" style="margin-bottom: 1.5rem;">
+            <h2 class="mp-section-heading" style="font-size: 1.1rem;">By market</h2>
+            <div class="mp-results-table-wrap">
+                <table class="mp-results-table">
+                    <thead>
+                        <tr>
+                            <th>Market</th>
+                            <th>Settled</th>
+                            <th>Correct</th>
+                            <th>Incorrect</th>
+                            <th>Hit rate</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var summary in Model.MarketSummaries)
+                    {
+                        <tr>
+                            <td>@summary.MarketLabel</td>
+                            <td>@summary.Total</td>
+                            <td>@summary.Wins</td>
+                            <td>@summary.Losses</td>
+                            <td>@($"{summary.HitRate:P0}")</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    }
+
+    @if (Model.Rows.Count == 0)
+    {
+        <div class="mp-empty-state">
+            <div class="mp-empty-state-icon">📊</div>
+            <p>No settled published picks in the last @Model.WindowDays days yet.</p>
+            <p class="mp-empty-state-hint">
+                Results appear here after fixtures on the public card finish and scores are matched.
+                See <a href="/methodology">how settlement works</a>.
+            </p>
+        </div>
+    }
+    else
+    {
+        <div class="mp-results-table-wrap">
+            <table class="mp-results-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Fixture</th>
+                        <th>Market</th>
+                        <th>Pick</th>
+                        <th>Score</th>
+                        <th>Result</th>
+                    </tr>
+                </thead>
+                <tbody>
+                @foreach (var row in Model.Rows)
+                {
+                    var p = row.Prediction;
+                    <tr>
+                        <td>@row.DateLabel</td>
+                        <td>@p.HomeTeam vs @p.AwayTeam <span style="color:var(--text-muted);font-size:0.8rem;">(@p.League)</span></td>
+                        <td>@row.MarketLabel</td>
+                        <td>@p.PredictedOutcome</td>
+                        <td>@(p.ActualScore ?? "—")</td>
+                        <td class="@(row.IsWin ? "mp-results-win" : "mp-results-loss")">
+                            @(row.IsWin ? "Correct" : "Incorrect")
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    <section class="mp-market-explainer" aria-labelledby="results-notes-heading">
+        <h2 id="results-notes-heading">How to read this page</h2>
+        <p>
+            Only <strong>published</strong>, <strong>current-revision</strong> picks with a non-empty
+            final score are listed. Bookings-only specials are excluded. Hit rate is a simple correct
+            count over settled rows in the window — it is not ROI, CLV, or proof of future profit.
+        </p>
+        <p>
+            Small samples swing wildly. Prefer the market breakdown and a growing sample over any
+            single hot or cold streak. For the model pipeline, see
+            <a href="/methodology">Methodology</a>. For today’s live card, open a market page such as
+            <a href="/predictions/btts">BTTS</a>.
+        </p>
+        <p>
+            MatchPredictor is informational, 18+, and not a bookmaker.
+            <a href="/Privacy#responsible-use">Responsible use</a>.
+        </p>
+    </section>
+</div>

@@ -1,0 +1,56 @@
+<section class="mp-market-explainer" aria-labelledby="win-explainer-heading">
+    <h2 id="win-explainer-heading">How Straight Win picks are built</h2>
+    <p>
+        Straight Win publishes a home-win or away-win angle in 90 minutes (plus stoppage). It is the
+        classic 1X2 side market without the draw. That makes it intuitive — “this side should win” —
+        and also unforgiving: a late equaliser or a single clinical counter turns a strong process
+        pick into a loss on the scoreboard.
+    </p>
+
+    <h3>What you see on the Straight Win card</h3>
+    <p>
+        Each published row names the backed side (home or away), the fixture context, kickoff, and
+        calibrated confidence. Filters help you focus on elite confidence, a specific league, or
+        upcoming fixtures only. When a match finishes, the score settles the pick: the backed side
+        must win; draws and losses both count as incorrect for Straight Win.
+    </p>
+
+    <h3>How a side is chosen</h3>
+    <p>
+        The ensemble builds 1X2 probabilities from de-vigged bookmaker prices (Shin margin removal
+        on the three-way market), Dixon-Coles scoreline probabilities, Elo-adjusted form, and a
+        quality-checked third-party feed when present. After blending, the 1X2 triple is renormalised
+        to sum to one. A Straight Win pick is published only when the chosen side’s calibrated
+        probability clears the side-specific threshold — not merely because the side is favourite
+        on the board.
+    </p>
+    <ul>
+        <li>Home and away wins use their own threshold profiles.</li>
+        <li>Favourites below the publish gate stay off the public card.</li>
+        <li>Optional ML signals join only after holdout Brier promotion.</li>
+    </ul>
+
+    <h3>Confidence vs “obvious favourite”</h3>
+    <p>
+        Bookmaker favourites and model confidence often agree — but not always. A short-priced side
+        can still miss the publish threshold if calibration says the price is too aggressive, and a
+        slightly longer side can clear the gate when statistical form and market prices align. Use
+        confidence to rank today’s published wins; use <a href="/results">Results</a> to see how
+        recent Straight Win picks actually landed.
+    </p>
+
+    <h3>Empty cards and cup chaos</h3>
+    <p>
+        Rotated squads, two-legged ties, or sparse schedules can leave few sides clearing the gate.
+        That is expected. We do not force a Straight Win onto the page to fill space. For multi-leg
+        constructions that start from analysed wins, see <a href="/betslips">Betslips</a>. For the
+        pipeline detail, see <a href="/methodology">Methodology</a>.
+    </p>
+
+    <h3>Responsible use</h3>
+    <p>
+        Match outcomes are uncertain even when probabilities look high. This site is informational,
+        18+, and not a bookmaker. Review <a href="/Privacy#responsible-use">responsible use</a> and
+        the <a href="/faq">FAQ</a> before relying on any card.
+    </p>
+</section>

@@ -31,6 +31,32 @@ public class PredictionQueries : IPredictionQueries
     public Task<IReadOnlyList<Prediction>> GetDrawAsync(DateTime date) =>
         GetByCategoryAsync(date, "Draw");
 
+    public async Task<IReadOnlyList<Prediction>> GetRecentSettledPublishedAsync(int days = 30)
+    {
+        var windowDays = Math.Clamp(days, 1, 90);
+        var todayLocal = DateOnly.FromDateTime(DateTimeProvider.GetLocalTime());
+        var fromLocal = todayLocal.AddDays(-(windowDays - 1));
+
+        var candidates = await _context.Predictions
+            .AsNoTracking()
+            .Where(p =>
+                p.IsCurrentRevision &&
+                p.WasPublished &&
+                p.MatchLocalDate >= fromLocal &&
+                p.MatchLocalDate <= todayLocal &&
+                p.ActualScore != null &&
+                p.ActualScore != "")
+            .ToListAsync();
+
+        return candidates
+            .Where(p => !UnsupportedFixtureFilter.IsBookingsFixture(p.HomeTeam, p.AwayTeam))
+            .OrderByDescending(p => p.MatchLocalDate)
+            .ThenByDescending(p => p.MatchLocalTime ?? DateTimeProvider.ParseLocalTimeOrNull(p.Time))
+            .ThenBy(p => p.League)
+            .ThenBy(p => p.HomeTeam)
+            .ToList();
+    }
+
     private async Task<IReadOnlyList<Prediction>> GetByCategoryAsync(DateTime date, string category)
     {
         var localDate = DateOnly.FromDateTime(date);

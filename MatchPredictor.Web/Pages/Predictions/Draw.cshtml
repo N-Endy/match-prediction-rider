@@ -3,6 +3,7 @@
 
 @{
     ViewData["Title"] = "Draw Predictions";
+    ViewData["Description"] = "Today’s calibrated Draw card from MatchPredictor — low-separation fixtures that cleared the draw publish threshold, with filters and explainers.";
     var today = MatchPredictor.Infrastructure.Utils.DateTimeProvider.GetLocalTime().ToString("dd MMM yyyy");
 }
 
@@ -47,4 +48,6 @@
             </p>
         </div>
     }
+
+    <partial name="_ExplainerDraw" />
 </div>

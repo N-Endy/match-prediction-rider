@@ -1,0 +1,84 @@
+@page
+@model AboutModel
+@{
+    ViewData["Title"] = "About MatchPredictor";
+    ViewData["Description"] = "MatchPredictor is an informational football statistics tool that publishes calibrated daily picks, selection lists, and an honest settled-results track record.";
+}
+
+<div class="mp-container mp-legal">
+    <div class="mp-page-header">
+        <div>
+            <p class="mp-page-kicker">About</p>
+            <div class="mp-page-title">
+                <h1>About MatchPredictor</h1>
+            </div>
+        </div>
+    </div>
+
+    <p class="mp-legal-meta">
+        Contact: <a href="mailto:hello@matchpredictor.dev">hello@matchpredictor.dev</a>
+        · <a href="/contact">Contact page</a>
+        · <a href="/methodology">How the model works</a>
+    </p>
+
+    <section class="mp-legal-section">
+        <h2>What this site is</h2>
+        <p>
+            MatchPredictor is an informational football (soccer) statistics site at
+            <strong>matchpredictor.dev</strong>. Each day we publish a curated card of picks across
+            Both Teams to Score, Over/Under 2.5 goals, Straight Win, and Draw markets, plus
+            auto-composed selection lists and a public settled-results record.
+        </p>
+        <p>
+            We are <strong>not</strong> a bookmaker. We do not accept stakes, hold deposits, or operate
+            gambling services. Optional slip-export links open a third-party sportsbook governed by
+            its own terms and licensing. The site is intended for users aged <strong>18 and over</strong> only.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>What we publish</h2>
+        <ul>
+            <li><strong>Daily market cards</strong> — filterable lists of published picks with calibrated confidence, kickoff time, and settlement when the match finishes.</li>
+            <li><strong>Selection lists</strong> — curated multi-leg lists (Banker, Rollover, Ladder, and related variants) built from the day’s analysed card.</li>
+            <li><strong>Settled results</strong> — an honest recent track record of published picks that have finished, including losses. See <a href="/results">Results</a>.</li>
+            <li><strong>Methodology</strong> — a plain-language description of how signals are blended, calibrated, and gated before publish. See <a href="/methodology">Methodology</a>.</li>
+        </ul>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>How we think about quality</h2>
+        <p>
+            A pick only appears on the public card when its calibrated probability clears a
+            market-specific publish threshold. After kickoff we settle scores against real results
+            and use that history to recalibrate and retune thresholds. Past hit rate is not a
+            guarantee of future results — it is a maintenance signal that the site is actively curated.
+        </p>
+        <p>
+            Predictions are statistical estimates. They can be wrong on any given day. Use the tools
+            for information and entertainment; never stake more than you can afford to lose.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Who runs it</h2>
+        <p>
+            MatchPredictor is operated as an independent project focused on football probability
+            modelling and transparent daily publication. There are no user accounts and we do not
+            sell personal data. For privacy details see our <a href="/Privacy">Privacy Policy</a>;
+            for usage rules see our <a href="/terms">Terms of Use</a>.
+        </p>
+        <p>
+            Questions, corrections, or press: <a href="mailto:hello@matchpredictor.dev">hello@matchpredictor.dev</a>.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Responsible use</h2>
+        <p>
+            If sports entertainment is affecting you or someone you know, seek help from a recognised
+            support organisation in your country. More detail is on our
+            <a href="/Privacy#responsible-use">responsible use</a> section.
+        </p>
+    </section>
+</div>

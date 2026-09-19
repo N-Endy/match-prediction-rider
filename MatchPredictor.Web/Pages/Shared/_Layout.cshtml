@@ -15,12 +15,12 @@
     var request = Context.Request;
     var origin = $"{request.Scheme}://{request.Host.Value}";
     var canonicalPath = string.IsNullOrEmpty(currentPath) ? "/" : currentPath;
-    var canonicalUrl = $"{origin}{canonicalPath}{request.QueryString.Value}";
+    var canonicalUrl = $"{origin}{canonicalPath}";
     var pageTitle = ViewData["Title"] as string;
     var ogTitle = string.IsNullOrWhiteSpace(pageTitle)
         ? "MatchPredictor – Daily AI Football Predictions"
         : $"{pageTitle} – MatchPredictor";
-    var defaultDescription = "Predict before kickoff. Results after the final whistle. Daily AI football predictions and betslips.";
+    var defaultDescription = "Calibrated daily football predictions, selection lists, and settled results. Informational statistics — not a bookmaker.";
     var ogDescription = ViewData["Description"] as string ?? defaultDescription;
     var ogImageUrl = $"{origin}/og-preview.png";
     var logoUrl = $"{origin}/img/logo.png";
@@ -143,8 +143,9 @@
             <li><a class="@NavClass("/predictions/draw")" href="/predictions/draw">Draw</a></li>
             <li><a class="@NavClass("/predictions/over2")" href="/predictions/over2">Over 2.5</a></li>
             <li><a class="@NavClass("/predictions/under2")" href="/predictions/under2">Under 2.5</a></li>
+            <li><a class="@NavClass("/results")" href="/results">Results</a></li>
             <li><a class="@NavClass("/aichat")" href="/aichat">AI Chat</a></li>
-            <li><a class="@NavClass("/analytics")" href="/analytics">Analytics</a></li>
+            <li><a class="@NavClass("/about")" href="/about">About</a></li>
         </ul>
     </div>
 </nav>
@@ -165,15 +166,23 @@
 <footer class="mp-footer">
     <div>
         <a href="/betslips">Betslips</a> ·
+        <a href="/results">Results</a> ·
         <a href="/predictions/btts">BTTS</a> ·
         <a href="/predictions/straightwin">Straight Win</a> ·
         <a href="/predictions/draw">Draw</a> ·
         <a href="/predictions/over2">Over 2.5</a> ·
-        <a href="/predictions/under2">Under 2.5</a> ·
+        <a href="/predictions/under2">Under 2.5</a>
+    </div>
+    <div class="mp-footer-legal">
+        <a href="/about">About</a> ·
+        <a href="/methodology">Methodology</a> ·
+        <a href="/faq">FAQ</a> ·
+        <a href="/contact">Contact</a> ·
+        <a href="/terms">Terms</a> ·
         <a href="/Privacy">Privacy</a> ·
         <a href="/Privacy#responsible-use">Responsible use</a>
     </div>
-    <p class="mp-footer-copy">&copy; @DateTime.Now.Year MatchPredictor · AI-Powered Football Predictions</p>
+    <p class="mp-footer-copy">&copy; @DateTime.Now.Year MatchPredictor · Informational football statistics</p>
 </footer>
 
 <!-- Scroll to Top -->
@@ -229,7 +238,7 @@
 <div id="cookieConsentBanner" class="mp-cookie-banner" style="display: none;">
     <div class="mp-cookie-content">
         <p>
-            We use cookies to personalize content, serve targeted ads, and analyze our traffic.
+            We use cookies for optional first-party analytics and to serve non-personalized ads.
             By clicking "Accept", you consent to our use of cookies in accordance with our <a href="/Privacy">Privacy Policy</a>.
         </p>
         <div class="mp-cookie-actions">

@@ -1,0 +1,149 @@
+@page
+@model MethodologyModel
+@{
+    ViewData["Title"] = "Prediction methodology";
+    ViewData["Description"] = "How MatchPredictor blends bookmaker prices, statistical models, and calibration to publish daily football picks — and how those picks are settled.";
+}
+
+<div class="mp-container mp-legal">
+    <div class="mp-page-header">
+        <div>
+            <p class="mp-page-kicker">Methodology</p>
+            <div class="mp-page-title">
+                <h1>How MatchPredictor builds the daily card</h1>
+            </div>
+        </div>
+    </div>
+
+    <p class="mp-legal-meta">
+        Last updated: September 2026 ·
+        <a href="/results">View settled results</a> ·
+        <a href="/about">About the site</a>
+    </p>
+
+    <section class="mp-legal-section">
+        <h2>Overview</h2>
+        <p>
+            MatchPredictor publishes a filtered subset of football market forecasts twice a day
+            (West Africa Time). The goal is not to list every available fixture — it is to surface
+            picks whose calibrated probabilities clear a publish threshold, then settle them against
+            real scores so the system can learn.
+        </p>
+        <p>
+            The pipeline has four stages: ingest market and model inputs, blend them into a single
+            probability, calibrate and threshold that probability, then settle finished matches and
+            retrain overnight.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Inputs we use</h2>
+        <ul>
+            <li><strong>Bookmaker prices</strong> — decimal odds from a major sportsbook, converted to
+                implied probabilities with margin removed (Shin for three-way markets; power method for
+                two-way markets such as Over/Under and BTTS). These act as a market anchor.</li>
+            <li><strong>Statistical models</strong> — a Dixon-Coles goals model with time decay and
+                team attack/defence strengths, blended with Elo ratings for form and home advantage.
+                Sparse teams fall back toward a global model rather than inventing unstable numbers.</li>
+            <li><strong>Third-party probability feeds</strong> — an independent probability source that
+                is quality-checked on ingest. When that feed is unavailable, the pipeline degrades to
+                bookmaker-sourced fixtures so the site still has a coherent card.</li>
+            <li><strong>Optional machine-learning signal</strong> — per-market LightGBM classifiers that
+                are only promoted into the live blend when they improve holdout Brier score versus the
+                incumbent ensemble.</li>
+        </ul>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Ensemble blending</h2>
+        <p>
+            Available signals are combined in logit space (a weighted geometric mean of probabilities).
+            Null or missing signals are skipped so the blend degrades gracefully. After blending,
+            1X2 probabilities are renormalised to sum to one, and Under 2.5 is treated as the
+            complement of Over 2.5.
+        </p>
+        <p>
+            Per-market stacking weights are learned on a walk-forward schedule and only replace the
+            live profile when the holdout Brier score improves by a meaningful margin. That promotion
+            gate exists specifically to stop short hot streaks from rewriting the model.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Calibration and publish thresholds</h2>
+        <p>
+            Raw ensemble probabilities are passed through a correction step and then a calibrator
+            (bucket, beta, or isotonic — whichever is currently promoted). Calibration asks a simple
+            question: when we say 70%, do outcomes land near 70% over time?
+        </p>
+        <p>
+            A pick is <strong>published</strong> only when its calibrated probability clears a
+            market-specific threshold. Thresholds themselves are tuned on recent settled history with
+            a holdout check. Configured defaults remain live until a tuned threshold is promoted.
+            BTTS picks additionally require an explicit BTTS market quote — a Poisson-only estimate
+            is not enough to appear on the card.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Published markets</h2>
+        <div class="mp-legal-table-wrap">
+            <table class="mp-legal-table">
+                <thead>
+                    <tr>
+                        <th>Market</th>
+                        <th>What “published” means</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Both Teams to Score</td>
+                        <td>Both sides are expected to score at least once</td>
+                    </tr>
+                    <tr>
+                        <td>Over / Under 2.5</td>
+                        <td>Total goals expected above or at/below 2.5</td>
+                    </tr>
+                    <tr>
+                        <td>Straight Win</td>
+                        <td>Home or away side backed to win in 90 minutes</td>
+                    </tr>
+                    <tr>
+                        <td>Draw</td>
+                        <td>Low-separation fixtures where the draw angle clears its threshold</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>Settlement and learning</h2>
+        <p>
+            After matches finish, scores are matched from multiple result sources and each published
+            pick is marked correct or incorrect. Those settled forecasts feed nightly loops that
+            retune ensemble weights, optional ML models, probability correction, calibrators, and
+            thresholds — always behind walk-forward promotion gates.
+        </p>
+        <p>
+            The public <a href="/results">Results</a> page shows recent settled published picks without
+            cherry-picking wins. Operator analytics (Brier, ECE, CLV, ROI) remain available for site
+            maintenance; the public site focuses on the card, the lists, and the track record.
+        </p>
+    </section>
+
+    <section class="mp-legal-section">
+        <h2>What this is not</h2>
+        <ul>
+            <li>Not a guarantee of profit or of any single match outcome.</li>
+            <li>Not insider information, tipster “locks,” or financial advice.</li>
+            <li>Not a bookmaker — we do not accept stakes.</li>
+        </ul>
+        <p>
+            Confidence scores are calibrated probabilities, not marketing labels. A 62% pick should
+            land roughly six times in ten over a large sample — and that still means four losses.
+            Read more in the <a href="/faq">FAQ</a> or review the
+            <a href="/Privacy#responsible-use">responsible use</a> policy.
+        </p>
+    </section>
+</div>

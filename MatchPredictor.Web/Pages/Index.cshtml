@@ -3,6 +3,7 @@
 
 @{
     ViewData["Title"] = "Smart Daily Football Predictions";
+    ViewData["Description"] = "MatchPredictor publishes calibrated daily football picks, selection lists, and an honest settled-results track record — an informational statistics tool, not a bookmaker.";
 }
 
 <section class="mp-hero">
@@ -11,13 +12,13 @@
         Updated daily
     </div>
     <h1>Smart Football<br>Predictions</h1>
-    <p>Today’s BTTS, Over 2.5, Under 2.5, Straight Win, and Draw card — analysed and published twice a day.</p>
+    <p>Today’s BTTS, Over 2.5, Under 2.5, Straight Win, and Draw card — analysed, threshold-gated, and published twice a day.</p>
     <div class="mp-hero-actions">
         <a href="/predictions/btts" class="mp-hero-cta">
             Open today’s card
         </a>
-        <a href="/betslips" class="mp-hero-cta mp-hero-cta-secondary">
-            Today’s selection lists
+        <a href="/results" class="mp-hero-cta mp-hero-cta-secondary">
+            Settled results
         </a>
     </div>
 </section>
@@ -66,25 +67,31 @@
 
     <div class="mp-home-block">
         <h2 class="mp-section-heading">How It Works</h2>
-        <p class="mp-section-subtitle">Three steps to the daily card</p>
+        <p class="mp-section-subtitle">From market inputs to a settled track record</p>
 
         <div class="mp-features">
             <div class="mp-feature-card">
-                <div class="mp-feature-icon mp-icon-over">🕵️</div>
-                <h3>Collect & Analyze</h3>
-                <p>We scrape AI-generated odds from a reliable source every day and run them through intelligent logic.</p>
+                <div class="mp-feature-icon mp-icon-over">📥</div>
+                <h3>Collect market &amp; model inputs</h3>
+                <p>We combine bookmaker prices (margin removed), statistical goals models, and checked third-party probability feeds for each fixture.</p>
             </div>
             <div class="mp-feature-card">
                 <div class="mp-feature-icon mp-icon-btts">🧠</div>
-                <h3>Smart Filtering</h3>
-                <p>Our algorithms filter for high-probability matches across multiple prediction categories.</p>
+                <h3>Blend, calibrate &amp; threshold</h3>
+                <p>Signals are blended into one probability, calibrated for honesty, and published only when they clear a market-specific gate.</p>
             </div>
             <div class="mp-feature-card">
-                <div class="mp-feature-icon mp-icon-cyan">📲</div>
-                <h3>Publish Daily</h3>
-                <p>Get a clean, curated list of daily football tips with clearly labeled sponsored slots and no noisy clutter.</p>
+                <div class="mp-feature-icon mp-icon-cyan">📊</div>
+                <h3>Settle &amp; learn</h3>
+                <p>Finished matches update the public <a href="/results">results</a> record and feed overnight recalibration — past performance is not a guarantee.</p>
             </div>
         </div>
+
+        <p class="mp-section-subtitle" style="margin-top: 1.5rem;">
+            Read the full pipeline on <a href="/methodology">Methodology</a> ·
+            Who we are on <a href="/about">About</a> ·
+            Common questions in the <a href="/faq">FAQ</a>
+        </p>
     </div>
 
     <div class="mp-home-ad">
@@ -94,6 +101,9 @@
     <div class="mp-home-cta">
         <a href="/betslips" class="mp-hero-cta">
             View today’s selection lists
+        </a>
+        <a href="/results" class="mp-hero-cta mp-hero-cta-secondary" style="margin-left: 0.75rem;">
+            View settled results
         </a>
     </div>
 </div>

@@ -1,0 +1,55 @@
+<section class="mp-market-explainer" aria-labelledby="under-explainer-heading">
+    <h2 id="under-explainer-heading">How Under 2.5 Goals picks are built</h2>
+    <p>
+        Under 2.5 Goals is the calm side of the totals market: the published view is that the match
+        is more likely to finish with two goals or fewer. Unders often show up in tighter leagues,
+        weather-affected pitches, or fixtures where both attacks look blunt relative to the defences
+        they face. They can unravel quickly when an early goal forces a chase.
+    </p>
+
+    <h3>What this card is for</h3>
+    <p>
+        The Under page lists only fixtures that cleared the live Under 2.5 publish threshold after
+        calibration. You can filter by league, kickoff window, live/finished status, and confidence
+        band. Each row is meant to be scannable: who is playing, when they kick off, how strong the
+        under angle is, and — once settled — whether the total stayed at two or below.
+    </p>
+
+    <h3>How Under relates to Over</h3>
+    <p>
+        Inside the pipeline, Under 2.5 is the complement of Over 2.5 after the ensemble blend is
+        renormalised. That keeps the two-way market mathematically consistent: the model is not free
+        to claim 80% Over and 80% Under on the same fixture. Bookmaker Under prices (margin removed),
+        Dixon-Coles expected goals, Elo form, and the third-party feed (when available) all inform
+        the blend before correction and calibration.
+    </p>
+    <ul>
+        <li>Publish only if calibrated Under probability clears its own threshold.</li>
+        <li>Settlement uses full-time total goals; stoppage-time strikes still count.</li>
+        <li>Live unders that go 3+ mid-match are already failed even before full time.</li>
+    </ul>
+
+    <h3>Interpreting confidence</h3>
+    <p>
+        High Under confidence means the model sees a compressed scoring environment, not that the
+        match will be goalless. A 1–1 or 2–0 still lands the under; a 2–1 does not. Compare confidence
+        across today’s published unders, then cross-check recent settled performance on
+        <a href="/results">Results</a>. The longer technical story lives on
+        <a href="/methodology">Methodology</a>.
+    </p>
+
+    <h3>Why the list can be short</h3>
+    <p>
+        Attack-heavy rounds, derbies, or high-tempo leagues may produce few unders that clear the
+        gate. Mid-season fixture congestion can cut both ways. An empty or thin Under card usually
+        means the threshold did its job. Selection lists that favour lower-scoring legs may still
+        appear later on <a href="/betslips">Betslips</a>.
+    </p>
+
+    <h3>Responsible use</h3>
+    <p>
+        One late goal ruins an under. Treat published unders as statistical estimates for adults
+        (18+). MatchPredictor does not accept stakes. Read
+        <a href="/Privacy#responsible-use">responsible use</a> and the <a href="/faq">FAQ</a>.
+    </p>
+</section>

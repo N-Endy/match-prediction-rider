@@ -52,15 +52,95 @@ public class WebApplicationFactorySmokeTests
     }
 
     [Fact]
-    public async Task HomePage_IncludesAnalyticsNavLink_WithoutAdminAuth()
+    public async Task HomePage_DoesNotIncludeAnalyticsNavLink_ForPublicUsers()
     {
         await using var factory = CreateFactory();
         using var client = CreateHttpsClient(factory);
 
         var html = await client.GetStringAsync("/");
 
-        Assert.Contains("href=\"/analytics\"", html);
-        Assert.Contains(">Analytics</a>", html);
+        Assert.DoesNotContain("href=\"/analytics\"", html);
+        Assert.Contains("href=\"/about\"", html);
+        Assert.Contains("href=\"/results\"", html);
+    }
+
+    [Fact]
+    public async Task TrustAndResultsPages_ReturnSuccess_WithExpectedHeadings()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var about = await client.GetStringAsync("/about");
+        var methodology = await client.GetStringAsync("/methodology");
+        var faq = await client.GetStringAsync("/faq");
+        var terms = await client.GetStringAsync("/terms");
+        var contact = await client.GetStringAsync("/contact");
+        var results = await client.GetStringAsync("/results");
+
+        Assert.Contains("About MatchPredictor", about);
+        Assert.Contains("How MatchPredictor builds the daily card", methodology);
+        Assert.Contains("Frequently asked questions", faq);
+        Assert.Contains("Terms of Use", terms);
+        Assert.Contains("Contact MatchPredictor", contact);
+        Assert.Contains("Settled published results", results);
+    }
+
+    [Fact]
+    public async Task PredictionPages_IncludeUniqueMarketExplainers()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var btts = await client.GetStringAsync("/predictions/btts");
+        var over = await client.GetStringAsync("/predictions/over2");
+        var under = await client.GetStringAsync("/predictions/under2");
+        var win = await client.GetStringAsync("/predictions/straightwin");
+        var draw = await client.GetStringAsync("/predictions/draw");
+
+        Assert.Contains("How Both Teams to Score picks are built", btts);
+        Assert.Contains("How Over 2.5 Goals picks are built", over);
+        Assert.Contains("How Under 2.5 Goals picks are built", under);
+        Assert.Contains("How Straight Win picks are built", win);
+        Assert.Contains("How Draw picks are built", draw);
+    }
+
+    [Fact]
+    public async Task SitemapAndRobots_IncludePublicUrls()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var sitemap = await client.GetStringAsync("/sitemap.xml");
+        var robots = await client.GetStringAsync("/robots.txt");
+
+        Assert.Contains("https://matchpredictor.dev/about", sitemap);
+        Assert.Contains("https://matchpredictor.dev/results", sitemap);
+        Assert.Contains("https://matchpredictor.dev/methodology", sitemap);
+        Assert.Contains("Sitemap: https://matchpredictor.dev/sitemap.xml", robots);
+    }
+
+    [Fact]
+    public async Task HomePage_UsesNonPersonalizedCookieBannerCopy()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var html = await client.GetStringAsync("/");
+
+        Assert.Contains("non-personalized ads", html);
+        Assert.DoesNotContain("serve targeted ads", html);
+    }
+
+    [Fact]
+    public async Task CanonicalUrl_DoesNotIncludeQueryString()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var html = await client.GetStringAsync("/predictions/btts?league=Test");
+
+        Assert.Contains("rel=\"canonical\" href=\"https://localhost/predictions/btts\"", html);
+        Assert.DoesNotContain("rel=\"canonical\" href=\"https://localhost/predictions/btts?league=Test\"", html);
     }
 
     [Fact]
@@ -239,6 +319,8 @@ public class WebApplicationFactorySmokeTests
         public Task<IReadOnlyList<Prediction>> GetStraightWinAsync(DateTime date) => Empty();
 
         public Task<IReadOnlyList<Prediction>> GetDrawAsync(DateTime date) => Empty();
+
+        public Task<IReadOnlyList<Prediction>> GetRecentSettledPublishedAsync(int days = 30) => Empty();
 
         private static Task<IReadOnlyList<Prediction>> Empty()
         {

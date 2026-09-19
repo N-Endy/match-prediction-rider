@@ -3,6 +3,7 @@
 
 @{
     ViewData["Title"] = "Under 2.5 Goals";
+    ViewData["Description"] = "Today’s calibrated Under 2.5 Goals card from MatchPredictor — quieter totals picks with publish thresholds, filters, and settlement explainers.";
     var today = MatchPredictor.Infrastructure.Utils.DateTimeProvider.GetLocalTime().ToString("dd MMM yyyy");
 }
 
@@ -47,4 +48,6 @@
             </p>
         </div>
     }
+
+    <partial name="_ExplainerUnder2" />
 </div>

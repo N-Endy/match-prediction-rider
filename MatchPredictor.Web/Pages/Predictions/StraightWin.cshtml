@@ -3,6 +3,7 @@
 
 @{
     ViewData["Title"] = "Straight Win";
+    ViewData["Description"] = "Today’s calibrated Straight Win card from MatchPredictor — home and away sides that cleared publish thresholds, with filters and methodology context.";
     var today = MatchPredictor.Infrastructure.Utils.DateTimeProvider.GetLocalTime().ToString("dd MMM yyyy");
 }
 
@@ -47,4 +48,6 @@
             </p>
         </div>
     }
+
+    <partial name="_ExplainerStraightWin" />
 </div>

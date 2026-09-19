@@ -1,0 +1,56 @@
+<section class="mp-market-explainer" aria-labelledby="draw-explainer-heading">
+    <h2 id="draw-explainer-heading">How Draw picks are built</h2>
+    <p>
+        Draw publishing targets low-separation fixtures: matches where the model sees enough
+        probability that neither side wins in 90 minutes. Draws are structurally harder than many
+        side markets — true draw rates in many leagues sit well below home-win rates — so the
+        publish threshold and calibration matter even more. A thin Draw card is common and usually
+        healthy.
+    </p>
+
+    <h3>What the Draw card contains</h3>
+    <p>
+        Only fixtures whose calibrated draw probability clears the live Draw threshold appear here.
+        Each row includes league, teams, kickoff, confidence, and status filters identical in spirit
+        to the other market pages, but the underlying decision is different: we are not backing a
+        side; we are backing a stalemate. Settlement is simple — full-time scoreline must be level.
+    </p>
+
+    <h3>Why draws need their own gate</h3>
+    <p>
+        Inside 1X2, draw probability comes from the same ensemble as home and away: Shin-devigged
+        bookmaker prices, Dixon-Coles score matrix mass on level scorelines, Elo context, and the
+        third-party feed when available. After renormalisation, Draw has its own threshold-tuning
+        loop so the card does not fill with noise whenever two mid-table sides meet. Optional ML
+        classifiers for Draw promote only when they improve holdout Brier versus the incumbent.
+    </p>
+    <ul>
+        <li>Low separation does not automatically mean “publish a draw.”</li>
+        <li>A 1–1 or 0–0 lands; a 2–1 late winner does not.</li>
+        <li>Historical draw hit rate should be read with sample size in mind.</li>
+    </ul>
+
+    <h3>Reading Draw confidence carefully</h3>
+    <p>
+        Because base rates are lower, published draw confidences often sit in a tighter band than
+        big-side Straight Wins. A 55–65% draw angle can still be a high bar relative to the league’s
+        natural draw rate — and it can still lose more often than a casual reader expects. Compare
+        today’s published draws against the settled record on <a href="/results">Results</a>, and
+        read how promotion gates work on <a href="/methodology">Methodology</a>.
+    </p>
+
+    <h3>When you see few draws</h3>
+    <p>
+        Open, high-tempo rounds and clear mismatch fixtures produce few qualifying draws. That is
+        preferred over listing every 2.80 decimal draw price on the board. Some selection-list
+        variants (including AI draw constructions) appear on <a href="/betslips">Betslips</a> when
+        those generators run — they are still subject to the same honesty about uncertainty.
+    </p>
+
+    <h3>Responsible use</h3>
+    <p>
+        Draws are easy to over-bet after a short winning streak. MatchPredictor is an informational
+        statistics site for adults (18+), not a bookmaker and not a guarantee service. See
+        <a href="/Privacy#responsible-use">responsible use</a> and the <a href="/faq">FAQ</a>.
+    </p>
+</section>

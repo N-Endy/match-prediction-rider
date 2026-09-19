@@ -126,4 +126,179 @@ public class PredictionQueriesTests
         Assert.Equal("Charlotte FC", result.HomeTeam);
         Assert.Equal("Columbus Crew", result.AwayTeam);
     }
+
+    [Fact]
+    public async Task GetRecentSettledPublishedAsync_ReturnsOnlySettledPublishedCurrentRevisions()
+    {
+        await using var context = CreateContext();
+        var today = DateOnly.FromDateTime(MatchPredictor.Infrastructure.Utils.DateTimeProvider.GetLocalTime());
+        var recent = today.AddDays(-2);
+
+        context.Predictions.AddRange(
+            new Prediction
+            {
+                Date = recent.ToString("dd-MM-yyyy"),
+                Time = "15:00",
+                MatchLocalDate = recent,
+                MatchLocalTime = new TimeOnly(15, 0),
+                League = "TestLeague",
+                HomeTeam = "Alpha",
+                AwayTeam = "Beta",
+                PredictionCategory = "BothTeamsScore",
+                PredictedOutcome = "BTTS",
+                WasPublished = true,
+                IsCurrentRevision = true,
+                ActualScore = "2-1",
+                ActualOutcome = "BTTS",
+                PredictionRunId = Guid.NewGuid(),
+                RunLabel = "04:30 WAT",
+                RunReason = "refresh",
+                RevisionNumber = 1
+            },
+            new Prediction
+            {
+                Date = recent.ToString("dd-MM-yyyy"),
+                Time = "16:00",
+                MatchLocalDate = recent,
+                MatchLocalTime = new TimeOnly(16, 0),
+                League = "TestLeague",
+                HomeTeam = "Gamma",
+                AwayTeam = "Delta",
+                PredictionCategory = "Over2.5Goals",
+                PredictedOutcome = "Over 2.5",
+                WasPublished = false,
+                IsCurrentRevision = true,
+                ActualScore = "3-1",
+                PredictionRunId = Guid.NewGuid(),
+                RunLabel = "04:30 WAT",
+                RunReason = "refresh",
+                RevisionNumber = 1
+            },
+            new Prediction
+            {
+                Date = recent.ToString("dd-MM-yyyy"),
+                Time = "17:00",
+                MatchLocalDate = recent,
+                MatchLocalTime = new TimeOnly(17, 0),
+                League = "TestLeague",
+                HomeTeam = "Epsilon",
+                AwayTeam = "Zeta",
+                PredictionCategory = "StraightWin",
+                PredictedOutcome = "Home Win",
+                WasPublished = true,
+                IsCurrentRevision = true,
+                ActualScore = null,
+                PredictionRunId = Guid.NewGuid(),
+                RunLabel = "04:30 WAT",
+                RunReason = "refresh",
+                RevisionNumber = 1
+            },
+            new Prediction
+            {
+                Date = recent.ToString("dd-MM-yyyy"),
+                Time = "18:00",
+                MatchLocalDate = recent,
+                MatchLocalTime = new TimeOnly(18, 0),
+                League = "MLS",
+                HomeTeam = "Charlotte FC (Bookings)",
+                AwayTeam = "Columbus Crew (Bookings)",
+                PredictionCategory = "BothTeamsScore",
+                PredictedOutcome = "BTTS",
+                WasPublished = true,
+                IsCurrentRevision = true,
+                ActualScore = "1-1",
+                PredictionRunId = Guid.NewGuid(),
+                RunLabel = "04:30 WAT",
+                RunReason = "refresh",
+                RevisionNumber = 1
+            },
+            new Prediction
+            {
+                Date = recent.ToString("dd-MM-yyyy"),
+                Time = "19:00",
+                MatchLocalDate = recent,
+                MatchLocalTime = new TimeOnly(19, 0),
+                League = "TestLeague",
+                HomeTeam = "Superseded",
+                AwayTeam = "Side",
+                PredictionCategory = "Draw",
+                PredictedOutcome = "Draw",
+                WasPublished = true,
+                IsCurrentRevision = false,
+                ActualScore = "0-0",
+                PredictionRunId = Guid.NewGuid(),
+                RunLabel = "04:30 WAT",
+                RunReason = "refresh",
+                RevisionNumber = 1
+            });
+
+        await context.SaveChangesAsync();
+        var queries = new PredictionQueries(context);
+
+        var results = await queries.GetRecentSettledPublishedAsync(30);
+
+        Assert.Contains(results, p => p.HomeTeam == "Alpha" && p.AwayTeam == "Beta");
+        Assert.DoesNotContain(results, p => p.HomeTeam == "Gamma");
+        Assert.DoesNotContain(results, p => p.HomeTeam == "Epsilon");
+        Assert.DoesNotContain(results, p => p.HomeTeam == "Superseded");
+        Assert.DoesNotContain(results, p => p.HomeTeam.Contains("Bookings", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetRecentSettledPublishedAsync_ExcludesRowsOutsideDayWindow()
+    {
+        await using var context = CreateContext();
+        var localNow = MatchPredictor.Infrastructure.Utils.DateTimeProvider.GetLocalTime();
+        var today = DateOnly.FromDateTime(localNow);
+        var inside = today.AddDays(-5);
+        var outside = today.AddDays(-45);
+
+        context.Predictions.AddRange(
+            new Prediction
+            {
+                Date = inside.ToString("dd-MM-yyyy"),
+                Time = "15:00",
+                MatchLocalDate = inside,
+                MatchLocalTime = new TimeOnly(15, 0),
+                League = "TestLeague",
+                HomeTeam = "Inside Home",
+                AwayTeam = "Inside Away",
+                PredictionCategory = "Under2.5Goals",
+                PredictedOutcome = "Under 2.5",
+                WasPublished = true,
+                IsCurrentRevision = true,
+                ActualScore = "0-1",
+                PredictionRunId = Guid.NewGuid(),
+                RunLabel = "04:30 WAT",
+                RunReason = "refresh",
+                RevisionNumber = 1
+            },
+            new Prediction
+            {
+                Date = outside.ToString("dd-MM-yyyy"),
+                Time = "15:00",
+                MatchLocalDate = outside,
+                MatchLocalTime = new TimeOnly(15, 0),
+                League = "TestLeague",
+                HomeTeam = "Outside Home",
+                AwayTeam = "Outside Away",
+                PredictionCategory = "Under2.5Goals",
+                PredictedOutcome = "Under 2.5",
+                WasPublished = true,
+                IsCurrentRevision = true,
+                ActualScore = "1-0",
+                PredictionRunId = Guid.NewGuid(),
+                RunLabel = "04:30 WAT",
+                RunReason = "refresh",
+                RevisionNumber = 1
+            });
+
+        await context.SaveChangesAsync();
+        var queries = new PredictionQueries(context);
+
+        var results = await queries.GetRecentSettledPublishedAsync(30);
+
+        Assert.Contains(results, p => p.HomeTeam == "Inside Home");
+        Assert.DoesNotContain(results, p => p.HomeTeam == "Outside Home");
+    }
 }

@@ -1,0 +1,57 @@
+<section class="mp-market-explainer" aria-labelledby="over-explainer-heading">
+    <h2 id="over-explainer-heading">How Over 2.5 Goals picks are built</h2>
+    <p>
+        Over 2.5 Goals is a totals market: the model is publishing that the match is more likely to
+        finish with three or more goals than with two or fewer. It does not say which team scores,
+        whether both teams score, or who wins. That focus makes Over useful when both sides create
+        chances — and fragile when a match turns into a cagey midfield battle after an early red card
+        or a weather delay.
+    </p>
+
+    <h3>What appears on today’s Over card</h3>
+    <p>
+        Published overs are fixtures whose calibrated Over probability cleared the live Over 2.5
+        threshold. Each card shows league, teams, kickoff, confidence, and status. Filters help you
+        scan early vs late kickoffs, isolate a league, or keep only strong/elite confidence bands.
+        Finished rows show the settled score so you can see whether the over landed without leaving
+        the page.
+    </p>
+
+    <h3>Signals behind an Over pick</h3>
+    <p>
+        Totals draw heavily on the Dixon-Coles score matrix (attack and defence strengths with time
+        decay), Elo context for recent form and home advantage, de-vigged bookmaker Over/Under prices,
+        and a third-party probability feed when quality checks pass. After blending in logit space,
+        Under is treated as the complement of Over so the two-way market stays coherent. Calibration
+        then reshapes the raw blend so stated percentages track long-run frequencies more honestly.
+    </p>
+    <ul>
+        <li>High Over confidence often coincides with open leagues or attack-heavy matchups.</li>
+        <li>A published Over can still fail at 2–0, 1–1, or 2–0 after a late miss.</li>
+        <li>Live scores update during the match; final settlement uses the full-time total.</li>
+    </ul>
+
+    <h3>Reading confidence on totals</h3>
+    <p>
+        A 70% Over pick means the calibrated model assigns roughly seven-in-ten chance to three-plus
+        goals — which still implies three misses in ten over a large sample. Do not confuse confidence
+        with “number of goals expected.” The market is binary at the 2.5 line. For how thresholds and
+        calibrators are promoted, see <a href="/methodology">Methodology</a>. For honest recent
+        outcomes, open <a href="/results">Results</a>.
+    </p>
+
+    <h3>Empty days and schedule effects</h3>
+    <p>
+        Some days simply lack enough fixtures that clear the Over threshold. Defensive leagues,
+        cup ties with rotated squads, or sparse midweeks can produce a short list. That is a feature
+        of threshold publishing, not a missing scrape. Come back after the next generation window,
+        or review curated multi-leg lists on <a href="/betslips">Betslips</a> when those runs complete.
+    </p>
+
+    <h3>Responsible use</h3>
+    <p>
+        Totals markets swing on a single late goal. Use this card as an informational filter, not as
+        a promise of profit. The site is 18+ and not a bookmaker. Details:
+        <a href="/Privacy#responsible-use">responsible use</a>, <a href="/faq">FAQ</a>.
+    </p>
+</section>

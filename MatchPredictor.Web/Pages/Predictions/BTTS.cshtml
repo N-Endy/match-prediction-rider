@@ -3,6 +3,7 @@
 
 @{
     ViewData["Title"] = "Both Teams to Score";
+    ViewData["Description"] = "Today’s calibrated Both Teams to Score card from MatchPredictor — filter by league, kickoff, and confidence, plus how BTTS picks are built and settled.";
     var today = MatchPredictor.Infrastructure.Utils.DateTimeProvider.GetLocalTime().ToString("dd MMM yyyy");
 }
 
@@ -47,4 +48,6 @@
             </p>
         </div>
     }
+
+    <partial name="_ExplainerBtts" />
 </div>
