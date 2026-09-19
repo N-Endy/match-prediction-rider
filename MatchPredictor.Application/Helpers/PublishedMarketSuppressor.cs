@@ -6,8 +6,8 @@ using Microsoft.EntityFrameworkCore;
 namespace MatchPredictor.Application.Helpers;
 
 /// <summary>
-/// Soft-suppresses prediction categories with persistently negative ROI and/or CLV.
-/// Used at publish time and again when packing betslips.
+/// Soft-suppresses prediction categories with persistently negative ROI and/or CLV
+/// when packing betslips. Public prediction pages keep showing selected picks.
 /// </summary>
 public static class PublishedMarketSuppressor
 {

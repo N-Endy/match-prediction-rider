@@ -62,7 +62,7 @@
             @if (Model.OpsQuality.SuppressedMarkets.Count > 0)
             {
                 <p class="mp-market-beta-empty">
-                    Soft-suppress (ROI ≤ −5% or CLV ≤ −2%, ≥20 settled): @string.Join(", ", Model.OpsQuality.SuppressedMarkets)
+                    Betslip soft-suppress (ROI ≤ −5% or CLV ≤ −2%, ≥20 settled): @string.Join(", ", Model.OpsQuality.SuppressedMarkets)
                 </p>
             }
         </article>
