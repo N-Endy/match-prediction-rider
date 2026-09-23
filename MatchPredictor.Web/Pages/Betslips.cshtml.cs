@@ -135,9 +135,19 @@ public class BetslipsModel : PageModel
         var monthStart = ParseMonth(month);
 
         DateOnly? effectiveDate = date;
+        BetslipRecordsForDate? requestedRecords = null;
         if (effectiveDate is null && autoSelectLatest)
         {
             effectiveDate = await _betslipQueries.GetLatestSlipDateAsync(RecordSection, ct);
+        }
+        else if (effectiveDate is not null)
+        {
+            requestedRecords = await _betslipQueries.GetSlipsForDateAsync(RecordSection, effectiveDate.Value, ct);
+            if (requestedRecords.Runs.Count == 0)
+            {
+                effectiveDate = await _betslipQueries.GetLatestSlipDateAsync(RecordSection, ct);
+                requestedRecords = null;
+            }
         }
 
         HasRecordDateSelection = effectiveDate is not null;
@@ -171,7 +181,8 @@ public class BetslipsModel : PageModel
             return;
         }
 
-        var records = await _betslipQueries.GetSlipsForDateAsync(RecordSection, RecordDate, ct);
+        var records = requestedRecords
+                      ?? await _betslipQueries.GetSlipsForDateAsync(RecordSection, RecordDate, ct);
         var utcNow = DateTime.UtcNow;
         Results = new BetslipRecordResultsViewModel
         {

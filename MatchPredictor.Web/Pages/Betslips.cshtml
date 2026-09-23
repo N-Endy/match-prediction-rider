@@ -80,10 +80,6 @@
         }
     }
 
-    @{
-        var recordTabDate = Model.HasRecordDateSelection ? Model.RecordDate : (DateOnly?)null;
-        var recordTabMonth = recordTabDate is null ? Model.CalendarMonth : (DateOnly?)null;
-    }
     <section class="mp-betslip-records"
              aria-labelledby="betslip-records-heading"
              data-betslip-records
@@ -98,16 +94,16 @@
             <nav class="mp-betslip-record-tabs" aria-label="Betslip type">
                 <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.Rollover ? "active" : "")"
                    data-record-section="rollover"
-                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Rollover, recordTabDate, recordTabMonth)">Rollover</a>
+                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Rollover)">Rollover</a>
                 <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.Banker ? "active" : "")"
                    data-record-section="banker"
-                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Banker, recordTabDate, recordTabMonth)">Banker</a>
+                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Banker)">Banker</a>
                 <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.Ladder ? "active" : "")"
                    data-record-section="ladder"
-                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Ladder, recordTabDate, recordTabMonth)">Ladder</a>
+                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.Ladder)">Ladder</a>
                 <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.AiDraws ? "active" : "")"
                    data-record-section="draws"
-                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.AiDraws, recordTabDate, recordTabMonth)">AI Draws</a>
+                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.AiDraws)">AI Draws</a>
             </nav>
         </header>
 
@@ -136,6 +132,10 @@
             let selectedDate = root.getAttribute('data-record-date')
                 || new URL(window.location.href).searchParams.get('date')
                 || null;
+            const datesBySection = {};
+            if (selectedDate) {
+                datesBySection[section] = selectedDate;
+            }
 
             function bindCopyButtons(scope) {
                 (scope || document).querySelectorAll('[data-copy-target]').forEach(button => {
@@ -159,17 +159,12 @@
                 });
             }
 
-            function updateTabHrefs(nextSection, nextMonth, nextDate) {
+            function updateTabHrefs() {
                 root.querySelectorAll('.mp-tab-btn[data-record-section]').forEach(tab => {
                     const tabSection = tab.getAttribute('data-record-section');
                     if (!tabSection) return;
                     const url = new URL('/betslips', window.location.origin);
                     url.searchParams.set('record', tabSection);
-                    if (nextDate) {
-                        url.searchParams.set('date', nextDate);
-                    } else if (nextMonth) {
-                        url.searchParams.set('month', nextMonth);
-                    }
                     tab.setAttribute('href', url.pathname + url.search);
                 });
             }
@@ -189,7 +184,7 @@
                     }
                 }
                 history.replaceState({}, '', url);
-                updateTabHrefs(nextSection, nextMonth, nextDate);
+                updateTabHrefs();
             }
 
             function setSelectedDate(date) {
@@ -204,8 +199,18 @@
                 return await response.text();
             }
 
+            async function fetchLatestDate(nextSection) {
+                const response = await fetch(
+                    `/betslips?handler=LatestRecordDate&record=${encodeURIComponent(nextSection)}`,
+                    { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                if (!response.ok) return null;
+                const payload = await response.json();
+                return payload?.date || null;
+            }
+
             async function loadDay(date) {
                 selectedDate = date;
+                datesBySection[section] = date;
                 month = date.slice(0, 7);
                 root.setAttribute('data-record-date', date);
                 root.setAttribute('data-record-month', month);
@@ -233,17 +238,20 @@
                 section = nextSection;
                 root.setAttribute('data-record-section', section);
 
-                if (selectedDate) {
-                    month = selectedDate.slice(0, 7);
+                const date = datesBySection[nextSection] || await fetchLatestDate(nextSection);
+                if (date) {
+                    datesBySection[nextSection] = date;
+                    month = date.slice(0, 7);
                     root.setAttribute('data-record-month', month);
-                    root.setAttribute('data-record-date', selectedDate);
+                    root.setAttribute('data-record-date', date);
                     calendarHost.innerHTML = await fetchHtml(
-                        `/betslips?handler=RecordCalendar&record=${encodeURIComponent(section)}&month=${encodeURIComponent(month)}&date=${encodeURIComponent(selectedDate)}`);
+                        `/betslips?handler=RecordCalendar&record=${encodeURIComponent(section)}&month=${encodeURIComponent(month)}&date=${encodeURIComponent(date)}`);
                     bindCalendar();
-                    await loadDay(selectedDate);
+                    await loadDay(date);
                     return;
                 }
 
+                selectedDate = null;
                 await loadCalendar(nextSection, month || root.getAttribute('data-record-month') || '');
                 resultsHost.innerHTML = emptyResults;
             }
@@ -285,7 +293,7 @@
 
             bindCalendar();
             bindCopyButtons(document);
-            updateTabHrefs(section, month, selectedDate);
+            updateTabHrefs();
         })();
     </script>
 }

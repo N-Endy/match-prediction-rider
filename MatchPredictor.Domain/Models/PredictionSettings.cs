@@ -12,13 +12,13 @@ public class PredictionSettings
     public double ValueBetMinimumEdge { get; set; } = 0.03;
 
     /// <summary>
-    /// Soft-suppress markets from betslip packing when recent settled ROI is below this percent
-    /// (requires enough samples). Does not remove picks from public prediction pages.
+    /// Down-rank markets in betslip packing when recent settled ROI is below this percent
+    /// (requires enough samples). Does not remove picks from public pages or the live-quoted pool.
     /// </summary>
     public double SuppressPublishBelowRoiPercent { get; set; } = -5.0;
 
     /// <summary>
-    /// Soft-suppress markets from betslip packing when average closing-line value is below this percent
+    /// Down-rank markets in betslip packing when average closing-line value is below this percent
     /// (requires enough publish+close snapshot pairs).
     /// </summary>
     public double SuppressPublishBelowClvPercent { get; set; } = -2.0;

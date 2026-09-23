@@ -504,6 +504,154 @@ public class BetslipGenerationServiceExclusivityTests
         Assert.Empty(bankerFixtures.Intersect(ladderFixtures, StringComparer.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task GenerateDailyBetslipsAsync_KeepsNonOverMarkets_WhenRoiWouldSuppressThem()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var today = DateTimeProvider.GetLocalDate();
+        var kickoff = DateTime.UtcNow.AddHours(5);
+        var fixtures = new List<SourceMarketFixture>();
+        var predictions = new List<Prediction>();
+        var nextId = 1;
+
+        SeedLosingHistory(context, ref nextId, "BothTeamsScore", "BTTS", "No BTTS");
+        SeedLosingHistory(context, ref nextId, "Under2.5Goals", "Under 2.5", "Over 2.5");
+        SeedLosingHistory(context, ref nextId, "StraightWin", "Home Win", "Away Win");
+
+        for (var i = 1; i <= 16; i++)
+        {
+            AddMainPrediction(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(i),
+                $"BttsHome{i}",
+                $"BttsAway{i}",
+                $"today-btts-{i}",
+                confidence: 0.88m - i * 0.002m,
+                category: "BothTeamsScore",
+                bttsOdds: 1.62);
+        }
+
+        for (var i = 1; i <= 16; i++)
+        {
+            AddMainPrediction(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(80 + i),
+                $"OverHome{i}",
+                $"OverAway{i}",
+                $"today-over-{i}",
+                confidence: 0.87m - i * 0.002m,
+                category: "Over2.5Goals",
+                overOdds: 1.68);
+        }
+
+        for (var i = 1; i <= 16; i++)
+        {
+            AddMainPrediction(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(160 + i),
+                $"UnderHome{i}",
+                $"UnderAway{i}",
+                $"today-under-{i}",
+                confidence: 0.86m - i * 0.002m,
+                category: "Under2.5Goals",
+                underOdds: 1.70);
+        }
+
+        for (var i = 1; i <= 16; i++)
+        {
+            AddMainPrediction(
+                predictions,
+                fixtures,
+                ref nextId,
+                today,
+                kickoff.AddMinutes(240 + i),
+                $"WinHome{i}",
+                $"WinAway{i}",
+                $"today-sw-{i}",
+                confidence: 0.85m - i * 0.002m,
+                category: "StraightWin",
+                homeOdds: 1.60);
+        }
+
+        context.Predictions.AddRange(predictions);
+        await context.SaveChangesAsync();
+
+        var service = CreateService(context, fixtures);
+        await service.GenerateDailyBetslipsAsync("morning");
+
+        var set = await context.BetslipSets
+            .Include(s => s.Slips)
+            .ThenInclude(s => s.Selections)
+            .SingleAsync(s => s.IsCurrent);
+
+        var mainMarkets = set.Slips
+            .Where(slip => !BetslipGenerationService.IsDrawSlip(slip))
+            .SelectMany(slip => slip.Selections)
+            .Select(selection => selection.Market)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.NotEmpty(mainMarkets);
+        Assert.Contains(mainMarkets, market => !string.Equals(market, "Over2.5", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void SeedLosingHistory(
+        ApplicationDbContext context,
+        ref int nextId,
+        string category,
+        string predictedOutcome,
+        string actualOutcome)
+    {
+        var lookbackDate = DateTimeProvider.GetLocalDate().AddDays(-2);
+        for (var index = 0; index < 22; index++)
+        {
+            var id = nextId++;
+            context.Predictions.Add(new Prediction
+            {
+                Id = id,
+                Date = lookbackDate.ToString("dd-MM-yyyy"),
+                Time = "18:00",
+                MatchLocalDate = lookbackDate,
+                MatchDateTime = DateTime.UtcNow.AddDays(-2).AddMinutes(index),
+                League = "History League",
+                HomeTeam = $"Hist{category}Home{index}",
+                AwayTeam = $"Hist{category}Away{index}",
+                FixtureKey = $"hist-{category}-{index}",
+                PredictionCategory = category,
+                PredictedOutcome = predictedOutcome,
+                ActualOutcome = actualOutcome,
+                ActualScore = "1:0",
+                IsLive = false,
+                WasPublished = true,
+                IsCurrentRevision = true,
+                ConfidenceScore = 0.60m,
+                PredictionRunId = Guid.NewGuid()
+            });
+            context.PredictionOddsSnapshots.Add(new PredictionOddsSnapshot
+            {
+                PredictionId = id,
+                SnapshotKind = PredictionOddsSnapshotKind.Publish,
+                DecimalOdds = 2.0,
+                Outcome = predictedOutcome,
+                Market = category,
+                ImpliedProbability = 0.5,
+                CapturedAtUtc = DateTime.UtcNow.AddDays(-2)
+            });
+        }
+    }
+
     private static HashSet<string> SelectionFixtureKeys(
         IEnumerable<BetslipSelection> selections,
         IReadOnlyDictionary<int, string> fixtureByPredictionId)
@@ -574,7 +722,7 @@ public class BetslipGenerationServiceExclusivityTests
             "BothTeamsScore" => "BTTS",
             "Over2.5Goals" => "Over 2.5",
             "Under2.5Goals" => "Under 2.5",
-            _ => "Home"
+            _ => "Home Win"
         };
 
         predictions.Add(new Prediction

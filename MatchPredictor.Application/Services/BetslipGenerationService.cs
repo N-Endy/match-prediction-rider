@@ -20,6 +20,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
     public const int RolloverSlipNumber = 10;
     public const string RolloverTierLabel = "Rollover (1.30-1.50x)";
     public const string DrawsTierLabel = "AI Draws (5)";
+    private const double SuppressedCategoryRankingPenalty = 15d;
 
     private static readonly string[] MainCategories =
     [
@@ -78,7 +79,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         {
             var kickoffCutoff = nowUtc.AddMinutes(settings.MinMinutesBeforeKickoff);
             var predictions = await LoadTodayPredictionsAsync(today, kickoffCutoff);
-            predictions = await FilterSuppressedCategoriesAsync(predictions);
+            var suppressedCategories = await LoadSuppressedCategoriesAsync(predictions.Count);
 
             _logger.LogInformation(
                 "Betslip generation started for {Date} ({DayKind}/{RunLabel}): {PredictionCount} published predictions past kickoff cutoff ({CutoffMinutes} min).",
@@ -101,6 +102,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
             var universe = await BuildLiveQuotedUniverseAsync(predictions, sourceFixtures);
             var (ranked, aiPassedCount) = await ScreenLiveQuotedUniverseAsync(universe);
+            ranked = ApplySuppressedCategoryRankingPenalty(ranked, suppressedCategories);
             var mainPool = CollapseOnePerFixture(
                 ranked.Where(p => MainCategories.Contains(p.Candidate.PredictionCategory)).ToList());
             var drawPool = ranked
@@ -325,34 +327,56 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         }
     }
 
-    private async Task<List<Prediction>> FilterSuppressedCategoriesAsync(List<Prediction> predictions)
+    private async Task<IReadOnlyDictionary<string, PublishedMarketSuppressor.SuppressDecision>> LoadSuppressedCategoriesAsync(
+        int predictionCount)
     {
-        if (predictions.Count == 0)
+        if (predictionCount == 0)
         {
-            return predictions;
+            return new Dictionary<string, PublishedMarketSuppressor.SuppressDecision>(StringComparer.OrdinalIgnoreCase);
         }
 
         var suppressed = await PublishedMarketSuppressor.EvaluateAsync(_dbContext, _predictionSettings);
-        if (suppressed.Count == 0)
-        {
-            return predictions;
-        }
-
-        var kept = predictions
-            .Where(prediction => !suppressed.ContainsKey(prediction.PredictionCategory))
-            .ToList();
-
         foreach (var entry in suppressed.Values)
         {
             _logger.LogWarning(
-                "Betslip soft-suppress for {Category}: {Reason} (settled={Settled}, clvSamples={ClvSamples}).",
+                "Betslip soft-suppress for {Category}: {Reason} (settled={Settled}, clvSamples={ClvSamples}). Down-ranking, not removing.",
                 entry.Category,
                 entry.Reason,
                 entry.SettledCount,
                 entry.ClvSampleCount);
         }
 
-        return kept;
+        return suppressed;
+    }
+
+    private static List<LiveQuotedCandidate> ApplySuppressedCategoryRankingPenalty(
+        List<LiveQuotedCandidate> ranked,
+        IReadOnlyDictionary<string, PublishedMarketSuppressor.SuppressDecision> suppressed)
+    {
+        if (ranked.Count == 0 || suppressed.Count == 0)
+        {
+            return ranked;
+        }
+
+        return ranked
+            .Select(candidate =>
+            {
+                if (!suppressed.ContainsKey(candidate.Candidate.PredictionCategory))
+                {
+                    return candidate;
+                }
+
+                var current = candidate.Candidate.ResearchScore ?? (double)candidate.Candidate.Confidence * 100d;
+                return candidate with
+                {
+                    Candidate = WithResearchScore(
+                        candidate.Candidate,
+                        Math.Max(0d, current - SuppressedCategoryRankingPenalty))
+                };
+            })
+            .OrderByDescending(p => p.Candidate.ResearchScore ?? (double)p.Candidate.Confidence)
+            .ThenBy(p => p.Prediction.Id)
+            .ToList();
     }
 
     private async Task<List<Prediction>> LoadTodayPredictionsAsync(DateOnly today, DateTime kickoffCutoffUtc)
