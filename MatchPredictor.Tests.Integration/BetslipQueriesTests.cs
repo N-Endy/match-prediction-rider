@@ -2,6 +2,7 @@ using MatchPredictor.Domain.Models;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Repositories;
 using MatchPredictor.Domain.Helpers;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
@@ -228,6 +229,66 @@ public class BetslipQueriesTests
 
         Assert.Equal([new DateOnly(2026, 8, 1)], bankerDates);
         Assert.Equal(new DateOnly(2026, 8, 1), latest);
+    }
+
+    [Fact]
+    public async Task GetSlipDatesAsync_CombinedCurrentSet_ReturnsTodayForBankerRolloverAndLadder()
+    {
+        var today = DateTimeProvider.GetLocalDate();
+        var rolloverLast = today.AddDays(-15);
+        var ladderLast = today.AddDays(-14);
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+
+        context.BetslipSets.Add(CreateSet(
+            rolloverLast,
+            BetslipRunLabels.Morning,
+            isCurrent: false,
+            generatedAtUtc: DateTime.UtcNow.AddDays(-15),
+            slips: [CreateSlip(BetslipKinds.RolloverSlipNumber, "Rollover (1.30-1.50x)", 10, "Old Roll Home", "Old Roll Away")]));
+        context.BetslipSets.Add(CreateSet(
+            ladderLast,
+            BetslipRunLabels.Morning,
+            isCurrent: false,
+            generatedAtUtc: DateTime.UtcNow.AddDays(-14),
+            slips: [CreateSlip(1, "Daily (30-100x)", 11, "Old Daily Home", "Old Daily Away")]));
+        context.BetslipSets.Add(CreateSet(
+            today,
+            BetslipRunLabels.Midday,
+            isCurrent: true,
+            generatedAtUtc: DateTime.UtcNow,
+            slips:
+            [
+                CreateSlip(BetslipKinds.BankerSlipNumber, "Banker (5-10x)", 1, "Bank Home", "Bank Away"),
+                CreateSlip(BetslipKinds.RolloverSlipNumber, "Rollover (1.30-1.50x)", 2, "Roll Home", "Roll Away"),
+                CreateSlip(1, "Daily (30-100x)", 3, "Daily Home", "Daily Away")
+            ]));
+
+        await context.SaveChangesAsync();
+
+        var queries = new BetslipQueries(context);
+
+        Assert.Equal(today, await queries.GetLatestSlipDateAsync(BetslipRecordSection.Banker));
+        Assert.Equal(today, await queries.GetLatestSlipDateAsync(BetslipRecordSection.Rollover));
+        Assert.Equal(today, await queries.GetLatestSlipDateAsync(BetslipRecordSection.Ladder));
+
+        var bankerDates = await queries.GetSlipDatesAsync(BetslipRecordSection.Banker, today.Year, today.Month);
+        var rolloverDates = await queries.GetSlipDatesAsync(BetslipRecordSection.Rollover, today.Year, today.Month);
+        var ladderDates = await queries.GetSlipDatesAsync(BetslipRecordSection.Ladder, today.Year, today.Month);
+
+        Assert.Contains(today, bankerDates);
+        Assert.Contains(today, rolloverDates);
+        Assert.Contains(today, ladderDates);
+
+        var rolloverMonthDates = await queries.GetSlipDatesAsync(
+            BetslipRecordSection.Rollover, rolloverLast.Year, rolloverLast.Month);
+        var ladderMonthDates = await queries.GetSlipDatesAsync(
+            BetslipRecordSection.Ladder, ladderLast.Year, ladderLast.Month);
+        Assert.Contains(rolloverLast, rolloverMonthDates);
+        Assert.Contains(ladderLast, ladderMonthDates);
     }
 
     [Fact]

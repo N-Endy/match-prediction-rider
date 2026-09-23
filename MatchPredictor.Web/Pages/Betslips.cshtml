@@ -238,7 +238,11 @@
                 section = nextSection;
                 root.setAttribute('data-record-section', section);
 
-                const date = datesBySection[nextSection] || await fetchLatestDate(nextSection);
+                const remembered = datesBySection[nextSection] || null;
+                const latest = await fetchLatestDate(nextSection);
+                const date = remembered && latest
+                    ? (remembered > latest ? remembered : latest)
+                    : (latest || remembered);
                 if (date) {
                     datesBySection[nextSection] = date;
                     month = date.slice(0, 7);

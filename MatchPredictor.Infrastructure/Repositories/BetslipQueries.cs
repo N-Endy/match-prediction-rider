@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
@@ -37,22 +38,29 @@ public class BetslipQueries : IBetslipQueries
         var monthStart = new DateOnly(year, month, 1);
         var monthEnd = monthStart.AddMonths(1);
 
-        return await WhereHasSection(_context.BetslipSets.AsNoTracking(), section)
-            .Where(s => s.SlipLocalDate >= monthStart && s.SlipLocalDate < monthEnd)
-            .Select(s => s.SlipLocalDate)
+        var rows = await ProjectSlipDatesAsync(
+            slip => slip.BetslipSet!.SlipLocalDate >= monthStart &&
+                    slip.BetslipSet.SlipLocalDate < monthEnd,
+            ct);
+
+        return rows
+            .Where(row => MatchesSection(row, section))
+            .Select(row => row.SlipLocalDate)
             .Distinct()
-            .OrderBy(d => d)
-            .ToListAsync(ct);
+            .OrderBy(date => date)
+            .ToList();
     }
 
     public async Task<DateOnly?> GetLatestSlipDateAsync(
         BetslipRecordSection section,
         CancellationToken ct = default)
     {
-        return await WhereHasSection(_context.BetslipSets.AsNoTracking(), section)
-            .OrderByDescending(s => s.SlipLocalDate)
-            .Select(s => (DateOnly?)s.SlipLocalDate)
-            .FirstOrDefaultAsync(ct);
+        var rows = await ProjectSlipDatesAsync(_ => true, ct);
+        var matchingDates = rows
+            .Where(row => MatchesSection(row, section))
+            .Select(row => row.SlipLocalDate)
+            .ToList();
+        return matchingDates.Count == 0 ? null : matchingDates.Max();
     }
 
     public async Task<BetslipRecordsForDate> GetSlipsForDateAsync(
@@ -132,27 +140,24 @@ public class BetslipQueries : IBetslipQueries
         };
     }
 
-    private static IQueryable<BetslipSet> WhereHasSection(
-        IQueryable<BetslipSet> query,
-        BetslipRecordSection section)
+    private async Task<List<SlipDateRow>> ProjectSlipDatesAsync(
+        Expression<Func<Betslip, bool>> predicate,
+        CancellationToken ct)
     {
-        return section switch
-        {
-            BetslipRecordSection.Rollover => query.Where(set => set.Slips.Any(slip =>
-                slip.SlipNumber == BetslipKinds.RolloverSlipNumber ||
-                slip.TierLabel.ToLower().StartsWith("rollover"))),
-            BetslipRecordSection.Banker => query.Where(set => set.Slips.Any(slip =>
-                slip.SlipNumber == BetslipKinds.BankerSlipNumber ||
-                slip.TierLabel.ToLower().StartsWith("banker"))),
-            BetslipRecordSection.AiDraws => query.Where(set => set.Slips.Any(slip =>
-                slip.TierLabel == BetslipKinds.DrawsTierLabel)),
-            BetslipRecordSection.Ladder => query.Where(set => set.Slips.Any(slip =>
-                slip.SlipNumber != BetslipKinds.RolloverSlipNumber &&
-                slip.SlipNumber != BetslipKinds.BankerSlipNumber &&
-                !slip.TierLabel.ToLower().StartsWith("rollover") &&
-                !slip.TierLabel.ToLower().StartsWith("banker") &&
-                slip.TierLabel != BetslipKinds.DrawsTierLabel)),
-            _ => query.Where(_ => false)
-        };
+        return await _context.Betslips
+            .AsNoTracking()
+            .Where(predicate)
+            .Select(slip => new SlipDateRow(
+                slip.SlipNumber,
+                slip.TierLabel,
+                slip.BetslipSet!.SlipLocalDate))
+            .ToListAsync(ct);
     }
+
+    private static bool MatchesSection(SlipDateRow row, BetslipRecordSection section) =>
+        BetslipKinds.MatchesSection(
+            new Betslip { SlipNumber = row.SlipNumber, TierLabel = row.TierLabel },
+            section);
+
+    private readonly record struct SlipDateRow(int SlipNumber, string TierLabel, DateOnly SlipLocalDate);
 }
