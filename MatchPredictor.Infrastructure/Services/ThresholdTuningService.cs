@@ -20,6 +20,8 @@ public class ThresholdTuningService : IThresholdTuningService
     private const double ThresholdStep = 0.01;
     private const double MinimumThreshold = 0.50;
     private const double MaximumThreshold = 0.90;
+    private const double DrawMinimumThreshold = 0.30;
+    private const double DrawMaximumThreshold = 0.60;
     private const int MinimumLeagueSegmentSampleCount = 30;
     private const double MaxLeagueThresholdAdjustment = 0.03;
     private static readonly PredictionMarket[] ActiveThresholdMarkets =
@@ -81,7 +83,10 @@ public class ThresholdTuningService : IThresholdTuningService
         {
             decision = new ThresholdDecision
             {
-                Threshold = Math.Clamp(decision.Threshold + adjustment, MinimumThreshold, MaximumThreshold),
+                Threshold = Math.Clamp(
+                    decision.Threshold + adjustment,
+                    GetLeagueThresholdFloor(fallbackThreshold),
+                    GetMaximumThreshold(market)),
                 ThresholdSource = decision.ThresholdSource == "Tuned" ? "Tuned+League" : "Configured+League"
             };
         }
@@ -137,7 +142,7 @@ public class ThresholdTuningService : IThresholdTuningService
             var trainingWindowDays = CalculateWindowDays(trainingForecasts);
             var validationWindowDays = CalculateWindowDays(validationForecasts);
 
-            var trainingCandidates = BuildCandidates(trainingForecasts, trainingWindowDays).ToList();
+            var trainingCandidates = BuildCandidates(market, trainingForecasts, trainingWindowDays).ToList();
             if (trainingCandidates.Count == 0)
             {
                 continue;
@@ -327,10 +332,13 @@ public class ThresholdTuningService : IThresholdTuningService
     }
 
     private static IEnumerable<ThresholdCandidate> BuildCandidates(
+        PredictionMarket market,
         IReadOnlyCollection<ForecastObservation> marketForecasts,
         double totalWindowDays)
     {
-        for (var threshold = MinimumThreshold; threshold <= MaximumThreshold + 0.000001; threshold += ThresholdStep)
+        var minimumThreshold = GetMinimumThreshold(market);
+        var maximumThreshold = GetMaximumThreshold(market);
+        for (var threshold = minimumThreshold; threshold <= maximumThreshold + 0.000001; threshold += ThresholdStep)
         {
             var roundedThreshold = Math.Round(threshold, 2);
             var candidate = EvaluateThreshold(marketForecasts, roundedThreshold, totalWindowDays);
@@ -340,6 +348,15 @@ public class ThresholdTuningService : IThresholdTuningService
             }
         }
     }
+
+    private static double GetMinimumThreshold(PredictionMarket market) =>
+        market == PredictionMarket.Draw ? DrawMinimumThreshold : MinimumThreshold;
+
+    private static double GetMaximumThreshold(PredictionMarket market) =>
+        market == PredictionMarket.Draw ? DrawMaximumThreshold : MaximumThreshold;
+
+    private static double GetLeagueThresholdFloor(double fallbackThreshold) =>
+        Math.Min(MinimumThreshold, fallbackThreshold);
 
     private static ThresholdCandidate? EvaluateThreshold(
         IReadOnlyCollection<ForecastObservation> forecasts,

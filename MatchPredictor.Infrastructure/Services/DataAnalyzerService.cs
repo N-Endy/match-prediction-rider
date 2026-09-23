@@ -490,7 +490,7 @@ public class DataAnalyzerService : IDataAnalyzerService
             ["mlSignal"] = mlSignal,
             ["mlSignalApplied"] = mlSignal is not null,
             ["explicitBttsMarket"] = match.TryGetNormalizedBttsPair(out _) || bookmakerSignal?.Btts is > 0,
-            ["explicitDrawMarket"] = bookmakerSignal?.Draw is > 0
+            ["explicitDrawMarket"] = match.TryGetNormalizedOneX2(out _) || bookmakerSignal?.Draw is > 0
         };
 
         return JsonSerializer.Serialize(summary);

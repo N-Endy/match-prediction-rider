@@ -222,6 +222,44 @@ public class ThresholdTuningServiceTests
         Assert.Equal(50, profile.TrainingSampleCount + profile.ValidationSampleCount);
     }
 
+    [Fact]
+    public async Task GetThresholdDecision_DoesNotRaiseDrawGateToSharedFloor_WhenLeagueAdjustmentApplies()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var now = DateTime.UtcNow;
+
+        SeedForecasts(
+            context,
+            now,
+            PredictionMarket.Draw,
+            35,
+            0.50,
+            false,
+            "Overconfident");
+
+        await context.SaveChangesAsync();
+
+        var service = new ThresholdTuningService(
+            context,
+            Options.Create(new PredictionSettings
+            {
+                DrawStrongThreshold = 0.45
+            }));
+
+        await service.RebuildProfilesAsync();
+
+        var decision = service.GetThresholdDecision(PredictionMarket.Draw, 0.45, "League");
+        var unclamped = 0.45 + 0.03;
+
+        Assert.Equal("Configured+League", decision.ThresholdSource);
+        Assert.Equal(unclamped, decision.Threshold, 3);
+        Assert.True(decision.Threshold < 0.50);
+    }
+
     private static ThresholdTuningService CreateService(ApplicationDbContext context)
     {
         return new ThresholdTuningService(

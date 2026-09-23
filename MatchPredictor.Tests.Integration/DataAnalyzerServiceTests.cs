@@ -205,6 +205,70 @@ public class DataAnalyzerServiceTests
         Assert.Equal(0.38, calculator.GetProperty("under25").GetDouble(), 6);
     }
 
+    [Fact]
+    public void SelectPublishedPredictions_PublishesDraw_WhenMatchHasExplicitOneX2()
+    {
+        var match = CreateMatch();
+        match.HomeWin = 0.35;
+        match.Draw = 0.32;
+        match.AwayWin = 0.33;
+        match.NormalizeSourceProbabilities();
+
+        var service = CreateDrawAnalyzer(homeWin: 0.28, awayWin: 0.22);
+
+        var published = service.SelectPublishedPredictions(service.BuildForecastCandidates([match]));
+        var draw = Assert.Single(published, candidate => candidate.Market == PredictionMarket.Draw);
+
+        Assert.True(draw.WasPublished);
+        Assert.True(draw.CalibratedProbability >= draw.ThresholdUsed);
+        Assert.Equal(0.45, draw.ThresholdUsed, 3);
+    }
+
+    [Fact]
+    public void SelectPublishedPredictions_DoesNotPublishDraw_WhenNeitherOneX2NorBookmakerDrawExists()
+    {
+        var match = CreateMatch();
+        var service = CreateDrawAnalyzer(homeWin: 0.28, awayWin: 0.22);
+
+        var published = service.SelectPublishedPredictions(service.BuildForecastCandidates([match]));
+
+        Assert.DoesNotContain(published, candidate => candidate.Market == PredictionMarket.Draw);
+    }
+
+    [Fact]
+    public void SelectPublishedPredictions_PublishesDraw_WhenBookmakerSuppliesDrawQuote()
+    {
+        var match = CreateMatch();
+        var bookmakerSignals = new BookmakerSignalSet();
+        bookmakerSignals.Add(match, new PartialMatchProbabilities(Draw: 0.48));
+
+        var service = CreateDrawAnalyzer(homeWin: 0.28, awayWin: 0.22);
+
+        var published = service.SelectPublishedPredictions(
+            service.BuildForecastCandidates([match], bookmakerSignals));
+        var draw = Assert.Single(published, candidate => candidate.Market == PredictionMarket.Draw);
+
+        Assert.True(draw.WasPublished);
+        Assert.True(draw.CalibratedProbability >= draw.ThresholdUsed);
+    }
+
+    private static DataAnalyzerService CreateDrawAnalyzer(double homeWin, double awayWin)
+    {
+        return new DataAnalyzerService(
+            new FakeProbabilityCalculator
+            {
+                HomeWin = homeWin,
+                AwayWin = awayWin
+            },
+            new FakeCalibrationService((_, raw) => raw),
+            new FakeThresholdTuningService(),
+            new IdentityProbabilityCorrectionService(),
+            Options.Create(new PredictionSettings
+            {
+                DrawStrongThreshold = 0.45
+            }));
+    }
+
     private static MatchData CreateMatch()
     {
         return new MatchData
