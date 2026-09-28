@@ -173,7 +173,7 @@ public class WebApplicationFactorySmokeTests
         Assert.Contains("no-cache", response.Headers.CacheControl?.ToString(), StringComparison.OrdinalIgnoreCase);
 
         var body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("matchpredictor-v2", body);
+        Assert.Contains("matchpredictor-v3", body);
     }
 
     [Fact]

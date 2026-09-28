@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_NAME = 'matchpredictor-v2';
+const CACHE_NAME = 'matchpredictor-v3';
 
 const PRECACHE_URLS = [
   '/offline.html',
@@ -18,10 +18,14 @@ const PRECACHE_URLS = [
   '/manifest.webmanifest'
 ];
 
-function shouldBypass(pathname) {
+function shouldBypass(url) {
+  const pathname = url.pathname;
   return pathname.startsWith('/api/')
     || pathname.startsWith('/admin/')
-    || pathname.startsWith('/hangfire');
+    || pathname.startsWith('/hangfire')
+    || url.searchParams.has('handler')
+    || pathname.startsWith('/betslips')
+    || pathname.startsWith('/predictions');
 }
 
 self.addEventListener('install', (event) => {
@@ -55,7 +59,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (shouldBypass(url.pathname)) {
+  if (shouldBypass(url)) {
     return;
   }
 
@@ -64,6 +68,19 @@ self.addEventListener('fetch', (event) => {
       fetch(request)
         .catch(() => caches.match('/offline.html'))
     );
+    return;
+  }
+
+  const isStaticAsset = request.destination === 'style'
+    || request.destination === 'script'
+    || request.destination === 'image'
+    || request.destination === 'font'
+    || url.pathname.startsWith('/css/')
+    || url.pathname.startsWith('/js/')
+    || url.pathname.startsWith('/img/')
+    || PRECACHE_URLS.includes(url.pathname);
+
+  if (!isStaticAsset) {
     return;
   }
 

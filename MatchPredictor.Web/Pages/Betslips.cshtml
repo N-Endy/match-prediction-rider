@@ -194,15 +194,23 @@
             }
 
             async function fetchHtml(url) {
-                const response = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                const separator = url.includes('?') ? '&' : '?';
+                const cacheBusterUrl = `${url}${separator}_t=${Date.now()}`;
+                const response = await fetch(cacheBusterUrl, {
+                    cache: 'no-store',
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                });
                 if (!response.ok) throw new Error('Request failed');
                 return await response.text();
             }
 
             async function fetchLatestDate(nextSection) {
                 const response = await fetch(
-                    `/betslips?handler=LatestRecordDate&record=${encodeURIComponent(nextSection)}`,
-                    { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                    `/betslips?handler=LatestRecordDate&record=${encodeURIComponent(nextSection)}&_t=${Date.now()}`,
+                    {
+                        cache: 'no-store',
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                    });
                 if (!response.ok) return null;
                 const payload = await response.json();
                 return payload?.date || null;
@@ -240,9 +248,7 @@
 
                 const remembered = datesBySection[nextSection] || null;
                 const latest = await fetchLatestDate(nextSection);
-                const date = remembered && latest
-                    ? (remembered > latest ? remembered : latest)
-                    : (latest || remembered);
+                const date = latest || remembered;
                 if (date) {
                     datesBySection[nextSection] = date;
                     month = date.slice(0, 7);

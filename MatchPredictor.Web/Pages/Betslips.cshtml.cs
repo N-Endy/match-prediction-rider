@@ -46,6 +46,7 @@ public class BetslipsModel : PageModel
 
     public async Task<IActionResult> OnGetRecordDayAsync(string? record, DateOnly date, CancellationToken ct)
     {
+        SetNoCacheHeaders();
         ApplyStake();
         await LoadRecordsAsync(record, date, month: null, loadResults: true, autoSelectLatest: false, ct);
         return Partial("_BetslipRecordResults", Results);
@@ -57,6 +58,7 @@ public class BetslipsModel : PageModel
         DateOnly? date,
         CancellationToken ct)
     {
+        SetNoCacheHeaders();
         ApplyStake();
         await LoadRecordsAsync(record, date, month, loadResults: false, autoSelectLatest: false, ct);
         return Partial("_BetslipCalendar", Calendar);
@@ -64,9 +66,17 @@ public class BetslipsModel : PageModel
 
     public async Task<IActionResult> OnGetLatestRecordDateAsync(string? record, CancellationToken ct)
     {
+        SetNoCacheHeaders();
         var section = BetslipKinds.ParseSectionOrDefault(record);
         var latest = await _betslipQueries.GetLatestSlipDateAsync(section, ct);
         return new JsonResult(new { date = latest?.ToString("yyyy-MM-dd") });
+    }
+
+    private void SetNoCacheHeaders()
+    {
+        Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+        Response.Headers.Pragma = "no-cache";
+        Response.Headers.Expires = "0";
     }
 
     public static string RecordUrl(BetslipRecordSection section, DateOnly? date = null, DateOnly? month = null)

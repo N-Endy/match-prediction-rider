@@ -5,10 +5,12 @@ using MatchPredictor.Infrastructure.Repositories;
 using MatchPredictor.Infrastructure.Utils;
 using MatchPredictor.Web.Pages;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -53,6 +55,48 @@ public class BetslipsRecordsDateTests
         Assert.NotEmpty(page.Results.Runs);
     }
 
+    [Fact]
+    public async Task OnGetLatestRecordDateAsync_ReturnsLatestDateAndNoCacheHeaders()
+    {
+        var today = DateTimeProvider.GetLocalDate();
+        var threeDaysAgo = today.AddDays(-3);
+        await using var context = CreateContext();
+        SeedSection(context, today, BetslipKinds.RolloverSlipNumber, "Rollover (1.30-1.50x)");
+        SeedSection(context, threeDaysAgo, 1, "Small (2-5)");
+        await context.SaveChangesAsync();
+
+        var page = CreatePage(context);
+        var result = await page.OnGetLatestRecordDateAsync("ladder", CancellationToken.None);
+
+        var json = Assert.IsType<JsonResult>(result);
+        Assert.NotNull(json.Value);
+        var dateProp = json.Value.GetType().GetProperty("date")?.GetValue(json.Value)?.ToString();
+        Assert.Equal(threeDaysAgo.ToString("yyyy-MM-dd"), dateProp);
+
+        Assert.Equal("no-cache, no-store, must-revalidate", page.Response.Headers.CacheControl.ToString());
+        Assert.Equal("no-cache", page.Response.Headers.Pragma.ToString());
+        Assert.Equal("0", page.Response.Headers.Expires.ToString());
+    }
+
+    [Fact]
+    public async Task OnGetRecordCalendarAsync_And_OnGetRecordDayAsync_SetNoCacheHeaders()
+    {
+        var today = DateTimeProvider.GetLocalDate();
+        await using var context = CreateContext();
+        SeedSection(context, today, 1, "Small (2-5)");
+        await context.SaveChangesAsync();
+
+        var pageCalendar = CreatePage(context);
+        var calendarResult = await pageCalendar.OnGetRecordCalendarAsync("ladder", today.ToString("yyyy-MM"), today, CancellationToken.None);
+        Assert.IsType<PartialViewResult>(calendarResult);
+        Assert.Equal("no-cache, no-store, must-revalidate", pageCalendar.Response.Headers.CacheControl.ToString());
+
+        var pageDay = CreatePage(context);
+        var dayResult = await pageDay.OnGetRecordDayAsync("ladder", today, CancellationToken.None);
+        Assert.IsType<PartialViewResult>(dayResult);
+        Assert.Equal("no-cache, no-store, must-revalidate", pageDay.Response.Headers.CacheControl.ToString());
+    }
+
     private static ApplicationDbContext CreateContext()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
@@ -63,13 +107,23 @@ public class BetslipsRecordsDateTests
 
     private static BetslipsModel CreatePage(ApplicationDbContext context)
     {
+        var metadataProvider = new EmptyModelMetadataProvider();
+        var services = new ServiceCollection();
+        services.AddSingleton<IModelMetadataProvider>(metadataProvider);
+        var serviceProvider = services.BuildServiceProvider();
+
+        var httpContext = new DefaultHttpContext
+        {
+            RequestServices = serviceProvider
+        };
+
         var page = new BetslipsModel(
             new BetslipQueries(context),
             Options.Create(new BetslipSettings()));
         page.PageContext = new PageContext
         {
-            HttpContext = new DefaultHttpContext(),
-            ViewData = new ViewDataDictionary(new EmptyModelMetadataProvider(), new ModelStateDictionary())
+            HttpContext = httpContext,
+            ViewData = new ViewDataDictionary(metadataProvider, new ModelStateDictionary())
         };
         return page;
     }
