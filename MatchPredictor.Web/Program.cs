@@ -114,6 +114,7 @@ builder.Services.AddScoped<IHistoricalDatasetService, HistoricalDatasetService>(
 builder.Services.AddScoped<SportyBetBookingService>();
 builder.Services.AddScoped<ISportyBetBookingService>(provider => provider.GetRequiredService<SportyBetBookingService>());
 builder.Services.AddScoped<ISourceMarketPricingService>(provider => provider.GetRequiredService<SportyBetBookingService>());
+builder.Services.AddSingleton<IAiAppKnowledgeBase, AiAppKnowledgeBase>();
 builder.Services.AddScoped<AiChatKnowledgeService>();
 builder.Services.AddScoped<IAiChatSessionStore, AiChatSessionStore>();
 builder.Services.AddSingleton<IAiLlmSettingsResolver, AiLlmSettingsResolver>();
@@ -121,6 +122,9 @@ builder.Services.AddSingleton<IChatCompletionsClient, OpenAiCompatibleChatComple
 builder.Services.AddScoped<IAiChatSchemaFallbackService, AiChatSchemaFallbackService>();
 builder.Services.AddScoped<AiChatRequestParser>();
 builder.Services.AddScoped<IAiChatFootballInsightService, AiChatFootballInsightService>();
+builder.Services.AddSingleton<IAiSecurityGuardrailService, AiSecurityGuardrailService>();
+builder.Services.AddScoped<IDeepMatchResearchService, DeepMatchResearchService>();
+builder.Services.AddSingleton<IAiLlmRouter, AiLlmRouter>();
 builder.Services.AddScoped<IAiAdvisorService, AiAdvisorService>();
 builder.Services.AddScoped<IPredictionRiskAuditorService, PredictionRiskAuditorService>();
 builder.Services.AddScoped<IValueBetsService, ValueBetsService>();

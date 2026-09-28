@@ -63,6 +63,37 @@ public class AiChatControllerTests
     }
 
     [Fact]
+    public async Task Stream_WhenLoginNotRequired_EmitsServerSentEvents()
+    {
+        var advisor = new FakeAiAdvisorService();
+        var auth = new FakeAiChatAuthTicketService { IsLoginRequired = false, SessionId = "anon-stream" };
+        var httpContext = new DefaultHttpContext();
+        httpContext.Response.Body = new MemoryStream();
+
+        var controller = new AiChatController(
+            advisor,
+            auth,
+            new FakeUserTrackingService(),
+            NullLogger<AiChatController>.Instance)
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = httpContext
+            }
+        };
+
+        await controller.Stream(new ChatRequest { Message = "Analyze match" }, CancellationToken.None);
+
+        Assert.Equal("text/event-stream", httpContext.Response.ContentType);
+        httpContext.Response.Body.Seek(0, SeekOrigin.Begin);
+        using var reader = new StreamReader(httpContext.Response.Body);
+        var body = await reader.ReadToEndAsync();
+        Assert.Contains("data: ", body);
+        Assert.Contains("\"EventType\":\"text\"", body);
+        Assert.Contains("\"EventType\":\"done\"", body);
+    }
+
+    [Fact]
     public async Task Chat_WhenServiceThrows_ReturnsGeneric500WithoutInternalDetails()
     {
         var httpContext = new DefaultHttpContext();
@@ -127,6 +158,16 @@ public class AiChatControllerTests
             {
                 Message = "ok"
             });
+        }
+
+        public async IAsyncEnumerable<AiChatStreamChunk> StreamAdviceAsync(
+            string userPrompt,
+            string sessionId,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            var res = await GetAdviceAsync(userPrompt, sessionId, ct);
+            yield return new AiChatStreamChunk { EventType = "text", Content = res.Message };
+            yield return new AiChatStreamChunk { EventType = "done" };
         }
 
         public Task<string> AnalyzeValueBetsAsync(string payload, CancellationToken ct = default) =>

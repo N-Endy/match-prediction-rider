@@ -1,10 +1,18 @@
 using System.Globalization;
+using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
 
 namespace MatchPredictor.Infrastructure.Services;
 
 public class AiChatKnowledgeService
 {
+    private readonly IAiAppKnowledgeBase _appKnowledgeBase;
+
+    public AiChatKnowledgeService(IAiAppKnowledgeBase? appKnowledgeBase = null)
+    {
+        _appKnowledgeBase = appKnowledgeBase ?? new AiAppKnowledgeBase();
+    }
+
     public bool TryBuildSecurityRefusal(string userPrompt, out AiChatResponse response)
     {
         if (!ContainsSensitiveTopic(userPrompt))
@@ -45,6 +53,17 @@ public class AiChatKnowledgeService
         {
             knowledgeTopic = "settlement";
             response = BuildSettlementColorResponse(contextCandidates);
+            return true;
+        }
+
+        if (_appKnowledgeBase.TryLookup(prompt, out var entry) && entry != null)
+        {
+            knowledgeTopic = entry.TopicId;
+            response = new AiChatResponse
+            {
+                Message = entry.Summary,
+                KnowledgeCards = new List<AiChatKnowledgeCard>(entry.Cards)
+            };
             return true;
         }
 

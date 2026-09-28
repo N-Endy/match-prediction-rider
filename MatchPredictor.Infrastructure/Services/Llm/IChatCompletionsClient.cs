@@ -10,4 +10,6 @@ public interface IChatCompletionsClient
     string Model { get; }
 
     Task<ChatCompletionsResult> CompleteAsync(ChatCompletionsRequest request, CancellationToken ct = default);
+
+    IAsyncEnumerable<string> StreamAsync(ChatCompletionsRequest request, CancellationToken ct = default);
 }

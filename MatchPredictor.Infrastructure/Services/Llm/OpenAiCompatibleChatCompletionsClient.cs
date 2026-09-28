@@ -123,6 +123,111 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
         return fallbackResult;
     }
 
+    public async IAsyncEnumerable<string> StreamAsync(
+        ChatCompletionsRequest request,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var settings = _settingsResolver.Resolve();
+        if (!settings.IsConfigured)
+        {
+            yield break;
+        }
+
+        var primary = settings.HasValidKey ? settings : null;
+        var fallback = settings.Fallback is { HasValidKey: true } ? settings.Fallback : null;
+        var activeSettings = primary ?? fallback;
+
+        if (activeSettings is null)
+        {
+            yield break;
+        }
+
+        var url = AiLlmSettingsResolver.BuildChatCompletionsUrl(activeSettings.BaseUrl);
+        var body = BuildRequestBody(activeSettings, request);
+        body["stream"] = true;
+        var json = JsonSerializer.Serialize(body, SerializerOptions);
+
+        using var httpClient = _httpClientFactory.CreateClient(HttpClientName);
+        var timeoutSeconds = request.TimeoutSeconds ?? activeSettings.TimeoutSeconds;
+        httpClient.Timeout = TimeSpan.FromSeconds(Math.Max(timeoutSeconds, 60));
+
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
+        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", activeSettings.ApiKey);
+        httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        HttpResponseMessage? response = null;
+        try
+        {
+            response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to start LLM stream with provider {Provider}", activeSettings.Provider);
+        }
+
+        if (response != null && response.IsSuccessStatusCode)
+        {
+            using (response)
+            using (var stream = await response.Content.ReadAsStreamAsync(ct))
+            using (var reader = new StreamReader(stream, Encoding.UTF8))
+            {
+                while (!reader.EndOfStream && !ct.IsCancellationRequested)
+                {
+                    var line = await reader.ReadLineAsync(ct);
+                    if (string.IsNullOrWhiteSpace(line))
+                    {
+                        continue;
+                    }
+
+                    if (line.StartsWith("data: "))
+                    {
+                        var data = line["data: ".Length..].Trim();
+                        if (data == "[DONE]")
+                        {
+                            break;
+                        }
+
+                        string? token = null;
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(data);
+                            if (doc.RootElement.TryGetProperty("choices", out var choices) &&
+                                choices.ValueKind == JsonValueKind.Array &&
+                                choices.GetArrayLength() > 0 &&
+                                choices[0].TryGetProperty("delta", out var delta) &&
+                                delta.TryGetProperty("content", out var contentElem) &&
+                                contentElem.ValueKind == JsonValueKind.String)
+                            {
+                                token = contentElem.GetString();
+                            }
+                        }
+                        catch (JsonException)
+                        {
+                            // ignore partial JSON in chunks
+                        }
+
+                        if (!string.IsNullOrEmpty(token))
+                        {
+                            yield return token;
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            var completeResult = await CompleteAsync(request, ct);
+            if (completeResult.Success && !string.IsNullOrWhiteSpace(completeResult.Content))
+            {
+                var words = completeResult.Content.Split(' ');
+                for (int i = 0; i < words.Length; i++)
+                {
+                    yield return (i > 0 ? " " : "") + words[i];
+                }
+            }
+        }
+    }
+
     private async Task<ChatCompletionsResult> CompleteWithSettingsAsync(
         ResolvedAiLlmSettings settings,
         ChatCompletionsRequest request,

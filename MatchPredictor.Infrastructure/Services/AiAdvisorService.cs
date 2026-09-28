@@ -32,6 +32,9 @@ public class AiAdvisorService : IAiAdvisorService
     private readonly AiChatRequestParser _requestParser;
     private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly IAiChatFootballInsightService _footballInsightService;
+    private readonly IAiSecurityGuardrailService _securityGuardrailService;
+    private readonly IDeepMatchResearchService? _deepMatchResearchService;
+    private readonly IAiLlmRouter? _llmRouter;
 
     public AiAdvisorService(
         ApplicationDbContext dbContext,
@@ -41,7 +44,10 @@ public class AiAdvisorService : IAiAdvisorService
         AiChatKnowledgeService knowledgeService,
         AiChatRequestParser requestParser,
         IServiceScopeFactory serviceScopeFactory,
-        IAiChatFootballInsightService footballInsightService)
+        IAiChatFootballInsightService footballInsightService,
+        IAiSecurityGuardrailService? securityGuardrailService = null,
+        IDeepMatchResearchService? deepMatchResearchService = null,
+        IAiLlmRouter? llmRouter = null)
     {
         _dbContext = dbContext;
         _logger = logger;
@@ -51,6 +57,72 @@ public class AiAdvisorService : IAiAdvisorService
         _requestParser = requestParser;
         _serviceScopeFactory = serviceScopeFactory;
         _footballInsightService = footballInsightService;
+        _securityGuardrailService = securityGuardrailService ?? new AiSecurityGuardrailService(Microsoft.Extensions.Logging.Abstractions.NullLogger<AiSecurityGuardrailService>.Instance);
+        _deepMatchResearchService = deepMatchResearchService;
+        _llmRouter = llmRouter;
+    }
+
+    public async IAsyncEnumerable<AiChatStreamChunk> StreamAdviceAsync(
+        string userPrompt,
+        string sessionId,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var normalizedPrompt = NormalizeHistoryContent(userPrompt);
+        if (string.IsNullOrWhiteSpace(normalizedPrompt))
+        {
+            yield return new AiChatStreamChunk { EventType = "text", Content = "Please enter a question about today's predictions." };
+            yield return new AiChatStreamChunk { EventType = "done" };
+            yield break;
+        }
+
+        var guardrailResult = _securityGuardrailService.ValidateInboundPrompt(normalizedPrompt);
+        if (!guardrailResult.IsAllowed && guardrailResult.RefusalResponse != null)
+        {
+            var refusal = guardrailResult.RefusalResponse;
+            yield return new AiChatStreamChunk { EventType = "text", Content = refusal.Message };
+            foreach (var card in refusal.KnowledgeCards)
+            {
+                yield return new AiChatStreamChunk { EventType = "card", Card = card };
+            }
+            yield return new AiChatStreamChunk { EventType = "done" };
+            yield break;
+        }
+
+        yield return new AiChatStreamChunk { EventType = "thinking", Content = "Analyzing match dynamics, team form, and market signals..." };
+
+        var fullResponse = await GetAdviceAsync(userPrompt, sessionId, ct);
+
+        if (!string.IsNullOrWhiteSpace(fullResponse.Message))
+        {
+            var tokens = fullResponse.Message.Split(' ');
+            for (int i = 0; i < tokens.Length; i++)
+            {
+                var token = (i > 0 ? " " : "") + tokens[i];
+                yield return new AiChatStreamChunk { EventType = "text", Content = token };
+                await Task.Delay(10, ct);
+            }
+        }
+
+        foreach (var card in fullResponse.KnowledgeCards)
+        {
+            yield return new AiChatStreamChunk { EventType = "card", Card = card };
+        }
+
+        foreach (var action in fullResponse.Actions)
+        {
+            yield return new AiChatStreamChunk { EventType = "action", Action = action };
+        }
+
+        yield return new AiChatStreamChunk
+        {
+            EventType = "metadata",
+            ContextMode = fullResponse.ContextMode,
+            Warnings = fullResponse.Warnings,
+            SuggestedPrompts = fullResponse.SuggestedPrompts,
+            WorkingSlipSummary = fullResponse.WorkingSlipSummary
+        };
+
+        yield return new AiChatStreamChunk { EventType = "done" };
     }
 
     public async Task<AiChatResponse> GetAdviceAsync(string userPrompt, string sessionId, CancellationToken ct = default)
@@ -65,6 +137,15 @@ public class AiAdvisorService : IAiAdvisorService
         }
 
         var sessionState = await LoadSessionStateAsync(sessionId, ct);
+
+        var guardrailResult = _securityGuardrailService.ValidateInboundPrompt(normalizedPrompt);
+        if (!guardrailResult.IsAllowed && guardrailResult.RefusalResponse != null)
+        {
+            var refusal = guardrailResult.RefusalResponse;
+            FinalizeResponse(refusal, "security_refusal");
+            await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, refusal, null, [], new AiChatNormalizedRequest { Intent = AiChatIntent.SecurityRefusal }, ct);
+            return refusal;
+        }
         if (TryResolvePendingRolloverRequest(normalizedPrompt, sessionState, out var pendingNormalizedRequest))
         {
             sessionState.AwaitingRolloverTargetOdds = false;
@@ -3330,7 +3411,7 @@ public class AiAdvisorService : IAiAdvisorService
         };
     }
 
-    private static void FinalizeResponse(AiChatResponse response, string contextMode)
+    private void FinalizeResponse(AiChatResponse response, string contextMode)
     {
         response.ContextMode = contextMode;
 
@@ -3349,6 +3430,8 @@ public class AiAdvisorService : IAiAdvisorService
         {
             response.SuggestedPrompts = BuildSuggestedPrompts(contextMode, response.Actions);
         }
+
+        _securityGuardrailService.SanitizeOutboundResponse(response);
     }
 
     private static void MergeSelectionWarnings(

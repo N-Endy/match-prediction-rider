@@ -75,6 +75,62 @@ public class AiChatController : ControllerBase
             return StatusCode(500, new { message = "AI Chat is temporarily unavailable. Please try again in a moment." });
         }
     }
+
+    [HttpPost("chat/stream")]
+    public async Task Stream([FromBody] ChatRequest request, CancellationToken ct)
+    {
+        string sessionId;
+        if (_authTicketService.IsLoginRequired)
+        {
+            if (!_authTicketService.TryValidate(HttpContext, out var authenticatedSessionId))
+            {
+                Response.StatusCode = StatusCodes.Status401Unauthorized;
+                Response.ContentType = "application/json";
+                await Response.WriteAsync("{\"message\":\"Unauthorized. Please authenticate on the AI Chat page.\"}", ct);
+                return;
+            }
+
+            sessionId = authenticatedSessionId!;
+        }
+        else
+        {
+            sessionId = _authTicketService.EnsureSession(HttpContext);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Message))
+        {
+            Response.StatusCode = StatusCodes.Status400BadRequest;
+            Response.ContentType = "application/json";
+            await Response.WriteAsync("{\"message\":\"Please enter a message.\"}", ct);
+            return;
+        }
+
+        Response.ContentType = "text/event-stream";
+        Response.Headers["Cache-Control"] = "no-cache";
+        Response.Headers["X-Accel-Buffering"] = "no";
+
+        try
+        {
+            await foreach (var chunk in _aiService.StreamAdviceAsync(request.Message, sessionId, ct))
+            {
+                var json = System.Text.Json.JsonSerializer.Serialize(chunk);
+                await Response.WriteAsync($"data: {json}\n\n", ct);
+                await Response.Body.FlushAsync(ct);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Client closed stream connection
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "AI Chat streaming request failed.");
+            var errorChunk = new AiChatStreamChunk { EventType = "text", Content = " [AI stream temporarily interrupted. Please refresh or try again.]" };
+            await Response.WriteAsync($"data: {System.Text.Json.JsonSerializer.Serialize(errorChunk)}\n\n", ct);
+            await Response.WriteAsync("data: {\"EventType\":\"done\"}\n\n", ct);
+            await Response.Body.FlushAsync(ct);
+        }
+    }
 }
 
 public class ChatRequest

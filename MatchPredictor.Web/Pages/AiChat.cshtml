@@ -500,9 +500,9 @@ else
 
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000);
+            const timeoutId = setTimeout(() => controller.abort(), 60000);
 
-            const response = await fetch('/api/ai/chat', {
+            const response = await fetch('/api/ai/chat/stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message }),
@@ -512,14 +512,105 @@ else
             clearTimeout(timeoutId);
             removeTypingIndicator();
 
-            if (response.ok) {
-                const data = await response.json();
-                appendAiResponse(data);
-            } else {
-                const errorData = await response.json().catch(() => null);
-                const errorMsg = errorData?.message || 'Something went wrong. Please try again.';
-                appendAiResponse({ message: `❌ ${errorMsg}`, actions: [], showBookAll: false, warnings: [] });
+            if (!response.ok || !response.body) {
+                const fallbackRes = await fetch('/api/ai/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message })
+                });
+                if (fallbackRes.ok) {
+                    const data = await fallbackRes.json();
+                    appendAiResponse(data);
+                } else {
+                    const errorData = await fallbackRes.json().catch(() => null);
+                    const errorMsg = errorData?.message || 'Something went wrong. Please try again.';
+                    appendAiResponse({ message: `❌ ${errorMsg}`, actions: [], showBookAll: false, warnings: [] });
+                }
+                return;
             }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'mp-chat-message mp-chat-ai';
+            const avatar = document.createElement('div');
+            avatar.className = 'mp-chat-avatar';
+            avatar.textContent = '🤖';
+
+            const bubble = document.createElement('div');
+            bubble.className = 'mp-chat-bubble';
+
+            const thinkingDiv = document.createElement('div');
+            thinkingDiv.className = 'mp-chat-thinking';
+            thinkingDiv.style.display = 'none';
+            thinkingDiv.innerHTML = '<span class="mp-typing-dots" style="display:inline-flex;margin-right:6px"><span></span><span></span><span></span></span> <span class="thinking-text">Thinking...</span>';
+
+            const textDiv = document.createElement('div');
+            textDiv.className = 'mp-chat-text';
+
+            bubble.appendChild(thinkingDiv);
+            bubble.appendChild(textDiv);
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(bubble);
+            chatMessages.appendChild(messageDiv);
+
+            let accumulatedText = '';
+            const accumulatedCards = [];
+            const accumulatedActions = [];
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed || !trimmed.startsWith('data: ')) continue;
+                    const jsonStr = trimmed.slice(6);
+                    try {
+                        const chunk = JSON.parse(jsonStr);
+                        if (chunk.EventType === 'thinking') {
+                            thinkingDiv.style.display = 'flex';
+                            thinkingDiv.style.alignItems = 'center';
+                            thinkingDiv.style.color = '#94a3b8';
+                            thinkingDiv.style.fontSize = '0.85rem';
+                            thinkingDiv.style.marginBottom = '6px';
+                            thinkingDiv.querySelector('.thinking-text').textContent = chunk.Content || 'Analyzing...';
+                            chatMessages.scrollTop = chatMessages.scrollHeight;
+                        } else if (chunk.EventType === 'text') {
+                            thinkingDiv.style.display = 'none';
+                            accumulatedText += chunk.Content || '';
+                            textDiv.innerHTML = formatMessageHtml(accumulatedText);
+                            chatMessages.scrollTop = chatMessages.scrollHeight;
+                        } else if (chunk.EventType === 'card' && chunk.Card) {
+                            accumulatedCards.push(chunk.Card);
+                        } else if (chunk.EventType === 'action' && chunk.Action) {
+                            accumulatedActions.push(chunk.Action);
+                        } else if (chunk.EventType === 'metadata') {
+                            if (accumulatedCards.length > 0) {
+                                bubble.appendChild(buildKnowledgeCardList(accumulatedCards));
+                            }
+                            if (accumulatedActions.length > 0) {
+                                bubble.appendChild(buildActionGrid(accumulatedActions));
+                            }
+                            if (chunk.SuggestedPrompts && chunk.SuggestedPrompts.length > 0) {
+                                bubble.appendChild(buildSuggestedPromptChips(chunk.SuggestedPrompts));
+                            }
+                            chatMessages.scrollTop = chatMessages.scrollHeight;
+                        }
+                    } catch (parseErr) {
+                        // ignore malformed chunks
+                    }
+                }
+            }
+
+            thinkingDiv.remove();
+
         } catch (err) {
             removeTypingIndicator();
             if (err.name === 'AbortError') {
