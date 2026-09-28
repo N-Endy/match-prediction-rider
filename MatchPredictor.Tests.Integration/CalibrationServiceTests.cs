@@ -37,8 +37,8 @@ public class CalibrationServiceTests
                 CalibratedProbability = calibratedProbability,
                 OutcomeOccurred = occurred,
                 IsSettled = true,
-                CreatedAt = now.AddDays(-index),
-                SettledAt = now.AddDays(-index)
+                CreatedAt = now.AddDays(-index).Date.AddHours(12),
+                SettledAt = now.AddDays(-index).Date.AddHours(20)
             });
         }
 
@@ -185,8 +185,8 @@ public class CalibrationServiceTests
                 CalibratedProbability = occurred ? 0.34 : 0.26,
                 OutcomeOccurred = occurred,
                 IsSettled = true,
-                CreatedAt = now.AddDays(-index),
-                SettledAt = now.AddDays(-index)
+                CreatedAt = now.AddDays(-index).Date.AddHours(12),
+                SettledAt = now.AddDays(-index).Date.AddHours(20)
             });
         }
 

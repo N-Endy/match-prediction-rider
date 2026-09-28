@@ -97,7 +97,7 @@ public class UserTrackingServiceTests
 
         Assert.Equal(0, await context.VisitorSessions.CountAsync());
         Assert.Equal(0, await context.UserActivityEvents.CountAsync());
-        Assert.Empty(httpContext.Response.Headers.SetCookie);
+        Assert.True(Microsoft.Extensions.Primitives.StringValues.IsNullOrEmpty(httpContext.Response.Headers.SetCookie));
     }
 
     [Fact]
