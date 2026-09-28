@@ -51,7 +51,9 @@ public sealed class AiLlmSettingsResolver : IAiLlmSettingsResolver
     public ResolvedAiLlmSettings Resolve()
     {
         var section = _configuration.GetSection(AiLlmOptions.SectionName);
-        var configuredProvider = NormalizeProvider(section["Provider"] ?? _configuration["AiLlm:Provider"]);
+        var explicitProvider = section["Provider"] ?? _configuration["AiLlm:Provider"];
+        var explicitModel = section["Model"] ?? _configuration["AiLlm:Model"];
+        var configuredProvider = ResolveProvider(explicitProvider, explicitModel);
         var timeout = ResolveTimeout(section);
 
         var primaryKey = ResolvePrimaryApiKey(configuredProvider, section);
@@ -228,6 +230,35 @@ public sealed class AiLlmSettingsResolver : IAiLlmSettingsResolver
         return int.TryParse(timeoutRaw, out var parsedTimeout) && parsedTimeout > 0
             ? parsedTimeout
             : 60;
+    }
+
+    private static string ResolveProvider(string? provider, string? model)
+    {
+        if (!string.IsNullOrWhiteSpace(provider))
+        {
+            return NormalizeProvider(provider);
+        }
+
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            var lowerModel = model.Trim().ToLowerInvariant();
+            if (lowerModel.Contains("gpt") || lowerModel.Contains("luna") || lowerModel.StartsWith("o1") || lowerModel.StartsWith("o3"))
+            {
+                return OpenAiProvider;
+            }
+
+            if (lowerModel.Contains("llama") || lowerModel.Contains("mixtral") || lowerModel.Contains("deepseek"))
+            {
+                return GroqProvider;
+            }
+
+            if (lowerModel.Contains("gemini"))
+            {
+                return GeminiProvider;
+            }
+        }
+
+        return GeminiProvider;
     }
 
     private static string NormalizeProvider(string? provider)

@@ -53,6 +53,21 @@ public class AiLlmSettingsResolverTests
     }
 
     [Fact]
+    public void Resolve_InfersOpenAiProvider_WhenModelIsLunaAndProviderOmitted()
+    {
+        var settings = CreateResolver(new Dictionary<string, string?>
+        {
+            ["AiLlm:Model"] = "gpt-5.6-luna",
+            ["AiLlm:ApiKey"] = "sk-test"
+        }).Resolve();
+
+        Assert.Equal(AiLlmSettingsResolver.OpenAiProvider, settings.Provider);
+        Assert.Equal("gpt-5.6-luna", settings.Model);
+        Assert.Equal("https://api.openai.com/v1/", settings.BaseUrl);
+        Assert.True(settings.IsConfigured);
+    }
+
+    [Fact]
     public void Resolve_OpenAi_UsesGeminiFallback_FromNestedSection()
     {
         var settings = CreateResolver(new Dictionary<string, string?>
