@@ -53,31 +53,45 @@ public sealed class AiLlmSettingsResolver : IAiLlmSettingsResolver
         var section = _configuration.GetSection(AiLlmOptions.SectionName);
         var explicitProvider = section["Provider"] ?? _configuration["AiLlm:Provider"];
         var explicitModel = section["Model"] ?? _configuration["AiLlm:Model"];
-        var configuredProvider = ResolveProvider(explicitProvider, explicitModel);
         var timeout = ResolveTimeout(section);
 
-        var primaryKey = ResolvePrimaryApiKey(configuredProvider, section);
+        var configuredKey = CoalesceKey(section["ApiKey"], _configuration["AiLlm:ApiKey"]);
+        var geminiKey = CoalesceKey(_configuration["GEMINI_API_KEY"]);
+        var groqKey = CoalesceKey(_configuration["GroqApiKey"]);
+
+        var detectedFromConfiguredKey = DetectProviderFromKey(configuredKey);
+
         string provider;
         string apiKey;
 
-        if (!string.IsNullOrEmpty(primaryKey))
+        if (detectedFromConfiguredKey != null)
         {
-            provider = configuredProvider;
-            apiKey = primaryKey;
+            provider = detectedFromConfiguredKey;
+            apiKey = configuredKey!;
+        }
+        else if (!string.IsNullOrEmpty(geminiKey) &&
+                 (string.IsNullOrEmpty(explicitProvider) || string.Equals(NormalizeProvider(explicitProvider), GeminiProvider, StringComparison.Ordinal)))
+        {
+            provider = GeminiProvider;
+            apiKey = geminiKey;
         }
         else
         {
-            var groqKey = CoalesceKey(_configuration["GroqApiKey"]);
-            if (!string.IsNullOrEmpty(groqKey) &&
-                !string.Equals(configuredProvider, OpenAiProvider, StringComparison.Ordinal))
+            var initialProvider = ResolveProvider(explicitProvider, explicitModel, configuredKey);
+            var primaryKey = ResolvePrimaryApiKey(initialProvider, section);
+            if (!string.IsNullOrEmpty(primaryKey))
             {
-                // Legacy deployments: only GroqApiKey is set → use Groq (unless explicitly targeting OpenAI).
+                provider = ResolveProvider(explicitProvider, explicitModel, primaryKey);
+                apiKey = primaryKey;
+            }
+            else if (!string.IsNullOrEmpty(groqKey) && !string.Equals(initialProvider, OpenAiProvider, StringComparison.Ordinal))
+            {
                 provider = GroqProvider;
                 apiKey = groqKey;
             }
             else
             {
-                provider = configuredProvider;
+                provider = initialProvider;
                 apiKey = string.Empty;
             }
         }
@@ -118,25 +132,32 @@ public sealed class AiLlmSettingsResolver : IAiLlmSettingsResolver
             fallbackSection["ApiKey"],
             _configuration["AiLlm:Fallback:ApiKey"]);
 
+        var explicitFallbackProvider = fallbackSection["Provider"] ?? _configuration["AiLlm:Fallback:Provider"];
+        var explicitFallbackModel = fallbackSection["Model"] ?? _configuration["AiLlm:Fallback:Model"];
+
         string? fallbackKey;
         string fallbackProvider;
 
         if (string.Equals(primaryProvider, OpenAiProvider, StringComparison.Ordinal))
         {
             // When primary is OpenAI, Gemini can be supplied via Fallback:* or GEMINI_API_KEY.
-            fallbackKey = CoalesceKey(explicitFallbackKey, _configuration["GEMINI_API_KEY"]);
-            fallbackProvider = NormalizeProvider(
-                fallbackSection["Provider"]
-                ?? _configuration["AiLlm:Fallback:Provider"]
-                ?? GeminiProvider);
+            fallbackKey = CoalesceKey(explicitFallbackKey, _configuration["GEMINI_API_KEY"], _configuration["GroqApiKey"]);
+            fallbackProvider = ResolveProvider(explicitFallbackProvider, explicitFallbackModel, fallbackKey, defaultProvider: GeminiProvider);
+        }
+        else if (string.Equals(primaryProvider, GeminiProvider, StringComparison.Ordinal))
+        {
+            // When primary is Gemini, OpenAI can be supplied via Fallback:*, or Groq via GroqApiKey.
+            var groqKey = CoalesceKey(_configuration["GroqApiKey"]);
+            fallbackKey = CoalesceKey(explicitFallbackKey, groqKey);
+            var defaultFallback = groqKey != null && string.IsNullOrEmpty(explicitFallbackKey)
+                ? GroqProvider
+                : OpenAiProvider;
+            fallbackProvider = ResolveProvider(explicitFallbackProvider, explicitFallbackModel, fallbackKey, defaultProvider: defaultFallback);
         }
         else if (!string.IsNullOrEmpty(explicitFallbackKey))
         {
             fallbackKey = explicitFallbackKey;
-            fallbackProvider = NormalizeProvider(
-                fallbackSection["Provider"]
-                ?? _configuration["AiLlm:Fallback:Provider"]
-                ?? GeminiProvider);
+            fallbackProvider = ResolveProvider(explicitFallbackProvider, explicitFallbackModel, fallbackKey, defaultProvider: GeminiProvider);
         }
         else
         {
@@ -152,7 +173,7 @@ public sealed class AiLlmSettingsResolver : IAiLlmSettingsResolver
         if (string.Equals(fallbackProvider, primaryProvider, StringComparison.Ordinal) &&
             string.Equals(
                 fallbackKey,
-                CoalesceKey(section["ApiKey"], _configuration["AiLlm:ApiKey"]),
+                CoalesceKey(section["ApiKey"], _configuration["AiLlm:ApiKey"], _configuration["GEMINI_API_KEY"]),
                 StringComparison.Ordinal))
         {
             return null;
@@ -186,6 +207,13 @@ public sealed class AiLlmSettingsResolver : IAiLlmSettingsResolver
         {
             configuredModel = CoalesceKey(endpointSection["Model"], _configuration["AiLlm:Model"]);
             configuredBaseUrl = CoalesceKey(endpointSection["BaseUrl"], _configuration["AiLlm:BaseUrl"]);
+        }
+
+        // Sanitize cross-provider BaseUrl contamination:
+        // If configuredBaseUrl is explicitly pointing to another provider's endpoint, reject it and use presetBaseUrl.
+        if (!string.IsNullOrWhiteSpace(configuredBaseUrl) && IsCrossProviderBaseUrl(provider, configuredBaseUrl))
+        {
+            configuredBaseUrl = null;
         }
 
         var model = configuredModel
@@ -232,8 +260,70 @@ public sealed class AiLlmSettingsResolver : IAiLlmSettingsResolver
             : 60;
     }
 
-    private static string ResolveProvider(string? provider, string? model)
+    public static bool IsCrossProviderBaseUrl(string provider, string baseUrl)
     {
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return false;
+        }
+
+        var lower = baseUrl.ToLowerInvariant();
+        if (string.Equals(provider, GeminiProvider, StringComparison.Ordinal))
+        {
+            return lower.Contains("api.openai.com") || lower.Contains("api.groq.com");
+        }
+
+        if (string.Equals(provider, OpenAiProvider, StringComparison.Ordinal))
+        {
+            return lower.Contains("googleapis.com") || lower.Contains("api.groq.com");
+        }
+
+        if (string.Equals(provider, GroqProvider, StringComparison.Ordinal))
+        {
+            return lower.Contains("googleapis.com") || lower.Contains("api.openai.com");
+        }
+
+        return false;
+    }
+
+    public static string? DetectProviderFromKey(string? apiKey)
+    {
+        if (string.IsNullOrWhiteSpace(apiKey) || ResolvedAiLlmSettings.IsPlaceholderKey(apiKey))
+        {
+            return null;
+        }
+
+        var key = apiKey.Trim();
+        if (key.StartsWith("AIzaSy", StringComparison.Ordinal))
+        {
+            return GeminiProvider;
+        }
+
+        if (key.StartsWith("gsk_", StringComparison.OrdinalIgnoreCase))
+        {
+            return GroqProvider;
+        }
+
+        if (key.StartsWith("sk-", StringComparison.OrdinalIgnoreCase))
+        {
+            return OpenAiProvider;
+        }
+
+        return null;
+    }
+
+    private static string ResolveProvider(
+        string? provider,
+        string? model,
+        string? apiKey = null,
+        string defaultProvider = GeminiProvider)
+    {
+        var keyProvider = DetectProviderFromKey(apiKey);
+        if (!string.IsNullOrWhiteSpace(keyProvider))
+        {
+            return keyProvider;
+        }
+
         if (!string.IsNullOrWhiteSpace(provider))
         {
             return NormalizeProvider(provider);
@@ -258,7 +348,7 @@ public sealed class AiLlmSettingsResolver : IAiLlmSettingsResolver
             }
         }
 
-        return GeminiProvider;
+        return defaultProvider;
     }
 
     private static string NormalizeProvider(string? provider)

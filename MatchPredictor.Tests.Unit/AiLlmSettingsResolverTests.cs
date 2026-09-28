@@ -150,6 +150,66 @@ public class AiLlmSettingsResolverTests
     }
 
     [Fact]
+    public void Resolve_Gemini_DiscardsConfiguredOpenAiBaseUrl_WhenCrossContaminated()
+    {
+        var settings = CreateResolver(new Dictionary<string, string?>
+        {
+            ["AiLlm:Provider"] = "gemini",
+            ["AiLlm:ApiKey"] = "AIzaSyTestKey123",
+            ["AiLlm:BaseUrl"] = "https://api.openai.com/v1/"
+        }).Resolve();
+
+        Assert.Equal(AiLlmSettingsResolver.GeminiProvider, settings.Provider);
+        Assert.Equal("AIzaSyTestKey123", settings.ApiKey);
+        Assert.Equal("https://generativelanguage.googleapis.com/v1beta/openai/", settings.BaseUrl);
+    }
+
+    [Fact]
+    public void Resolve_OpenAi_DiscardsConfiguredGoogleBaseUrl_WhenCrossContaminated()
+    {
+        var settings = CreateResolver(new Dictionary<string, string?>
+        {
+            ["AiLlm:Provider"] = "openai",
+            ["AiLlm:ApiKey"] = "sk-test-key",
+            ["AiLlm:BaseUrl"] = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        }).Resolve();
+
+        Assert.Equal(AiLlmSettingsResolver.OpenAiProvider, settings.Provider);
+        Assert.Equal("sk-test-key", settings.ApiKey);
+        Assert.Equal("https://api.openai.com/v1/", settings.BaseUrl);
+    }
+
+    [Fact]
+    public void Resolve_AutoDetectsGeminiKeyPrefix_EvenIfProviderConfiguredAsOpenAi()
+    {
+        var settings = CreateResolver(new Dictionary<string, string?>
+        {
+            ["AiLlm:Provider"] = "openai",
+            ["AiLlm:ApiKey"] = "AIzaSyBnRealGeminiKey",
+            ["AiLlm:BaseUrl"] = "https://api.openai.com/v1/"
+        }).Resolve();
+
+        Assert.Equal(AiLlmSettingsResolver.GeminiProvider, settings.Provider);
+        Assert.Equal("AIzaSyBnRealGeminiKey", settings.ApiKey);
+        Assert.Equal("https://generativelanguage.googleapis.com/v1beta/openai/", settings.BaseUrl);
+    }
+
+    [Fact]
+    public void Resolve_AutoDetectsOpenAiKeyPrefix_EvenIfProviderConfiguredAsGemini()
+    {
+        var settings = CreateResolver(new Dictionary<string, string?>
+        {
+            ["AiLlm:Provider"] = "gemini",
+            ["AiLlm:ApiKey"] = "sk-proj-openai-key-here",
+            ["AiLlm:BaseUrl"] = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        }).Resolve();
+
+        Assert.Equal(AiLlmSettingsResolver.OpenAiProvider, settings.Provider);
+        Assert.Equal("sk-proj-openai-key-here", settings.ApiKey);
+        Assert.Equal("https://api.openai.com/v1/", settings.BaseUrl);
+    }
+
+    [Fact]
     public void Resolve_AcceptsGeminiApiKeyAlias_AndExplicitOverrides()
     {
         var settings = CreateResolver(new Dictionary<string, string?>
