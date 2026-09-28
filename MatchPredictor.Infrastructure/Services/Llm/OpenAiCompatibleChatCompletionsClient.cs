@@ -171,9 +171,9 @@ public sealed class OpenAiCompatibleChatCompletionsClient : IChatCompletionsClie
             using (var stream = await response.Content.ReadAsStreamAsync(ct))
             using (var reader = new StreamReader(stream, Encoding.UTF8))
             {
-                while (!reader.EndOfStream && !ct.IsCancellationRequested)
+                string? line;
+                while ((line = await reader.ReadLineAsync(ct)) != null)
                 {
-                    var line = await reader.ReadLineAsync(ct);
                     if (string.IsNullOrWhiteSpace(line))
                     {
                         continue;
