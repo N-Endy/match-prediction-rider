@@ -35,7 +35,7 @@ public sealed class AiLlmSettingsResolver : IAiLlmSettingsResolver
     public const string OpenAiProvider = "openai";
 
     public const string DefaultGeminiBaseUrl = "https://generativelanguage.googleapis.com/v1beta/openai/";
-    public const string DefaultGeminiModel = "gemini-3.5-flash";
+    public const string DefaultGeminiModel = "gemini-3.8-flash";
     public const string DefaultGroqBaseUrl = "https://api.groq.com/openai/v1";
     public const string DefaultGroqModel = "openai/gpt-oss-120b";
     public const string DefaultOpenAiBaseUrl = "https://api.openai.com/v1";
@@ -216,9 +216,10 @@ public sealed class AiLlmSettingsResolver : IAiLlmSettingsResolver
             configuredBaseUrl = null;
         }
 
-        var model = configuredModel
+        var rawModel = configuredModel
                     ?? (string.Equals(provider, GroqProvider, StringComparison.Ordinal) ? groqModel : null)
                     ?? presetModel;
+        var model = NormalizeDeprecatedModel(provider, rawModel);
         var baseUrl = configuredBaseUrl ?? presetBaseUrl;
 
         var endpointTimeoutRaw = endpointSection["TimeoutSeconds"];
@@ -310,6 +311,31 @@ public sealed class AiLlmSettingsResolver : IAiLlmSettingsResolver
         }
 
         return null;
+    }
+
+    public static string NormalizeDeprecatedModel(string provider, string model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            return model;
+        }
+
+        if (string.Equals(provider, GeminiProvider, StringComparison.OrdinalIgnoreCase))
+        {
+            var stripped = model.Trim().Replace("models/", "", StringComparison.OrdinalIgnoreCase);
+            var lower = stripped.ToLowerInvariant();
+            if (lower == "gemini-2.5-flash" || lower == "gemini-2.0-flash" || lower == "gemini-1.5-flash")
+            {
+                return "gemini-3.8-flash";
+            }
+
+            if (lower == "gemini-2.5-pro" || lower == "gemini-2.0-pro" || lower == "gemini-1.5-pro")
+            {
+                return "gemini-3.8-pro";
+            }
+        }
+
+        return model;
     }
 
     private static string ResolveProvider(

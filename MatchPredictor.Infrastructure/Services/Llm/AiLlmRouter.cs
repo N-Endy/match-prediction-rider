@@ -56,36 +56,37 @@ public class AiLlmRouter : IAiLlmRouter
     {
         if (string.IsNullOrWhiteSpace(defaultModel))
         {
-            return tier == ModelTier.Fast ? "gemini-2.5-flash" : "gemini-2.5-pro";
+            return tier == ModelTier.Fast ? "gemini-3.8-flash" : "gemini-3.8-pro";
         }
 
-        var lower = defaultModel.ToLowerInvariant();
+        var normalizedDefault = AiLlmSettingsResolver.NormalizeDeprecatedModel(AiLlmSettingsResolver.GeminiProvider, defaultModel);
+        var lower = normalizedDefault.ToLowerInvariant();
 
         if (tier == ModelTier.Fast)
         {
             // If already on flash/mini, keep it
             if (lower.Contains("flash") || lower.Contains("mini") || lower.Contains("8b"))
             {
-                return defaultModel;
+                return normalizedDefault;
             }
 
             // Downshift pro to flash if fast tier requested
             if (lower.Contains("pro"))
             {
-                return defaultModel.Replace("pro", "flash", StringComparison.OrdinalIgnoreCase);
+                return normalizedDefault.Replace("pro", "flash", StringComparison.OrdinalIgnoreCase);
             }
 
-            return defaultModel;
+            return normalizedDefault;
         }
         else // DeepReasoning
         {
             // If on flash, upshift to pro for deep reasoning
             if (lower.Contains("flash"))
             {
-                return defaultModel.Replace("flash", "pro", StringComparison.OrdinalIgnoreCase);
+                return normalizedDefault.Replace("flash", "pro", StringComparison.OrdinalIgnoreCase);
             }
 
-            return defaultModel;
+            return normalizedDefault;
         }
     }
 }

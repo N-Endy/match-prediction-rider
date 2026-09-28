@@ -76,7 +76,7 @@ public class AiLlmSettingsResolverTests
             ["AiLlm:ApiKey"] = "sk-primary",
             ["AiLlm:Fallback:Provider"] = "gemini",
             ["AiLlm:Fallback:ApiKey"] = "gemini-fallback",
-            ["AiLlm:Fallback:Model"] = "gemini-3.5-flash"
+            ["AiLlm:Fallback:Model"] = "gemini-3.8-flash"
         }).Resolve();
 
         Assert.Equal(AiLlmSettingsResolver.OpenAiProvider, settings.Provider);
@@ -207,6 +207,37 @@ public class AiLlmSettingsResolverTests
         Assert.Equal(AiLlmSettingsResolver.OpenAiProvider, settings.Provider);
         Assert.Equal("sk-proj-openai-key-here", settings.ApiKey);
         Assert.Equal("https://api.openai.com/v1/", settings.BaseUrl);
+    }
+
+    [Fact]
+    public void Resolve_Gemini_UsesGemini38Flash_AsDefaultModel()
+    {
+        var settings = CreateResolver(new Dictionary<string, string?>
+        {
+            ["AiLlm:Provider"] = "gemini",
+            ["AiLlm:ApiKey"] = "AIzaSyTest"
+        }).Resolve();
+
+        Assert.Equal("gemini-3.8-flash", settings.Model);
+    }
+
+    [Theory]
+    [InlineData("gemini-2.5-flash", "gemini-3.8-flash")]
+    [InlineData("models/gemini-2.5-flash", "gemini-3.8-flash")]
+    [InlineData("gemini-2.0-flash", "gemini-3.8-flash")]
+    [InlineData("gemini-1.5-flash", "gemini-3.8-flash")]
+    [InlineData("gemini-2.5-pro", "gemini-3.8-pro")]
+    [InlineData("models/gemini-2.5-pro", "gemini-3.8-pro")]
+    public void Resolve_Gemini_UpgradesDeprecatedModels(string inputModel, string expectedModel)
+    {
+        var settings = CreateResolver(new Dictionary<string, string?>
+        {
+            ["AiLlm:Provider"] = "gemini",
+            ["AiLlm:ApiKey"] = "AIzaSyTest",
+            ["AiLlm:Model"] = inputModel
+        }).Resolve();
+
+        Assert.Equal(expectedModel, settings.Model);
     }
 
     [Fact]
