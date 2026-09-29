@@ -193,7 +193,37 @@ else
         }
     }
 
-    function buildActionCard(action) {
+    function normalizeAction(action) {
+        if (!action) return action;
+        return {
+            type: action.type || action.Type || 'add_bet',
+            actionKey: action.actionKey || action.ActionKey || '',
+            predictionId: action.predictionId || action.PredictionId || 0,
+            homeTeam: action.homeTeam || action.HomeTeam || '',
+            awayTeam: action.awayTeam || action.AwayTeam || '',
+            league: action.league || action.League || '',
+            matchDateLabel: action.matchDateLabel || action.MatchDateLabel || 'Today',
+            kickoffTime: action.kickoffTime || action.KickoffTime || '',
+            matchDateTimeUtc: action.matchDateTimeUtc || action.MatchDateTimeUtc || null,
+            status: action.status || action.Status || 'Upcoming',
+            actualScore: action.actualScore || action.ActualScore || null,
+            market: action.market || action.Market || '',
+            prediction: action.prediction || action.Prediction || '',
+            explanation: action.explanation || action.Explanation || '',
+            modelProbability: action.modelProbability !== undefined ? action.modelProbability : action.ModelProbability,
+            marketProbability: action.marketProbability !== undefined ? action.marketProbability : action.MarketProbability,
+            edgePoints: action.edgePoints !== undefined ? action.edgePoints : action.EdgePoints,
+            estimatedOdds: action.estimatedOdds !== undefined ? action.estimatedOdds : action.EstimatedOdds,
+            analysisSummary: action.analysisSummary || action.AnalysisSummary || null,
+            analysisConfidence: action.analysisConfidence || action.AnalysisConfidence || null,
+            insightBullets: action.insightBullets || action.InsightBullets || [],
+            insightSource: action.insightSource || action.InsightSource || null,
+            canBook: action.canBook !== undefined ? action.canBook : (action.CanBook !== undefined ? action.CanBook : true)
+        };
+    }
+
+    function buildActionCard(rawAction) {
+        const action = normalizeAction(rawAction);
         const card = document.createElement('div');
         card.className = 'mp-chat-action';
 
@@ -403,6 +433,17 @@ else
         return shell;
     }
 
+    function buildActionGrid(actions) {
+        const container = document.createElement('div');
+        container.className = 'mp-chat-action-list';
+        (actions || []).forEach(action => container.appendChild(buildActionCard(action)));
+        return container;
+    }
+
+    function buildKnowledgeCardList(cards) {
+        return buildKnowledgeCards(cards);
+    }
+
     function escapeHtml(text) {
         return String(text ?? '')
             .replace(/&/g, '&amp;')
@@ -574,33 +615,82 @@ else
                     const jsonStr = trimmed.slice(6);
                     try {
                         const chunk = JSON.parse(jsonStr);
-                        if (chunk.EventType === 'thinking') {
+                        const eventType = chunk.EventType || chunk.eventType;
+                        if (eventType === 'thinking') {
                             thinkingDiv.style.display = 'flex';
                             thinkingDiv.style.alignItems = 'center';
                             thinkingDiv.style.color = '#94a3b8';
                             thinkingDiv.style.fontSize = '0.85rem';
                             thinkingDiv.style.marginBottom = '6px';
-                            thinkingDiv.querySelector('.thinking-text').textContent = chunk.Content || 'Analyzing...';
+                            thinkingDiv.querySelector('.thinking-text').textContent = chunk.Content || chunk.content || 'Analyzing...';
                             chatMessages.scrollTop = chatMessages.scrollHeight;
-                        } else if (chunk.EventType === 'text') {
+                        } else if (eventType === 'text') {
                             thinkingDiv.style.display = 'none';
-                            accumulatedText += chunk.Content || '';
+                            accumulatedText += chunk.Content || chunk.content || '';
                             textDiv.innerHTML = formatMessageHtml(accumulatedText);
                             chatMessages.scrollTop = chatMessages.scrollHeight;
-                        } else if (chunk.EventType === 'card' && chunk.Card) {
-                            accumulatedCards.push(chunk.Card);
-                        } else if (chunk.EventType === 'action' && chunk.Action) {
-                            accumulatedActions.push(chunk.Action);
-                        } else if (chunk.EventType === 'metadata') {
+                        } else if (eventType === 'card' && (chunk.Card || chunk.card)) {
+                            accumulatedCards.push(chunk.Card || chunk.card);
+                        } else if (eventType === 'action' && (chunk.Action || chunk.action)) {
+                            accumulatedActions.push(normalizeAction(chunk.Action || chunk.action));
+                        } else if (eventType === 'metadata') {
+                            const slipSummary = chunk.WorkingSlipSummary || chunk.workingSlipSummary;
+                            if (slipSummary) {
+                                bubble.appendChild(buildWorkingSlipSummary(slipSummary));
+                            }
+
+                            const warnings = chunk.Warnings || chunk.warnings;
+                            if (Array.isArray(warnings) && warnings.length > 0) {
+                                const warningsDiv = document.createElement('div');
+                                warningsDiv.className = 'mp-chat-warnings';
+                                warningsDiv.innerHTML = warnings
+                                    .map(warning => `<div>${escapeHtml(warning)}</div>`)
+                                    .join('');
+                                bubble.appendChild(warningsDiv);
+                            }
+
                             if (accumulatedCards.length > 0) {
-                                bubble.appendChild(buildKnowledgeCardList(accumulatedCards));
+                                bubble.appendChild(buildKnowledgeCards(accumulatedCards));
                             }
+
                             if (accumulatedActions.length > 0) {
-                                bubble.appendChild(buildActionGrid(accumulatedActions));
+                                const actionsDiv = document.createElement('div');
+                                actionsDiv.className = 'mp-chat-action-list';
+                                accumulatedActions.forEach(action => actionsDiv.appendChild(buildActionCard(action)));
+                                bubble.appendChild(actionsDiv);
                             }
-                            if (chunk.SuggestedPrompts && chunk.SuggestedPrompts.length > 0) {
-                                bubble.appendChild(buildSuggestedPromptChips(chunk.SuggestedPrompts));
+
+                            const showBookAll = chunk.ShowBookAll ?? chunk.showBookAll;
+                            if (showBookAll && accumulatedActions.length > 0) {
+                                const footer = document.createElement('div');
+                                footer.className = 'mp-chat-book-footer';
+
+                                const btn = document.createElement('button');
+                                btn.className = 'mp-book-btn';
+                                btn.textContent = accumulatedActions.length === 1
+                                    ? 'Add & Open Slip'
+                                    : 'Add All & Open Slip';
+                                btn.addEventListener('click', () => addAllAndBook(btn));
+
+                                footer.appendChild(btn);
+                                bubble.appendChild(footer);
                             }
+
+                            const suggestedPrompts = chunk.SuggestedPrompts || chunk.suggestedPrompts;
+                            if (Array.isArray(suggestedPrompts) && suggestedPrompts.length > 0) {
+                                bubble.appendChild(buildSuggestedPromptChips(suggestedPrompts));
+                            }
+
+                            const autoBook = chunk.AutoBook ?? chunk.autoBook;
+                            if (autoBook) {
+                                const bookBtn = bubble.querySelector('.mp-book-btn');
+                                if (bookBtn) {
+                                    addAllAndBook(bookBtn);
+                                } else {
+                                    addAllAndBookFromBubble(bubble);
+                                }
+                            }
+
                             chatMessages.scrollTop = chatMessages.scrollHeight;
                         }
                     } catch (parseErr) {

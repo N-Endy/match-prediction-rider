@@ -10,4 +10,6 @@ public class AiChatStreamChunk
     public List<string>? SuggestedPrompts { get; set; }
     public AiChatWorkingSlipSummary? WorkingSlipSummary { get; set; }
     public string? ContextMode { get; set; }
+    public bool ShowBookAll { get; set; }
+    public bool AutoBook { get; set; }
 }

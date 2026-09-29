@@ -105,6 +105,69 @@ public class AiChatPageScriptTests
         Assert.Contains("addAllAndBook(bookBtn)", script);
     }
 
+    [Fact]
+    public void ChatScript_DefinesGridAndKnowledgeListHelpers_AndHandlesStreamingActions()
+    {
+        var script = ExtractScript(ResolveAiChatPagePath());
+
+        Assert.Contains("function buildActionGrid", script);
+        Assert.Contains("function buildKnowledgeCardList", script);
+        Assert.Contains("normalizeAction", script);
+        Assert.Contains("accumulatedActions.forEach", script);
+        Assert.Contains("showBookAll", script);
+        Assert.Contains("autoBook", script);
+    }
+
+    [Fact]
+    public void ChatScript_NormalizeAction_HandlesBothPascalAndCamelCase()
+    {
+        var script = ExtractScript(ResolveAiChatPagePath());
+
+        var engine = new Engine();
+        engine.Execute("""
+            var document = {
+                body: { appendChild: function() {} },
+                getElementById: function() { return null; },
+                querySelectorAll: function() { return []; },
+                createElement: function() {
+                    return {
+                        style: {},
+                        dataset: {},
+                        classList: { add: function() {}, remove: function() {} },
+                        appendChild: function() {},
+                        addEventListener: function() {},
+                        querySelectorAll: function() { return []; },
+                        closest: function() { return null; }
+                    };
+                },
+                addEventListener: function() {}
+            };
+            var fetch = async function() { return { ok: true, json: async function() { return {}; } }; };
+            var addToCart = function() {};
+            var openCartModal = function() {};
+            """);
+        engine.Execute(script);
+
+        var normalized = engine.Invoke("normalizeAction", new
+        {
+            HomeTeam = "Arsenal",
+            AwayTeam = "Chelsea",
+            Market = "BTTS",
+            Prediction = "Yes",
+            PredictionId = 42
+        });
+
+        var homeTeam = normalized.Get("homeTeam").AsString();
+        var awayTeam = normalized.Get("awayTeam").AsString();
+        var market = normalized.Get("market").AsString();
+        var predId = (int)normalized.Get("predictionId").AsNumber();
+
+        Assert.Equal("Arsenal", homeTeam);
+        Assert.Equal("Chelsea", awayTeam);
+        Assert.Equal("BTTS", market);
+        Assert.Equal(42, predId);
+    }
+
     private static string ResolveAiChatPagePath()
     {
         var candidates = new[]

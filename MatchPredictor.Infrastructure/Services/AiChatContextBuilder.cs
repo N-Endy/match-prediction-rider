@@ -21,7 +21,15 @@ public static partial class AiChatContextBuilder
         "straightwin", "straightwins", "stronger", "rollover", "supplied", "teams", "than", "the", "them", "these", "this", "those", "ticket", "to",
         "today", "top", "total", "totals", "altogether", "under", "value", "why", "won", "yesterday",
         "want", "wanted", "wanting", "what", "which", "win", "wins", "with", "would", "you", "your", "red", "green", "finished", "lost", "landed", "did", "mix", "mixture", "suggest", "suggested", "random", "randomly",
-        "explain", "explained", "discuss", "discussion", "talk", "riskiest", "weakest", "remove", "swap", "replace", "fits", "left", "also", "well", "same", "fixture", "fixtures", "available"
+        "explain", "explained", "discuss", "discussion", "talk", "riskiest", "weakest", "remove", "swap", "replace", "fits", "left", "also", "well", "same", "fixture", "fixtures", "available",
+        "tonight", "tomorrow", "weekend", "morning", "afternoon", "evening", "night", "later", "now", "soon",
+        "play", "plays", "stake", "staked", "stakes", "betting", "punter", "punters", "coupon", "coupons", "slate",
+        "solid", "winnable", "sure", "accurate", "lock", "locks", "bank", "high", "low", "higher", "lower", "medium", "moderate",
+        "look", "looking", "check", "checking", "see", "view", "get", "bring", "pull", "fetch",
+        "who", "when", "where", "how", "think", "thinking", "believe", "expect", "predict", "predicted",
+        "tell", "say", "mention", "provide", "generate", "create", "build", "selections", "selection", "select", "choose", "choice", "choices",
+        "against", "versus", "vs", "at", "favorite", "favourite", "favorites", "favourites", "underdog", "underdogs",
+        "score", "scores", "scoring", "goal", "goals", "premier", "league", "leagues", "cup", "tournament"
     };
 
     /// <summary>
@@ -853,15 +861,45 @@ public static partial class AiChatContextBuilder
                !prompt.Contains("tell me about", StringComparison.Ordinal);
     }
 
+    internal static bool MentionsBookingIntent(string promptLower)
+    {
+        return promptLower.Contains("book", StringComparison.Ordinal) ||
+               promptLower.Contains("add all", StringComparison.Ordinal) ||
+               promptLower.Contains("open slip", StringComparison.Ordinal) ||
+               promptLower.Contains("add to slip", StringComparison.Ordinal) ||
+               promptLower.Contains("add to betslip", StringComparison.Ordinal) ||
+               promptLower.Contains("add them", StringComparison.Ordinal) ||
+               promptLower.Contains("add these", StringComparison.Ordinal) ||
+               promptLower.Contains("book them", StringComparison.Ordinal) ||
+               promptLower.Contains("book these", StringComparison.Ordinal) ||
+               promptLower.Contains("book the matches", StringComparison.Ordinal) ||
+               promptLower.Contains("book matches", StringComparison.Ordinal) ||
+               promptLower.Contains("book it", StringComparison.Ordinal) ||
+               promptLower.Contains("put on slip", StringComparison.Ordinal) ||
+               promptLower.Contains("put on betslip", StringComparison.Ordinal);
+    }
+
     internal static bool IsMatchDiscussionPrompt(string prompt, bool hasWorkingSlip, bool hasContextCandidates)
     {
-        return prompt.Contains("tell me about", StringComparison.Ordinal) ||
-               prompt.Contains("explain these", StringComparison.Ordinal) ||
-               prompt.Contains("explain this", StringComparison.Ordinal) ||
-               prompt.Contains("talk about", StringComparison.Ordinal) ||
-               prompt.Contains("discuss", StringComparison.Ordinal) ||
-               (hasWorkingSlip && (prompt.Contains("these matches", StringComparison.Ordinal) || prompt.Contains("them", StringComparison.Ordinal))) ||
-               (hasContextCandidates && prompt.Contains("this match", StringComparison.Ordinal));
+        if (MentionsBookingIntent(prompt))
+        {
+            return false;
+        }
+
+        var asksToDiscuss = prompt.Contains("tell me about", StringComparison.Ordinal) ||
+                           prompt.Contains("explain these", StringComparison.Ordinal) ||
+                           prompt.Contains("explain this", StringComparison.Ordinal) ||
+                           prompt.Contains("explain them", StringComparison.Ordinal) ||
+                           prompt.Contains("talk about", StringComparison.Ordinal) ||
+                           prompt.Contains("discuss", StringComparison.Ordinal) ||
+                           prompt.Contains("why these", StringComparison.Ordinal) ||
+                           prompt.Contains("why them", StringComparison.Ordinal) ||
+                           prompt.Contains("why this", StringComparison.Ordinal) ||
+                           prompt.Contains("break down", StringComparison.Ordinal);
+
+        return asksToDiscuss ||
+               (hasWorkingSlip && prompt.Contains("these matches", StringComparison.Ordinal) && asksToDiscuss) ||
+               (hasContextCandidates && (prompt.Contains("this match", StringComparison.Ordinal) || prompt.Contains("this game", StringComparison.Ordinal)));
     }
 
     private static string? NormalizeRequestedMarket(string rawMarket)

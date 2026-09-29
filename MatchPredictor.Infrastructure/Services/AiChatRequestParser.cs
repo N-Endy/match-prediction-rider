@@ -779,12 +779,13 @@ public partial class AiChatRequestParser
             AiChatIntent.SettlementExplanation or
             AiChatIntent.ValueBetRequest or
             AiChatIntent.RecommendPicks or
-            AiChatIntent.MixedMarketRecommendation)
+            AiChatIntent.MixedMarketRecommendation or
+            AiChatIntent.WorkingSlipRefinement)
         {
             return [];
         }
 
-        if (requireSameFixtureMarkets || isCatalogListing)
+        if (requireSameFixtureMarkets || isCatalogListing || AiChatContextBuilder.MentionsBookingIntent(prompt))
         {
             return [];
         }
@@ -1066,18 +1067,8 @@ public partial class AiChatRequestParser
                promptLower.Contains("ev", StringComparison.Ordinal);
     }
 
-    private static bool MentionsBookingIntent(string promptLower)
-    {
-        return promptLower.Contains("book", StringComparison.Ordinal) ||
-               promptLower.Contains("add all", StringComparison.Ordinal) ||
-               promptLower.Contains("open slip", StringComparison.Ordinal) ||
-               promptLower.Contains("add to slip", StringComparison.Ordinal) ||
-               promptLower.Contains("add them", StringComparison.Ordinal) ||
-               promptLower.Contains("add these", StringComparison.Ordinal) ||
-               promptLower.Contains("book them", StringComparison.Ordinal) ||
-               promptLower.Contains("book these", StringComparison.Ordinal) ||
-               promptLower.Contains("book it", StringComparison.Ordinal);
-    }
+    private static bool MentionsBookingIntent(string promptLower) =>
+        AiChatContextBuilder.MentionsBookingIntent(promptLower);
 
     private static string NormalizeScope(string scope)
     {

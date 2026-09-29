@@ -119,7 +119,9 @@ public class AiAdvisorService : IAiAdvisorService
             ContextMode = fullResponse.ContextMode,
             Warnings = fullResponse.Warnings,
             SuggestedPrompts = fullResponse.SuggestedPrompts,
-            WorkingSlipSummary = fullResponse.WorkingSlipSummary
+            WorkingSlipSummary = fullResponse.WorkingSlipSummary,
+            ShowBookAll = fullResponse.ShowBookAll,
+            AutoBook = fullResponse.AutoBook
         };
 
         yield return new AiChatStreamChunk { EventType = "done" };
@@ -203,7 +205,10 @@ public class AiAdvisorService : IAiAdvisorService
 
         if (IsBookingFollowUp(normalizedRequest, sessionState))
         {
-            var followUp = BuildBookingFollowUpResponse(predictions, sessionState.LastRecommendedActionKeys);
+            var targetActionKeys = sessionState.LastRecommendedActionKeys.Count > 0
+                ? sessionState.LastRecommendedActionKeys
+                : sessionState.WorkingSlipActionKeys;
+            var followUp = BuildBookingFollowUpResponse(predictions, targetActionKeys);
             FinalizeResponse(followUp, "working_slip_refinement");
             await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, followUp, null, followUp.Actions.Select(action => action.PredictionId).ToList(), normalizedRequest, ct);
             return followUp;
@@ -3677,19 +3682,8 @@ public class AiAdvisorService : IAiAdvisorService
         return modelRequestedBookAll || MentionsBookingIntent(userPrompt);
     }
 
-    private static bool MentionsBookingIntent(string userPrompt)
-    {
-        var prompt = userPrompt.ToLowerInvariant();
-        return prompt.Contains("book", StringComparison.Ordinal) ||
-               prompt.Contains("add all", StringComparison.Ordinal) ||
-               prompt.Contains("open slip", StringComparison.Ordinal) ||
-               prompt.Contains("add to slip", StringComparison.Ordinal) ||
-               prompt.Contains("add them", StringComparison.Ordinal) ||
-               prompt.Contains("add these", StringComparison.Ordinal) ||
-               prompt.Contains("book them", StringComparison.Ordinal) ||
-               prompt.Contains("book these", StringComparison.Ordinal) ||
-               prompt.Contains("book it", StringComparison.Ordinal);
-    }
+    private static bool MentionsBookingIntent(string userPrompt) =>
+        AiChatContextBuilder.MentionsBookingIntent(userPrompt);
 
     private static bool TryParseChatModelResponse(string rawResponse, out ChatModelResponse response)
     {
@@ -3821,7 +3815,9 @@ public class AiAdvisorService : IAiAdvisorService
 
     private static bool IsBookingFollowUp(AiChatNormalizedRequest request, AiChatSessionState sessionState)
     {
-        if (sessionState.LastRecommendedActionKeys.Count == 0)
+        var hasPriorKeys = sessionState.LastRecommendedActionKeys.Count > 0 ||
+                           sessionState.WorkingSlipActionKeys.Count > 0;
+        if (!hasPriorKeys)
         {
             return false;
         }
@@ -3831,6 +3827,12 @@ public class AiAdvisorService : IAiAdvisorService
         var mentionsPriorPicks = prompt.Contains("them", StringComparison.Ordinal) ||
                                  prompt.Contains("those", StringComparison.Ordinal) ||
                                  prompt.Contains("these", StringComparison.Ordinal) ||
+                                 prompt.Contains("the matches", StringComparison.Ordinal) ||
+                                 prompt.Contains("the games", StringComparison.Ordinal) ||
+                                 prompt.Contains("the picks", StringComparison.Ordinal) ||
+                                 prompt.Contains("matches", StringComparison.Ordinal) ||
+                                 prompt.Contains("games", StringComparison.Ordinal) ||
+                                 prompt.Contains("picks", StringComparison.Ordinal) ||
                                  prompt.Contains("last", StringComparison.Ordinal) ||
                                  prompt.Contains("recommended", StringComparison.Ordinal) ||
                                  prompt.Contains("add all", StringComparison.Ordinal) ||

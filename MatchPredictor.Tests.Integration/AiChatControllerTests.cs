@@ -94,6 +94,56 @@ public class AiChatControllerTests
     }
 
     [Fact]
+    public async Task Stream_EmitsMetadataWithShowBookAllAndAutoBook()
+    {
+        var advisor = new FakeAiAdvisorService
+        {
+            CustomChunks =
+            [
+                new AiChatStreamChunk { EventType = "text", Content = "Booking matches" },
+                new AiChatStreamChunk
+                {
+                    EventType = "action",
+                    Action = new AiChatAction { ActionKey = "P1", HomeTeam = "Arsenal", AwayTeam = "Chelsea" }
+                },
+                new AiChatStreamChunk
+                {
+                    EventType = "metadata",
+                    ShowBookAll = true,
+                    AutoBook = true
+                },
+                new AiChatStreamChunk { EventType = "done" }
+            ]
+        };
+        var auth = new FakeAiChatAuthTicketService { IsLoginRequired = false, SessionId = "anon-stream" };
+        var httpContext = new DefaultHttpContext();
+        httpContext.Response.Body = new MemoryStream();
+
+        var controller = new AiChatController(
+            advisor,
+            auth,
+            new FakeUserTrackingService(),
+            NullLogger<AiChatController>.Instance)
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = httpContext
+            }
+        };
+
+        await controller.Stream(new ChatRequest { Message = "book the matches" }, CancellationToken.None);
+
+        httpContext.Response.Body.Seek(0, SeekOrigin.Begin);
+        using var reader = new StreamReader(httpContext.Response.Body);
+        var body = await reader.ReadToEndAsync();
+        Assert.Contains("\"EventType\":\"metadata\"", body);
+        Assert.Contains("\"ShowBookAll\":true", body);
+        Assert.Contains("\"AutoBook\":true", body);
+        Assert.Contains("\"Action\":", body);
+        Assert.Contains("Arsenal", body);
+    }
+
+    [Fact]
     public async Task Chat_WhenServiceThrows_ReturnsGeneric500WithoutInternalDetails()
     {
         var httpContext = new DefaultHttpContext();
@@ -160,11 +210,22 @@ public class AiChatControllerTests
             });
         }
 
+        public IReadOnlyList<AiChatStreamChunk>? CustomChunks { get; init; }
+
         public async IAsyncEnumerable<AiChatStreamChunk> StreamAdviceAsync(
             string userPrompt,
             string sessionId,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
         {
+            if (CustomChunks is not null)
+            {
+                foreach (var chunk in CustomChunks)
+                {
+                    yield return chunk;
+                }
+                yield break;
+            }
+
             var res = await GetAdviceAsync(userPrompt, sessionId, ct);
             yield return new AiChatStreamChunk { EventType = "text", Content = res.Message };
             yield return new AiChatStreamChunk { EventType = "done" };

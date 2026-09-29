@@ -436,6 +436,39 @@ public class AiChatRequestParserTests
         Assert.Contains(result.Request.RequestedMarkets, market => market.PredictionCategory == "BothTeamsScore");
     }
 
+    [Theory]
+    [InlineData("book the matches")]
+    [InlineData("book them")]
+    [InlineData("book these")]
+    [InlineData("book it")]
+    [InlineData("add all and open slip")]
+    public void ParseDeterministic_DoesNotTreatBookingKeywordsAsEntityTerms(string prompt)
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            prompt,
+            null,
+            hasWorkingSlip: true,
+            hasContextCandidates: true);
+
+        Assert.Empty(result.Request.EntityTerms);
+        Assert.True(result.Request.WantsBooking);
+    }
+
+    [Theory]
+    [InlineData("give me solid plays for tonight")]
+    [InlineData("find me winnable coupon picks for tomorrow")]
+    [InlineData("show me bankers for tonight")]
+    public void ParseDeterministic_DoesNotTreatConversationalAndTemporalKeywordsAsEntityTerms(string prompt)
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            prompt,
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: true);
+
+        Assert.Empty(result.Request.EntityTerms);
+    }
+
     private sealed class StubSchemaFallbackService : IAiChatSchemaFallbackService
     {
         private readonly AiChatNormalizedRequest? _response;

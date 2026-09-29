@@ -166,6 +166,64 @@ public class AiAdvisorServiceTests
     }
 
     [Fact]
+    public async Task GetAdviceAsync_UsesWorkingSlipOrSavedRecommendations_ForBookTheMatchesFollowUp()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(context, 2);
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "message": "Here are 2 picks for you.",
+                  "recommendedActionKeys": ["P{{predictions[0].Id}}", "P{{predictions[1].Id}}"],
+                  "showBookAll": true
+                }
+                """));
+
+        var service = CreateService(context, handler);
+
+        var firstResponse = await service.GetAdviceAsync("Give me 2 picks", "session-book-matches");
+        var followUpResponse = await service.GetAdviceAsync("book the matches", "session-book-matches");
+
+        Assert.Equal(2, firstResponse.Actions.Count);
+        Assert.Equal(2, followUpResponse.Actions.Count);
+        Assert.True(followUpResponse.ShowBookAll);
+        Assert.True(followUpResponse.AutoBook);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task StreamAdviceAsync_EmitsMetadataWithShowBookAllAndAutoBook()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(context, 2);
+
+        var handler = new SequenceHttpMessageHandler(
+            BuildGroqResponse($$"""
+                {
+                  "message": "Here are 2 picks for you.",
+                  "recommendedActionKeys": ["P{{predictions[0].Id}}", "P{{predictions[1].Id}}"],
+                  "showBookAll": true
+                }
+                """));
+
+        var service = CreateService(context, handler);
+        await service.GetAdviceAsync("Give me 2 picks", "session-stream-book");
+
+        var chunks = new List<AiChatStreamChunk>();
+        await foreach (var chunk in service.StreamAdviceAsync("book the matches", "session-stream-book"))
+        {
+            chunks.Add(chunk);
+        }
+
+        var actionChunks = chunks.Where(c => c.EventType == "action").ToList();
+        Assert.Equal(2, actionChunks.Count);
+        var metadataChunk = Assert.Single(chunks, c => c.EventType == "metadata");
+        Assert.True(metadataChunk.ShowBookAll);
+        Assert.True(metadataChunk.AutoBook);
+    }
+
+    [Fact]
     public async Task GetAdviceAsync_TrimsSessionHistoryToLastSixTurns()
     {
         await using var context = CreateContext();
