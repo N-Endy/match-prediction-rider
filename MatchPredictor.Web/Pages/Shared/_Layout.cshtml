@@ -1,4 +1,4 @@
-﻿@using Microsoft.Extensions.Configuration
+@using Microsoft.Extensions.Configuration
 @inject IConfiguration Configuration
 @{
     var currentPath = Context.Request.Path.Value ?? "/";
@@ -137,7 +137,8 @@
 
         <ul class="mp-nav-links" id="navLinks">
             <li><a class="@NavClass("/")" asp-page="/Index">Home</a></li>
-            <li><a class="@NavClass("/betslips")" href="/betslips">Betslips</a></li>
+            <li><a class="@NavClass("/betslips")" href="/betslips">Selections</a></li>
+            <li><a class="@NavClass("/guides")" href="/guides">Guides</a></li>
             <li><a class="@NavClass("/predictions/btts")" href="/predictions/btts">BTTS</a></li>
             <li><a class="@NavClass("/predictions/straightwin")" href="/predictions/straightwin">Straight Win</a></li>
             <li><a class="@NavClass("/predictions/draw")" href="/predictions/draw">Draw</a></li>
@@ -165,7 +166,8 @@
 <!-- Footer -->
 <footer class="mp-footer">
     <div>
-        <a href="/betslips">Betslips</a> ·
+        <a href="/betslips">Selections</a> ·
+        <a href="/guides">Guides</a> ·
         <a href="/results">Results</a> ·
         <a href="/predictions/btts">BTTS</a> ·
         <a href="/predictions/straightwin">Straight Win</a> ·
@@ -175,12 +177,17 @@
     </div>
     <div class="mp-footer-legal">
         <a href="/about">About</a> ·
+        <a href="/guides">Guides &amp; Analytics</a> ·
         <a href="/methodology">Methodology</a> ·
         <a href="/faq">FAQ</a> ·
         <a href="/contact">Contact</a> ·
         <a href="/terms">Terms</a> ·
         <a href="/Privacy">Privacy</a> ·
         <a href="/Privacy#responsible-use">Responsible use</a>
+    </div>
+    <div class="mp-footer-trust" style="max-width: 720px; margin: 1.2rem auto 0; font-size: 0.8rem; color: var(--text-muted); line-height: 1.5;">
+        <span class="mp-trust-badge" style="display: inline-block; padding: 2px 7px; border-radius: 4px; font-weight: 700; background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); margin-right: 6px;">18+</span>
+        MatchPredictor is an informational sports analytics and statistical modeling platform. We are not a bookmaker and do not accept stakes or wagers. Statistical predictions are probabilistic estimates and never guaranteed. Please analyze responsibly. For help with gambling concerns, visit <a href="https://www.begambleaware.org" target="_blank" rel="noopener nofollow" style="color: var(--text-secondary); text-decoration: underline;">BeGambleAware.org</a> or <a href="https://www.gamcare.org.uk" target="_blank" rel="noopener nofollow" style="color: var(--text-secondary); text-decoration: underline;">GamCare</a>.
     </div>
     <p class="mp-footer-copy">&copy; @DateTime.Now.Year MatchPredictor · Informational football statistics</p>
 </footer>

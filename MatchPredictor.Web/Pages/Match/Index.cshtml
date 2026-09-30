@@ -1,0 +1,284 @@
+@page "/match/{id:int}/{slug?}"
+@model MatchPredictor.Web.Pages.Match.IndexModel
+@using MatchPredictor.Web.Helpers
+
+@{
+    var p = Model.CurrentPrediction;
+    var nowUtc = DateTime.UtcNow;
+    var isActuallyLive = PredictionDisplayHelper.IsActuallyLive(p, nowUtc);
+    var statusLabel = PredictionDisplayHelper.GetStatusLabel(p, nowUtc);
+    var badgeClass = PredictionDisplayHelper.GetPredictionBadgeClass(p);
+    var badgeText = PredictionDisplayHelper.GetPredictionBadgeText(p);
+    var cartMarket = PredictionDisplayHelper.GetCartMarket(p);
+    var homeForm = Model.FootballInsight?.HomeForm;
+    var awayForm = Model.FootballInsight?.AwayForm;
+    var h2h = Model.FootballInsight?.HeadToHead;
+}
+
+<script type="application/ld+json">
+@Html.Raw(Model.JsonLd)
+</script>
+
+<div class="mp-container mp-match-detail-page">
+    <!-- Breadcrumb -->
+    <nav class="mp-breadcrumb" aria-label="Breadcrumb">
+        <ol>
+            <li><a href="/">Home</a></li>
+            <li><a href="/predictions/straightwin">Predictions</a></li>
+            <li><span>@p.League</span></li>
+            <li aria-current="page">@p.HomeTeam vs @p.AwayTeam</li>
+        </ol>
+    </nav>
+
+    <!-- Match Header Hero -->
+    <section class="mp-match-hero">
+        <div class="mp-match-hero-meta">
+            <span class="mp-league-tag">@p.League</span>
+            <span class="mp-match-hero-time">
+                <i class="far fa-clock"></i> @PredictionDisplayHelper.FormatWatTime(p) WAT
+                @if (p.MatchLocalDate != default)
+                {
+                    <span>· @p.MatchLocalDate.ToString("dd MMM yyyy")</span>
+                }
+            </span>
+            <span class="mp-state-pill mp-state-@statusLabel.ToLowerInvariant()">@statusLabel</span>
+        </div>
+
+        <div class="mp-matchup-banner">
+            <div class="mp-matchup-team mp-team-home">
+                <div class="mp-team-shield">🏠</div>
+                <h1 class="mp-team-title">@p.HomeTeam</h1>
+            </div>
+
+            <div class="mp-matchup-center">
+                @if (!string.IsNullOrEmpty(p.ActualScore))
+                {
+                    <div class="mp-score-display @(isActuallyLive ? "mp-score-live" : "")">
+                        @if (isActuallyLive)
+                        {
+                            <span class="mp-live-pulse-dot"></span>
+                        }
+                        <span>@p.ActualScore</span>
+                        <span class="mp-score-caption">@(isActuallyLive ? "Live Score" : "Final Score")</span>
+                    </div>
+                }
+                else
+                {
+                    <span class="mp-vs-badge">VS</span>
+                }
+            </div>
+
+            <div class="mp-matchup-team mp-team-away">
+                <div class="mp-team-shield">✈️</div>
+                <h2 class="mp-team-title">@p.AwayTeam</h2>
+            </div>
+        </div>
+
+        <!-- Featured Prediction Box -->
+        <div class="mp-featured-pick-card">
+            <div class="mp-featured-pick-info">
+                <span class="mp-kicker">Recommended Model Selection</span>
+                <div class="mp-featured-pick-outcome">
+                    <span class="mp-prediction-badge @badgeClass">@badgeText</span>
+                    <span class="mp-confidence-highlight">@PredictionDisplayHelper.GetConfidenceChip(p)</span>
+                    <span class="mp-insight-chip">@PredictionDisplayHelper.GetThresholdChip(p)</span>
+                </div>
+                <p class="mp-featured-reason">@PredictionDisplayHelper.BuildPredictionReason(p)</p>
+            </div>
+            <div class="mp-featured-pick-cta">
+                <button class="mp-add-cart-btn mp-btn-lg"
+                        data-home="@p.HomeTeam"
+                        data-away="@p.AwayTeam"
+                        data-league="@p.League"
+                        data-market="@cartMarket"
+                        data-prediction="@badgeText"
+                        data-prediction-id="@p.Id"
+                        data-match-datetime-utc="@(p.MatchDateTime?.ToString("O") ?? string.Empty)"
+                        title="Add to your selections">
+                    + Add to Selections
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Multi-Market Probability Breakdown -->
+    <section class="mp-detail-section">
+        <h2 class="mp-detail-heading"><i class="fas fa-chart-pie"></i> Model Market Probabilities</h2>
+        <p class="mp-detail-sub">Blended signals from Dixon-Coles Poisson simulations, de-vigged market lines, and calibrated probability matrices.</p>
+
+        <div class="mp-market-cards-grid">
+            @foreach (var pred in Model.RelatedPredictions)
+            {
+                var confVal = PredictionDisplayHelper.GetConfidenceValue(pred);
+                var confPct = confVal * 100m;
+                var threshPct = (decimal)(pred.ThresholdUsed * 100d);
+                var isOverGate = confPct >= threshPct;
+                var mktBadgeClass = PredictionDisplayHelper.GetPredictionBadgeClass(pred);
+                var mktBadgeText = PredictionDisplayHelper.GetPredictionBadgeText(pred);
+                var mktCart = PredictionDisplayHelper.GetCartMarket(pred);
+
+                <div class="mp-market-metric-card">
+                    <div class="mp-metric-header">
+                        <span class="mp-prediction-badge @mktBadgeClass">@mktBadgeText</span>
+                        <span class="mp-metric-category">@pred.PredictionCategory</span>
+                    </div>
+
+                    <div class="mp-progress-container">
+                        <div class="mp-progress-bar-wrap">
+                            <div class="mp-progress-fill @(isOverGate ? "mp-fill-pass" : "mp-fill-sub")" style="width: @Math.Min(100, Math.Max(5, (int)confPct))%;"></div>
+                            <div class="mp-threshold-marker" style="left: @Math.Min(98, Math.Max(2, (int)threshPct))%;" title="Publish Gate: @threshPct:F1%"></div>
+                        </div>
+                        <div class="mp-metric-values">
+                            <span class="mp-metric-conf">Confidence: <strong>@confPct:F1%</strong></span>
+                            <span class="mp-metric-thresh">Gate: <strong>@threshPct:F1%</strong></span>
+                        </div>
+                    </div>
+
+                    <div class="mp-metric-footer">
+                        <span class="mp-metric-status @(isOverGate ? "mp-status-cleared" : "")">
+                            @(isOverGate ? "✓ Cleared Threshold" : "Under Gate")
+                        </span>
+                        <button class="mp-add-cart-btn mp-btn-sm"
+                                data-home="@pred.HomeTeam"
+                                data-away="@pred.AwayTeam"
+                                data-league="@pred.League"
+                                data-market="@mktCart"
+                                data-prediction="@mktBadgeText"
+                                data-prediction-id="@pred.Id"
+                                data-match-datetime-utc="@(pred.MatchDateTime?.ToString("O") ?? string.Empty)"
+                                title="Add to selections">
+                            + Select
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    </section>
+
+    <!-- Form and Statistical Indicators -->
+    <section class="mp-detail-section">
+        <h2 class="mp-detail-heading"><i class="fas fa-futbol"></i> Form &amp; Goal Trends</h2>
+        <p class="mp-detail-sub">Statistical distribution indicators derived from recent fixtures and scoring dynamics.</p>
+
+        @if (homeForm is not null && awayForm is not null && (homeForm.SampleSize > 0 || awayForm.SampleSize > 0))
+        {
+            <div class="mp-stats-comparison-grid">
+                <!-- Home Stats -->
+                <div class="mp-team-stats-card">
+                    <h3 class="mp-stats-team-name">🏠 @p.HomeTeam</h3>
+                    <div class="mp-form-sequence">
+                        <span class="mp-form-label">Recent Form:</span>
+                        <div class="mp-form-badges">
+                            @foreach (var res in homeForm.LastFiveOverallResults)
+                            {
+                                var badge = res.Result.ToUpperInvariant() switch
+                                {
+                                    "W" => "mp-res-win",
+                                    "D" => "mp-res-draw",
+                                    "L" => "mp-res-loss",
+                                    _ => "mp-res-other"
+                                };
+                                <span class="mp-form-badge @badge" title="@res.Opponent (@res.Score)">@res.Result</span>
+                            }
+                        </div>
+                    </div>
+                    <div class="mp-stat-rows">
+                        <div class="mp-stat-row">
+                            <span>Avg Goals Scored / Match:</span>
+                            <strong>@homeForm.GoalsForPerMatch.ToString("F2")</strong>
+                        </div>
+                        <div class="mp-stat-row">
+                            <span>Avg Goals Conceded / Match:</span>
+                            <strong>@homeForm.GoalsAgainstPerMatch.ToString("F2")</strong>
+                        </div>
+                        <div class="mp-stat-row">
+                            <span>Clean Sheet Frequency:</span>
+                            <strong>@(homeForm.CleanSheetRate * 100):F0%</strong>
+                        </div>
+                        <div class="mp-stat-row">
+                            <span>Both Teams Scored Rate:</span>
+                            <strong>@(homeForm.BttsRate * 100):F0%</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Away Stats -->
+                <div class="mp-team-stats-card">
+                    <h3 class="mp-stats-team-name">✈️ @p.AwayTeam</h3>
+                    <div class="mp-form-sequence">
+                        <span class="mp-form-label">Recent Form:</span>
+                        <div class="mp-form-badges">
+                            @foreach (var res in awayForm.LastFiveOverallResults)
+                            {
+                                var badge = res.Result.ToUpperInvariant() switch
+                                {
+                                    "W" => "mp-res-win",
+                                    "D" => "mp-res-draw",
+                                    "L" => "mp-res-loss",
+                                    _ => "mp-res-other"
+                                };
+                                <span class="mp-form-badge @badge" title="@res.Opponent (@res.Score)">@res.Result</span>
+                            }
+                        </div>
+                    </div>
+                    <div class="mp-stat-rows">
+                        <div class="mp-stat-row">
+                            <span>Avg Goals Scored / Match:</span>
+                            <strong>@awayForm.GoalsForPerMatch.ToString("F2")</strong>
+                        </div>
+                        <div class="mp-stat-row">
+                            <span>Avg Goals Conceded / Match:</span>
+                            <strong>@awayForm.GoalsAgainstPerMatch.ToString("F2")</strong>
+                        </div>
+                        <div class="mp-stat-row">
+                            <span>Clean Sheet Frequency:</span>
+                            <strong>@(awayForm.CleanSheetRate * 100):F0%</strong>
+                        </div>
+                        <div class="mp-stat-row">
+                            <span>Both Teams Scored Rate:</span>
+                            <strong>@(awayForm.BttsRate * 100):F0%</strong>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="mp-info-fallback-card">
+                <i class="fas fa-info-circle"></i>
+                <div>
+                    <h4>League-Calibrated Mathematical Baseline</h4>
+                    <p>Sample-limited fixture. Probabilities are generated via Dixon-Coles goal distributions blended with de-vigged bookmaker lines and league-specific defensive baseline indexes.</p>
+                </div>
+            </div>
+        }
+
+        @if (h2h is not null && h2h.RecentScores.Count > 0)
+        {
+            <div class="mp-h2h-block">
+                <h3><i class="fas fa-history"></i> Head-to-Head Track Record</h3>
+                <div class="mp-h2h-tags">
+                    @foreach (var score in h2h.RecentScores)
+                    {
+                        <span class="mp-h2h-pill">@score</span>
+                    }
+                </div>
+            </div>
+        }
+    </section>
+
+    <!-- Methodology & Educational Note -->
+    <section class="mp-detail-section mp-methodology-note">
+        <h3><i class="fas fa-graduation-cap"></i> About This Prediction Model</h3>
+        <p>
+            MatchPredictor applies statistical goal distribution algorithms (Dixon-Coles &amp; Poisson modeling) combined with market odds calibration. We use historical Brier scores to optimize threshold gates nightly.
+            Want to understand the mathematics behind our forecasts? Read our detailed guides:
+        </p>
+        <div class="mp-guide-links">
+            <a href="/guides/the-math-of-football-predictions-poisson-and-dixon-coles" class="mp-guide-chip">📘 Dixon-Coles Modeling</a>
+            <a href="/guides/understanding-market-odds-margin-removal-and-shins-method" class="mp-guide-chip">📐 Margin Removal &amp; Shin's Method</a>
+            <a href="/guides/probability-calibration-and-brier-score-explained" class="mp-guide-chip">📊 Brier Score Calibration</a>
+            <a href="/methodology" class="mp-guide-chip">⚙️ Full Methodology</a>
+        </div>
+    </section>
+</div>

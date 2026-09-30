@@ -97,6 +97,27 @@ public class PredictionDisplayHelperTests
         Assert.Equal("mp-score-correct", scoreClass);
     }
 
+    [Fact]
+    public void GenerateMatchSlug_CleansPunctuationAndFormatsProperly()
+    {
+        var slug = PredictionDisplayHelper.GenerateMatchSlug("Arsenal F.C.", "Chelsea (London)");
+        Assert.Equal("arsenal-f-c-vs-chelsea-london", slug);
+    }
+
+    [Fact]
+    public void GetMatchUrl_CreatesCanonicalPathWithIdAndSlug()
+    {
+        var prediction = new Prediction
+        {
+            Id = 42,
+            HomeTeam = "Real Madrid",
+            AwayTeam = "Barcelona"
+        };
+
+        var url = PredictionDisplayHelper.GetMatchUrl(prediction);
+        Assert.Equal("/match/42/real-madrid-vs-barcelona", url);
+    }
+
     private static Prediction CreatePrediction(string predictionCategory, string predictedOutcome, string actualScore)
     {
         return new Prediction

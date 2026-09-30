@@ -21,6 +21,7 @@ using Polly.Extensions.Http;
 using MatchPredictor.Web.Filters;
 using MatchPredictor.Web.Middleware;
 using MatchPredictor.Web.Services;
+using MatchPredictor.Web.Helpers;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -82,6 +83,7 @@ builder.Services.AddScoped<IBetslipQueries>(provider => new CachedBetslipQueries
     provider.GetRequiredService<BetslipQueries>(),
     provider.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>()));
 builder.Services.AddScoped<IHealthQueryService, HealthQueryService>();
+builder.Services.AddSingleton<IGuideContentService, GuideContentService>();
 builder.Services.AddScoped<IScrapeStatusQueries, ScrapeStatusQueries>();
 builder.Services.AddScoped<IAnalyticsQueries, AnalyticsQueries>();
 builder.Services.AddScoped<IDataAnalyzerService, DataAnalyzerService>();
@@ -436,6 +438,78 @@ if (!skipStartupInitialization)
 app.MapRazorPages();
 app.MapControllers();
 app.MapHealthChecks("/health");
+
+app.MapGet("/sitemap.xml", async (
+    ApplicationDbContext dbContext,
+    IGuideContentService guideService,
+    HttpContext context) =>
+{
+    var origin = "https://matchpredictor.dev";
+    var urls = new List<(string Loc, string ChangeFreq, string Priority)>
+    {
+        ($"{origin}/", "daily", "1.0"),
+        ($"{origin}/betslips", "daily", "0.9"),
+        ($"{origin}/results", "daily", "0.9"),
+        ($"{origin}/guides", "weekly", "0.9"),
+        ($"{origin}/predictions/btts", "daily", "0.8"),
+        ($"{origin}/predictions/over2", "daily", "0.8"),
+        ($"{origin}/predictions/under2", "daily", "0.8"),
+        ($"{origin}/predictions/straightwin", "daily", "0.8"),
+        ($"{origin}/predictions/draw", "daily", "0.8"),
+        ($"{origin}/about", "monthly", "0.7"),
+        ($"{origin}/methodology", "monthly", "0.7"),
+        ($"{origin}/faq", "monthly", "0.6"),
+        ($"{origin}/contact", "monthly", "0.5"),
+        ($"{origin}/terms", "yearly", "0.4"),
+        ($"{origin}/Privacy", "yearly", "0.4")
+    };
+
+    foreach (var guide in guideService.GetAllGuides())
+    {
+        urls.Add(($"{origin}/guides/{guide.Slug}", "monthly", "0.8"));
+    }
+
+    try
+    {
+        var recentMatches = await dbContext.Predictions
+            .AsNoTracking()
+            .Where(p => p.WasPublished)
+            .OrderByDescending(p => p.Id)
+            .Take(120)
+            .Select(p => new { p.Id, p.HomeTeam, p.AwayTeam })
+            .ToListAsync();
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var m in recentMatches)
+        {
+            var slug = PredictionDisplayHelper.GenerateMatchSlug(m.HomeTeam, m.AwayTeam);
+            var key = $"{m.Id}/{slug}";
+            if (seen.Add(key))
+            {
+                urls.Add(($"{origin}/match/{key}", "daily", "0.7"));
+            }
+        }
+    }
+    catch
+    {
+        // Graceful fallback to static core URLs if database query times out
+    }
+
+    var xml = new System.Text.StringBuilder();
+    xml.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+    xml.AppendLine("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">");
+    foreach (var (loc, changeFreq, priority) in urls)
+    {
+        xml.AppendLine("  <url>");
+        xml.AppendLine($"    <loc>{System.Security.SecurityElement.Escape(loc)}</loc>");
+        xml.AppendLine($"    <changefreq>{changeFreq}</changefreq>");
+        xml.AppendLine($"    <priority>{priority}</priority>");
+        xml.AppendLine("  </url>");
+    }
+    xml.AppendLine("</urlset>");
+
+    return Results.Content(xml.ToString(), "application/xml; charset=utf-8");
+});
 
 app.Run();
 

@@ -1,0 +1,48 @@
+@page "/guides"
+@model MatchPredictor.Web.Pages.Guides.IndexModel
+
+@{
+    var request = HttpContext.Request;
+    var origin = $"{request.Scheme}://{request.Host.Value}";
+    var canonicalUrl = $"{origin}/guides";
+}
+
+<script type="application/ld+json">
+{
+  "@@context": "https://schema.org",
+  "@@type": "CollectionPage",
+  "name": "MatchPredictor Football Predictive Modeling Guides",
+  "url": "@canonicalUrl",
+  "description": "Educational articles on Dixon-Coles Poisson modeling, probability calibration, and quantitative football analytics.",
+  "publisher": {
+    "@@type": "Organization",
+    "name": "MatchPredictor",
+    "url": "@origin"
+  }
+}
+</script>
+
+<div class="mp-container mp-guides-container">
+    <div class="mp-guides-header">
+        <span class="mp-hero-badge"><i class="fas fa-graduation-cap"></i> Knowledge Base</span>
+        <h1>Predictive Football Modeling &amp; Quantitative Analytics</h1>
+        <p>
+            Explore the mathematics behind sports forecasting. From Dixon-Coles bivariate Poisson score distributions to Shin margin removal and nightly Brier calibration, read our in-depth research guides.
+        </p>
+    </div>
+
+    <div class="mp-guides-grid">
+        @foreach (var guide in Model.Guides)
+        {
+            <a href="/guides/@guide.Slug" class="mp-guide-card">
+                <span class="mp-guide-category">@guide.Category</span>
+                <h2>@guide.Title</h2>
+                <p>@guide.Summary</p>
+                <div class="mp-guide-meta">
+                    <span><i class="far fa-clock"></i> @guide.ReadingTime</span>
+                    <span class="mp-read-more">Read Article &rarr;</span>
+                </div>
+            </a>
+        }
+    </div>
+</div>

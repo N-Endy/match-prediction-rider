@@ -34,9 +34,11 @@
             <span class="mp-state-pill mp-state-@statusLabel.ToLowerInvariant()">@statusLabel</span>
         </div>
         <div class="mp-match-teams">
-            @Model.HomeTeam
-            <span class="mp-vs">vs</span>
-            @Model.AwayTeam
+            <a href="@MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetMatchUrl(Model)" class="mp-match-link" title="View detailed match analysis">
+                @Model.HomeTeam
+                <span class="mp-vs">vs</span>
+                @Model.AwayTeam
+            </a>
         </div>
         <div class="mp-prediction-insights">
             <span class="mp-insight-chip">@MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetConfidenceChip(Model)</span>
@@ -76,7 +78,7 @@
         }
 
         <span class="mp-prediction-badge @badgeClass">@badgeText</span>
-        <button class="mp-add-cart-btn" title="Add Bet"
+        <button class="mp-add-cart-btn" title="Add to selections"
                 data-home="@Model.HomeTeam"
                 data-away="@Model.AwayTeam"
                 data-league="@Model.League"
@@ -84,7 +86,7 @@
                 data-prediction="@badgeText"
                 data-prediction-id="@Model.Id"
                 data-match-datetime-utc="@(Model.MatchDateTime?.ToString("O") ?? string.Empty)">
-            Add Bet
+            + Select
         </button>
         @if (isActuallyLive)
         {

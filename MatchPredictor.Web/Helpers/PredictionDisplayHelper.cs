@@ -165,4 +165,17 @@ public static class PredictionDisplayHelper
 
     public static bool IsPredictionCorrect(Prediction prediction) =>
         PredictionScoreClassHelper.IsPredictionCorrect(prediction);
+
+    public static string GenerateMatchSlug(string homeTeam, string awayTeam)
+    {
+        var raw = $"{homeTeam}-vs-{awayTeam}".ToLowerInvariant();
+        var cleaned = System.Text.RegularExpressions.Regex.Replace(raw, @"[^a-z0-9]+", "-").Trim('-');
+        return string.IsNullOrWhiteSpace(cleaned) ? "match" : cleaned;
+    }
+
+    public static string GetMatchUrl(Prediction prediction)
+    {
+        var slug = GenerateMatchSlug(prediction.HomeTeam, prediction.AwayTeam);
+        return $"/match/{prediction.Id}/{slug}";
+    }
 }

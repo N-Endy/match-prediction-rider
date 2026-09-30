@@ -33,12 +33,12 @@ function addToCart(match) {
     const cart = getCart();
     const maxSelections = getMaxBookingSelections();
     if (cart.length >= maxSelections) {
-        showToast(`Betslip full (${maxSelections} max)`);
+        showToast(`Selections full (${maxSelections} max)`);
         return;
     }
     const exists = cart.some(m => getCartIdentity(m) === getCartIdentity(match));
     if (exists) {
-        showToast('Already in betslip');
+        showToast('Already in selections');
         return;
     }
     cart.push(match);
@@ -48,7 +48,7 @@ function addToCart(match) {
         prediction: match.prediction || '',
         league: match.league || ''
     });
-    showToast('Added to betslip');
+    showToast('Added to selections');
 }
 
 function removeFromCart(index) {
@@ -211,7 +211,7 @@ function openSportyBetBooking(url) {
 
     clearCart();
     closeCartModal();
-    showToast('Betslip cleared');
+    showToast('Selections cleared');
 
     // Do not pass noopener/noreferrer in window.open features: modern browsers still open
     // the tab but return null, which previously made us also navigate the current app page.

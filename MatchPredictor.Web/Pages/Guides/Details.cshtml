@@ -1,0 +1,48 @@
+@page "/guides/{slug}"
+@model MatchPredictor.Web.Pages.Guides.DetailsModel
+
+<script type="application/ld+json">
+@Html.Raw(Model.JsonLd)
+</script>
+
+<div class="mp-container">
+    <article class="mp-guide-article">
+        <!-- Breadcrumb -->
+        <nav class="mp-breadcrumb" aria-label="Breadcrumb">
+            <ol>
+                <li><a href="/">Home</a></li>
+                <li><a href="/guides">Guides</a></li>
+                <li aria-current="page">@Model.Article.Title</li>
+            </ol>
+        </nav>
+
+        <header class="mp-article-header">
+            <span class="mp-guide-category">@Model.Article.Category</span>
+            <h1 class="mp-article-title">@Model.Article.Title</h1>
+            <div class="mp-article-meta">
+                <span><i class="far fa-calendar-alt"></i> @Model.Article.PublishedDate</span>
+                <span><i class="far fa-clock"></i> @Model.Article.ReadingTime</span>
+                <span><i class="far fa-user"></i> @Model.Article.AuthorName</span>
+            </div>
+        </header>
+
+        <div class="mp-article-content">
+            @Html.Raw(Model.Article.ContentHtml)
+        </div>
+
+        <!-- E-E-A-T Author Bio Card -->
+        <div class="mp-author-bio-card">
+            <div class="mp-author-avatar">MP</div>
+            <div class="mp-author-info">
+                <h4>@Model.Article.AuthorName</h4>
+                <p>
+                    @Model.Article.AuthorRole. MatchPredictor publishes peer-reviewed mathematical methodologies, Dixon-Coles goal distribution models, and nightly probability calibration research. We emphasize mathematical transparency and responsible data analysis.
+                </p>
+            </div>
+        </div>
+
+        <div style="margin-top: 2.5rem; text-align: center;">
+            <a href="/guides" class="mp-hero-cta mp-hero-cta-secondary">&larr; Back to All Guides</a>
+        </div>
+    </article>
+</div>
