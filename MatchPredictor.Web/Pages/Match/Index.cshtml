@@ -85,19 +85,22 @@
                 </div>
                 <p class="mp-featured-reason">@PredictionDisplayHelper.BuildPredictionReason(p)</p>
             </div>
-            <div class="mp-featured-pick-cta">
-                <button class="mp-add-cart-btn mp-btn-lg"
-                        data-home="@p.HomeTeam"
-                        data-away="@p.AwayTeam"
-                        data-league="@p.League"
-                        data-market="@cartMarket"
-                        data-prediction="@badgeText"
-                        data-prediction-id="@p.Id"
-                        data-match-datetime-utc="@(p.MatchDateTime?.ToString("O") ?? string.Empty)"
-                        title="Add to your selections">
-                    + Add to Selections
-                </button>
-            </div>
+            @if (PredictionDisplayHelper.CanAddToSelections(p, nowUtc))
+            {
+                <div class="mp-featured-pick-cta">
+                    <button class="mp-add-cart-btn mp-btn-lg"
+                            data-home="@p.HomeTeam"
+                            data-away="@p.AwayTeam"
+                            data-league="@p.League"
+                            data-market="@cartMarket"
+                            data-prediction="@badgeText"
+                            data-prediction-id="@p.Id"
+                            data-match-datetime-utc="@(p.MatchDateTime?.ToString("O") ?? string.Empty)"
+                            title="Add to your selections">
+                        + Add to Selections
+                    </button>
+                </div>
+            }
         </div>
     </section>
 
@@ -138,17 +141,20 @@
                         <span class="mp-metric-status @(isOverGate ? "mp-status-cleared" : "")">
                             @(isOverGate ? "✓ Cleared Threshold" : "Under Gate")
                         </span>
-                        <button class="mp-add-cart-btn mp-btn-sm"
-                                data-home="@pred.HomeTeam"
-                                data-away="@pred.AwayTeam"
-                                data-league="@pred.League"
-                                data-market="@mktCart"
-                                data-prediction="@mktBadgeText"
-                                data-prediction-id="@pred.Id"
-                                data-match-datetime-utc="@(pred.MatchDateTime?.ToString("O") ?? string.Empty)"
-                                title="Add to selections">
-                            + Select
-                        </button>
+                        @if (PredictionDisplayHelper.CanAddToSelections(pred, nowUtc))
+                        {
+                            <button class="mp-add-cart-btn mp-btn-sm"
+                                    data-home="@pred.HomeTeam"
+                                    data-away="@pred.AwayTeam"
+                                    data-league="@pred.League"
+                                    data-market="@mktCart"
+                                    data-prediction="@mktBadgeText"
+                                    data-prediction-id="@pred.Id"
+                                    data-match-datetime-utc="@(pred.MatchDateTime?.ToString("O") ?? string.Empty)"
+                                    title="Add to selections">
+                                + Select
+                            </button>
+                        }
                     </div>
                 </div>
             }

@@ -110,6 +110,19 @@ function closeCartModal() {
     if (modal) modal.classList.remove('open');
 }
 
+function isCartItemEnded(item) {
+    if (!item) return false;
+    if (item.ended === true || item.status === 'finished') return true;
+    if (item.matchDateTimeUtc) {
+        const kickoffMs = new Date(item.matchDateTimeUtc).getTime();
+        if (Number.isFinite(kickoffMs)) {
+            // Kickoff was at least 120 minutes (2 hours) ago
+            return (Date.now() - kickoffMs) >= 120 * 60 * 1000;
+        }
+    }
+    return false;
+}
+
 function renderCartItems() {
     const container = document.getElementById('cartItemsList');
     const emptyState = document.getElementById('cartEmpty');
@@ -129,11 +142,15 @@ function renderCartItems() {
     if (footer) footer.style.display = 'flex';
 
     cart.forEach((item, index) => {
+        const isEnded = isCartItemEnded(item);
         const div = document.createElement('div');
-        div.className = 'mp-cart-item';
+        div.className = `mp-cart-item ${isEnded ? 'mp-cart-item-ended' : ''}`;
         div.innerHTML = `
             <div class="mp-cart-item-info">
-                <div class="mp-cart-item-teams">${item.homeTeam} vs ${item.awayTeam}</div>
+                <div class="mp-cart-item-teams">
+                    ${item.homeTeam} vs ${item.awayTeam}
+                    ${isEnded ? '<span class="mp-cart-ended-pill">Ended</span>' : ''}
+                </div>
                 <div class="mp-cart-item-meta">
                     <span class="mp-cart-item-league">${item.league}</span>
                     <span class="mp-cart-item-prediction">${item.prediction}</span>
@@ -153,7 +170,18 @@ async function bookGames() {
         showToast('Cart is empty');
         return;
     }
-    if (cart.length > maxSelections) {
+
+    const activeCart = cart.filter(item => !isCartItemEnded(item));
+    if (activeCart.length === 0) {
+        showToast('All selected matches have ended');
+        return;
+    }
+    if (activeCart.length < cart.length) {
+        const endedCount = cart.length - activeCart.length;
+        showToast(`Excluded ${endedCount} ended match${endedCount === 1 ? '' : 'es'}`);
+    }
+
+    if (activeCart.length > maxSelections) {
         showToast(`A maximum of ${maxSelections} selections is allowed.`);
         return;
     }
@@ -166,7 +194,7 @@ async function bookGames() {
     }
 
     try {
-        const selections = buildBookingSelections(cart);
+        const selections = buildBookingSelections(activeCart);
 
         const response = await fetch('/api/booking/book', {
             method: 'POST',
@@ -298,7 +326,9 @@ function renderBookingSummary(result) {
 }
 
 function buildBookingSelections(cart) {
-    return cart.map(item => ({
+    return cart
+        .filter(item => !isCartItemEnded(item))
+        .map(item => ({
         homeTeam: item.homeTeam,
         awayTeam: item.awayTeam,
         league: item.league,

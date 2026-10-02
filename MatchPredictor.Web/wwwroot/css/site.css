@@ -1616,6 +1616,23 @@ a:hover {
   font-weight: 600;
 }
 
+.mp-cart-item-ended {
+  opacity: 0.7;
+}
+
+.mp-cart-ended-pill {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--accent-rose);
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
 .mp-cart-item-remove {
   background: none;
   border: none;

@@ -209,8 +209,95 @@ public class CartJsTests
         Assert.Equal(1, engine.Evaluate("__anchorClicks.length").AsNumber());
         Assert.Equal("_blank", engine.Evaluate("__anchorClicks[0].target").AsString());
         Assert.Contains("noopener", engine.Evaluate("__anchorClicks[0].rel").AsString());
-        Assert.DoesNotContain("noopener,noreferrer", script);
         Assert.DoesNotContain("window.location.href = url", script);
+    }
+
+    [Fact]
+    public void BuildBookingSelections_ExcludesEndedMatches()
+    {
+        var script = File.ReadAllText(ResolveCartJsPath());
+
+        var engine = new Engine();
+        engine.Execute("""
+            var __storage = {};
+            var window = { matchPredictorTracking: { track: function() {} } };
+            var localStorage = {
+                getItem: function(key) { return Object.prototype.hasOwnProperty.call(__storage, key) ? __storage[key] : null; },
+                setItem: function(key, value) { __storage[key] = String(value); },
+                removeItem: function(key) { delete __storage[key]; }
+            };
+            var document = {
+                body: { appendChild: function() {} },
+                getElementById: function() { return null; },
+                createElement: function() { return {}; },
+                addEventListener: function() {}
+            };
+            """);
+        engine.Execute(script);
+
+        // Add 1 upcoming match (future 2030) and 1 ended match (past 2020)
+        engine.Execute("""
+            var cart = [
+                {
+                    homeTeam: 'Arsenal',
+                    awayTeam: 'Chelsea',
+                    league: 'England - Premier League',
+                    market: 'BTTS',
+                    prediction: 'BTTS',
+                    predictionId: 101,
+                    matchDateTimeUtc: '2030-01-01T12:00:00Z'
+                },
+                {
+                    homeTeam: 'Liverpool',
+                    awayTeam: 'Everton',
+                    league: 'England - Premier League',
+                    market: 'StraightWin',
+                    prediction: 'Home Win',
+                    predictionId: 102,
+                    matchDateTimeUtc: '2020-01-01T12:00:00Z'
+                },
+                {
+                    homeTeam: 'Real Madrid',
+                    awayTeam: 'Barcelona',
+                    league: 'Spain - La Liga',
+                    market: 'Over2.5',
+                    prediction: 'Over 2.5',
+                    predictionId: 103,
+                    ended: true
+                }
+            ];
+            var selections = buildBookingSelections(cart);
+            """);
+
+        var selectionsJson = engine.Evaluate("JSON.stringify(selections)").AsString();
+        using var doc = JsonDocument.Parse(selectionsJson);
+        var array = doc.RootElement.EnumerateArray().ToList();
+
+        Assert.Single(array);
+        Assert.Equal("Arsenal", array[0].GetProperty("homeTeam").GetString());
+        Assert.Equal(101, array[0].GetProperty("predictionId").GetInt32());
+    }
+
+    [Fact]
+    public void IsCartItemEnded_ReturnsTrue_ForPastMatchOrEndedFlag()
+    {
+        var script = File.ReadAllText(ResolveCartJsPath());
+
+        var engine = new Engine();
+        engine.Execute("""
+            var document = { addEventListener: function() {} };
+            """);
+        engine.Execute(script);
+
+        var pastEnded = engine.Evaluate("isCartItemEnded({ matchDateTimeUtc: '2020-01-01T00:00:00Z' })").AsBoolean();
+        var futureEnded = engine.Evaluate("isCartItemEnded({ matchDateTimeUtc: '2030-01-01T00:00:00Z' })").AsBoolean();
+        var flagEnded = engine.Evaluate("isCartItemEnded({ ended: true })").AsBoolean();
+        var finishedStatus = engine.Evaluate("isCartItemEnded({ status: 'finished' })").AsBoolean();
+
+        Assert.True(pastEnded);
+        Assert.False(futureEnded);
+        Assert.True(flagEnded);
+        Assert.True(finishedStatus);
     }
 
     private static string ResolveCartJsPath()

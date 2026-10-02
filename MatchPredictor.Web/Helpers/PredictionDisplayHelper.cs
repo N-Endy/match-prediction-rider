@@ -166,6 +166,43 @@ public static class PredictionDisplayHelper
     public static bool IsPredictionCorrect(Prediction prediction) =>
         PredictionScoreClassHelper.IsPredictionCorrect(prediction);
 
+    public static bool IsMatchEnded(Prediction prediction, DateTime utcNow)
+    {
+        if (IsActuallyLive(prediction, utcNow))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(prediction.ActualScore) ||
+            !string.IsNullOrWhiteSpace(prediction.ActualOutcome))
+        {
+            return true;
+        }
+
+        if (prediction.MatchDateTime.HasValue &&
+            utcNow >= prediction.MatchDateTime.Value.AddMinutes(120))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    public static bool CanAddToSelections(Prediction prediction, DateTime utcNow)
+    {
+        if (IsMatchEnded(prediction, utcNow))
+        {
+            return false;
+        }
+
+        if (IsActuallyLive(prediction, utcNow) && PredictionScoreClassHelper.HasLiveOptionDecided(prediction))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     public static string GenerateMatchSlug(string homeTeam, string awayTeam)
     {
         var raw = $"{homeTeam}-vs-{awayTeam}".ToLowerInvariant();

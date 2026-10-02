@@ -83,6 +83,25 @@ public static partial class PredictionScoreClassHelper
         };
     }
 
+    public static bool HasLiveOptionDecided(Prediction prediction)
+    {
+        if (!prediction.IsLive || !TryParseScore(prediction.ActualScore, out var homeGoals, out var awayGoals))
+        {
+            return false;
+        }
+
+        var totalGoals = homeGoals + awayGoals;
+        var bothTeamsScored = homeGoals > 0 && awayGoals > 0;
+
+        return prediction.PredictionCategory switch
+        {
+            "BothTeamsScore" => bothTeamsScored,
+            "Over2.5Goals" => totalGoals > 2,
+            "Under2.5Goals" => totalGoals > 2,
+            _ => false
+        };
+    }
+
     private static bool TryParseScore(string? score, out int homeGoals, out int awayGoals)
     {
         homeGoals = 0;

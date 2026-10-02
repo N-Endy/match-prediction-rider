@@ -78,16 +78,19 @@
         }
 
         <span class="mp-prediction-badge @badgeClass">@badgeText</span>
-        <button class="mp-add-cart-btn" title="Add to selections"
-                data-home="@Model.HomeTeam"
-                data-away="@Model.AwayTeam"
-                data-league="@Model.League"
-                data-market="@cartMarket"
-                data-prediction="@badgeText"
-                data-prediction-id="@Model.Id"
-                data-match-datetime-utc="@(Model.MatchDateTime?.ToString("O") ?? string.Empty)">
-            + Select
-        </button>
+        @if (MatchPredictor.Web.Helpers.PredictionDisplayHelper.CanAddToSelections(Model, nowUtc))
+        {
+            <button class="mp-add-cart-btn" title="Add to selections"
+                    data-home="@Model.HomeTeam"
+                    data-away="@Model.AwayTeam"
+                    data-league="@Model.League"
+                    data-market="@cartMarket"
+                    data-prediction="@badgeText"
+                    data-prediction-id="@Model.Id"
+                    data-match-datetime-utc="@(Model.MatchDateTime?.ToString("O") ?? string.Empty)">
+                + Select
+            </button>
+        }
         @if (isActuallyLive)
         {
             <button class="btn-watch-stream d-none" title="Watch Live Stream"
