@@ -116,8 +116,9 @@ public sealed class EloRatingModel
         var expectedHome = ExpectedScore(homeRating, awayRating);
 
         var gap = homeRating - awayRating;
+        var maxFeasibleDraw = 2.0 * Math.Min(expectedHome, 1.0 - expectedHome);
         var drawProbability = _options.MaxDrawProbability * Math.Exp(-Math.Pow(gap / _options.DrawWidth, 2));
-        drawProbability = Math.Clamp(drawProbability, 0.0, 0.6);
+        drawProbability = Math.Clamp(drawProbability, 0.0, Math.Min(0.6, maxFeasibleDraw));
 
         var homeWin = expectedHome - (0.5 * drawProbability);
         var awayWin = 1.0 - drawProbability - homeWin;

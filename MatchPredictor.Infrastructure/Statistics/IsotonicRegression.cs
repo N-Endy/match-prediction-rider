@@ -31,7 +31,13 @@ public static class IsotonicRegression
         {
             if (i == values.Length || Math.Abs(values[i] - values[start]) > 1e-9)
             {
-                knots.Add(new Knot(inputs[start], Math.Clamp(values[start], 0.0, 1.0)));
+                var blockVal = Math.Clamp(values[start], 0.0, 1.0);
+                knots.Add(new Knot(inputs[start], blockVal));
+                var end = i - 1;
+                if (end > start && inputs[end] > inputs[start] + 1e-9)
+                {
+                    knots.Add(new Knot(inputs[end], blockVal));
+                }
                 start = i;
             }
         }

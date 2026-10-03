@@ -271,7 +271,7 @@ public static class WeekendPayoutSlipComposer
 
         if (selected.Count == 0 || product < minOdds || product > maxOdds)
         {
-            return BandPackResult.Empty;
+            return SearchBandBranchAndBound(ordered, minOdds, maxOdds, maxPicks, maxSingleMarketShare, useFallback);
         }
 
         return new BandPackResult
@@ -282,6 +282,110 @@ public static class WeekendPayoutSlipComposer
                 .ThenBy(c => c.HomeTeam)
                 .ToList(),
             CombinedOdds = product,
+            ActiveMinOdds = minOdds,
+            ActiveMaxOdds = maxOdds,
+            UsedFallback = useFallback
+        };
+    }
+
+    private static BandPackResult SearchBandBranchAndBound(
+        IReadOnlyList<BetslipComposerCandidate> ordered,
+        double minOdds,
+        double maxOdds,
+        int maxPicks,
+        double maxSingleMarketShare,
+        bool useFallback)
+    {
+        var shortlist = ordered.Take(40).ToList();
+        if (shortlist.Count == 0)
+        {
+            return BandPackResult.Empty;
+        }
+
+        var suffixMaxProduct = new double[shortlist.Count + 1];
+        suffixMaxProduct[shortlist.Count] = 1d;
+        for (var i = shortlist.Count - 1; i >= 0; i--)
+        {
+            suffixMaxProduct[i] = suffixMaxProduct[i + 1] * shortlist[i].DecimalOdds!.Value;
+        }
+
+        var bestSelections = (List<BetslipComposerCandidate>?)null;
+        var bestProduct = 0d;
+        var bestAvgScore = double.MinValue;
+        var nodes = 0;
+        const int maxNodes = 20_000;
+
+        void Dfs(
+            int idx,
+            double prod,
+            List<BetslipComposerCandidate> cur,
+            HashSet<string> fixtures,
+            Dictionary<string, int> marketCounts)
+        {
+            if (nodes++ >= maxNodes) return;
+
+            if (cur.Count > 0 && prod >= minOdds && prod <= maxOdds)
+            {
+                var avgScore = cur.Average(c => (double)c.Confidence);
+                if (bestSelections is null || cur.Count < bestSelections.Count || (cur.Count == bestSelections.Count && avgScore > bestAvgScore))
+                {
+                    bestSelections = cur.ToList();
+                    bestProduct = prod;
+                    bestAvgScore = avgScore;
+                }
+                return;
+            }
+
+            if (cur.Count >= maxPicks || idx >= shortlist.Count) return;
+            if (bestSelections != null && cur.Count >= bestSelections.Count && prod < minOdds) return;
+            if (prod * suffixMaxProduct[idx] < minOdds) return;
+
+            var cand = shortlist[idx];
+            var fKey = ResolveFixtureKey(cand);
+            if (!fixtures.Contains(fKey))
+            {
+                var mKey = NormalizeMarketKey(cand.PredictionCategory, cand.Market);
+                var mCount = marketCounts.GetValueOrDefault(mKey);
+                var marketCap = Math.Max(1, (int)Math.Floor(maxPicks * maxSingleMarketShare));
+                var nextProd = prod * cand.DecimalOdds!.Value;
+
+                if (mCount < marketCap && nextProd <= maxOdds)
+                {
+                    cur.Add(cand);
+                    fixtures.Add(fKey);
+                    marketCounts[mKey] = mCount + 1;
+
+                    Dfs(idx + 1, nextProd, cur, fixtures, marketCounts);
+
+                    cur.RemoveAt(cur.Count - 1);
+                    fixtures.Remove(fKey);
+                    marketCounts[mKey] = mCount;
+                }
+            }
+
+            Dfs(idx + 1, prod, cur, fixtures, marketCounts);
+        }
+
+        Dfs(
+            0,
+            1d,
+            new List<BetslipComposerCandidate>(),
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase));
+
+        if (bestSelections == null || bestSelections.Count == 0)
+        {
+            return BandPackResult.Empty;
+        }
+
+        return new BandPackResult
+        {
+            Selections = bestSelections
+                .OrderBy(c => c.MatchDateTimeUtc ?? DateTime.MaxValue)
+                .ThenBy(c => c.League)
+                .ThenBy(c => c.HomeTeam)
+                .ToList(),
+            CombinedOdds = bestProduct,
             ActiveMinOdds = minOdds,
             ActiveMaxOdds = maxOdds,
             UsedFallback = useFallback

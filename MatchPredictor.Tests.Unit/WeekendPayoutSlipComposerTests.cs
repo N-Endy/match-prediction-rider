@@ -87,9 +87,8 @@ public class WeekendPayoutSlipComposerTests
         // Instead: give odds that clear fallback 20–120 but carefully...
         // 1.55^8 ≈ 33.4 → hits primary. Need cases where primary fails.
         // Use odds 1.20 with max 8 picks: 1.2^8 ≈ 4.3 — can't hit even fallback 20.
-        // Give 40 candidates at 1.35: 1.35^8 ≈ 11.0 still below 20.
-        // 1.5^8 ≈ 25.6 → within fallback 20–120, not primary 30–100.
-        var candidates = BuildLadder(40, odds: 1.5);
+        // 1.45^8 ≈ 19.5, max ladder 1.51^8 ≈ 26.7 → strictly within fallback 20–120, not primary 30–100.
+        var candidates = BuildLadder(40, odds: 1.45);
         var settings = new BetslipSettings
         {
             WeekendSmallSlipCount = 1,

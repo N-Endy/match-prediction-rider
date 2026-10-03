@@ -361,6 +361,8 @@ public class DataAnalyzerService : IDataAnalyzerService
             .Cast<PredictionCandidate>()
             .ToList();
 
+        NormalizeSimplexProbabilities(realizedCandidates);
+
         foreach (var candidate in realizedCandidates)
         {
             candidate.FeatureContributionsJson = BuildFeatureContributionSummary(
@@ -368,6 +370,48 @@ public class DataAnalyzerService : IDataAnalyzerService
         }
 
         return realizedCandidates;
+    }
+
+    internal static void NormalizeSimplexProbabilities(List<PredictionCandidate> candidates)
+    {
+        var home = candidates.FirstOrDefault(c => c.Market == PredictionMarket.HomeWin);
+        var draw = candidates.FirstOrDefault(c => c.Market == PredictionMarket.Draw);
+        var away = candidates.FirstOrDefault(c => c.Market == PredictionMarket.AwayWin);
+
+        if (home != null && draw != null && away != null)
+        {
+            var calibratedSum = home.CalibratedProbability + draw.CalibratedProbability + away.CalibratedProbability;
+            if (calibratedSum > 0)
+            {
+                var normHome = Math.Clamp(home.CalibratedProbability / calibratedSum, 0.0, 1.0);
+                var normDraw = Math.Clamp(draw.CalibratedProbability / calibratedSum, 0.0, 1.0);
+                var normAway = Math.Clamp(1.0 - normHome - normDraw, 0.0, 1.0);
+
+                home.CalibratedProbability = normHome;
+                draw.CalibratedProbability = normDraw;
+                away.CalibratedProbability = normAway;
+            }
+
+            var correctedSum = home.CorrectedProbability + draw.CorrectedProbability + away.CorrectedProbability;
+            if (correctedSum > 0)
+            {
+                var normHome = Math.Clamp(home.CorrectedProbability / correctedSum, 0.0, 1.0);
+                var normDraw = Math.Clamp(draw.CorrectedProbability / correctedSum, 0.0, 1.0);
+                var normAway = Math.Clamp(1.0 - normHome - normDraw, 0.0, 1.0);
+
+                home.CorrectedProbability = normHome;
+                draw.CorrectedProbability = normDraw;
+                away.CorrectedProbability = normAway;
+            }
+        }
+
+        var over25 = candidates.FirstOrDefault(c => c.Market == PredictionMarket.Over25Goals);
+        var under25 = candidates.FirstOrDefault(c => c.Market == PredictionMarket.Under25Goals);
+        if (over25 != null && under25 != null)
+        {
+            under25.CalibratedProbability = Math.Clamp(1.0 - over25.CalibratedProbability, 0.0, 1.0);
+            under25.CorrectedProbability = Math.Clamp(1.0 - over25.CorrectedProbability, 0.0, 1.0);
+        }
     }
 
     /// <summary>

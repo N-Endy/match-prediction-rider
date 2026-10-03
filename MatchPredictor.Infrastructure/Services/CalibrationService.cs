@@ -568,39 +568,74 @@ public class CalibrationService : ICalibrationService
         return Math.Clamp(rawProbability + (weight * (empiricalBucketProbability - rawProbability)), 0.0, 1.0);
     }
 
-    private static (double alpha, double beta, double gamma) FitBetaCalibration(IReadOnlyList<(double RawProbability, bool Outcome, double Weight)> training)
+    internal static (double alpha, double beta, double gamma) FitBetaCalibration(IReadOnlyList<(double RawProbability, bool Outcome, double Weight)> training)
     {
-        var best = (alpha: 1.0, beta: 1.0, gamma: 0.0);
-        var bestScore = ScoreBetaParameters(training, best.alpha, best.beta, best.gamma);
-
-        for (var alpha = 0.5; alpha <= 2.0 + 0.0001; alpha += 0.25)
+        if (training.Count == 0)
         {
-            for (var beta = 0.5; beta <= 2.0 + 0.0001; beta += 0.25)
-            {
-                for (var gamma = -1.0; gamma <= 1.0 + 0.0001; gamma += 0.25)
-                {
-                    var score = ScoreBetaParameters(training, alpha, beta, gamma);
-                    if (score < bestScore)
-                    {
-                        best = (Math.Round(alpha, 3), Math.Round(beta, 3), Math.Round(gamma, 3));
-                        bestScore = score;
-                    }
-                }
-            }
+            return (1.0, 1.0, 0.0);
         }
 
-        for (var alpha = Math.Max(0.1, best.alpha - 0.25); alpha <= best.alpha + 0.25 + 0.0001; alpha += 0.05)
+        var totalWeight = Math.Max(training.Sum(item => item.Weight), 1e-9);
+
+        // Precompute features x1 = ln(p), x2 = -ln(1-p), y = outcome ? 1 : 0
+        var samples = training.Select(item =>
         {
-            for (var beta = Math.Max(0.1, best.beta - 0.25); beta <= best.beta + 0.25 + 0.0001; beta += 0.05)
+            var p = Math.Clamp(item.RawProbability, 1e-6, 1.0 - 1e-6);
+            return (
+                X1: Math.Log(p),
+                X2: -Math.Log(1.0 - p),
+                Y: item.Outcome ? 1.0 : 0.0,
+                Weight: item.Weight
+            );
+        }).ToArray();
+
+        var alpha = 1.0;
+        var beta = 1.0;
+        var gamma = 0.0;
+        var bestScore = ScoreBetaParameters(training, alpha, beta, gamma);
+        var best = (alpha, beta, gamma);
+
+        var learningRate = 0.1;
+        for (var iter = 0; iter < 120; iter++)
+        {
+            var gradAlpha = 0.0;
+            var gradBeta = 0.0;
+            var gradGamma = 0.0;
+
+            foreach (var s in samples)
             {
-                for (var gamma = best.gamma - 0.25; gamma <= best.gamma + 0.25 + 0.0001; gamma += 0.05)
+                var logit = (alpha * s.X1) + (beta * s.X2) + gamma;
+                var pred = 1.0 / (1.0 + Math.Exp(-logit));
+                // Brier score gradient: d/dtheta (pred - y)^2 = 2 * (pred - y) * pred * (1 - pred) * dlogit/dtheta
+                var errorFactor = 2.0 * (pred - s.Y) * pred * (1.0 - pred) * s.Weight;
+                gradAlpha += errorFactor * s.X1;
+                gradBeta += errorFactor * s.X2;
+                gradGamma += errorFactor;
+            }
+
+            gradAlpha /= totalWeight;
+            gradBeta /= totalWeight;
+            gradGamma /= totalWeight;
+
+            var newAlpha = Math.Clamp(alpha - (learningRate * gradAlpha), 0.05, 10.0);
+            var newBeta = Math.Clamp(beta - (learningRate * gradBeta), 0.05, 10.0);
+            var newGamma = Math.Clamp(gamma - (learningRate * gradGamma), -5.0, 5.0);
+
+            var newScore = ScoreBetaParameters(training, newAlpha, newBeta, newGamma);
+            if (newScore < bestScore)
+            {
+                bestScore = newScore;
+                best = (Math.Round(newAlpha, 4), Math.Round(newBeta, 4), Math.Round(newGamma, 4));
+                alpha = newAlpha;
+                beta = newBeta;
+                gamma = newGamma;
+            }
+            else
+            {
+                learningRate *= 0.5;
+                if (learningRate < 1e-5)
                 {
-                    var score = ScoreBetaParameters(training, alpha, beta, gamma);
-                    if (score < bestScore)
-                    {
-                        best = (Math.Round(alpha, 3), Math.Round(beta, 3), Math.Round(gamma, 3));
-                        bestScore = score;
-                    }
+                    break;
                 }
             }
         }
@@ -616,7 +651,7 @@ public class CalibrationService : ICalibrationService
         return totalWeight <= 0 ? 0.0 : weightedError / totalWeight;
     }
 
-    private static double ApplyBetaCalibration(double rawProbability, double alpha, double beta, double gamma)
+    internal static double ApplyBetaCalibration(double rawProbability, double alpha, double beta, double gamma)
     {
         var clamped = Math.Clamp(rawProbability, 1e-6, 1.0 - 1e-6);
         var logit = (alpha * Math.Log(clamped)) - (beta * Math.Log(1.0 - clamped)) + gamma;

@@ -313,6 +313,7 @@ public class ThresholdTuningService : IThresholdTuningService
         const int bootstrapIterations = 200;
         var random = new Random(validationForecasts.Count * 43 + (int)(baselineBrier * 10_000));
         var bootstrapImprovements = new List<double>(bootstrapIterations);
+        var validationWindowDays = CalculateWindowDays(validationForecasts);
         for (var iteration = 0; iteration < bootstrapIterations; iteration++)
         {
             var resampled = new List<ForecastObservation>(validationForecasts.Count);
@@ -321,8 +322,8 @@ public class ThresholdTuningService : IThresholdTuningService
                 resampled.Add(validationForecasts[random.Next(validationForecasts.Count)]);
             }
 
-            var resampledBaseline = EvaluateThreshold(resampled, fallbackThreshold, validationForecasts.Count);
-            var resampledCandidate = EvaluateThreshold(resampled, candidateThreshold, validationForecasts.Count);
+            var resampledBaseline = EvaluateThreshold(resampled, fallbackThreshold, validationWindowDays);
+            var resampledCandidate = EvaluateThreshold(resampled, candidateThreshold, validationWindowDays);
             bootstrapImprovements.Add(CalculateImprovement(resampledCandidate, resampledBaseline));
         }
 

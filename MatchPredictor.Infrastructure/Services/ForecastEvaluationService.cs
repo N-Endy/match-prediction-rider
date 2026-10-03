@@ -28,18 +28,33 @@ public class ForecastEvaluationService : IForecastEvaluationService
             .Where(IsPredictionCompletedForAnalytics)
             .ToList();
 
+        var settledForecasts = PointInTimeBacktestingSelector.SelectForecasts(forecasts)
+            .Where(IsActiveAnalyticsForecast)
+            .Where(forecast => forecast.IsSettled && forecast.OutcomeOccurred.HasValue)
+            .ToList();
+
+        var totalPredictions = predictionList.Count;
+        var completedCount = completedPredictions.Count;
+        var overallTp = completedPredictions.Count(IsPredictionCorrectForAnalytics);
+        var overallFn = settledForecasts.Count(f => !f.IsPublished && f.OutcomeOccurred == true);
+
+        var precision = completedCount > 0 ? (double)overallTp / completedCount : 0.0;
+        var recall = settledForecasts.Count > 0
+            ? (overallTp + overallFn > 0 ? (double)overallTp / (overallTp + overallFn) : 0.0)
+            : (completedCount > 0 ? (double)overallTp / completedCount : 0.0);
+        var f1Score = CalculateF1(precision, recall);
+
         var stats = new AnalyticsStats
         {
-            TotalPredictions = predictionList.Count,
-            CompletedPredictions = completedPredictions.Count,
-            CorrectPredictions = completedPredictions.Count(IsPredictionCorrectForAnalytics),
-            OverallAccuracy = completedPredictions.Count > 0
-                ? (double)completedPredictions.Count(IsPredictionCorrectForAnalytics) / completedPredictions.Count
-                : 0.0
+            TotalPredictions = totalPredictions,
+            CompletedPredictions = completedCount,
+            CorrectPredictions = overallTp,
+            OverallAccuracy = completedCount > 0 ? (double)overallTp / completedCount : 0.0,
+            Precision = precision,
+            Recall = recall,
+            F1Score = f1Score,
+            SettledForecasts = settledForecasts.Count
         };
-        stats.Precision = CalculatePrecision(completedPredictions);
-        stats.Recall = CalculateRecall(completedPredictions);
-        stats.F1Score = CalculateF1(stats.Precision, stats.Recall);
 
         foreach (var group in completedPredictions.GroupBy(prediction => prediction.PredictionCategory))
         {
@@ -51,6 +66,15 @@ public class ForecastEvaluationService : IForecastEvaluationService
                     Probability: (double)Math.Clamp(prediction.ConfidenceScore!.Value, 0m, 1m),
                     Outcome: IsPredictionCorrectForAnalytics(prediction)))
                 .ToList();
+
+            var catSettled = settledForecasts.Where(f => ForecastMatchesCategory(f, group.Key)).ToList();
+            var catTp = correct;
+            var catFn = catSettled.Count(f => !f.IsPublished && f.OutcomeOccurred == true);
+            var catPrecision = total > 0 ? (double)catTp / total : 0.0;
+            var catRecall = catSettled.Count > 0
+                ? (catTp + catFn > 0 ? (double)catTp / (catTp + catFn) : 0.0)
+                : (total > 0 ? (double)catTp / total : 0.0);
+            var catF1 = CalculateF1(catPrecision, catRecall);
 
             stats.CategoryStats[group.Key] = new CategoryStat
             {
@@ -66,18 +90,11 @@ public class ForecastEvaluationService : IForecastEvaluationService
                             IsPredictionCorrectForAnalytics(prediction)))
                     : 0.0,
                 LogLoss = outcomes.Count > 0 ? outcomes.Average(item => BinaryLogLoss(item.Probability, item.Outcome)) : 0.0,
-                Precision = CalculatePrecision(group),
-                Recall = CalculateRecall(group),
-                F1Score = CalculateF1(CalculatePrecision(group), CalculateRecall(group))
+                Precision = catPrecision,
+                Recall = catRecall,
+                F1Score = catF1
             };
         }
-
-        var settledForecasts = PointInTimeBacktestingSelector.SelectForecasts(forecasts)
-            .Where(IsActiveAnalyticsForecast)
-            .Where(forecast => forecast.IsSettled && forecast.OutcomeOccurred.HasValue)
-            .ToList();
-
-        stats.SettledForecasts = settledForecasts.Count;
 
         if (settledForecasts.Count > 0)
         {
@@ -291,6 +308,9 @@ public class ForecastEvaluationService : IForecastEvaluationService
                 var clvSamples = marketBets.Where(bet => bet.Clv.HasValue).Select(bet => bet.Clv!.Value).ToList();
                 var staked = marketBets.Count;
                 var net = marketBets.Sum(bet => bet.FlatProfit);
+                var kellyBets = marketBets.Where(bet => bet.KellyStake > 0).ToList();
+                var kellyStaked = kellyBets.Sum(bet => bet.KellyStake);
+                var kellyNet = kellyBets.Sum(bet => bet.KellyProfit);
                 return new MarketBettingStat
                 {
                     MarketKey = group.Key,
@@ -300,6 +320,8 @@ public class ForecastEvaluationService : IForecastEvaluationService
                     WinRate = marketBets.Count(bet => bet.Won) / (double)marketBets.Count,
                     NetProfitUnits = net,
                     RoiPercent = staked > 0 ? net / staked : 0.0,
+                    KellyRoiPercent = kellyStaked > 0 ? kellyNet / kellyStaked : 0.0,
+                    KellyCompoundedReturnPercent = CalculateCompoundedKellyReturn(marketBets),
                     AverageOdds = marketBets.Average(bet => bet.DecimalOdds),
                     ClosingLineSamples = clvSamples.Count,
                     AverageClosingLineValuePercent = clvSamples.Count > 0 ? clvSamples.Average() : 0.0
@@ -332,6 +354,7 @@ public class ForecastEvaluationService : IForecastEvaluationService
         performance.KellyRoiPercent = performance.KellyStakedUnits > 0
             ? performance.KellyNetProfitUnits / performance.KellyStakedUnits
             : 0.0;
+        performance.KellyCompoundedReturnPercent = CalculateCompoundedKellyReturn(bets);
 
         var clvSamples = bets.Where(bet => bet.Clv.HasValue).Select(bet => bet.Clv!.Value).ToList();
         performance.ClosingLineSamples = clvSamples.Count;
@@ -339,6 +362,21 @@ public class ForecastEvaluationService : IForecastEvaluationService
         performance.BeatCloseRate = clvSamples.Count > 0
             ? clvSamples.Count(value => value > 0) / (double)clvSamples.Count
             : 0.0;
+    }
+
+    private static double CalculateCompoundedKellyReturn(IEnumerable<BetRecord> bets)
+    {
+        var bankroll = 1.0;
+        foreach (var bet in bets)
+        {
+            var stakeFraction = bet.KellyStake;
+            if (stakeFraction > 0)
+            {
+                var stake = bankroll * stakeFraction;
+                bankroll += bet.Won ? stake * (bet.DecimalOdds - 1.0) : -stake;
+            }
+        }
+        return bankroll - 1.0;
     }
 
     private static double? ResolveSnapshotOdds(
@@ -440,12 +478,25 @@ public class ForecastEvaluationService : IForecastEvaluationService
 
     private static bool IsActiveAnalyticsPrediction(Prediction prediction)
     {
-        return !string.Equals(prediction.PredictionCategory, "Draw", StringComparison.OrdinalIgnoreCase);
+        return true;
     }
 
     private static bool IsActiveAnalyticsForecast(ForecastObservation forecast)
     {
-        return forecast.Market != PredictionMarket.Draw;
+        return true;
+    }
+
+    private static bool ForecastMatchesCategory(ForecastObservation forecast, string category)
+    {
+        return category switch
+        {
+            "BothTeamsScore" => forecast.Market == PredictionMarket.BothTeamsScore,
+            "Over2.5Goals" => forecast.Market == PredictionMarket.Over25Goals,
+            "Under2.5Goals" => forecast.Market == PredictionMarket.Under25Goals,
+            "StraightWin" => forecast.Market == PredictionMarket.StraightWin,
+            "Draw" => forecast.Market == PredictionMarket.Draw,
+            _ => string.Equals(forecast.Market.ToString(), category, StringComparison.OrdinalIgnoreCase)
+        };
     }
 
     private static bool IsPredictionCompletedForAnalytics(Prediction prediction)

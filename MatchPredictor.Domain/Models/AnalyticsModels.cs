@@ -64,6 +64,7 @@ public class BettingPerformanceStats
     public double KellyStakedUnits { get; set; }
     public double KellyNetProfitUnits { get; set; }
     public double KellyRoiPercent { get; set; }
+    public double KellyCompoundedReturnPercent { get; set; }
     public int KellyBetCount { get; set; }
     public int ClosingLineSamples { get; set; }
     public double AverageClosingLineValuePercent { get; set; }
@@ -80,6 +81,8 @@ public class MarketBettingStat
     public double WinRate { get; set; }
     public double NetProfitUnits { get; set; }
     public double RoiPercent { get; set; }
+    public double KellyRoiPercent { get; set; }
+    public double KellyCompoundedReturnPercent { get; set; }
     public double AverageOdds { get; set; }
     public int ClosingLineSamples { get; set; }
     public double AverageClosingLineValuePercent { get; set; }

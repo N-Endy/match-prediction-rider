@@ -78,7 +78,7 @@ public static partial class PredictionScoreClassHelper
         {
             "BothTeamsScore" => DoesBttsPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
             "Over2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
-            "Under2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+            "Under2.5Goals" => false,
             _ => false
         };
     }

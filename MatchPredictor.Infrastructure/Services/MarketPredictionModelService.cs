@@ -147,7 +147,7 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
             var predictions = model.Transform(_mlContext.Data.LoadFromEnumerable(holdout));
             var scored = _mlContext.Data.CreateEnumerable<MarketModelOutput>(predictions, reuseRowObject: false).ToList();
 
-            var baselineBrier = WeightedBrier(holdout, holdout.Select(row => (double)row.CalculatorProbability).ToList());
+            var baselineBrier = WeightedBrier(holdout, holdout.Select(ResolveEnsembleBaselineProbability).ToList());
             var candidateBrier = WeightedBrier(holdout, scored.Select(row => (double)row.Probability).ToList());
             var improvement = baselineBrier - candidateBrier;
             if (improvement < MinimumBrierImprovement)
@@ -402,6 +402,17 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         }).Sum();
         var totalWeight = rows.Sum(row => Math.Max(row.Weight, 1e-6f));
         return weightedError / Math.Max(totalWeight, 1e-9);
+    }
+
+    private static double ResolveEnsembleBaselineProbability(MarketModelInput row)
+    {
+        var bookmaker = row.HasBookmaker > 0.5f ? (double?)row.BookmakerProbability : null;
+        var statistical = row.HasStatistical > 0.5f ? (double?)row.StatisticalProbability : null;
+        var calculator = (double)row.CalculatorProbability;
+        return EnsembleProbabilityBlender.BlendLogit(
+            (bookmaker, EnsembleWeights.ProductionDefault.Bookmaker),
+            (calculator, EnsembleWeights.ProductionDefault.Market),
+            (statistical, EnsembleWeights.ProductionDefault.DixonColes));
     }
 
     public sealed class MarketModelInput

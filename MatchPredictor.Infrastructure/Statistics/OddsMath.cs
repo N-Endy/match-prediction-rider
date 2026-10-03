@@ -178,6 +178,11 @@ public static class OddsMath
 
         var low = 0.0;
         var high = 0.5;
+        while (SumForZ(high) > 1.0 && high < 0.99)
+        {
+            high = Math.Min(high * 1.5, 0.99);
+        }
+
         // SumForZ(0) == booksum (>1); increasing z lowers the sum toward 1.
         for (var iteration = 0; iteration < 100; iteration++)
         {
