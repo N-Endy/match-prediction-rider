@@ -208,7 +208,8 @@ public class CalibrationServiceTests
 
         Assert.NotEmpty(drawBucketProfiles);
         Assert.Single(drawBetaProfiles);
-        Assert.Empty(drawHistory);
+        Assert.NotEmpty(drawHistory);
+        Assert.All(drawHistory, h => Assert.Equal(PredictionMarket.Draw, h.Market));
         Assert.NotEqual(0.34, service.Calibrate(PredictionMarket.Draw, 0.34));
     }
 

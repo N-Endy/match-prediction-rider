@@ -321,10 +321,63 @@ public class ValueBetsService : IValueBetsService
             }
         }
 
+        ApplySimultaneousKellyOptimization(topCandidates);
+
         report.IncludedCandidateCount = topCandidates.Count;
         report.ExclusionBreakdown = BuildExclusionBreakdown(exclusionCounts);
         report.Bets = topCandidates.Select(candidate => candidate.ToDto()).ToList();
         return report;
+    }
+
+    private void ApplySimultaneousKellyOptimization(List<ValueBetCandidate> candidates)
+    {
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        var simCandidates = candidates.Select(c => new SimultaneousKellyCandidate(
+            CandidateKey: c.CandidateKey,
+            FixtureKey: $"{c.HomeTeam}|{c.AwayTeam}|{c.League}",
+            ModelProbability: c.MathematicalProbability,
+            DecimalOdds: c.DecimalOdds,
+            KickoffUtc: c.MatchDateTimeUtc ?? DateTime.UtcNow,
+            Edge: c.Edge,
+            ExpectedValuePercent: c.ExpectedValuePercent
+        )).ToList();
+
+        var options = new SimultaneousKellyOptions(
+            MaxWindowExposureFraction: _settings.MaxConcurrentWindowExposureFraction,
+            WindowToleranceMinutes: _settings.ConcurrentWindowToleranceMinutes,
+            KellyFraction: BetPricingMath.DefaultKellyFraction,
+            EnforceFixtureExclusivity: _settings.EnforceFixtureExclusivityInSimultaneousKelly
+        );
+
+        var allocations = BetPricingMath.OptimizeSimultaneousKellyStakes(simCandidates, options);
+
+        foreach (var c in candidates)
+        {
+            if (allocations.TryGetValue(c.CandidateKey, out var alloc))
+            {
+                c.StandaloneKellyStakeFraction = alloc.StandaloneStakeFraction;
+                c.PortfolioKellyStakeFraction = alloc.PortfolioStakeFraction;
+                c.ConcurrentWindowBetCount = alloc.WindowConcurrentBetCount;
+                c.WindowTotalExposureFraction = alloc.WindowTotalExposureFraction;
+                c.IsPortfolioCapped = alloc.WasCapped;
+                c.ExcludedDueToFixtureExclusivity = alloc.ExcludedDueToFixtureExclusivity;
+            }
+            else
+            {
+                var standalone = BetPricingMath.CalculateFractionalKellyStakeFraction(
+                    c.MathematicalProbability, c.DecimalOdds, BetPricingMath.DefaultKellyFraction);
+                c.StandaloneKellyStakeFraction = standalone;
+                c.PortfolioKellyStakeFraction = standalone;
+                c.ConcurrentWindowBetCount = 1;
+                c.WindowTotalExposureFraction = standalone;
+                c.IsPortfolioCapped = false;
+                c.ExcludedDueToFixtureExclusivity = false;
+            }
+        }
     }
 
     private IEnumerable<ValueBetCandidate> SelectBestMatchCandidates(IEnumerable<ValueBetCandidate> candidates)
@@ -707,8 +760,19 @@ public class ValueBetsService : IValueBetsService
         public double? RealizedReturnPercent { get; set; }
         public double? ClosingLineValuePercent { get; set; }
 
+        public double StandaloneKellyStakeFraction { get; set; }
+        public double PortfolioKellyStakeFraction { get; set; }
+        public int ConcurrentWindowBetCount { get; set; } = 1;
+        public double WindowTotalExposureFraction { get; set; }
+        public bool IsPortfolioCapped { get; set; }
+        public bool ExcludedDueToFixtureExclusivity { get; set; }
+
         public ValueBetDto ToDto()
         {
+            var effectiveKellyStake = PortfolioKellyStakeFraction > 0d
+                ? PortfolioKellyStakeFraction
+                : (ExcludedDueToFixtureExclusivity ? 0d : StandaloneKellyStakeFraction);
+
             return new ValueBetDto
             {
                 PredictionId = PredictionId,
@@ -726,10 +790,13 @@ public class ValueBetsService : IValueBetsService
                 ExpectedValuePercent = ExpectedValuePercent,
                 Edge = Edge,
                 KellyFraction = BetPricingMath.DefaultKellyFraction,
-                KellyStakeFraction = BetPricingMath.CalculateFractionalKellyStakeFraction(
-                    MathematicalProbability,
-                    DecimalOdds,
-                    BetPricingMath.DefaultKellyFraction),
+                KellyStakeFraction = effectiveKellyStake,
+                StandaloneKellyStakeFraction = StandaloneKellyStakeFraction,
+                PortfolioKellyStakeFraction = PortfolioKellyStakeFraction,
+                ConcurrentWindowBetCount = ConcurrentWindowBetCount,
+                WindowTotalExposureFraction = WindowTotalExposureFraction,
+                IsPortfolioCapped = IsPortfolioCapped,
+                ExcludedDueToFixtureExclusivity = ExcludedDueToFixtureExclusivity,
                 ThresholdUsed = ThresholdUsed,
                 ThresholdSource = ThresholdSource,
                 CalibratorUsed = CalibratorUsed,

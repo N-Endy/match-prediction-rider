@@ -80,4 +80,218 @@ public static class BetPricingMath
 
         return Math.Clamp(rawFraction * kellyFraction, 0d, 1d);
     }
+
+    /// <summary>
+    /// Optimizes fractional Kelly stakes across concurrent bets within overlapping kickoff windows,
+    /// enforcing aggregate window bankroll exposure limits and fixture exclusivity.
+    /// </summary>
+    public static IReadOnlyDictionary<string, SimultaneousKellyAllocation> OptimizeSimultaneousKellyStakes(
+        IReadOnlyList<SimultaneousKellyCandidate> candidates,
+        SimultaneousKellyOptions? options = null)
+    {
+        options ??= new SimultaneousKellyOptions();
+        if (candidates is null || candidates.Count == 0)
+        {
+            return new Dictionary<string, SimultaneousKellyAllocation>(StringComparer.Ordinal);
+        }
+
+        var result = new Dictionary<string, SimultaneousKellyAllocation>(StringComparer.Ordinal);
+        var ordered = candidates.OrderBy(c => c.KickoffUtc).ToList();
+        var clusters = new List<List<SimultaneousKellyCandidate>>();
+        var currentCluster = new List<SimultaneousKellyCandidate>();
+
+        foreach (var candidate in ordered)
+        {
+            if (currentCluster.Count == 0)
+            {
+                currentCluster.Add(candidate);
+            }
+            else
+            {
+                var clusterAnchor = currentCluster[0].KickoffUtc;
+                if (Math.Abs((candidate.KickoffUtc - clusterAnchor).TotalMinutes) <= options.WindowToleranceMinutes)
+                {
+                    currentCluster.Add(candidate);
+                }
+                else
+                {
+                    clusters.Add(currentCluster);
+                    currentCluster = [candidate];
+                }
+            }
+        }
+
+        if (currentCluster.Count > 0)
+        {
+            clusters.Add(currentCluster);
+        }
+
+        foreach (var cluster in clusters)
+        {
+            var activeCandidates = new List<SimultaneousKellyCandidate>();
+            var excludedCandidates = new List<SimultaneousKellyCandidate>();
+
+            if (options.EnforceFixtureExclusivity)
+            {
+                var fixtureGroups = cluster.GroupBy(c => c.FixtureKey, StringComparer.OrdinalIgnoreCase);
+                foreach (var group in fixtureGroups)
+                {
+                    var bestPick = group
+                        .OrderByDescending(c => c.ExpectedValuePercent)
+                        .ThenByDescending(c => c.Edge)
+                        .First();
+
+                    activeCandidates.Add(bestPick);
+                    foreach (var subordinate in group)
+                    {
+                        if (!ReferenceEquals(subordinate, bestPick))
+                        {
+                            excludedCandidates.Add(subordinate);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                activeCandidates.AddRange(cluster);
+            }
+
+            var standaloneStakes = new Dictionary<string, double>(StringComparer.Ordinal);
+            var excessReturns = new Dictionary<string, double>(StringComparer.Ordinal);
+            var variances = new Dictionary<string, double>(StringComparer.Ordinal);
+
+            foreach (var c in activeCandidates)
+            {
+                var standalone = CalculateFractionalKellyStakeFraction(c.ModelProbability, c.DecimalOdds, options.KellyFraction);
+                standaloneStakes[c.CandidateKey] = standalone;
+
+                var b = Math.Max(0.0001, c.DecimalOdds - 1.0);
+                var p = Math.Clamp(c.ModelProbability, 0.0, 1.0);
+                var excessReturn = (b * p) - (1.0 - p);
+                var variance = (p * (1.0 - p) * b * b) + ((1.0 - p) * 1.0);
+                excessReturns[c.CandidateKey] = excessReturn;
+                variances[c.CandidateKey] = Math.Max(0.001, variance);
+            }
+
+            var totalStandalone = standaloneStakes.Values.Sum();
+            var wasCapped = totalStandalone > options.MaxWindowExposureFraction + 1e-6;
+            var portfolioStakes = new Dictionary<string, double>(StringComparer.Ordinal);
+
+            if (!wasCapped || activeCandidates.Count == 0)
+            {
+                foreach (var c in activeCandidates)
+                {
+                    portfolioStakes[c.CandidateKey] = standaloneStakes[c.CandidateKey];
+                }
+            }
+            else
+            {
+                double low = 0.0;
+                double high = excessReturns.Values.DefaultIfEmpty(1.0).Max() + 1.0;
+                double target = options.MaxWindowExposureFraction;
+                bool solved = false;
+
+                for (int iter = 0; iter < 50; iter++)
+                {
+                    double mid = (low + high) / 2.0;
+                    double sum = 0.0;
+                    foreach (var c in activeCandidates)
+                    {
+                        var raw = (excessReturns[c.CandidateKey] - mid) / variances[c.CandidateKey];
+                        var stake = Math.Clamp(raw * options.KellyFraction, 0.0, standaloneStakes[c.CandidateKey]);
+                        sum += stake;
+                    }
+
+                    if (Math.Abs(sum - target) < 1e-4)
+                    {
+                        foreach (var c in activeCandidates)
+                        {
+                            var raw = (excessReturns[c.CandidateKey] - mid) / variances[c.CandidateKey];
+                            portfolioStakes[c.CandidateKey] = Math.Clamp(raw * options.KellyFraction, 0.0, standaloneStakes[c.CandidateKey]);
+                        }
+                        solved = true;
+                        break;
+                    }
+
+                    if (sum > target)
+                    {
+                        low = mid;
+                    }
+                    else
+                    {
+                        high = mid;
+                    }
+                }
+
+                if (!solved || portfolioStakes.Values.Sum() <= 1e-6)
+                {
+                    var scale = target / totalStandalone;
+                    foreach (var c in activeCandidates)
+                    {
+                        portfolioStakes[c.CandidateKey] = Math.Round(standaloneStakes[c.CandidateKey] * scale, 6);
+                    }
+                }
+            }
+
+            var windowExposure = Math.Round(portfolioStakes.Values.Sum(), 4);
+            var concurrentCount = activeCandidates.Count;
+
+            foreach (var c in activeCandidates)
+            {
+                var standalone = standaloneStakes[c.CandidateKey];
+                var portfolio = portfolioStakes[c.CandidateKey];
+                result[c.CandidateKey] = new SimultaneousKellyAllocation(
+                    c.CandidateKey,
+                    c.FixtureKey,
+                    standalone,
+                    portfolio,
+                    concurrentCount,
+                    windowExposure,
+                    wasCapped,
+                    ExcludedDueToFixtureExclusivity: false);
+            }
+
+            foreach (var c in excludedCandidates)
+            {
+                var standalone = CalculateFractionalKellyStakeFraction(c.ModelProbability, c.DecimalOdds, options.KellyFraction);
+                result[c.CandidateKey] = new SimultaneousKellyAllocation(
+                    c.CandidateKey,
+                    c.FixtureKey,
+                    standalone,
+                    PortfolioStakeFraction: 0.0,
+                    concurrentCount,
+                    windowExposure,
+                    WasCapped: true,
+                    ExcludedDueToFixtureExclusivity: true);
+            }
+        }
+
+        return result;
+    }
 }
+
+public sealed record SimultaneousKellyCandidate(
+    string CandidateKey,
+    string FixtureKey,
+    double ModelProbability,
+    double DecimalOdds,
+    DateTime KickoffUtc,
+    double Edge,
+    double ExpectedValuePercent);
+
+public sealed record SimultaneousKellyOptions(
+    double MaxWindowExposureFraction = 0.20,
+    double WindowToleranceMinutes = 45.0,
+    double KellyFraction = BetPricingMath.DefaultKellyFraction,
+    bool EnforceFixtureExclusivity = true);
+
+public sealed record SimultaneousKellyAllocation(
+    string CandidateKey,
+    string FixtureKey,
+    double StandaloneStakeFraction,
+    double PortfolioStakeFraction,
+    int WindowConcurrentBetCount,
+    double WindowTotalExposureFraction,
+    bool WasCapped,
+    bool ExcludedDueToFixtureExclusivity);
+

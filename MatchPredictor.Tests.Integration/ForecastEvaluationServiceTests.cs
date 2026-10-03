@@ -165,7 +165,7 @@ public class ForecastEvaluationServiceTests
     }
 
     [Fact]
-    public void CalculateStats_ExcludesLegacyDrawRows_FromAnalyticsDashboardStats()
+    public void CalculateStats_IncludesDrawRows_InAnalyticsDashboardStats()
     {
         var service = new ForecastEvaluationService();
         var kickoff = DateTime.UtcNow.AddHours(-6);
@@ -233,9 +233,8 @@ public class ForecastEvaluationServiceTests
 
         var stats = service.CalculateStats(predictions, forecasts);
         var categoryStats = Assert.Single(stats.CategoryStats.Values);
-        var marketStats = Assert.Single(stats.ForecastMarketStats);
 
-        Assert.Equal(1, stats.TotalPredictions);
+        Assert.Equal(2, stats.TotalPredictions);
         Assert.Equal(1, stats.CompletedPredictions);
         Assert.Equal(1, stats.CorrectPredictions);
         Assert.Equal("Under2.5Goals", categoryStats.Category);
@@ -243,8 +242,10 @@ public class ForecastEvaluationServiceTests
         Assert.Equal(1, categoryStats.Total);
         Assert.Equal(1, categoryStats.Correct);
         Assert.Equal(1.0, categoryStats.Accuracy, 5);
-        Assert.Equal(1, stats.SettledForecasts);
-        Assert.Equal(PredictionMarket.Under25Goals, marketStats.Market);
+        Assert.Equal(2, stats.SettledForecasts);
+        Assert.Equal(2, stats.ForecastMarketStats.Count);
+        Assert.Contains(stats.ForecastMarketStats, m => m.Market == PredictionMarket.Draw);
+        Assert.Contains(stats.ForecastMarketStats, m => m.Market == PredictionMarket.Under25Goals);
     }
 
     [Fact]

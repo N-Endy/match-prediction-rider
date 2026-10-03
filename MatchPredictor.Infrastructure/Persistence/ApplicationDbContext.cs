@@ -41,6 +41,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<BetslipSet> BetslipSets => Set<BetslipSet>();
     public DbSet<Betslip> Betslips => Set<Betslip>();
     public DbSet<BetslipSelection> BetslipSelections => Set<BetslipSelection>();
+    public DbSet<MatchLineupSnapshot> MatchLineupSnapshots => Set<MatchLineupSnapshot>();
     // Required by IDataProtectionKeyContext
     public DbSet<DataProtectionKey> DataProtectionKeys { get; set; }
 
@@ -165,6 +166,12 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
         {
             entity.HasIndex(e => new { e.FixtureKey, e.CapturedAtUtc });
             entity.HasIndex(e => new { e.MatchLocalDate, e.FixtureKey });
+        });
+
+        modelBuilder.Entity<MatchLineupSnapshot>(entity =>
+        {
+            entity.HasIndex(e => new { e.FixtureKey, e.CapturedAtUtc });
+            entity.HasIndex(e => new { e.MatchLocalDate, e.IsConfirmed });
         });
 
         modelBuilder.Entity<TeamMatchStats>(entity =>

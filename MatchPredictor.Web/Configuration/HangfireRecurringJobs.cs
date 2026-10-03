@@ -26,7 +26,9 @@ internal static class HangfireRecurringJobs
         "team-match-stats-sync-job",
         "statistical-coverage-diagnostics-job",
         "cleanup-old-predictions",
-        "betslip-generation-job"
+        "betslip-generation-job",
+        "lineup-refresh-job",
+        "interim-odds-snapshot-job"
     ];
 
     /// <summary>
@@ -165,6 +167,20 @@ internal static class HangfireRecurringJobs
                 "betslip-generation-job",
                 service => service.GenerateDailyBetslipsAsync(null),
                 "0 2,13 * * *",
+                new RecurringJobOptions { TimeZone = watTimeZone }));
+
+        TryWithLockRetry(logger, "register:lineup-refresh-job", () =>
+            recurringJobs.AddOrUpdate<ILineupAvailabilityService>(
+                "lineup-refresh-job",
+                service => service.ProcessUpcomingConfirmedLineupsAsync(75, CancellationToken.None),
+                "*/5 * * * *",
+                new RecurringJobOptions { TimeZone = watTimeZone }));
+
+        TryWithLockRetry(logger, "register:interim-odds-snapshot-job", () =>
+            recurringJobs.AddOrUpdate<IMarketTimingService>(
+                "interim-odds-snapshot-job",
+                service => service.CaptureInterimOddsSnapshotsAsync(CancellationToken.None),
+                "*/15 * * * *",
                 new RecurringJobOptions { TimeZone = watTimeZone }));
     }
 

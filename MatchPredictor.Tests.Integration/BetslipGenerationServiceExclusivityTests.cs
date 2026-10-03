@@ -404,7 +404,7 @@ public class BetslipGenerationServiceExclusivityTests
         context.Predictions.AddRange(predictions);
         await context.SaveChangesAsync();
 
-        var service = CreateService(context, fixtures, advisor);
+        var service = CreateService(context, fixtures, advisor, s => s.DrawCandidatePoolSize = 20);
         await service.GenerateDailyBetslipsAsync("morning");
 
         Assert.NotNull(advisor.LastDrawCandidates);
@@ -673,32 +673,37 @@ public class BetslipGenerationServiceExclusivityTests
     private static BetslipGenerationService CreateService(
         ApplicationDbContext context,
         IReadOnlyList<SourceMarketFixture> fixtures,
-        IAiAdvisorService? advisor = null) =>
-        new(
+        IAiAdvisorService? advisor = null,
+        Action<BetslipSettings>? configureSettings = null)
+    {
+        var settings = new BetslipSettings
+        {
+            BookingDelayMilliseconds = 0,
+            MaxSlipsPerPrediction = 1,
+            BankerMinConfidence = 0.5,
+            BankerMinOdds = 5,
+            BankerMaxOdds = 15,
+            BankerFallbackMinOdds = 4,
+            BankerFallbackMaxOdds = 20,
+            BankerShortlistSize = 30,
+            BankerMaxPicks = 8,
+            DrawSlipSize = 5,
+            DrawCandidatePoolSize = 12,
+            ReferenceStakeNaira = 100,
+            WeekendSmallSlipCount = 2,
+            WeekendMediumSlipCount = 2,
+            WeekendBigSlipCount = 1,
+            WeekendMegaSlipCount = 1
+        };
+        configureSettings?.Invoke(settings);
+        return new(
             context,
             new FakeBooking(),
             new FakePricing { Fixtures = fixtures },
             advisor ?? new FakeAdvisor(),
-            Options.Create(new BetslipSettings
-            {
-                BookingDelayMilliseconds = 0,
-                MaxSlipsPerPrediction = 1,
-                BankerMinConfidence = 0.5,
-                BankerMinOdds = 5,
-                BankerMaxOdds = 15,
-                BankerFallbackMinOdds = 4,
-                BankerFallbackMaxOdds = 20,
-                BankerShortlistSize = 30,
-                BankerMaxPicks = 8,
-                DrawSlipSize = 5,
-                DrawCandidatePoolSize = 12,
-                ReferenceStakeNaira = 100,
-                WeekendSmallSlipCount = 2,
-                WeekendMediumSlipCount = 2,
-                WeekendBigSlipCount = 1,
-                WeekendMegaSlipCount = 1
-            }),
+            Options.Create(settings),
             NullLogger<BetslipGenerationService>.Instance);
+    }
 
     private static void AddMainPrediction(
         List<Prediction> predictions,

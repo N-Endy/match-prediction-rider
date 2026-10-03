@@ -106,10 +106,52 @@ public sealed class DixonColesModel
         return (ClampLambda(Math.Exp(logHome)), ClampLambda(Math.Exp(logAway)));
     }
 
+    /// <summary>Expected goals (lambda, mu) for a fixture with lineup availability adjustments.</summary>
+    public (double HomeGoals, double AwayGoals) ExpectedGoals(
+        string homeTeam,
+        string awayTeam,
+        double homeAttackModifier,
+        double homeDefenseModifier,
+        double awayAttackModifier,
+        double awayDefenseModifier)
+    {
+        var home = homeTeam.Trim();
+        var away = awayTeam.Trim();
+        var logHome = Intercept + HomeAdvantage + GetAttack(home) + homeAttackModifier - (GetDefence(away) + awayDefenseModifier);
+        var logAway = Intercept + GetAttack(away) + awayAttackModifier - (GetDefence(home) + homeDefenseModifier);
+        return (ClampLambda(Math.Exp(logHome)), ClampLambda(Math.Exp(logAway)));
+    }
+
     /// <summary>Builds the full market probability set for a fixture from the score matrix.</summary>
     public MatchProbabilities Predict(string homeTeam, string awayTeam)
     {
         var (lambda, mu) = ExpectedGoals(homeTeam, awayTeam);
+        return PredictFromLambdas(lambda, mu);
+    }
+
+    /// <summary>Builds the full market probability set for a fixture with lineup availability modifiers.</summary>
+    public MatchProbabilities Predict(
+        string homeTeam,
+        string awayTeam,
+        double homeAttackModifier,
+        double homeDefenseModifier,
+        double awayAttackModifier,
+        double awayDefenseModifier)
+    {
+        var (lambda, mu) = ExpectedGoals(
+            homeTeam,
+            awayTeam,
+            homeAttackModifier,
+            homeDefenseModifier,
+            awayAttackModifier,
+            awayDefenseModifier);
+
+        return PredictFromLambdas(lambda, mu);
+    }
+
+    /// <summary>Evaluates bivariate Poisson score matrix for given lambda and mu.</summary>
+    public MatchProbabilities PredictFromLambdas(double lambda, double mu)
+    {
         var max = _options.MaxGoals;
         var homePmf = PoissonPmfVector(lambda, max);
         var awayPmf = PoissonPmfVector(mu, max);
@@ -174,6 +216,21 @@ public sealed class DixonColesModel
         return ReferenceEquals(model, this)
             ? Predict(homeTeam, awayTeam)
             : model.Predict(homeTeam, awayTeam);
+    }
+
+    public MatchProbabilities Predict(
+        string homeTeam,
+        string awayTeam,
+        string? league,
+        double homeAttackModifier,
+        double homeDefenseModifier,
+        double awayAttackModifier,
+        double awayDefenseModifier)
+    {
+        var model = ResolveLeagueModel(league, homeTeam, awayTeam);
+        return ReferenceEquals(model, this)
+            ? Predict(homeTeam, awayTeam, homeAttackModifier, homeDefenseModifier, awayAttackModifier, awayDefenseModifier)
+            : model.Predict(homeTeam, awayTeam, homeAttackModifier, homeDefenseModifier, awayAttackModifier, awayDefenseModifier);
     }
 
     /// <summary>

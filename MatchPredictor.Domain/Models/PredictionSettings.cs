@@ -31,4 +31,20 @@ public class PredictionSettings
     /// ("Market") signal toward zero so bookmaker + statistical + ML dominate.
     /// </summary>
     public bool RetireProbabilityCalculatorWhenMlPromoted { get; set; } = true;
+
+    /// <summary>
+    /// Maximum aggregate Kelly exposure allowed across all concurrent bets in a single kickoff window.
+    /// Default 0.20 (20% of bankroll).
+    /// </summary>
+    public double MaxConcurrentWindowExposureFraction { get; set; } = 0.20;
+
+    /// <summary>
+    /// Maximum minutes separating fixtures to be considered concurrent in the simultaneous Kelly solver.
+    /// </summary>
+    public double ConcurrentWindowToleranceMinutes { get; set; } = 45.0;
+
+    /// <summary>
+    /// When true, enforce single highest-edge pick per match in the simultaneous Kelly solver.
+    /// </summary>
+    public bool EnforceFixtureExclusivityInSimultaneousKelly { get; set; } = true;
 }
