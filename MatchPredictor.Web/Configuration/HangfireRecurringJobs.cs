@@ -28,7 +28,9 @@ internal static class HangfireRecurringJobs
         "cleanup-old-predictions",
         "betslip-generation-job",
         "lineup-refresh-job",
-        "interim-odds-snapshot-job"
+        "interim-odds-snapshot-job",
+        "challenger-training-job",
+        "shadow-evaluation-settle-job"
     ];
 
     /// <summary>
@@ -181,6 +183,20 @@ internal static class HangfireRecurringJobs
                 "interim-odds-snapshot-job",
                 service => service.CaptureInterimOddsSnapshotsAsync(CancellationToken.None),
                 "*/15 * * * *",
+                new RecurringJobOptions { TimeZone = watTimeZone }));
+
+        TryWithLockRetry(logger, "register:challenger-training-job", () =>
+            recurringJobs.AddOrUpdate<IMarketPredictionModelService>(
+                "challenger-training-job",
+                service => service.TrainChallengerProfilesAsync(CancellationToken.None),
+                "0 3 * * 1",
+                new RecurringJobOptions { TimeZone = watTimeZone }));
+
+        TryWithLockRetry(logger, "register:shadow-evaluation-settle-job", () =>
+            recurringJobs.AddOrUpdate<IMarketPredictionModelService>(
+                "shadow-evaluation-settle-job",
+                service => service.EvaluateAndSettleShadowPredictionsAsync(CancellationToken.None),
+                "0 4 * * *",
                 new RecurringJobOptions { TimeZone = watTimeZone }));
     }
 

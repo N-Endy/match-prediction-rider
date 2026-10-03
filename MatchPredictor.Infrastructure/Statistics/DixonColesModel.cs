@@ -149,6 +149,41 @@ public sealed class DixonColesModel
         return PredictFromLambdas(lambda, mu);
     }
 
+    /// <summary>
+    /// Computes the full normalized bivariate score probability matrix P(X=h, Y=a) for h, a in [0, MaxGoals].
+    /// </summary>
+    public double[,] CalculateScoreProbabilityMatrix(double lambda, double mu)
+    {
+        var max = _options.MaxGoals;
+        var homePmf = PoissonPmfVector(lambda, max);
+        var awayPmf = PoissonPmfVector(mu, max);
+        var matrix = new double[max + 1, max + 1];
+
+        var mass = 0.0;
+        for (var h = 0; h <= max; h++)
+        {
+            for (var a = 0; a <= max; a++)
+            {
+                var prob = Math.Max(0.0, homePmf[h] * awayPmf[a] * Tau(h, a, lambda, mu, Rho));
+                matrix[h, a] = prob;
+                mass += prob;
+            }
+        }
+
+        if (mass > 0)
+        {
+            for (var h = 0; h <= max; h++)
+            {
+                for (var a = 0; a <= max; a++)
+                {
+                    matrix[h, a] /= mass;
+                }
+            }
+        }
+
+        return matrix;
+    }
+
     /// <summary>Evaluates bivariate Poisson score matrix for given lambda and mu.</summary>
     public MatchProbabilities PredictFromLambdas(double lambda, double mu)
     {

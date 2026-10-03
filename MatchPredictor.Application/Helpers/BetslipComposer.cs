@@ -43,8 +43,12 @@ public sealed class ComposedBetslip
     public bool IsRollover { get; init; }
     public bool IsPayoutBand { get; init; }
     public bool IsMega { get; init; }
+    public bool IsSgm { get; init; }
     public double? ActiveMinOdds { get; init; }
     public double? ActiveMaxOdds { get; init; }
+    public double? JointProbability { get; init; }
+    public double? IndependentProbability { get; init; }
+    public double? CorrelationRatio { get; init; }
 }
 
 public static class BetslipComposer

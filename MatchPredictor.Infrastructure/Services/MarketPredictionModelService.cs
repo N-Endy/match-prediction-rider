@@ -61,6 +61,7 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
     private readonly IMlXgFeatureReadiness? _xgFeatureReadiness;
     private readonly MLContext _mlContext = new(seed: 42);
     private Dictionary<PredictionMarket, PredictionEngine<MarketModelInput, MarketModelOutput>>? _engines;
+    private Dictionary<PredictionMarket, PredictionEngine<MarketModelInput, MarketModelOutput>>? _challengerEngines;
     private string[] _activeFeatureColumns = BaseFeatureColumns;
     private string _expectedFeatureSchemaJson = JsonSerializer.Serialize(BaseFeatureColumns);
 
@@ -81,7 +82,30 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         double? statisticalProbability,
         double? bookmakerProbability)
     {
-        var engines = _engines ??= LoadPromotedEngines();
+        var engines = _engines ??= LoadEngines(isPromoted: true, isShadow: false);
+        if (!engines.TryGetValue(market, out var engine))
+        {
+            return null;
+        }
+
+        var features = LoadLatestFeatureSnapshot(match);
+        var output = engine.Predict(MapFeatures(
+            calculatorProbability,
+            statisticalProbability,
+            bookmakerProbability,
+            features));
+
+        return Math.Clamp(output.Probability, 0.0f, 1.0f);
+    }
+
+    public double? TryPredictChallenger(
+        MatchData match,
+        PredictionMarket market,
+        double calculatorProbability,
+        double? statisticalProbability,
+        double? bookmakerProbability)
+    {
+        var engines = _challengerEngines ??= LoadEngines(isPromoted: false, isShadow: true);
         if (!engines.TryGetValue(market, out var engine))
         {
             return null;
@@ -184,6 +208,12 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
             .ToListAsync(cancellationToken);
         nextProfiles.AddRange(retainedProfiles);
 
+        var existingShadows = await _dbContext.MarketMlModelProfiles
+            .AsNoTracking()
+            .Where(profile => profile.IsShadow)
+            .ToListAsync(cancellationToken);
+        nextProfiles.AddRange(existingShadows);
+
         try
         {
             await _dbContext.MarketMlModelProfiles.ExecuteDeleteAsync(cancellationToken);
@@ -199,16 +229,242 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         _engines = null;
     }
 
-    private Dictionary<PredictionMarket, PredictionEngine<MarketModelInput, MarketModelOutput>> LoadPromotedEngines()
+    public async Task TrainChallengerProfilesAsync(CancellationToken cancellationToken = default)
+    {
+        await ResolveActiveFeatureColumnsAsync(cancellationToken);
+        var cutoff = DateTime.UtcNow.AddDays(-180);
+        var forecasts = await _dbContext.ForecastObservations
+            .AsNoTracking()
+            .Where(forecast =>
+                forecast.IsSettled &&
+                forecast.OutcomeOccurred != null &&
+                (forecast.SettledAt ?? forecast.CreatedAt) >= cutoff)
+            .ToListAsync(cancellationToken);
+
+        if (forecasts.Count == 0)
+        {
+            _logger.LogInformation("No settled forecasts found for challenger training.");
+            return;
+        }
+
+        var featureSnapshots = await _dbContext.FixtureFeatureSnapshots
+            .AsNoTracking()
+            .Where(snapshot => snapshot.CapturedAtUtc >= cutoff.AddDays(-30))
+            .ToListAsync(cancellationToken);
+
+        var pointInTime = PointInTimeBacktestingSelector.SelectForecasts(forecasts);
+        var challengerProfiles = new List<MarketMlModelProfile>();
+
+        foreach (var market in Markets)
+        {
+            var rows = pointInTime
+                .Where(forecast => forecast.Market == market)
+                .OrderBy(forecast => forecast.SettledAt ?? forecast.CreatedAt)
+                .Select(forecast => BuildTrainingRow(forecast, featureSnapshots))
+                .Where(row => row is not null)
+                .Cast<MarketModelInput>()
+                .ToList();
+
+            if (rows.Count < MinimumTrainingSamples + MinimumHoldoutSamples)
+            {
+                continue;
+            }
+
+            var splitIndex = Math.Max(MinimumTrainingSamples, (int)Math.Round(rows.Count * 0.7));
+            if (splitIndex >= rows.Count - MinimumHoldoutSamples + 1)
+            {
+                splitIndex = rows.Count - MinimumHoldoutSamples;
+            }
+
+            var training = rows.Take(splitIndex).ToList();
+            var holdout = rows.Skip(splitIndex).ToList();
+
+            var pipeline = _mlContext.Transforms.Concatenate("Features", _activeFeatureColumns)
+                .Append(_mlContext.BinaryClassification.Trainers.LightGbm(
+                    labelColumnName: nameof(MarketModelInput.Label),
+                    featureColumnName: "Features",
+                    exampleWeightColumnName: nameof(MarketModelInput.Weight)));
+
+            var model = pipeline.Fit(_mlContext.Data.LoadFromEnumerable(training));
+            var predictions = model.Transform(_mlContext.Data.LoadFromEnumerable(holdout));
+            var scored = _mlContext.Data.CreateEnumerable<MarketModelOutput>(predictions, reuseRowObject: false).ToList();
+
+            var baselineBrier = WeightedBrier(holdout, holdout.Select(ResolveEnsembleBaselineProbability).ToList());
+            var candidateBrier = WeightedBrier(holdout, scored.Select(row => (double)row.Probability).ToList());
+            var improvement = baselineBrier - candidateBrier;
+
+            await using var stream = new MemoryStream();
+            _mlContext.Model.Save(model, _mlContext.Data.LoadFromEnumerable(training).Schema, stream);
+
+            challengerProfiles.Add(new MarketMlModelProfile
+            {
+                Market = market,
+                ModelBytes = stream.ToArray(),
+                TrainingSampleCount = training.Count,
+                HoldoutSampleCount = holdout.Count,
+                BaselineBrierScore = baselineBrier,
+                CandidateBrierScore = candidateBrier,
+                Improvement = improvement,
+                IsPromoted = false,
+                IsShadow = true,
+                FeatureSchemaJson = _expectedFeatureSchemaJson,
+                UpdatedAtUtc = DateTime.UtcNow
+            });
+        }
+
+        var marketsToReplace = challengerProfiles.Select(p => p.Market).ToList();
+        var existingChallengers = await _dbContext.MarketMlModelProfiles
+            .Where(p => p.IsShadow && marketsToReplace.Contains(p.Market))
+            .ToListAsync(cancellationToken);
+
+        _dbContext.MarketMlModelProfiles.RemoveRange(existingChallengers);
+        await _dbContext.MarketMlModelProfiles.AddRangeAsync(challengerProfiles, cancellationToken);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        _challengerEngines = null;
+        _logger.LogInformation("Trained {Count} challenger ML models in shadow mode.", challengerProfiles.Count);
+    }
+
+    public async Task LogShadowPredictionAsync(
+        int predictionId,
+        string fixtureKey,
+        PredictionMarket market,
+        string predictedOutcome,
+        double championProbability,
+        double challengerProbability,
+        CancellationToken ct = default)
+    {
+        var record = new ModelShadowEvaluation
+        {
+            PredictionId = predictionId,
+            FixtureKey = fixtureKey,
+            Market = market,
+            PredictedOutcome = predictedOutcome,
+            ChampionCalibratedProbability = championProbability,
+            ChallengerCalibratedProbability = challengerProbability,
+            IsSettled = false,
+            CapturedAtUtc = DateTime.UtcNow
+        };
+
+        await _dbContext.ModelShadowEvaluations.AddAsync(record, ct);
+        await _dbContext.SaveChangesAsync(ct);
+    }
+
+    public async Task EvaluateAndSettleShadowPredictionsAsync(CancellationToken cancellationToken = default)
+    {
+        var unsettledEvals = await _dbContext.ModelShadowEvaluations
+            .Where(e => !e.IsSettled)
+            .ToListAsync(cancellationToken);
+
+        if (unsettledEvals.Count == 0)
+        {
+            return;
+        }
+
+        var predIds = unsettledEvals.Select(e => e.PredictionId).Distinct().ToList();
+        var predictions = await _dbContext.Predictions
+            .AsNoTracking()
+            .Where(p => predIds.Contains(p.Id))
+            .ToDictionaryAsync(p => p.Id, cancellationToken);
+
+        var settledCount = 0;
+        foreach (var eval in unsettledEvals)
+        {
+            if (!predictions.TryGetValue(eval.PredictionId, out var prediction) ||
+                string.IsNullOrWhiteSpace(prediction.ActualOutcome) ||
+                prediction.IsLive)
+            {
+                continue;
+            }
+
+            var outcomeOccurred = string.Equals(prediction.ActualOutcome, eval.PredictedOutcome, StringComparison.OrdinalIgnoreCase);
+            var outcomeVal = outcomeOccurred ? 1.0 : 0.0;
+
+            eval.OutcomeOccurred = outcomeOccurred;
+            eval.ChampionBrierLoss = Math.Pow(eval.ChampionCalibratedProbability - outcomeVal, 2);
+            eval.ChallengerBrierLoss = Math.Pow(eval.ChallengerCalibratedProbability - outcomeVal, 2);
+            eval.IsSettled = true;
+            eval.SettledAtUtc = DateTime.UtcNow;
+            settledCount++;
+        }
+
+        if (settledCount > 0)
+        {
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            _logger.LogInformation("Settled {Count} shadow model evaluations.", settledCount);
+        }
+
+        // Check promotion gates per market
+        foreach (var market in Markets)
+        {
+            var settledMarketEvals = await _dbContext.ModelShadowEvaluations
+                .AsNoTracking()
+                .Where(e => e.Market == market && e.IsSettled && e.ChampionBrierLoss.HasValue && e.ChallengerBrierLoss.HasValue)
+                .OrderByDescending(e => e.SettledAtUtc)
+                .Take(250)
+                .ToListAsync(cancellationToken);
+
+            if (settledMarketEvals.Count < ModelPromotionGate.DefaultMinimumSampleCount)
+            {
+                continue;
+            }
+
+            var champLosses = settledMarketEvals.Select(e => e.ChampionBrierLoss!.Value).ToList();
+            var challLosses = settledMarketEvals.Select(e => e.ChallengerBrierLoss!.Value).ToList();
+
+            var gateResult = ModelPromotionGate.Evaluate(champLosses, challLosses);
+
+            var shadowProfile = await _dbContext.MarketMlModelProfiles
+                .FirstOrDefaultAsync(p => p.Market == market && p.IsShadow, cancellationToken);
+
+            if (shadowProfile is not null)
+            {
+                shadowProfile.ShadowSampleCount = gateResult.SampleCount;
+                shadowProfile.ShadowBrierScore = gateResult.ChallengerLoss;
+                shadowProfile.PromotionPValue = gateResult.PValue;
+
+                if (gateResult.ShouldPromote)
+                {
+                    _logger.LogInformation(
+                        "🎉 Auto-promoting challenger model for {Market}! {Summary}",
+                        market,
+                        gateResult.Summary);
+
+                    var currentChampion = await _dbContext.MarketMlModelProfiles
+                        .FirstOrDefaultAsync(p => p.Market == market && p.IsPromoted, cancellationToken);
+                    if (currentChampion is not null)
+                    {
+                        currentChampion.IsPromoted = false;
+                    }
+
+                    shadowProfile.IsPromoted = true;
+                    shadowProfile.IsShadow = false;
+                    shadowProfile.UpdatedAtUtc = DateTime.UtcNow;
+
+                    _engines = null;
+                    _challengerEngines = null;
+                }
+            }
+
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    private Dictionary<PredictionMarket, PredictionEngine<MarketModelInput, MarketModelOutput>> LoadEngines(bool isPromoted, bool isShadow)
     {
         ResolveActiveFeatureColumnsAsync(CancellationToken.None).GetAwaiter().GetResult();
         var engines = new Dictionary<PredictionMarket, PredictionEngine<MarketModelInput, MarketModelOutput>>();
-        foreach (var profile in _dbContext.MarketMlModelProfiles.AsNoTracking().Where(profile => profile.IsPromoted))
+        var profiles = _dbContext.MarketMlModelProfiles
+            .AsNoTracking()
+            .Where(profile => profile.IsPromoted == isPromoted && profile.IsShadow == isShadow)
+            .ToList();
+
+        foreach (var profile in profiles)
         {
             if (!string.Equals(profile.FeatureSchemaJson, _expectedFeatureSchemaJson, StringComparison.Ordinal))
             {
                 _logger.LogInformation(
-                    "Skipping promoted ML model for {Market} because feature schema changed.",
+                    "Skipping ML model for {Market} because feature schema changed.",
                     profile.Market);
                 continue;
             }

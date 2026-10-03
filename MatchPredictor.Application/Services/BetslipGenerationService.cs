@@ -20,6 +20,8 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
     public const int RolloverSlipNumber = 10;
     public const string RolloverTierLabel = "Rollover (1.30-1.50x)";
     public const string DrawsTierLabel = "AI Draws (5)";
+    public const int SgmSlipNumber = 20;
+    public const string SgmTierLabel = "Bet Builder (SGM)";
     private const double SuppressedCategoryRankingPenalty = 15d;
 
     private static readonly string[] MainCategories =
@@ -35,6 +37,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
     private readonly ISourceMarketPricingService _pricingService;
     private readonly IAiAdvisorService _aiAdvisorService;
     private readonly ITeamResolutionService? _teamResolutionService;
+    private readonly ISameGameMultiService? _sameGameMultiService;
     private readonly BetslipSettings _settings;
     private readonly PredictionSettings _predictionSettings;
     private readonly double _minimumEdge;
@@ -49,13 +52,15 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         IOptions<BetslipSettings> options,
         ILogger<BetslipGenerationService> logger,
         IOptions<PredictionSettings>? predictionOptions = null,
-        ITeamResolutionService? teamResolutionService = null)
+        ITeamResolutionService? teamResolutionService = null,
+        ISameGameMultiService? sameGameMultiService = null)
     {
         _dbContext = dbContext;
         _bookingService = bookingService;
         _pricingService = pricingService;
         _aiAdvisorService = aiAdvisorService;
         _teamResolutionService = teamResolutionService;
+        _sameGameMultiService = sameGameMultiService;
         _settings = options.Value;
         _predictionSettings = predictionOptions?.Value ?? new PredictionSettings();
         _logger = logger;
@@ -250,6 +255,15 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 if (drawSlip is not null)
                 {
                     composed.Add(drawSlip);
+                }
+            }
+
+            if (settings.EnableCuratedSgmSlip && _sameGameMultiService != null)
+            {
+                var sgmSlip = ComposeCuratedSgmSlip(predictions);
+                if (sgmSlip is not null)
+                {
+                    composed.Add(sgmSlip);
                 }
             }
 
@@ -2002,6 +2016,89 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             Message = message
         });
         await _dbContext.SaveChangesAsync();
+    }
+
+    private ComposedBetslip? ComposeCuratedSgmSlip(IReadOnlyList<Prediction> predictions)
+    {
+        if (predictions.Count == 0 || _sameGameMultiService is null)
+        {
+            return null;
+        }
+
+        var marqueeGroup = predictions
+            .GroupBy(p => p.FixtureKey, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(g => g.Count())
+            .ThenByDescending(g => g.Average(p => (double)(p.ConfidenceScore ?? 0.5m)))
+            .FirstOrDefault();
+
+        if (marqueeGroup is null)
+        {
+            return null;
+        }
+
+        var marqueeFixture = marqueeGroup.First();
+        var homeWinPred = marqueeGroup.FirstOrDefault(p =>
+            string.Equals(p.PredictionCategory, "StraightWin", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(p.PredictedOutcome, "Home", StringComparison.OrdinalIgnoreCase));
+        var awayWinPred = marqueeGroup.FirstOrDefault(p =>
+            string.Equals(p.PredictionCategory, "StraightWin", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(p.PredictedOutcome, "Away", StringComparison.OrdinalIgnoreCase));
+        var over25Pred = marqueeGroup.FirstOrDefault(p =>
+            string.Equals(p.PredictionCategory, "Over2.5Goals", StringComparison.OrdinalIgnoreCase));
+
+        var over25Prob = over25Pred?.ConfidenceScore != null
+            ? (double)over25Pred.ConfidenceScore.Value / (over25Pred.ConfidenceScore.Value > 1m ? 100d : 1d)
+            : 0.52;
+
+        var homeProb = homeWinPred?.ConfidenceScore != null
+            ? (double)homeWinPred.ConfidenceScore.Value / (homeWinPred.ConfidenceScore.Value > 1m ? 100d : 1d)
+            : 0.45;
+
+        var awayProb = awayWinPred?.ConfidenceScore != null
+            ? (double)awayWinPred.ConfidenceScore.Value / (awayWinPred.ConfidenceScore.Value > 1m ? 100d : 1d)
+            : 0.28;
+
+        var totalXg = Math.Clamp(1.8 + (over25Prob - 0.4) * 2.5, 1.2, 3.8);
+        var homeShare = Math.Clamp((homeProb + 0.1) / (homeProb + awayProb + 0.2), 0.3, 0.7);
+        var homeLambda = Math.Clamp(totalXg * homeShare, 0.5, 3.0);
+        var awayMu = Math.Clamp(totalXg * (1.0 - homeShare), 0.5, 3.0);
+
+        var curated = _sameGameMultiService.FindCuratedCombinations(homeLambda, awayMu, -0.11, 2.0, 6.0);
+        if (curated.Count == 0)
+        {
+            return null;
+        }
+
+        var bestCombo = curated.OrderByDescending(c => c.ExactJointProbability).First();
+        var candidates = bestCombo.Legs.Select(leg => new BetslipComposerCandidate
+        {
+            PredictionId = marqueeFixture.Id,
+            FixtureKey = marqueeFixture.FixtureKey,
+            League = marqueeFixture.League,
+            HomeTeam = marqueeFixture.HomeTeam,
+            AwayTeam = marqueeFixture.AwayTeam,
+            Market = leg.Market.ToString(),
+            PredictedOutcome = leg.DisplayName,
+            PredictionCategory = "BetBuilder",
+            Confidence = (decimal)Math.Round(bestCombo.ExactJointProbability * 100.0, 2),
+            DecimalOdds = bestCombo.FairDecimalOdds,
+            MatchDateTimeUtc = marqueeFixture.MatchDateTime,
+            AiNote = $"SGM Leg: {leg.DisplayName}"
+        }).ToList();
+
+        return new ComposedBetslip
+        {
+            SlipNumber = SgmSlipNumber,
+            Title = $"Bet Builder: {marqueeFixture.HomeTeam} vs {marqueeFixture.AwayTeam}",
+            TierLabel = SgmTierLabel,
+            TargetMinSelections = bestCombo.Legs.Count,
+            TargetMaxSelections = bestCombo.Legs.Count,
+            Selections = candidates,
+            IsSgm = true,
+            TargetCombinedOdds = bestCombo.FairDecimalOdds,
+            JointProbability = bestCombo.ExactJointProbability,
+            AiSummary = $"Same-Game Multi (Dixon-Coles exact score matrix): joint probability {bestCombo.ExactJointProbability:P1} (fair odds {bestCombo.FairDecimalOdds:0.00}). Legs: {string.Join(" + ", bestCombo.Legs.Select(l => l.DisplayName))}"
+        };
     }
 
     private sealed record SignalPayload(string? Summary, bool AllSignalsAlign, bool ModelDivergesFromBookmaker);

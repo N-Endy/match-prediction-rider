@@ -132,6 +132,8 @@ builder.Services.AddScoped<IPredictionRiskAuditorService, PredictionRiskAuditorS
 builder.Services.AddScoped<IValueBetsService, ValueBetsService>();
 builder.Services.AddScoped<ILineupAvailabilityService, LineupAvailabilityService>();
 builder.Services.AddScoped<IMarketTimingService, MarketTimingService>();
+builder.Services.AddScoped<IFeatureDriftMonitorService, FeatureDriftMonitorService>();
+builder.Services.AddScoped<ISameGameMultiService, SameGameMultiService>();
 builder.Services.AddScoped<IBetslipGenerationService, BetslipGenerationService>();
 builder.Services.AddScoped<IManualScoreLinkService, ManualScoreLinkService>();
 builder.Services.AddScoped<IUserTrackingService, UserTrackingService>();

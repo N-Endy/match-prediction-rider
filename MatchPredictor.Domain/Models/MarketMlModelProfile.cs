@@ -11,6 +11,11 @@ public class MarketMlModelProfile
     public double CandidateBrierScore { get; set; }
     public double Improvement { get; set; }
     public bool IsPromoted { get; set; }
+    public bool IsShadow { get; set; }
+    public int ShadowSampleCount { get; set; }
+    public double? ShadowBrierScore { get; set; }
+    public double? ShadowLogLoss { get; set; }
+    public double? PromotionPValue { get; set; }
     public string FeatureSchemaJson { get; set; } = "[]";
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 }

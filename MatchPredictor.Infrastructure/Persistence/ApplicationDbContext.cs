@@ -42,6 +42,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<Betslip> Betslips => Set<Betslip>();
     public DbSet<BetslipSelection> BetslipSelections => Set<BetslipSelection>();
     public DbSet<MatchLineupSnapshot> MatchLineupSnapshots => Set<MatchLineupSnapshot>();
+    public DbSet<ModelShadowEvaluation> ModelShadowEvaluations => Set<ModelShadowEvaluation>();
     // Required by IDataProtectionKeyContext
     public DbSet<DataProtectionKey> DataProtectionKeys { get; set; }
 
@@ -315,6 +316,12 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.Property(e => e.AiNote).HasMaxLength(512);
             entity.HasIndex(e => e.BetslipId);
             entity.HasIndex(e => e.PredictionId);
+        });
+
+        modelBuilder.Entity<ModelShadowEvaluation>(entity =>
+        {
+            entity.HasIndex(e => new { e.PredictionId, e.Market });
+            entity.HasIndex(e => new { e.IsSettled, e.CapturedAtUtc });
         });
     }
 }

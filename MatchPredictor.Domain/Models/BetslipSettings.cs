@@ -14,6 +14,9 @@ public class BetslipSettings
     public int DrawCandidatePoolSize { get; set; } = 12;
     public int DrawSlipSize { get; set; } = 5;
 
+    /// <summary>Whether to generate a curated Same-Game Multi / Bet Builder slip for the marquee match.</summary>
+    public bool EnableCuratedSgmSlip { get; set; } = true;
+
     public double BankerMinOdds { get; set; } = 5.0;
     public double BankerMaxOdds { get; set; } = 10.0;
     public double BankerFallbackMinOdds { get; set; } = 4.0;

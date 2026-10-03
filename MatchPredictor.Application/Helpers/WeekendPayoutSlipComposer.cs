@@ -173,6 +173,23 @@ public static class WeekendPayoutSlipComposer
                     $"Widened payout range to {result.ActiveMinOdds:0.##}-{result.ActiveMaxOdds:0.##}x.");
             }
 
+            var probs = result.Selections
+                .Select(s => (double)(s.Confidence > 1m ? s.Confidence / 100m : s.Confidence))
+                .ToList();
+
+            var leagueGroups = result.Selections
+                .GroupBy(s => s.League, StringComparer.OrdinalIgnoreCase)
+                .Where(g => !string.IsNullOrWhiteSpace(g.Key))
+                .ToList();
+
+            var hasSharedLeague = leagueGroups.Any(g => g.Count() > 1);
+            var rho = hasSharedLeague ? GaussianCopulaAccumulatorMath.DefaultLeagueEquicorrelation : 0.02;
+            var copulaResult = GaussianCopulaAccumulatorMath.EvaluateAccumulator(probs, rho);
+
+            var summary = copulaResult.TailDependenceRatio != 1.0 && probs.Count > 1
+                ? $"Gaussian copula modeled ({probs.Count} legs, joint prob: {copulaResult.CopulaProbability:P1} vs indep: {copulaResult.IndependentProbability:P1}, tail ratio: {copulaResult.TailDependenceRatio:0.00})."
+                : null;
+
             composed.Add(new ComposedBetslip
             {
                 SlipNumber = band.SlipNumber,
@@ -182,11 +199,15 @@ public static class WeekendPayoutSlipComposer
                 TargetMaxSelections = band.MaxPicks,
                 Selections = result.Selections,
                 ShortfallNote = notes.Count > 0 ? string.Join(" ", notes) : null,
+                AiSummary = summary,
                 TargetCombinedOdds = result.CombinedOdds,
                 ActiveMinOdds = result.ActiveMinOdds,
                 ActiveMaxOdds = result.ActiveMaxOdds,
                 IsPayoutBand = true,
-                IsMega = band.IsMega
+                IsMega = band.IsMega,
+                JointProbability = copulaResult.CopulaProbability,
+                IndependentProbability = copulaResult.IndependentProbability,
+                CorrelationRatio = copulaResult.TailDependenceRatio
             });
         }
 

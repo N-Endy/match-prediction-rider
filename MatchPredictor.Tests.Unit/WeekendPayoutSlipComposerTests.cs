@@ -328,4 +328,30 @@ public class WeekendPayoutSlipComposerTests
 
         return list;
     }
+
+    [Fact]
+    public void Compose_DecoratesComposedSlipWithCopulaProbabilities()
+    {
+        var candidates = BuildLadder(30, odds: 1.55);
+        var settings = new BetslipSettings
+        {
+            WeekendSmallSlipCount = 1,
+            WeekendMediumSlipCount = 0,
+            WeekendBigSlipCount = 0,
+            WeekendMegaSlipCount = 0
+        };
+
+        var slips = WeekendPayoutSlipComposer.Compose(
+            candidates,
+            WeekendPayoutSlipComposer.BuildWeekendPlan(settings));
+
+        var slip = Assert.Single(slips);
+        Assert.NotNull(slip.JointProbability);
+        Assert.NotNull(slip.IndependentProbability);
+        Assert.NotNull(slip.CorrelationRatio);
+        Assert.True(slip.JointProbability > 0.0);
+        Assert.True(slip.IndependentProbability > 0.0);
+        Assert.NotNull(slip.AiSummary);
+        Assert.Contains("Gaussian copula", slip.AiSummary);
+    }
 }
