@@ -618,7 +618,8 @@ public class AiChatContextBuilderTests
     [Fact]
     public void BuildSelection_ReturnsSameFixtureDoubles_WhenBothMarketsArePublished()
     {
-        var kickoff = DateTime.UtcNow.AddHours(3);
+        var nowUtc = DateTime.UtcNow.Date.AddHours(14);
+        var kickoff = nowUtc.AddHours(3);
         var predictions = new[]
         {
             CreatePrediction(1, "BothTeamsScore", "BTTS", "Arsenal", "Chelsea", "England - Premier League", 0.78m, matchDateTimeUtc: kickoff),
@@ -630,7 +631,7 @@ public class AiChatContextBuilderTests
         var selection = AiChatContextBuilder.BuildSelection(
             predictions,
             "Which predictions are marked as both gg and over2.5",
-            DateTime.UtcNow);
+            nowUtc);
 
         Assert.False(selection.NoRelevantMatchesFound);
         Assert.Equal(2, selection.Candidates.Count);
@@ -647,7 +648,8 @@ public class AiChatContextBuilderTests
     [Fact]
     public void BuildSelection_ReturnsSameFixtureDoubles_WhenPromptHasPredictionTypo()
     {
-        var kickoff = DateTime.UtcNow.AddHours(3);
+        var nowUtc = DateTime.UtcNow.Date.AddHours(14);
+        var kickoff = nowUtc.AddHours(3);
         var predictions = new[]
         {
             CreatePrediction(1, "BothTeamsScore", "BTTS", "Arsenal", "Chelsea", "England - Premier League", 0.78m, matchDateTimeUtc: kickoff),
@@ -658,7 +660,7 @@ public class AiChatContextBuilderTests
         var selection = AiChatContextBuilder.BuildSelection(
             predictions,
             "Which pedictions are listed as both btts and over 2.5",
-            DateTime.UtcNow);
+            nowUtc);
 
         Assert.False(selection.NoRelevantMatchesFound);
         Assert.Equal(2, selection.Candidates.Count);
@@ -674,7 +676,8 @@ public class AiChatContextBuilderTests
     [Fact]
     public void BuildSelection_WarnsWhenNoSameFixtureDoublesExist()
     {
-        var kickoff = DateTime.UtcNow.AddHours(3);
+        var nowUtc = DateTime.UtcNow.Date.AddHours(14);
+        var kickoff = nowUtc.AddHours(3);
         var predictions = new[]
         {
             CreatePrediction(1, "BothTeamsScore", "BTTS", "Arsenal", "Chelsea", "England - Premier League", 0.78m, matchDateTimeUtc: kickoff),
@@ -684,7 +687,7 @@ public class AiChatContextBuilderTests
         var selection = AiChatContextBuilder.BuildSelection(
             predictions,
             "Which predictions are marked as both gg and over2.5",
-            DateTime.UtcNow);
+            nowUtc);
 
         Assert.Empty(selection.Candidates);
         Assert.True(selection.NoRelevantMatchesFound);
@@ -694,7 +697,8 @@ public class AiChatContextBuilderTests
     [Fact]
     public void BuildSelection_KeepsIndependentMix_WhenExplicitMarketCountsAreRequested()
     {
-        var kickoff = DateTime.UtcNow.AddHours(3);
+        var nowUtc = DateTime.UtcNow.Date.AddHours(14);
+        var kickoff = nowUtc.AddHours(3);
         var predictions = new[]
         {
             CreatePrediction(1, "BothTeamsScore", "BTTS", "Arsenal", "Chelsea", "England - Premier League", 0.78m, matchDateTimeUtc: kickoff),
@@ -705,7 +709,7 @@ public class AiChatContextBuilderTests
         var selection = AiChatContextBuilder.BuildSelection(
             predictions,
             "Give me 1 gg and 1 over 2.5",
-            DateTime.UtcNow);
+            nowUtc);
 
         Assert.False(selection.NormalizedRequest?.RequireSameFixtureMarkets);
         Assert.Equal(2, selection.Candidates.Count);
