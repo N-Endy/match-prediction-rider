@@ -43,6 +43,7 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<BetslipSelection> BetslipSelections => Set<BetslipSelection>();
     public DbSet<MatchLineupSnapshot> MatchLineupSnapshots => Set<MatchLineupSnapshot>();
     public DbSet<ModelShadowEvaluation> ModelShadowEvaluations => Set<ModelShadowEvaluation>();
+    public DbSet<LeagueCalibrationProfile> LeagueCalibrationProfiles => Set<LeagueCalibrationProfile>();
     // Required by IDataProtectionKeyContext
     public DbSet<DataProtectionKey> DataProtectionKeys { get; set; }
 
@@ -322,6 +323,11 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
         {
             entity.HasIndex(e => new { e.PredictionId, e.Market });
             entity.HasIndex(e => new { e.IsSettled, e.CapturedAtUtc });
+        });
+
+        modelBuilder.Entity<LeagueCalibrationProfile>(entity =>
+        {
+            entity.HasIndex(e => new { e.Market, e.League }).IsUnique();
         });
     }
 }

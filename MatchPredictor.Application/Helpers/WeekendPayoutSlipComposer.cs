@@ -233,7 +233,7 @@ public static class WeekendPayoutSlipComposer
             {
                 Candidate = c,
                 Uses = usageCounts.GetValueOrDefault(c.PredictionId),
-                Score = ResolvePackingScore(c) - overlapPenalty * usageCounts.GetValueOrDefault(c.PredictionId)
+                Score = ResolvePackingScore(c) - (overlapPenalty * 100d) * usageCounts.GetValueOrDefault(c.PredictionId)
             })
             .Where(x => x.Uses < maxSlipsPerPrediction)
             .OrderByDescending(x => x.Score)
@@ -487,10 +487,10 @@ public static class WeekendPayoutSlipComposer
 
     private static double ResolvePackingScore(BetslipComposerCandidate candidate)
     {
-        // ResearchScore is 0–100 when present; Confidence is 0–1. Keep that scale so screened picks win.
-        var baseScore = candidate.ResearchScore ?? (double)candidate.Confidence;
+        // Normalize both ResearchScore (0–100) and Confidence (0–1 -> 0–100) to consistent 0–100 scale.
+        var baseScore = candidate.ResearchScore ?? ((double)candidate.Confidence * 100d);
         var ev = BetPricingMath.CalculateExpectedValuePercent((double)candidate.Confidence, candidate.DecimalOdds) ?? 0d;
-        return baseScore + (Math.Max(ev, -0.5d) * 0.01d);
+        return baseScore + (Math.Max(ev, -50d) * 0.1d);
     }
 
     private static string ResolveFixtureKey(BetslipComposerCandidate candidate) =>

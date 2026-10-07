@@ -25,8 +25,11 @@ public class BetslipsModel : PageModel
     public string GeneratedLocalLabel { get; private set; } = string.Empty;
     public Betslip? RolloverSlip { get; private set; }
     public Betslip? BankerSlip { get; private set; }
+    public Betslip? BetBuilderSlip { get; private set; }
     public IReadOnlyList<Betslip> OtherSlips { get; private set; } = [];
     public decimal ReferenceStakeNaira { get; private set; } = 100m;
+    public IReadOnlyList<string> AvailableTodayRuns { get; private set; } = [];
+    public string SelectedRun { get; private set; } = string.Empty;
 
     public BetslipRecordSection RecordSection { get; private set; } = BetslipRecordSection.Banker;
     public DateOnly RecordDate { get; private set; }
@@ -37,10 +40,18 @@ public class BetslipsModel : PageModel
 
     public string RecordSectionSlug => BetslipKinds.ToSlug(RecordSection);
 
-    public async Task OnGetAsync(string? record, DateOnly? date, string? month, CancellationToken ct)
+    public Task OnGetAsync(string? record, DateOnly? date, string? month, CancellationToken ct) =>
+        OnGetAsync(record, date, month, run: null, ct);
+
+    public async Task OnGetAsync(
+        string? record = null,
+        DateOnly? date = null,
+        string? month = null,
+        string? run = null,
+        CancellationToken ct = default)
     {
         ApplyStake();
-        await LoadCurrentSetAsync(ct);
+        await LoadCurrentSetAsync(run, ct);
         await LoadRecordsAsync(record, date, month, loadResults: true, autoSelectLatest: date is null, ct);
     }
 
@@ -109,25 +120,53 @@ public class BetslipsModel : PageModel
         ViewData["ReferenceStakeNaira"] = ReferenceStakeNaira;
     }
 
-    private async Task LoadCurrentSetAsync(CancellationToken ct)
+    private async Task LoadCurrentSetAsync(string? requestedRun, CancellationToken ct)
     {
-        CurrentSet = await _betslipQueries.GetCurrentSetAsync(ct);
+        var todaySets = await _betslipQueries.GetTodaySetsAsync(ct);
+        AvailableTodayRuns = todaySets
+            .Select(s => s.RunLabel.ToLowerInvariant())
+            .Distinct()
+            .ToList();
+
+        if (todaySets.Count > 0)
+        {
+            if (!string.IsNullOrWhiteSpace(requestedRun))
+            {
+                CurrentSet = todaySets.FirstOrDefault(s =>
+                    string.Equals(s.RunLabel, requestedRun, StringComparison.OrdinalIgnoreCase))
+                    ?? todaySets.LastOrDefault(s => s.IsCurrent)
+                    ?? todaySets.Last();
+            }
+            else
+            {
+                CurrentSet = todaySets.LastOrDefault(s => s.IsCurrent) ?? todaySets.Last();
+            }
+        }
+        else
+        {
+            CurrentSet = await _betslipQueries.GetCurrentSetAsync(ct);
+        }
+
         if (CurrentSet is null)
         {
             return;
         }
 
+        SelectedRun = CurrentSet.RunLabel.ToLowerInvariant();
         var local = DateTimeProvider.ConvertUtcToLocal(CurrentSet.GeneratedAtUtc);
         GeneratedLocalLabel = $"{local:ddd d MMM yyyy, HH:mm} WAT";
 
         RolloverSlip = CurrentSet.Slips
-            .FirstOrDefault(s => BetslipGenerationService.IsRolloverSlip(s));
+            .FirstOrDefault(s => BetslipKinds.IsRolloverSlip(s));
 
         BankerSlip = CurrentSet.Slips
-            .FirstOrDefault(s => BetslipGenerationService.IsBankerSlip(s));
+            .FirstOrDefault(s => BetslipKinds.IsBankerSlip(s));
+
+        BetBuilderSlip = CurrentSet.Slips
+            .FirstOrDefault(s => BetslipKinds.IsBetBuilderSlip(s));
 
         OtherSlips = CurrentSet.Slips
-            .Where(s => s != RolloverSlip && s != BankerSlip)
+            .Where(s => s != RolloverSlip && s != BankerSlip && s != BetBuilderSlip)
             .OrderBy(s => s.SlipNumber)
             .ToList();
     }

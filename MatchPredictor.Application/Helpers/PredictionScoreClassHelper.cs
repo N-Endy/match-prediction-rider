@@ -140,13 +140,19 @@ public static partial class PredictionScoreClassHelper
     private static bool DoesOverPredictionMatch(string? predictedOutcome, int homeGoals, int awayGoals)
     {
         var isOver = homeGoals + awayGoals > 2;
+        var normalized = NormalizeOutcome(predictedOutcome);
 
-        return NormalizeOutcome(predictedOutcome) switch
+        if (normalized.Contains("under"))
         {
-            "over" or "over 2.5" or "over2.5" => isOver,
-            "under" or "under 2.5" or "under2.5" => !isOver,
-            _ => isOver
-        };
+            return !isOver;
+        }
+
+        if (normalized.Contains("over"))
+        {
+            return isOver;
+        }
+
+        return isOver;
     }
 
     private static bool DoesDrawPredictionMatch(string? predictedOutcome, int homeGoals, int awayGoals)

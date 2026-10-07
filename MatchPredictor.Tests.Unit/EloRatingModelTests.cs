@@ -68,4 +68,37 @@ public class EloRatingModelTests
 
         Assert.True(homeWin > awayWin);
     }
+
+    [Fact]
+    public void Update_MassiveUnderdogUpset_DoesNotDivideByZeroOrInvertMultiplier()
+    {
+        var model = new EloRatingModel();
+        // Train team A to very high and team B to very low, creating a > 2200 point gap
+        var results = new List<MatchResult>();
+        var date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < 80; i++)
+        {
+            results.Add(new MatchResult("SuperTeam", "Fodder", 5, 0, date.AddDays(i)));
+        }
+        model.Train(results);
+
+        var superRatingBefore = model.GetRating("SuperTeam");
+        var underdogRatingBefore = model.GetRating("Underdog"); // starts at initial 1500
+
+        // Massive gap: SuperTeam is > 3000, Underdog is 1500 (gap > 1500..2500)
+        // Underdog pulls off an upset 4-0
+        model.Update(new MatchResult("Underdog", "SuperTeam", 4, 0, date.AddDays(100)));
+
+        var underdogRatingAfter = model.GetRating("Underdog");
+        var superRatingAfter = model.GetRating("SuperTeam");
+
+        Assert.False(double.IsNaN(underdogRatingAfter));
+        Assert.False(double.IsInfinity(underdogRatingAfter));
+        Assert.False(double.IsNaN(superRatingAfter));
+        Assert.False(double.IsInfinity(superRatingAfter));
+        // Underdog MUST gain rating points for winning!
+        Assert.True(underdogRatingAfter > underdogRatingBefore);
+        // SuperTeam MUST lose rating points for losing!
+        Assert.True(superRatingAfter < superRatingBefore);
+    }
 }

@@ -6,6 +6,8 @@ public interface IBetslipQueries
 {
     Task<BetslipSet?> GetCurrentSetAsync(CancellationToken ct = default);
 
+    Task<IReadOnlyList<BetslipSet>> GetTodaySetsAsync(CancellationToken ct = default);
+
     Task<IReadOnlyList<DateOnly>> GetSlipDatesAsync(
         BetslipRecordSection section,
         int year,

@@ -29,7 +29,7 @@ public class CalibrationService : ICalibrationService
     private List<MarketCalibrationProfile>? _profiles;
     private List<BetaCalibrationProfile>? _betaProfiles;
     private List<IsotonicCalibrationProfile>? _isotonicProfiles;
-    private Dictionary<(PredictionMarket Market, string League), double> _leagueLogitAdjustments = new();
+    private Dictionary<(PredictionMarket Market, string League), double>? _leagueLogitAdjustments;
 
     public CalibrationService(ApplicationDbContext dbContext)
     {
@@ -52,6 +52,11 @@ public class CalibrationService : ICalibrationService
         .AsNoTracking()
         .Where(profile => ActiveCalibrationMarkets.Contains(profile.Market))
         .ToList();
+
+    private Dictionary<(PredictionMarket Market, string League), double> LeagueLogitAdjustments =>
+        _leagueLogitAdjustments ??= _dbContext.LeagueCalibrationProfiles
+            .AsNoTracking()
+            .ToDictionary(profile => (profile.Market, profile.League), profile => profile.LogitAdjustment);
 
     public double Calibrate(PredictionMarket market, double rawProbability, string? league = null)
     {
@@ -95,7 +100,7 @@ public class CalibrationService : ICalibrationService
         }
 
         if (!string.IsNullOrWhiteSpace(league) &&
-            _leagueLogitAdjustments.TryGetValue((market, NormalizeLeagueKey(league)), out var logitAdjustment))
+            LeagueLogitAdjustments.TryGetValue((market, NormalizeLeagueKey(league)), out var logitAdjustment))
         {
             decision.Probability = ApplyLeagueLogitAdjustment(decision.Probability, logitAdjustment);
         }
@@ -202,22 +207,30 @@ public class CalibrationService : ICalibrationService
         }
 
         await _dbContext.IsotonicCalibrationProfiles.AddRangeAsync(isotonicProfiles);
+        var existingLeague = await _dbContext.LeagueCalibrationProfiles.ToListAsync();
+        _dbContext.LeagueCalibrationProfiles.RemoveRange(existingLeague);
+
+        var leagueProfiles = BuildLeagueCalibrationProfiles(pointInTimeForecasts);
+        await _dbContext.LeagueCalibrationProfiles.AddRangeAsync(leagueProfiles);
+
         if (promotionHistory.Count > 0)
         {
             await _dbContext.PromotionHistories.AddRangeAsync(promotionHistory);
         }
+
         await _dbContext.SaveChangesAsync();
 
         _profiles = rebuiltProfiles;
         _betaProfiles = betaProfiles;
         _isotonicProfiles = isotonicProfiles;
-        _leagueLogitAdjustments = BuildLeagueLogitAdjustments(pointInTimeForecasts);
+        _leagueLogitAdjustments = leagueProfiles.ToDictionary(p => (p.Market, p.League), p => p.LogitAdjustment);
     }
 
-    private static Dictionary<(PredictionMarket Market, string League), double> BuildLeagueLogitAdjustments(
+    private static List<LeagueCalibrationProfile> BuildLeagueCalibrationProfiles(
         IReadOnlyCollection<ForecastObservation> forecasts)
     {
-        var adjustments = new Dictionary<(PredictionMarket, string), double>();
+        var profiles = new List<LeagueCalibrationProfile>();
+        var nowUtc = DateTime.UtcNow;
         foreach (var group in forecasts
                      .Where(forecast => !string.IsNullOrWhiteSpace(forecast.League))
                      .GroupBy(forecast => (forecast.Market, League: NormalizeLeagueKey(forecast.League))))
@@ -247,10 +260,17 @@ public class CalibrationService : ICalibrationService
             var meanPredicted = weightedPredicted / totalWeight;
             var empiricalRate = weightedOutcome / totalWeight;
             var adjustment = ToLogit(empiricalRate) - ToLogit(meanPredicted);
-            adjustments[group.Key] = Math.Clamp(adjustment, -MaxLeagueLogitAdjustment, MaxLeagueLogitAdjustment);
+            profiles.Add(new LeagueCalibrationProfile
+            {
+                Market = group.Key.Market,
+                League = group.Key.League,
+                LogitAdjustment = Math.Clamp(adjustment, -MaxLeagueLogitAdjustment, MaxLeagueLogitAdjustment),
+                SampleCount = group.Count(),
+                LastUpdated = nowUtc
+            });
         }
 
-        return adjustments;
+        return profiles;
     }
 
     private static double ApplyLeagueLogitAdjustment(double probability, double logitAdjustment)

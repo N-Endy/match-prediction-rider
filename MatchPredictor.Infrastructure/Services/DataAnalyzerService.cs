@@ -101,7 +101,7 @@ public class DataAnalyzerService : IDataAnalyzerService
                          candidate.League)))
         {
             var qualifiedTotals = totalsGroup
-                .Where(candidate => candidate.CalibratedProbability >= candidate.ThresholdUsed)
+                .Where(candidate => HasExplicitTotalsMarket(candidate) && candidate.CalibratedProbability >= candidate.ThresholdUsed)
                 .OrderByDescending(candidate => candidate.CalibratedProbability)
                 .ThenByDescending(candidate => candidate.Market == PredictionMarket.Over25Goals ? 1 : 0)
                 .FirstOrDefault();
@@ -270,6 +270,11 @@ public class DataAnalyzerService : IDataAnalyzerService
         return HasExplicitMarketFlag(candidate, "explicitDrawMarket");
     }
 
+    private static bool HasExplicitTotalsMarket(PredictionCandidate candidate)
+    {
+        return HasExplicitMarketFlag(candidate, "explicitTotalsMarket");
+    }
+
     private static bool HasExplicitMarketFlag(PredictionCandidate candidate, string propertyName)
     {
         if (string.IsNullOrWhiteSpace(candidate.FeatureContributionsJson) ||
@@ -409,8 +414,21 @@ public class DataAnalyzerService : IDataAnalyzerService
         var under25 = candidates.FirstOrDefault(c => c.Market == PredictionMarket.Under25Goals);
         if (over25 != null && under25 != null)
         {
-            under25.CalibratedProbability = Math.Clamp(1.0 - over25.CalibratedProbability, 0.0, 1.0);
-            under25.CorrectedProbability = Math.Clamp(1.0 - over25.CorrectedProbability, 0.0, 1.0);
+            var calibratedSum = over25.CalibratedProbability + under25.CalibratedProbability;
+            if (calibratedSum > 0)
+            {
+                var normOver = Math.Clamp(over25.CalibratedProbability / calibratedSum, 0.0, 1.0);
+                over25.CalibratedProbability = normOver;
+                under25.CalibratedProbability = Math.Clamp(1.0 - normOver, 0.0, 1.0);
+            }
+
+            var correctedSum = over25.CorrectedProbability + under25.CorrectedProbability;
+            if (correctedSum > 0)
+            {
+                var normOver = Math.Clamp(over25.CorrectedProbability / correctedSum, 0.0, 1.0);
+                over25.CorrectedProbability = normOver;
+                under25.CorrectedProbability = Math.Clamp(1.0 - normOver, 0.0, 1.0);
+            }
         }
     }
 
@@ -534,7 +552,8 @@ public class DataAnalyzerService : IDataAnalyzerService
             ["mlSignal"] = mlSignal,
             ["mlSignalApplied"] = mlSignal is not null,
             ["explicitBttsMarket"] = match.TryGetNormalizedBttsPair(out _) || bookmakerSignal?.Btts is > 0,
-            ["explicitDrawMarket"] = match.TryGetNormalizedOneX2(out _) || bookmakerSignal?.Draw is > 0
+            ["explicitDrawMarket"] = match.TryGetNormalizedOneX2(out _) || bookmakerSignal?.Draw is > 0,
+            ["explicitTotalsMarket"] = match.TryGetNormalizedOver25Pair(out _) || (bookmakerSignal?.Over25 is > 0 || bookmakerSignal?.Under25 is > 0) || (statisticalSignal?.Over25 is > 0)
         };
 
         return JsonSerializer.Serialize(summary);

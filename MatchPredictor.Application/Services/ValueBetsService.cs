@@ -769,9 +769,9 @@ public class ValueBetsService : IValueBetsService
 
         public ValueBetDto ToDto()
         {
-            var effectiveKellyStake = PortfolioKellyStakeFraction > 0d
-                ? PortfolioKellyStakeFraction
-                : (ExcludedDueToFixtureExclusivity ? 0d : StandaloneKellyStakeFraction);
+            var effectiveKellyStake = ExcludedDueToFixtureExclusivity
+                ? 0d
+                : PortfolioKellyStakeFraction;
 
             return new ValueBetDto
             {

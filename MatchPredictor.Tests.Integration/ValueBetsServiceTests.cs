@@ -641,6 +641,74 @@ public class ValueBetsServiceTests
         Assert.Contains(report.ExclusionBreakdown, item => item.Key == "processing_error" && item.Count == 1);
     }
 
+    [Fact]
+    public async Task GetValueBetReportAsync_PortfolioExposureCapped_EnforcesZeroStakeWhenAllocatedZero()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetUpcomingKickoffForToday(2);
+        var date = DateTimeProvider.GetLocalDate().ToString("dd-MM-yyyy");
+        var time = kickoff.ToString("HH:mm");
+
+        context.MatchDatas.Add(new MatchData
+        {
+            Date = date,
+            Time = time,
+            MatchLocalDate = DateTimeProvider.GetLocalDate(),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+            MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            FixtureKey = "test-league|alpha|beta",
+            League = "Test League",
+            HomeTeam = "Alpha",
+            AwayTeam = "Beta",
+            HomeWin = 0.60,
+            Draw = 0.25,
+            AwayWin = 0.15,
+            OverTwoGoals = 0.52,
+            UnderTwoGoals = 0.48
+        });
+
+        await context.SaveChangesAsync();
+
+        var analyzer = new FakeDataAnalyzerService();
+        analyzer.Seed(
+            "Alpha",
+            "Beta",
+            [
+                CreateCandidate(PredictionMarket.HomeWin, "StraightWin", "Home Win", 0.60, 0.70)
+            ]);
+
+        var service = new ValueBetsService(
+            context,
+            analyzer,
+            new FakeThresholdTuningService
+            {
+                Decisions =
+                {
+                    [PredictionMarket.HomeWin] = new ThresholdDecision { Threshold = 0.65, ThresholdSource = "Configured" }
+                }
+            },
+            new FakeAiAdvisorService(_ => "{}"),
+            new FakeSourceMarketPricingService(),
+            Options.Create(new PredictionSettings
+            {
+                HomeWinStrong = 0.65,
+                ValueBetMinimumEdge = 0.03,
+                MaxConcurrentWindowExposureFraction = 0.0 // zero window budget forces portfolio allocation to 0
+            }),
+            NullLogger<ValueBetsService>.Instance);
+
+        var report = await service.GetValueBetReportAsync();
+
+        var bet = Assert.Single(report.Bets);
+        Assert.True(bet.StandaloneKellyStakeFraction > 0, "Standalone stake should be positive based on model edge.");
+        Assert.Equal(0.0, bet.PortfolioKellyStakeFraction, 6);
+        Assert.Equal(0.0, bet.KellyStakeFraction, 6);
+    }
+
     private static PredictionCandidate CreateCandidate(
         PredictionMarket market,
         string category,

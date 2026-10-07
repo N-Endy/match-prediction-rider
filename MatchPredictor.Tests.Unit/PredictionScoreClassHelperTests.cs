@@ -111,4 +111,27 @@ public class PredictionScoreClassHelperTests
         Assert.False(PredictionScoreClassHelper.HasLiveOptionDecided(notLive));
         Assert.False(PredictionScoreClassHelper.HasLiveOptionDecided(noScore));
     }
+
+    [Theory]
+    [InlineData("Under 2.5 Goals", "0-0", true)]
+    [InlineData("Under 2.5 Goals", "1-0", true)]
+    [InlineData("Under 2.5 Goals", "1-1", true)]
+    [InlineData("Under 2.5 Goals", "2-1", false)]
+    [InlineData("Under 2.5 Goals", "3-3", false)]
+    [InlineData("Over 2.5 Goals", "3-0", true)]
+    [InlineData("Over 2.5 Goals", "1-1", false)]
+    [InlineData("Under 2.5", "0-0", true)]
+    [InlineData("Under 2.5", "2-2", false)]
+    public void IsPredictionCorrect_Totals_UnderAndOverHandledAccurately(string predictedOutcome, string score, bool expected)
+    {
+        var prediction = new Prediction
+        {
+            PredictionCategory = predictedOutcome.Contains("Under") ? "Under2.5Goals" : "Over2.5Goals",
+            PredictedOutcome = predictedOutcome,
+            ActualScore = score
+        };
+
+        var actual = PredictionScoreClassHelper.IsPredictionCorrect(prediction);
+        Assert.Equal(expected, actual);
+    }
 }

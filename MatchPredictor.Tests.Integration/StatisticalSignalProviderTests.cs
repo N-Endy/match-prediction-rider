@@ -8,6 +8,11 @@ namespace MatchPredictor.Tests.Integration;
 
 public class StatisticalSignalProviderTests
 {
+    public StatisticalSignalProviderTests()
+    {
+        StatisticalSignalProvider.ClearCache();
+    }
+
     private static ApplicationDbContext NewContext()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()

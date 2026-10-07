@@ -12,6 +12,11 @@ public static class BetslipSelectionHitMapper
             return BetslipSelectionHitStatus.Pending;
         }
 
+        if (IsVoidOrPostponed(prediction))
+        {
+            return BetslipSelectionHitStatus.Void;
+        }
+
         if (PredictionScoreClassHelper.IsActuallyLive(prediction, utcNow))
         {
             if (PredictionScoreClassHelper.IsLivePredictionCorrect(prediction))
@@ -63,23 +68,56 @@ public static class BetslipSelectionHitMapper
             return BetslipHitStatus.Lost;
         }
 
+        if (legStatuses.All(status => status == BetslipSelectionHitStatus.Void))
+        {
+            return BetslipHitStatus.Void;
+        }
+
         if (legStatuses.Any(status => status == BetslipSelectionHitStatus.Live))
         {
             return BetslipHitStatus.Live;
         }
 
-        if (legStatuses.All(status => status == BetslipSelectionHitStatus.Won))
+        if (legStatuses.All(status => status is BetslipSelectionHitStatus.Won or BetslipSelectionHitStatus.Void))
         {
             return BetslipHitStatus.Won;
         }
 
-        if (legStatuses.Any(status => status == BetslipSelectionHitStatus.Won) &&
+        if (legStatuses.Any(status => status is BetslipSelectionHitStatus.Won or BetslipSelectionHitStatus.Void) &&
             legStatuses.Any(status => status == BetslipSelectionHitStatus.Pending))
         {
             return BetslipHitStatus.Partial;
         }
 
         return BetslipHitStatus.Pending;
+    }
+
+    public static double CalculateEffectiveCombinedOdds(
+        IEnumerable<BetslipSelection> selections,
+        IReadOnlyDictionary<int, BetslipSelectionHitStatus> hitStatuses)
+    {
+        var product = 1.0;
+        var anyValid = false;
+        foreach (var selection in selections.Where(s => s.WasBooked && s.DecimalOdds is > 1.0))
+        {
+            var status = hitStatuses.GetValueOrDefault(selection.Id, BetslipSelectionHitStatus.Pending);
+            if (status == BetslipSelectionHitStatus.Void)
+            {
+                continue;
+            }
+            product *= selection.DecimalOdds!.Value;
+            anyValid = true;
+        }
+        return anyValid ? product : 1.0;
+    }
+
+    private static bool IsVoidOrPostponed(Prediction prediction)
+    {
+        var outcome = prediction.ActualOutcome?.Trim().ToLowerInvariant();
+        var score = prediction.ActualScore?.Trim().ToLowerInvariant();
+
+        return outcome is "void" or "postponed" or "cancelled" or "canc" or "abandoned"
+            || score is "void" or "canc" or "postp" or "postponed" or "abandoned";
     }
 
     public static Prediction? Resolve(

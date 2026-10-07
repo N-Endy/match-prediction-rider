@@ -125,4 +125,28 @@ public class SimultaneousKellyOptimizerTests
         Assert.False(allocations["pick-eve-1"].WasCapped);
         Assert.Equal(0.05, allocations["pick-eve-1"].PortfolioStakeFraction, 4);
     }
+
+    [Fact]
+    public void OptimizeSimultaneousKellyStakes_RollingRiskWindow_GroupsSequentialFixtures()
+    {
+        // Fixture A: 14:00, Fixture B: 14:35 (35m later), Fixture C: 15:10 (35m later, 70m from A)
+        var kickoffA = new DateTime(2026, 10, 3, 14, 0, 0, DateTimeKind.Utc);
+        var kickoffB = new DateTime(2026, 10, 3, 14, 35, 0, DateTimeKind.Utc);
+        var kickoffC = new DateTime(2026, 10, 3, 15, 10, 0, DateTimeKind.Utc);
+
+        var candidates = new List<SimultaneousKellyCandidate>
+        {
+            new("pick-A", "fix-A", 0.60, 2.0, kickoffA, 0.10, 0.20),
+            new("pick-B", "fix-B", 0.60, 2.0, kickoffB, 0.10, 0.20),
+            new("pick-C", "fix-C", 0.60, 2.0, kickoffC, 0.10, 0.20)
+        };
+
+        var options = new SimultaneousKellyOptions(WindowToleranceMinutes: 45.0, MaxWindowExposureFraction: 0.20);
+        var allocations = BetPricingMath.OptimizeSimultaneousKellyStakes(candidates, options);
+
+        // Under rolling window clustering, all 3 sequential fixtures belong to the same concurrent window (count = 3)
+        Assert.Equal(3, allocations["pick-A"].WindowConcurrentBetCount);
+        Assert.Equal(3, allocations["pick-B"].WindowConcurrentBetCount);
+        Assert.Equal(3, allocations["pick-C"].WindowConcurrentBetCount);
+    }
 }

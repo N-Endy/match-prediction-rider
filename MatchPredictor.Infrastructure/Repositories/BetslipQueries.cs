@@ -29,6 +29,19 @@ public class BetslipQueries : IBetslipQueries
             .FirstOrDefaultAsync(ct);
     }
 
+    public async Task<IReadOnlyList<BetslipSet>> GetTodaySetsAsync(CancellationToken ct = default)
+    {
+        var today = DateTimeProvider.GetLocalDate();
+        return await _context.BetslipSets
+            .AsNoTracking()
+            .AsSplitQuery()
+            .Include(s => s.Slips)
+                .ThenInclude(slip => slip.Selections)
+            .Where(s => s.SlipLocalDate == today)
+            .OrderBy(s => s.GeneratedAtUtc)
+            .ToListAsync(ct);
+    }
+
     public async Task<IReadOnlyList<DateOnly>> GetSlipDatesAsync(
         BetslipRecordSection section,
         int year,

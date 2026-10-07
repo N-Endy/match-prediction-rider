@@ -169,6 +169,34 @@ public sealed class LineupAvailabilityService : ILineupAvailabilityService
                 }
 
                 observation.FeatureContributionsJson = JsonSerializer.Serialize(contributions);
+
+                var netHomeAdvantage = (lineup.HomeAttackAdjustment - lineup.AwayDefenseAdjustment)
+                                     - (lineup.AwayAttackAdjustment - lineup.HomeDefenseAdjustment);
+                var netGoalShift = (lineup.HomeAttackAdjustment + lineup.AwayAttackAdjustment)
+                                 + (lineup.HomeDefenseAdjustment + lineup.AwayDefenseAdjustment);
+
+                var probShift = observation.Market switch
+                {
+                    PredictionMarket.HomeWin => netHomeAdvantage * 0.15,
+                    PredictionMarket.AwayWin => -netHomeAdvantage * 0.15,
+                    PredictionMarket.Over25Goals => netGoalShift * 0.10,
+                    PredictionMarket.Under25Goals => -netGoalShift * 0.10,
+                    PredictionMarket.BothTeamsScore => Math.Min(lineup.HomeAttackAdjustment, lineup.AwayAttackAdjustment) * 0.10,
+                    PredictionMarket.Draw => -Math.Abs(netHomeAdvantage) * 0.08,
+                    _ => 0.0
+                };
+
+                if (Math.Abs(probShift) > 0.0001)
+                {
+                    if (observation.CorrectedProbability > 0)
+                    {
+                        observation.CorrectedProbability = Math.Clamp(observation.CorrectedProbability + probShift, 0.02, 0.98);
+                    }
+                    if (observation.CalibratedProbability > 0)
+                    {
+                        observation.CalibratedProbability = Math.Clamp(observation.CalibratedProbability + probShift, 0.02, 0.98);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -177,6 +205,63 @@ public sealed class LineupAvailabilityService : ILineupAvailabilityService
             }
         }
 
+        NormalizeUpcomingObservations(upcomingObservations);
+
+        var matchingPredictions = await _db.Predictions
+            .Where(p => fixtureKeys.Contains(p.FixtureKey) && p.IsCurrentRevision)
+            .ToListAsync(ct);
+
+        foreach (var observation in upcomingObservations)
+        {
+            var matchingPred = matchingPredictions.FirstOrDefault(p =>
+                p.FixtureKey == observation.FixtureKey &&
+                PredictionMarketExtensions.TryFromCategory(p.PredictionCategory, out var m) &&
+                m == observation.Market);
+
+            if (matchingPred != null && observation.CalibratedProbability > 0)
+            {
+                matchingPred.ConfidenceScore = (decimal)observation.CalibratedProbability;
+                if (observation.CorrectedProbability > 0)
+                {
+                    matchingPred.RawConfidenceScore = (decimal)observation.CorrectedProbability;
+                }
+            }
+        }
+
         await _db.SaveChangesAsync(ct);
+    }
+
+    private static void NormalizeUpcomingObservations(List<ForecastObservation> observations)
+    {
+        foreach (var group in observations.GroupBy(o => o.FixtureKey))
+        {
+            var obsList = group.ToList();
+            var home = obsList.FirstOrDefault(o => o.Market == PredictionMarket.HomeWin);
+            var draw = obsList.FirstOrDefault(o => o.Market == PredictionMarket.Draw);
+            var away = obsList.FirstOrDefault(o => o.Market == PredictionMarket.AwayWin);
+
+            if (home != null && draw != null && away != null)
+            {
+                var sum = home.CalibratedProbability + draw.CalibratedProbability + away.CalibratedProbability;
+                if (sum > 0)
+                {
+                    home.CalibratedProbability = Math.Clamp(home.CalibratedProbability / sum, 0.01, 0.98);
+                    draw.CalibratedProbability = Math.Clamp(draw.CalibratedProbability / sum, 0.01, 0.98);
+                    away.CalibratedProbability = Math.Clamp(1.0 - home.CalibratedProbability - draw.CalibratedProbability, 0.01, 0.98);
+                }
+            }
+
+            var over = obsList.FirstOrDefault(o => o.Market == PredictionMarket.Over25Goals);
+            var under = obsList.FirstOrDefault(o => o.Market == PredictionMarket.Under25Goals);
+            if (over != null && under != null)
+            {
+                var sum = over.CalibratedProbability + under.CalibratedProbability;
+                if (sum > 0)
+                {
+                    over.CalibratedProbability = Math.Clamp(over.CalibratedProbability / sum, 0.01, 0.98);
+                    under.CalibratedProbability = Math.Clamp(1.0 - over.CalibratedProbability, 0.01, 0.98);
+                }
+            }
+        }
     }
 }

@@ -417,6 +417,8 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
     public static bool IsLadderSlip(Betslip slip) => BetslipKinds.IsLadderSlip(slip);
 
+    public static bool IsBetBuilderSlip(Betslip slip) => BetslipKinds.IsBetBuilderSlip(slip);
+
     private async Task<ComposedBetslip?> ComposeRolloverFromPassersAsync(
         IReadOnlyList<LiveQuotedCandidate> mainPool,
         BetslipSettings settings)

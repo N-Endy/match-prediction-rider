@@ -144,7 +144,10 @@ public sealed class EloRatingModel
 
         // Dampen the multiplier for results that were already expected (auto-correlation
         // correction), following the FiveThirtyEight formulation.
+        // Clamp the denominator to a positive floor to prevent division-by-zero or
+        // inverted negative multipliers on massive underdog cup upsets.
         var winnerRatingEdge = goalDifference > 0 ? ratingDifference : -ratingDifference;
-        return Math.Log(margin + 1.0) * (2.2 / ((winnerRatingEdge * 0.001) + 2.2));
+        var denominator = Math.Max(0.2, (winnerRatingEdge * 0.001) + 2.2);
+        return Math.Log(margin + 1.0) * (2.2 / denominator);
     }
 }

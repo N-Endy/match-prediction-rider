@@ -1,5 +1,6 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Utils;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace MatchPredictor.Web.Services;
@@ -28,6 +29,20 @@ public class CachedBetslipQueries : IBetslipQueries
         var result = await _inner.GetCurrentSetAsync(ct);
         _cache.Set(CurrentCacheKey, result, CacheTtl);
         return result;
+    }
+
+    public async Task<IReadOnlyList<BetslipSet>> GetTodaySetsAsync(CancellationToken ct = default)
+    {
+        var today = DateTimeProvider.GetLocalDate();
+        var result = await _cache.GetOrCreateAsync(
+            $"betslips:today-sets:{today:yyyy-MM-dd}",
+            async entry =>
+            {
+                entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+                return await _inner.GetTodaySetsAsync(ct);
+            });
+
+        return result ?? [];
     }
 
     public async Task<IReadOnlyList<DateOnly>> GetSlipDatesAsync(

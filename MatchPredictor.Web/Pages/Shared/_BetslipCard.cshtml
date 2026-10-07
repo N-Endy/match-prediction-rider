@@ -216,7 +216,7 @@
                             "btts" => "btts",
                             "over2.5" => "over",
                             "under2.5" => "under",
-                            "1x2" => "draw",
+                            "1x2" or "straightwin" => (selection.PredictedOutcome?.ToLowerInvariant() is "draw" or "x") ? "draw" : "win",
                             _ => "win"
                         })">@selection.PredictedOutcome</span>
                     </div>

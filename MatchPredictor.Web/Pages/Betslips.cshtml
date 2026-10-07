@@ -38,6 +38,19 @@
             <span>@Model.CurrentSet.SlipCount slip@(Model.CurrentSet.SlipCount == 1 ? "" : "s")</span>
             <span>@Model.CurrentSet.SlipLocalDate.ToString("dddd d MMMM")</span>
             <span>2:00 AM and 1:00 PM WAT</span>
+            @if (Model.AvailableTodayRuns.Count > 1)
+            {
+                <span class="mp-betslip-run-toggle-group">
+                    Run:
+                    @foreach (var r in Model.AvailableTodayRuns)
+                    {
+                        var isActive = string.Equals(Model.SelectedRun, r, StringComparison.OrdinalIgnoreCase);
+                        <a href="/betslips?run=@r" class="mp-run-pill @(isActive ? "active" : "")">
+                            @BetslipsModel.FormatRunLabel(r)
+                        </a>
+                    }
+                </span>
+            }
         </div>
 
         @if (Model.RolloverSlip is not null)
@@ -65,6 +78,16 @@
                 </div>
             }
         </section>
+
+        @if (Model.BetBuilderSlip is not null)
+        {
+            <section class="mp-betslip-board-section" aria-label="Bet Builder">
+                <h2 class="mp-betslip-board-label">Bet Builder (SGM)</h2>
+                <div class="mp-betslip-banker-wrap">
+                    <partial name="_BetslipCard" model="Model.BetBuilderSlip" />
+                </div>
+            </section>
+        }
 
         @if (Model.OtherSlips.Count > 0)
         {
@@ -101,6 +124,9 @@
                 <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.Ladder ? "active" : "")"
                    data-record-section="ladder"
                    href="@BetslipsModel.RecordUrl(BetslipRecordSection.Ladder)">Ladder</a>
+                <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.BetBuilder ? "active" : "")"
+                   data-record-section="betbuilder"
+                   href="@BetslipsModel.RecordUrl(BetslipRecordSection.BetBuilder)">Bet Builder</a>
                 <a class="mp-tab-btn @(Model.RecordSection == BetslipRecordSection.AiDraws ? "active" : "")"
                    data-record-section="draws"
                    href="@BetslipsModel.RecordUrl(BetslipRecordSection.AiDraws)">AI Draws</a>

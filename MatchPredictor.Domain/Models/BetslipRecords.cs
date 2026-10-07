@@ -5,6 +5,7 @@ public enum BetslipRecordSection
     Rollover,
     Banker,
     Ladder,
+    BetBuilder,
     AiDraws
 }
 
@@ -13,7 +14,8 @@ public enum BetslipSelectionHitStatus
     Pending,
     Won,
     Lost,
-    Live
+    Live,
+    Void
 }
 
 /// <summary>Aggregate settlement for a whole slip from its leg hit statuses.</summary>
@@ -23,7 +25,8 @@ public enum BetslipHitStatus
     Live,
     Won,
     Lost,
-    Partial
+    Partial,
+    Void
 }
 
 public sealed class BetslipRecordsForDate

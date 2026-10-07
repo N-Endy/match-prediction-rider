@@ -19,10 +19,31 @@ namespace MatchPredictor.Infrastructure.Services;
 public sealed class StatisticalSignalProvider : IStatisticalSignalProvider
 {
     private const int HistoryWindowDays = 540;
+    private static readonly object CacheLock = new();
+    private static CachedStatisticalCore? _cachedCore;
     private readonly ApplicationDbContext _db;
     private readonly DixonColesOptions _dixonColesOptions;
     private readonly EloOptions _eloOptions;
     private readonly EnsembleWeights _signalWeights;
+
+    public static void ClearCache()
+    {
+        lock (CacheLock)
+        {
+            _cachedCore = null;
+        }
+    }
+
+    private sealed class CachedStatisticalCore
+    {
+        public DateTime CachedAtUtc { get; init; }
+        public int LatestScoreId { get; init; }
+        public DateTime LatestScoreTime { get; init; }
+        public DateTime CutoffUtc { get; init; }
+        public DixonColesModel DixonColes { get; init; } = null!;
+        public EloRatingModel Elo { get; init; } = null!;
+        public IReadOnlyDictionary<string, string> AliasLookup { get; init; } = null!;
+    }
 
     public StatisticalSignalProvider(ApplicationDbContext db)
         : this(db, null, null, null)
@@ -63,40 +84,89 @@ public sealed class StatisticalSignalProvider : IStatisticalSignalProvider
         var cutoffUtc = earliestKickoffUtc < nowUtc ? earliestKickoffUtc : nowUtc;
         var historyStartUtc = cutoffUtc.AddDays(-HistoryWindowDays);
 
-        var scores = _db.MatchScores
+        var latestScoreInfo = _db.MatchScores
             .AsNoTracking()
             .Where(score => !score.IsLive &&
                             score.MatchTime >= historyStartUtc &&
                             score.MatchTime < cutoffUtc)
-            .ToList();
+            .OrderByDescending(score => score.MatchTime)
+            .Select(score => new { score.Id, score.MatchTime })
+            .FirstOrDefault();
 
-        var aliasLookup = LoadTeamAliasLookup();
-        var results = new List<MatchResult>(scores.Count);
-        foreach (var score in scores)
-        {
-            if (TryParseScore(score.Score, out var homeGoals, out var awayGoals))
-            {
-                results.Add(new MatchResult(
-                    ResolveCanonicalTeamKey(score.HomeTeam, score.League, aliasLookup),
-                    ResolveCanonicalTeamKey(score.AwayTeam, score.League, aliasLookup),
-                    homeGoals,
-                    awayGoals,
-                    score.MatchTime,
-                    score.League));
-            }
-        }
-
-        if (results.Count == 0)
+        if (latestScoreInfo == null)
         {
             return EmptySignalSet.Instance;
         }
 
-        var halfLifeTuning = DixonColesModel.TuneHalfLife(results, cutoffUtc, _dixonColesOptions);
-        var effectiveDixonColesOptions = halfLifeTuning.Promoted
-            ? _dixonColesOptions with { HalfLifeDays = halfLifeTuning.SelectedHalfLifeDays }
-            : _dixonColesOptions;
-        var dixonColes = DixonColesModel.Fit(results, cutoffUtc, effectiveDixonColesOptions);
-        var elo = new EloRatingModel(_eloOptions).Train(results);
+        DixonColesModel? dixonColes = null;
+        EloRatingModel? elo = null;
+        IReadOnlyDictionary<string, string>? aliasLookup = null;
+
+        lock (CacheLock)
+        {
+            if (_cachedCore != null &&
+                _cachedCore.LatestScoreId == latestScoreInfo.Id &&
+                _cachedCore.LatestScoreTime == latestScoreInfo.MatchTime &&
+                Math.Abs((cutoffUtc - _cachedCore.CutoffUtc).TotalMinutes) < 60 &&
+                (nowUtc - _cachedCore.CachedAtUtc) < TimeSpan.FromHours(1))
+            {
+                dixonColes = _cachedCore.DixonColes;
+                elo = _cachedCore.Elo;
+                aliasLookup = _cachedCore.AliasLookup;
+            }
+        }
+
+        if (dixonColes == null || elo == null || aliasLookup == null)
+        {
+            var scores = _db.MatchScores
+                .AsNoTracking()
+                .Where(score => !score.IsLive &&
+                                score.MatchTime >= historyStartUtc &&
+                                score.MatchTime < cutoffUtc)
+                .ToList();
+
+            aliasLookup = LoadTeamAliasLookup();
+            var results = new List<MatchResult>(scores.Count);
+            foreach (var score in scores)
+            {
+                if (TryParseScore(score.Score, out var homeGoals, out var awayGoals))
+                {
+                    results.Add(new MatchResult(
+                        ResolveCanonicalTeamKey(score.HomeTeam, score.League, aliasLookup),
+                        ResolveCanonicalTeamKey(score.AwayTeam, score.League, aliasLookup),
+                        homeGoals,
+                        awayGoals,
+                        score.MatchTime,
+                        score.League));
+                }
+            }
+
+            if (results.Count == 0)
+            {
+                return EmptySignalSet.Instance;
+            }
+
+            var halfLifeTuning = DixonColesModel.TuneHalfLife(results, cutoffUtc, _dixonColesOptions);
+            var effectiveDixonColesOptions = halfLifeTuning.Promoted
+                ? _dixonColesOptions with { HalfLifeDays = halfLifeTuning.SelectedHalfLifeDays }
+                : _dixonColesOptions;
+            dixonColes = DixonColesModel.Fit(results, cutoffUtc, effectiveDixonColesOptions);
+            elo = new EloRatingModel(_eloOptions).Train(results);
+
+            lock (CacheLock)
+            {
+                _cachedCore = new CachedStatisticalCore
+                {
+                    CachedAtUtc = nowUtc,
+                    LatestScoreId = latestScoreInfo.Id,
+                    LatestScoreTime = latestScoreInfo.MatchTime,
+                    CutoffUtc = cutoffUtc,
+                    DixonColes = dixonColes,
+                    Elo = elo,
+                    AliasLookup = aliasLookup
+                };
+            }
+        }
 
         var signals = new Dictionary<string, MatchProbabilities>(StringComparer.OrdinalIgnoreCase);
         foreach (var match in upcoming)

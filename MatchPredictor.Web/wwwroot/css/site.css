@@ -3158,6 +3158,35 @@ a:hover {
   border-color: rgba(45, 212, 191, 0.55);
 }
 
+.mp-betslip-run-toggle-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+.mp-run-pill {
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-sm, 4px);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted, var(--text-secondary));
+  text-decoration: none;
+  font-size: 0.8rem;
+  font-weight: 600;
+  transition: all 0.15s ease;
+}
+
+.mp-run-pill:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.mp-run-pill.active {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border-color: rgba(45, 212, 191, 0.55);
+}
+
 .mp-betslip-records-body {
   display: grid;
   grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);

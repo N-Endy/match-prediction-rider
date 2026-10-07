@@ -58,11 +58,13 @@ public class ProbabilityCalculator : IProbabilityCalculator
         var totalXg = EstimateTotalXg(match, settings);
         if (totalXg <= 0)
         {
-            var sourceOver25 = match.TryGetNormalizedOver25Pair(out var overUnder25) ? overUnder25.over25 : 0.0;
+            var hasOverUnder = match.TryGetNormalizedOver25Pair(out var overUnder25);
+            var sourceOver25 = hasOverUnder ? overUnder25.over25 : 0.0;
+            var sourceUnder25 = hasOverUnder ? Math.Clamp(1.0 - sourceOver25, 0.0, 1.0) : 0.0;
             return new MatchProbabilities(
                 Btts: match.TryGetNormalizedBttsPair(out var bttsPair) ? bttsPair.yes : 0.0,
                 Over25: sourceOver25,
-                Under25: Math.Clamp(1.0 - sourceOver25, 0.0, 1.0),
+                Under25: sourceUnder25,
                 Draw: drawSource,
                 HomeWin: homeWinSource,
                 AwayWin: awayWinSource);

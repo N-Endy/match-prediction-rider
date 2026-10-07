@@ -108,8 +108,8 @@ public static class BetPricingMath
             }
             else
             {
-                var clusterAnchor = currentCluster[0].KickoffUtc;
-                if (Math.Abs((candidate.KickoffUtc - clusterAnchor).TotalMinutes) <= options.WindowToleranceMinutes)
+                var previousKickoff = currentCluster[^1].KickoffUtc;
+                if (Math.Abs((candidate.KickoffUtc - previousKickoff).TotalMinutes) <= options.WindowToleranceMinutes)
                 {
                     currentCluster.Add(candidate);
                 }

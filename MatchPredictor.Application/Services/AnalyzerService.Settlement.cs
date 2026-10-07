@@ -392,7 +392,12 @@ public partial class AnalyzerService
 
         foreach (var prediction in eligiblePredictionsForSettlement)
         {
-            RepairPredictionOutcomeFromStoredScore(prediction);
+            RepairPredictionOutcomeFromStoredScore(prediction, nowUtc, today);
+        }
+
+        foreach (var forecast in eligibleForecastsForSettlement)
+        {
+            RepairForecastOutcomeFromStoredScore(forecast, nowUtc, today);
         }
 
         var sourceQualityLookup = await LoadSourceQualityLookupAsync();
@@ -1442,10 +1447,23 @@ public partial class AnalyzerService
             bttsLabel);
     }
 
-    private void RepairPredictionOutcomeFromStoredScore(Prediction prediction)
+    private void RepairPredictionOutcomeFromStoredScore(Prediction prediction, DateTime utcNow, DateOnly today)
     {
-        if (prediction.IsLive || string.IsNullOrWhiteSpace(prediction.ActualScore) ||
-            !IsOutcomeMissing(prediction.ActualOutcome))
+        if (string.IsNullOrWhiteSpace(prediction.ActualScore))
+        {
+            return;
+        }
+
+        // Terminal reaper: if match was > 3.5 hours ago or from a past date, it can no longer be live.
+        var isTerminalMatch = prediction.MatchLocalDate < today ||
+            (prediction.MatchDateTime.HasValue && utcNow >= prediction.MatchDateTime.Value.AddHours(3.5));
+
+        if (prediction.IsLive && isTerminalMatch)
+        {
+            prediction.IsLive = false;
+        }
+
+        if (prediction.IsLive || !IsOutcomeMissing(prediction.ActualOutcome))
         {
             return;
         }
@@ -1454,6 +1472,30 @@ public partial class AnalyzerService
             prediction.PredictionCategory,
             prediction.ActualScore,
             null);
+    }
+
+    private void RepairForecastOutcomeFromStoredScore(ForecastObservation forecast, DateTime utcNow, DateOnly today)
+    {
+        if (string.IsNullOrWhiteSpace(forecast.ActualScore))
+        {
+            return;
+        }
+
+        var isTerminalMatch = forecast.MatchLocalDate < today ||
+            (forecast.MatchDateTime.HasValue && utcNow >= forecast.MatchDateTime.Value.AddHours(3.5));
+
+        if (forecast.IsLive && isTerminalMatch)
+        {
+            forecast.IsLive = false;
+        }
+
+        if (!forecast.IsSettled && !forecast.IsLive)
+        {
+            forecast.IsSettled = true;
+            forecast.SettledAt ??= utcNow;
+            forecast.OutcomeOccurred = DetermineForecastOutcomeOccurred(forecast.Market, forecast.ActualScore, false, forecast.PredictedOutcome);
+            forecast.ActualOutcome = DetermineForecastActualOutcome(forecast.Market, forecast.ActualScore, false);
+        }
     }
 
     private static bool NeedsPredictionSettlementRepair(Prediction prediction)
@@ -1531,11 +1573,11 @@ public partial class AnalyzerService
 
         forecast.IsSettled = true;
         forecast.SettledAt = DateTime.UtcNow;
-        forecast.OutcomeOccurred = DetermineForecastOutcomeOccurred(forecast.Market, settlementScore, bttsLabel);
+        forecast.OutcomeOccurred = DetermineForecastOutcomeOccurred(forecast.Market, settlementScore, bttsLabel, forecast.PredictedOutcome);
         forecast.ActualOutcome = DetermineForecastActualOutcome(forecast.Market, settlementScore, bttsLabel);
     }
 
-    private bool? DetermineForecastOutcomeOccurred(PredictionMarket market, string score, bool bttsLabel)
+    private bool? DetermineForecastOutcomeOccurred(PredictionMarket market, string score, bool bttsLabel, string? predictedOutcome = null)
     {
         switch (market)
         {
@@ -1571,6 +1613,13 @@ public partial class AnalyzerService
                     : null;
 
             case PredictionMarket.StraightWin:
+                if (!string.IsNullOrWhiteSpace(predictedOutcome) && TryParseScore(score, out var swHome, out var swAway))
+                {
+                    if (predictedOutcome.Contains("Home", StringComparison.OrdinalIgnoreCase) || predictedOutcome == "1")
+                        return swHome > swAway;
+                    if (predictedOutcome.Contains("Away", StringComparison.OrdinalIgnoreCase) || predictedOutcome == "2")
+                        return swAway > swHome;
+                }
                 return DetermineStraightWinOutcome(score) == "Home Win" || DetermineStraightWinOutcome(score) == "Away Win";
 
             default:
