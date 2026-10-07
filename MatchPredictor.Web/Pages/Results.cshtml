@@ -13,8 +13,8 @@
                 <h1>Settled published results</h1>
             </div>
             <p class="mp-page-subtext">
-                Last @Model.WindowDays days of published picks that have a final score.
-                Losses are included — this is not a highlights reel.
+                Last @Model.WindowDays days of published picks with final scores.
+                Losses are included — full transparency, no highlights reel.
             </p>
         </div>
         @if (Model.FromLocalDate.HasValue && Model.ToLocalDate.HasValue)
@@ -23,56 +23,97 @@
         }
     </div>
 
+    <!-- Overall Track Record Summary -->
     <div class="mp-results-summary">
         <div class="mp-results-stat">
             <strong>@Model.TotalCount</strong>
             <span>Settled picks</span>
         </div>
         <div class="mp-results-stat">
-            <strong>@Model.WinCount</strong>
+            <strong style="color:var(--accent-emerald);">@Model.WinCount</strong>
             <span>Correct</span>
         </div>
         <div class="mp-results-stat">
-            <strong>@Model.LossCount</strong>
+            <strong style="color:var(--accent-rose);">@Model.LossCount</strong>
             <span>Incorrect</span>
         </div>
         <div class="mp-results-stat">
-            <strong>@(Model.TotalCount == 0 ? "—" : $"{Model.OverallHitRate:P0}")</strong>
+            <strong style="color:var(--accent-cyan);">@(Model.TotalCount == 0 ? "—" : $"{Model.OverallHitRate:P0}")</strong>
             <span>Hit rate</span>
         </div>
     </div>
 
+    <!-- Interactive Market Performance Cards -->
     @if (Model.MarketSummaries.Count > 0)
     {
-        <section class="mp-legal-section" style="margin-bottom: 1.5rem;">
-            <h2 class="mp-section-heading" style="font-size: 1.1rem;">By market</h2>
-            <div class="mp-results-table-wrap">
-                <table class="mp-results-table">
-                    <thead>
-                        <tr>
-                            <th>Market</th>
-                            <th>Settled</th>
-                            <th>Correct</th>
-                            <th>Incorrect</th>
-                            <th>Hit rate</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    @foreach (var summary in Model.MarketSummaries)
-                    {
-                        <tr>
-                            <td>@summary.MarketLabel</td>
-                            <td>@summary.Total</td>
-                            <td>@summary.Wins</td>
-                            <td>@summary.Losses</td>
-                            <td>@($"{summary.HitRate:P0}")</td>
-                        </tr>
-                    }
-                    </tbody>
-                </table>
+        <section class="mp-results-markets-section" aria-label="Market Performance Breakdown">
+            <div class="mp-section-header-row">
+                <h2 class="mp-section-heading">Performance by market</h2>
+                <span class="mp-section-hint">Click a market card to filter results below</span>
+            </div>
+            <div class="mp-market-grid">
+                @foreach (var summary in Model.MarketSummaries)
+                {
+                    <div class="mp-market-card" data-market-filter="@summary.MarketLabel" role="button" tabindex="0" title="Filter by @summary.MarketLabel">
+                        <div class="mp-market-card-top">
+                            <span class="mp-market-card-name">@summary.MarketLabel</span>
+                            <span class="mp-market-card-rate @(summary.HitRate >= 0.65 ? "mp-rate-high" : summary.HitRate >= 0.5 ? "mp-rate-mid" : "mp-rate-low")">
+                                @($"{summary.HitRate:P0}")
+                            </span>
+                        </div>
+                        <div class="mp-market-card-bottom">
+                            <div class="mp-market-progress-bar">
+                                <div class="mp-market-progress-fill" style="width: @($"{Math.Min(100, summary.HitRate * 100):F0}%");"></div>
+                            </div>
+                            <span class="mp-market-card-record">
+                                <strong style="color:var(--accent-emerald);">@summary.Wins</strong> / @summary.Total settled
+                            </span>
+                        </div>
+                    </div>
+                }
             </div>
         </section>
     }
+
+    <!-- Filtering & Search Toolbar -->
+    <div class="mp-results-toolbar" id="results-filter-toolbar">
+        <div class="mp-toolbar-row">
+            <!-- Market Pills -->
+            <div class="mp-filter-group" role="tablist" aria-label="Market Filters" id="market-filter-group">
+                <button type="button" class="mp-filter-pill active" data-filter-type="market" data-filter-val="all">All markets (@Model.TotalCount)</button>
+                @foreach (var summary in Model.MarketSummaries)
+                {
+                    <button type="button" class="mp-filter-pill" data-filter-type="market" data-filter-val="@summary.MarketLabel">
+                        @summary.MarketLabel (@summary.Total)
+                    </button>
+                }
+            </div>
+        </div>
+
+        <div class="mp-toolbar-row mp-toolbar-secondary">
+            <!-- Outcome Toggle -->
+            <div class="mp-filter-group" role="tablist" aria-label="Outcome Filters" id="outcome-filter-group">
+                <button type="button" class="mp-filter-pill mp-pill-outcome active" data-filter-type="outcome" data-filter-val="all">All outcomes</button>
+                <button type="button" class="mp-filter-pill mp-pill-outcome mp-pill-win" data-filter-type="outcome" data-filter-val="win">✓ Correct only (@Model.WinCount)</button>
+                <button type="button" class="mp-filter-pill mp-pill-outcome mp-pill-loss" data-filter-type="outcome" data-filter-val="loss">✗ Incorrect only (@Model.LossCount)</button>
+            </div>
+
+            <!-- Search input -->
+            <div class="mp-search-wrap">
+                <svg class="mp-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="mp-results-search" class="mp-search-input" placeholder="Search team or league..." autocomplete="off" />
+                <button type="button" id="mp-results-search-clear" class="mp-search-clear" style="display:none;" aria-label="Clear search">✕</button>
+            </div>
+        </div>
+
+        <!-- Filter readout count -->
+        <div class="mp-filter-status" id="mp-filter-status">
+            <span>Showing <strong id="mp-visible-count">@Model.TotalCount</strong> of @Model.TotalCount settled picks</span>
+            <button type="button" id="mp-filter-reset" class="mp-filter-reset-link" style="display:none;">Reset filters</button>
+        </div>
+    </div>
 
     @if (Model.Rows.Count == 0)
     {
@@ -87,36 +128,133 @@
     }
     else
     {
-        <div class="mp-results-table-wrap">
-            <table class="mp-results-table">
-                <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th>Fixture</th>
-                        <th>Market</th>
-                        <th>Pick</th>
-                        <th>Score</th>
-                        <th>Result</th>
-                    </tr>
-                </thead>
-                <tbody>
-                @foreach (var row in Model.Rows)
-                {
-                    var p = row.Prediction;
-                    <tr>
-                        <td>@row.DateLabel</td>
-                        <td>@p.HomeTeam vs @p.AwayTeam <span style="color:var(--text-muted);font-size:0.8rem;">(@p.League)</span></td>
-                        <td>@row.MarketLabel</td>
-                        <td>@p.PredictedOutcome</td>
-                        <td>@(p.ActualScore ?? "—")</td>
-                        <td class="@(row.IsWin ? "mp-results-win" : "mp-results-loss")">
-                            @(row.IsWin ? "Correct" : "Incorrect")
-                        </td>
-                    </tr>
-                }
-                </tbody>
-            </table>
+        <!-- Empty State for filtered results -->
+        <div id="mp-no-results-match" class="mp-empty-state" style="display:none;">
+            <div class="mp-empty-state-icon">🔍</div>
+            <p>No settled picks found matching your search and filter criteria.</p>
+            <button type="button" class="mp-btn mp-btn-outline" style="margin-top:1rem;" onclick="resetAllResultsFilters()">Reset all filters</button>
         </div>
+
+        <!-- Day-by-Day Groups -->
+        <div id="mp-results-days-container" class="mp-results-days-container">
+            @for (var i = 0; i < Model.DayGroups.Count; i++)
+            {
+                var day = Model.DayGroups[i];
+                var isHiddenByDefault = i >= 5; // Progressive loading: show first 5 days initially
+                <div class="mp-results-day-group @(isHiddenByDefault ? "mp-day-hidden" : "")" data-day-index="@i" data-day-date="@day.Date.ToString("yyyy-MM-dd")">
+                    <header class="mp-results-day-header" role="button" tabindex="0" aria-expanded="true">
+                        <div class="mp-results-day-title">
+                            <span class="mp-day-calendar-icon">📅</span>
+                            <span>@day.DateHeading</span>
+                            @if (!string.IsNullOrWhiteSpace(day.RelativeLabel) && day.RelativeLabel != day.Date.ToString("ddd"))
+                            {
+                                <span class="mp-day-badge-rel">@day.RelativeLabel</span>
+                            }
+                        </div>
+                        <div class="mp-results-day-stats">
+                            <span class="mp-day-badge-record @(day.HitRate >= 0.6 ? "mp-record-good" : "")">
+                                @day.WinCount / @day.TotalCount Won (@($"{day.HitRate:P0}"))
+                            </span>
+                            <span class="mp-day-badge-count">@day.TotalCount picks</span>
+                            <span class="mp-day-chevron" aria-hidden="true">▾</span>
+                        </div>
+                    </header>
+
+                    <div class="mp-results-day-content">
+                        <!-- Desktop Table View -->
+                        <div class="mp-results-desktop-table-wrap">
+                            <table class="mp-results-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 80px;">Time</th>
+                                        <th style="width: 140px;">League</th>
+                                        <th>Fixture</th>
+                                        <th style="width: 110px;">Market</th>
+                                        <th style="width: 120px;">Pick</th>
+                                        <th style="width: 90px; text-align: center;">Score</th>
+                                        <th style="width: 110px; text-align: right;">Outcome</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                @foreach (var row in day.Rows)
+                                {
+                                    var p = row.Prediction;
+                                    <tr class="mp-result-item" 
+                                        data-market="@row.MarketLabel" 
+                                        data-outcome="@(row.IsWin ? "win" : "loss")" 
+                                        data-search="@($"{p.HomeTeam} {p.AwayTeam} {p.League}".ToLowerInvariant())">
+                                        <td class="mp-cell-time">@row.KickoffTime</td>
+                                        <td class="mp-cell-league" title="@p.League"><span class="mp-league-pill">@p.League</span></td>
+                                        <td class="mp-cell-fixture">
+                                            <div class="mp-fixture-teams">
+                                                <span class="mp-team mp-home">@p.HomeTeam</span>
+                                                <span class="mp-vs">vs</span>
+                                                <span class="mp-team mp-away">@p.AwayTeam</span>
+                                            </div>
+                                        </td>
+                                        <td><span class="mp-badge-market">@row.MarketLabel</span></td>
+                                        <td><strong>@p.PredictedOutcome</strong></td>
+                                        <td style="text-align: center;"><span class="mp-score-badge">@(p.ActualScore ?? "—")</span></td>
+                                        <td style="text-align: right;">
+                                            <span class="mp-outcome-badge @(row.IsWin ? "mp-badge-win" : "mp-badge-loss")">
+                                                @(row.IsWin ? "✓ Correct" : "✗ Incorrect")
+                                            </span>
+                                        </td>
+                                    </tr>
+                                }
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Mobile Card View -->
+                        <div class="mp-results-mobile-list">
+                            @foreach (var row in day.Rows)
+                            {
+                                var p = row.Prediction;
+                                <div class="mp-result-item mp-mobile-card" 
+                                     data-market="@row.MarketLabel" 
+                                     data-outcome="@(row.IsWin ? "win" : "loss")" 
+                                     data-search="@($"{p.HomeTeam} {p.AwayTeam} {p.League}".ToLowerInvariant())">
+                                    <div class="mp-mobile-card-top">
+                                        <span class="mp-league-pill">@p.League</span>
+                                        <span class="mp-cell-time">@row.KickoffTime</span>
+                                    </div>
+                                    <div class="mp-mobile-card-fixture">
+                                        <div class="mp-mobile-teams">
+                                            <div class="mp-team-row"><span>@p.HomeTeam</span></div>
+                                            <div class="mp-team-row"><span>@p.AwayTeam</span></div>
+                                        </div>
+                                        <div class="mp-score-badge mp-score-mobile">
+                                            @(p.ActualScore ?? "—")
+                                        </div>
+                                    </div>
+                                    <div class="mp-mobile-card-bottom">
+                                        <div class="mp-mobile-pick">
+                                            <span class="mp-badge-market">@row.MarketLabel</span>
+                                            <strong>@p.PredictedOutcome</strong>
+                                        </div>
+                                        <span class="mp-outcome-badge @(row.IsWin ? "mp-badge-win" : "mp-badge-loss")">
+                                            @(row.IsWin ? "✓ Correct" : "✗ Incorrect")
+                                        </span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <!-- Progressive Load More Button -->
+        @if (Model.DayGroups.Count > 5)
+        {
+            <div class="mp-load-more-wrap" id="mp-load-more-wrap">
+                <button type="button" id="mp-load-more-btn" class="mp-load-more-btn">
+                    <span>📅 Load older dates (+5 days)</span>
+                    <span class="mp-load-more-count" id="mp-load-more-count">(@(Model.DayGroups.Count - 5) days remaining)</span>
+                </button>
+            </div>
+        }
     }
 
     <section class="mp-market-explainer" aria-labelledby="results-notes-heading">
@@ -138,3 +276,259 @@
         </p>
     </section>
 </div>
+
+@section Scripts {
+<script>
+    (function () {
+        let selectedMarket = 'all';
+        let selectedOutcome = 'all';
+        let searchQuery = '';
+        let visibleDaysCount = 5;
+        const totalDays = @Model.DayGroups.Count;
+
+        const dayGroups = document.querySelectorAll('.mp-results-day-group');
+        const marketPills = document.querySelectorAll('#market-filter-group .mp-filter-pill');
+        const outcomePills = document.querySelectorAll('#outcome-filter-group .mp-filter-pill');
+        const marketCards = document.querySelectorAll('.mp-market-card');
+        const searchInput = document.getElementById('mp-results-search');
+        const searchClear = document.getElementById('mp-results-search-clear');
+        const resetBtn = document.getElementById('mp-filter-reset');
+        const visibleCountEl = document.getElementById('mp-visible-count');
+        const noResultsMatchEl = document.getElementById('mp-no-results-match');
+        const loadMoreBtn = document.getElementById('mp-load-more-btn');
+        const loadMoreWrap = document.getElementById('mp-load-more-wrap');
+        const loadMoreCount = document.getElementById('mp-load-more-count');
+
+        // Accordion Toggle
+        dayGroups.forEach(group => {
+            const header = group.querySelector('.mp-results-day-header');
+            if (header) {
+                header.addEventListener('click', () => {
+                    group.classList.toggle('collapsed');
+                    header.setAttribute('aria-expanded', !group.classList.contains('collapsed'));
+                });
+                header.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        group.classList.toggle('collapsed');
+                        header.setAttribute('aria-expanded', !group.classList.contains('collapsed'));
+                    }
+                });
+            }
+        });
+
+        // Market Pills Click
+        marketPills.forEach(pill => {
+            pill.addEventListener('click', () => {
+                marketPills.forEach(p => p.classList.remove('active'));
+                pill.classList.add('active');
+                selectedMarket = pill.getAttribute('data-filter-val');
+                syncMarketCardsActive();
+                applyFilters();
+            });
+        });
+
+        // Market Cards Click (top cards)
+        marketCards.forEach(card => {
+            card.addEventListener('click', () => {
+                const targetMarket = card.getAttribute('data-market-filter');
+                if (selectedMarket === targetMarket) {
+                    selectedMarket = 'all';
+                } else {
+                    selectedMarket = targetMarket;
+                }
+                syncMarketPillsActive();
+                syncMarketCardsActive();
+                applyFilters();
+                // Smooth scroll to toolbar
+                const toolbar = document.getElementById('results-filter-toolbar');
+                if (toolbar) {
+                    toolbar.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+            });
+        });
+
+        // Outcome Pills Click
+        outcomePills.forEach(pill => {
+            pill.addEventListener('click', () => {
+                outcomePills.forEach(p => p.classList.remove('active'));
+                pill.classList.add('active');
+                selectedOutcome = pill.getAttribute('data-filter-val');
+                applyFilters();
+            });
+        });
+
+        // Search Input
+        if (searchInput) {
+            searchInput.addEventListener('input', () => {
+                searchQuery = searchInput.value.trim().toLowerCase();
+                if (searchClear) {
+                    searchClear.style.display = searchQuery ? 'block' : 'none';
+                }
+                applyFilters();
+            });
+        }
+
+        if (searchClear) {
+            searchClear.addEventListener('click', () => {
+                searchInput.value = '';
+                searchQuery = '';
+                searchClear.style.display = 'none';
+                applyFilters();
+                searchInput.focus();
+            });
+        }
+
+        // Reset Filters Button
+        if (resetBtn) {
+            resetBtn.addEventListener('click', resetAllFilters);
+        }
+
+        window.resetAllResultsFilters = resetAllFilters;
+
+        function resetAllFilters() {
+            selectedMarket = 'all';
+            selectedOutcome = 'all';
+            searchQuery = '';
+            if (searchInput) searchInput.value = '';
+            if (searchClear) searchClear.style.display = 'none';
+
+            syncMarketPillsActive();
+            syncMarketCardsActive();
+            outcomePills.forEach(p => {
+                if (p.getAttribute('data-filter-val') === 'all') p.classList.add('active');
+                else p.classList.remove('active');
+            });
+
+            applyFilters();
+        }
+
+        function syncMarketPillsActive() {
+            marketPills.forEach(p => {
+                if (p.getAttribute('data-filter-val') === selectedMarket) {
+                    p.classList.add('active');
+                } else {
+                    p.classList.remove('active');
+                }
+            });
+        }
+
+        function syncMarketCardsActive() {
+            marketCards.forEach(c => {
+                if (c.getAttribute('data-market-filter') === selectedMarket) {
+                    c.classList.add('active');
+                } else {
+                    c.classList.remove('active');
+                }
+            });
+        }
+
+        // Progressive Load More Days
+        if (loadMoreBtn) {
+            loadMoreBtn.addEventListener('click', () => {
+                visibleDaysCount += 5;
+                updateProgressiveVisibility();
+                applyFilters();
+            });
+        }
+
+        function updateProgressiveVisibility() {
+            dayGroups.forEach((group, idx) => {
+                if (idx < visibleDaysCount) {
+                    group.classList.remove('mp-day-hidden');
+                } else {
+                    group.classList.add('mp-day-hidden');
+                }
+            });
+
+            if (loadMoreWrap) {
+                if (visibleDaysCount >= totalDays) {
+                    loadMoreWrap.style.display = 'none';
+                } else {
+                    loadMoreWrap.style.display = 'flex';
+                    if (loadMoreCount) {
+                        loadMoreCount.textContent = `(${totalDays - visibleDaysCount} days remaining)`;
+                    }
+                }
+            }
+        }
+
+        // Core Filtering Engine
+        function applyFilters() {
+            let totalVisible = 0;
+            const isFiltered = (selectedMarket !== 'all' || selectedOutcome !== 'all' || searchQuery.length > 0);
+
+            if (resetBtn) {
+                resetBtn.style.display = isFiltered ? 'inline-block' : 'none';
+            }
+
+            dayGroups.forEach((group, idx) => {
+                const items = group.querySelectorAll('.mp-result-item');
+                let dayMatches = 0;
+
+                items.forEach(item => {
+                    const itemMarket = item.getAttribute('data-market');
+                    const itemOutcome = item.getAttribute('data-outcome');
+                    const itemSearch = item.getAttribute('data-search') || '';
+
+                    const marketMatch = (selectedMarket === 'all' || itemMarket === selectedMarket);
+                    const outcomeMatch = (selectedOutcome === 'all' || itemOutcome === selectedOutcome);
+                    const searchMatch = (!searchQuery || itemSearch.includes(searchQuery));
+
+                    if (marketMatch && outcomeMatch && searchMatch) {
+                        item.style.display = '';
+                        dayMatches++;
+                    } else {
+                        item.style.display = 'none';
+                    }
+                });
+
+                // If filtering is active, unhide any day with matching items regardless of progressive limit
+                // and expand it so results are immediately visible
+                if (isFiltered) {
+                    if (dayMatches > 0) {
+                        group.classList.remove('mp-day-hidden');
+                        group.style.display = '';
+                        group.classList.remove('collapsed');
+                        totalVisible += dayMatches;
+                    } else {
+                        group.style.display = 'none';
+                    }
+                } else {
+                    // Default browsing mode: adhere to progressive loading
+                    group.style.display = '';
+                    if (idx < visibleDaysCount) {
+                        group.classList.remove('mp-day-hidden');
+                    } else {
+                        group.classList.add('mp-day-hidden');
+                    }
+                    if (idx < visibleDaysCount) {
+                        totalVisible += dayMatches;
+                    }
+                }
+            });
+
+            // Count & empty state handling
+            if (visibleCountEl) {
+                visibleCountEl.textContent = isFiltered ? totalVisible : @Model.TotalCount;
+            }
+
+            if (noResultsMatchEl) {
+                noResultsMatchEl.style.display = (totalVisible === 0 && isFiltered) ? 'block' : 'none';
+            }
+
+            // Hide/show load more button when filters are active
+            if (loadMoreWrap) {
+                if (isFiltered) {
+                    loadMoreWrap.style.display = 'none';
+                } else {
+                    loadMoreWrap.style.display = visibleDaysCount < totalDays ? 'flex' : 'none';
+                }
+            }
+        }
+
+        // Initialize
+        updateProgressiveVisibility();
+    })();
+</script>
+}
