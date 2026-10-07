@@ -30,9 +30,9 @@
         BetslipBookingStatuses.Guide => "mp-betslip-status-guide",
         _ => isSgm ? "mp-betslip-status-guide" : "mp-betslip-status-failed"
     };
-    var displayStatus = Model.BookingStatus == BetslipBookingStatuses.Guide || isSgm
-        ? "Builder Guide"
-        : Model.BookingStatus;
+    var displayStatus = !string.IsNullOrWhiteSpace(Model.BookingCode)
+        ? Model.BookingStatus
+        : (isSgm || Model.BookingStatus == BetslipBookingStatuses.Guide ? "Builder Guide" : Model.BookingStatus);
     var bookedCount = Model.Selections.Count(s => s.WasBooked);
     var cardClass = isRollover
         ? "mp-betslip-card mp-betslip-card-rollover"
@@ -153,7 +153,32 @@
         <p class="mp-betslip-ai-summary">@Model.AiSummary</p>
     }
 
-    @if (isSgm || Model.BookingStatus == BetslipBookingStatuses.Guide)
+    @if (!string.IsNullOrWhiteSpace(Model.BookingCode))
+    {
+        <div class="mp-betslip-code-row">
+            <code class="mp-betslip-code" id="betslip-code-@Model.Id">@Model.BookingCode</code>
+            <div class="mp-betslip-code-actions">
+                <button type="button"
+                        class="mp-betslip-copy-btn"
+                        data-copy-target="betslip-code-@Model.Id">
+                    Copy
+                </button>
+                @{
+                    var resolvedBookingUrl = !string.IsNullOrWhiteSpace(Model.BookingUrl)
+                        && !Model.BookingUrl.TrimEnd('/').EndsWith("/sport/football", StringComparison.OrdinalIgnoreCase)
+                            ? Model.BookingUrl
+                            : $"https://www.sportybet.com/ng/?shareCode={Model.BookingCode}";
+                }
+                <a class="mp-book-btn"
+                   href="@resolvedBookingUrl"
+                   target="_blank"
+                   rel="noopener noreferrer">
+                    @openSlipLabel
+                </a>
+            </div>
+        </div>
+    }
+    else if (isSgm || Model.BookingStatus == BetslipBookingStatuses.Guide)
     {
         <div class="mp-betslip-code-row mp-betslip-guide-row">
             <span class="mp-betslip-guide-badge">
@@ -168,28 +193,9 @@
                 </a>
             </div>
         </div>
-    }
-    else if (!string.IsNullOrWhiteSpace(Model.BookingCode))
-    {
-        <div class="mp-betslip-code-row">
-            <code class="mp-betslip-code" id="betslip-code-@Model.Id">@Model.BookingCode</code>
-            <div class="mp-betslip-code-actions">
-                <button type="button"
-                        class="mp-betslip-copy-btn"
-                        data-copy-target="betslip-code-@Model.Id">
-                    Copy
-                </button>
-                @if (!string.IsNullOrWhiteSpace(Model.BookingUrl))
-                {
-                    <a class="mp-book-btn"
-                       href="@Model.BookingUrl"
-                       target="_blank"
-                       rel="noopener noreferrer">
-                        @openSlipLabel
-                    </a>
-                }
-            </div>
-        </div>
+        <p class="mp-betslip-warning" style="margin-top: 0.35rem;">
+            Auto-booking code unavailable for this fixture; combine the selections above in SportyBet Bet Builder.
+        </p>
     }
     else
     {

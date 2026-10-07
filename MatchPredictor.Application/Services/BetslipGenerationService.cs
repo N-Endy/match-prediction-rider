@@ -987,47 +987,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
     private async Task<Betslip?> BookAndBuildSlipAsync(ComposedBetslip composed, BetslipSettings settings)
     {
-        if (composed.IsSgm)
-        {
-            var sgmOdds = Math.Round(composed.TargetCombinedOdds ?? 2.50, 2);
-            var sgmSelections = composed.Selections.Select(c => new BetslipSelection
-            {
-                PredictionId = c.PredictionId,
-                League = c.League,
-                HomeTeam = c.HomeTeam,
-                AwayTeam = c.AwayTeam,
-                Market = c.Market,
-                PredictedOutcome = c.PredictedOutcome,
-                ConfidenceScore = c.Confidence,
-                MatchDateTimeUtc = c.MatchDateTimeUtc,
-                DecimalOdds = sgmOdds,
-                AiNote = c.AiNote,
-                WasBooked = true
-            }).ToList();
-
-            return new Betslip
-            {
-                SlipNumber = composed.SlipNumber,
-                Title = composed.Title,
-                TierLabel = composed.TierLabel,
-                TargetMinSelections = composed.TargetMinSelections,
-                TargetMaxSelections = composed.TargetMaxSelections,
-                SelectionCount = sgmSelections.Count,
-                BookingCode = string.Empty,
-                BookingUrl = "https://www.sportybet.com/ng/sport/football",
-                BookingStatus = BetslipBookingStatuses.Guide,
-                StatusMessage = "Bet Builder Guide: Combine these correlated selections in your bookmaker's Bet Builder.",
-                EarliestKickoffUtc = sgmSelections
-                    .Where(s => s.MatchDateTimeUtc.HasValue)
-                    .Select(s => (DateTime?)s.MatchDateTimeUtc!.Value)
-                    .DefaultIfEmpty(null)
-                    .Min(),
-                CombinedDecimalOdds = sgmOdds,
-                AiSummary = composed.AiSummary,
-                Selections = sgmSelections
-            };
-        }
-
+        var sgmOdds = composed.IsSgm ? Math.Round(composed.TargetCombinedOdds ?? 2.50, 2) : 1.0;
         var selections = composed.Selections.Select(c => new BetslipSelection
         {
             PredictionId = c.PredictionId,
@@ -1038,7 +998,7 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             PredictedOutcome = c.PredictedOutcome,
             ConfidenceScore = c.Confidence,
             MatchDateTimeUtc = c.MatchDateTimeUtc,
-            DecimalOdds = c.DecimalOdds,
+            DecimalOdds = composed.IsSgm ? sgmOdds : c.DecimalOdds,
             AiNote = c.AiNote,
             WasBooked = false
         }).ToList();
@@ -1106,6 +1066,14 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 ? BetslipBookingStatuses.Partial
                 : BetslipBookingStatuses.Booked;
         }
+        else if (composed.IsSgm)
+        {
+            bookingStatus = BetslipBookingStatuses.Guide;
+            foreach (var selection in selections)
+            {
+                selection.WasBooked = true;
+            }
+        }
         else
         {
             bookingStatus = BetslipBookingStatuses.Failed;
@@ -1126,17 +1094,24 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         {
             statusParts.Add("Booking code unavailable; retrying next run.");
         }
+        else if (bookingStatus == BetslipBookingStatuses.Guide)
+        {
+            statusParts.Add("Bet Builder Guide: Combine these correlated selections in your bookmaker's Bet Builder.");
+        }
 
         double? combinedOdds = composed.TargetCombinedOdds;
-        var oddsValues = selections.Where(s => s.WasBooked && s.DecimalOdds is > 1).Select(s => s.DecimalOdds!.Value).ToList();
-        if (oddsValues.Count > 0 && oddsValues.Count == bookedCount)
+        if (!composed.IsSgm)
         {
-            combinedOdds = oddsValues.Aggregate(1d, (acc, odds) => acc * odds);
-        }
-        else if (oddsValues.Count > 0)
-        {
-            // Partial booking: recompute from booked picks only.
-            combinedOdds = oddsValues.Aggregate(1d, (acc, odds) => acc * odds);
+            var oddsValues = selections.Where(s => s.WasBooked && s.DecimalOdds is > 1).Select(s => s.DecimalOdds!.Value).ToList();
+            if (oddsValues.Count > 0 && oddsValues.Count == bookedCount)
+            {
+                combinedOdds = oddsValues.Aggregate(1d, (acc, odds) => acc * odds);
+            }
+            else if (oddsValues.Count > 0)
+            {
+                // Partial booking: recompute from booked picks only.
+                combinedOdds = oddsValues.Aggregate(1d, (acc, odds) => acc * odds);
+            }
         }
 
         if ((composed.IsBanker || composed.IsRollover) &&
@@ -1171,6 +1146,13 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             return null;
         }
 
+        var bookingCode = bookingResult.BookingCode ?? string.Empty;
+        var bookingUrl = !string.IsNullOrWhiteSpace(bookingResult.BookingUrl)
+            ? bookingResult.BookingUrl
+            : !string.IsNullOrWhiteSpace(bookingCode)
+                ? $"https://www.sportybet.com/ng/?shareCode={bookingCode}"
+                : (composed.IsSgm ? "https://www.sportybet.com/ng/sport/football" : string.Empty);
+
         return new Betslip
         {
             SlipNumber = composed.SlipNumber,
@@ -1179,8 +1161,8 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             TargetMinSelections = composed.TargetMinSelections,
             TargetMaxSelections = composed.TargetMaxSelections,
             SelectionCount = selections.Count,
-            BookingCode = bookingResult.BookingCode ?? string.Empty,
-            BookingUrl = bookingResult.BookingUrl ?? string.Empty,
+            BookingCode = bookingCode,
+            BookingUrl = bookingUrl,
             BookingStatus = bookingStatus,
             StatusMessage = string.Join(" ", statusParts).Trim(),
             EarliestKickoffUtc = selections

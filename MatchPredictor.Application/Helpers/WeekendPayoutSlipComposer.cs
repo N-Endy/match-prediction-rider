@@ -487,10 +487,10 @@ public static class WeekendPayoutSlipComposer
 
     private static double ResolvePackingScore(BetslipComposerCandidate candidate)
     {
-        // Normalize both ResearchScore (0–100) and Confidence (0–1 -> 0–100) to consistent 0–100 scale.
-        var baseScore = candidate.ResearchScore ?? ((double)candidate.Confidence * 100d);
+        // Researched picks (0–100 scale) take precedence over raw unvetted picks (0–1 scale).
+        var baseScore = candidate.ResearchScore ?? (double)candidate.Confidence;
         var ev = BetPricingMath.CalculateExpectedValuePercent((double)candidate.Confidence, candidate.DecimalOdds) ?? 0d;
-        return baseScore + (Math.Max(ev, -50d) * 0.1d);
+        return baseScore + (Math.Max(ev, -50d) * 0.001d);
     }
 
     private static string ResolveFixtureKey(BetslipComposerCandidate candidate) =>

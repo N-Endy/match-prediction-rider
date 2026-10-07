@@ -164,15 +164,18 @@
                         data-copy-target="record-betslip-code-@slip.Id">
                     Copy
                 </button>
-                @if (!string.IsNullOrWhiteSpace(slip.BookingUrl))
-                {
-                    <a class="mp-book-btn"
-                       href="@slip.BookingUrl"
-                       target="_blank"
-                       rel="noopener noreferrer">
-                        @openSlipLabel
-                    </a>
+                @{
+                    var resolvedBookingUrl = !string.IsNullOrWhiteSpace(slip.BookingUrl)
+                        && !slip.BookingUrl.TrimEnd('/').EndsWith("/sport/football", StringComparison.OrdinalIgnoreCase)
+                            ? slip.BookingUrl
+                            : $"https://www.sportybet.com/ng/?shareCode={slip.BookingCode}";
                 }
+                <a class="mp-book-btn"
+                   href="@resolvedBookingUrl"
+                   target="_blank"
+                   rel="noopener noreferrer">
+                    @openSlipLabel
+                </a>
             </div>
         </div>
     }
