@@ -26,19 +26,19 @@
     <!-- Overall Track Record Summary -->
     <div class="mp-results-summary">
         <div class="mp-results-stat">
-            <strong>@Model.TotalCount</strong>
+            <strong id="mp-stat-total">@Model.TotalCount</strong>
             <span>Settled picks</span>
         </div>
         <div class="mp-results-stat">
-            <strong style="color:var(--accent-emerald);">@Model.WinCount</strong>
+            <strong id="mp-stat-wins" style="color:var(--accent-emerald);">@Model.WinCount</strong>
             <span>Correct</span>
         </div>
         <div class="mp-results-stat">
-            <strong style="color:var(--accent-rose);">@Model.LossCount</strong>
+            <strong id="mp-stat-losses" style="color:var(--accent-rose);">@Model.LossCount</strong>
             <span>Incorrect</span>
         </div>
         <div class="mp-results-stat">
-            <strong style="color:var(--accent-cyan);">@(Model.TotalCount == 0 ? "—" : $"{Model.OverallHitRate:P0}")</strong>
+            <strong id="mp-stat-rate" style="color:var(--accent-cyan);">@(Model.TotalCount == 0 ? "—" : $"{Model.OverallHitRate:P0}")</strong>
             <span>Hit rate</span>
         </div>
     </div>
@@ -152,10 +152,12 @@
                             }
                         </div>
                         <div class="mp-results-day-stats">
-                            <span class="mp-day-badge-record @(day.HitRate >= 0.6 ? "mp-record-good" : "")">
+                            <span class="mp-day-badge-record @(day.HitRate >= 0.6 ? "mp-record-good" : "")"
+                                  data-initial-text="@day.WinCount / @day.TotalCount Won (@($"{day.HitRate:P0}"))"
+                                  data-initial-good="@(day.HitRate >= 0.6 ? "true" : "false")">
                                 @day.WinCount / @day.TotalCount Won (@($"{day.HitRate:P0}"))
                             </span>
-                            <span class="mp-day-badge-count">@day.TotalCount picks</span>
+                            <span class="mp-day-badge-count" data-initial-text="@day.TotalCount picks">@day.TotalCount picks</span>
                             <span class="mp-day-chevron" aria-hidden="true">▾</span>
                         </div>
                     </header>
@@ -455,7 +457,8 @@
 
         // Core Filtering Engine
         function applyFilters() {
-            let totalVisible = 0;
+            let totalFilteredPicks = 0;
+            let totalFilteredWins = 0;
             const isFiltered = (selectedMarket !== 'all' || selectedOutcome !== 'all' || searchQuery.length > 0);
 
             if (resetBtn) {
@@ -463,25 +466,60 @@
             }
 
             dayGroups.forEach((group, idx) => {
-                const items = group.querySelectorAll('.mp-result-item');
+                const desktopRows = group.querySelectorAll('tbody tr.mp-result-item');
+                const mobileCards = group.querySelectorAll('.mp-results-mobile-list .mp-result-item');
                 let dayMatches = 0;
+                let dayWins = 0;
 
-                items.forEach(item => {
-                    const itemMarket = item.getAttribute('data-market');
-                    const itemOutcome = item.getAttribute('data-outcome');
-                    const itemSearch = item.getAttribute('data-search') || '';
+                desktopRows.forEach((row, i) => {
+                    const mobileCard = mobileCards[i];
+                    const itemMarket = row.getAttribute('data-market');
+                    const itemOutcome = row.getAttribute('data-outcome');
+                    const itemSearch = row.getAttribute('data-search') || '';
 
                     const marketMatch = (selectedMarket === 'all' || itemMarket === selectedMarket);
                     const outcomeMatch = (selectedOutcome === 'all' || itemOutcome === selectedOutcome);
                     const searchMatch = (!searchQuery || itemSearch.includes(searchQuery));
+                    const isVisible = (marketMatch && outcomeMatch && searchMatch);
 
-                    if (marketMatch && outcomeMatch && searchMatch) {
-                        item.style.display = '';
+                    if (isVisible) {
+                        row.style.display = '';
+                        if (mobileCard) mobileCard.style.display = '';
                         dayMatches++;
+                        if (itemOutcome === 'win') {
+                            dayWins++;
+                        }
                     } else {
-                        item.style.display = 'none';
+                        row.style.display = 'none';
+                        if (mobileCard) mobileCard.style.display = 'none';
                     }
                 });
+
+                // Dynamically update day header stats badge and percentage
+                const badgeRecord = group.querySelector('.mp-day-badge-record');
+                const badgeCount = group.querySelector('.mp-day-badge-count');
+
+                if (badgeRecord && badgeCount) {
+                    if (isFiltered) {
+                        const dayHitRate = dayMatches === 0 ? 0 : Math.round((dayWins / dayMatches) * 100);
+                        badgeRecord.textContent = `${dayWins} / ${dayMatches} Won (${dayHitRate}%)`;
+                        if (dayHitRate >= 60 && dayMatches > 0) {
+                            badgeRecord.classList.add('mp-record-good');
+                        } else {
+                            badgeRecord.classList.remove('mp-record-good');
+                        }
+                        badgeCount.textContent = `${dayMatches} pick${dayMatches === 1 ? '' : 's'}`;
+                    } else {
+                        // Restore initial values
+                        badgeRecord.textContent = badgeRecord.getAttribute('data-initial-text');
+                        if (badgeRecord.getAttribute('data-initial-good') === 'true') {
+                            badgeRecord.classList.add('mp-record-good');
+                        } else {
+                            badgeRecord.classList.remove('mp-record-good');
+                        }
+                        badgeCount.textContent = badgeCount.getAttribute('data-initial-text');
+                    }
+                }
 
                 // If filtering is active, unhide any day with matching items regardless of progressive limit
                 // and expand it so results are immediately visible
@@ -490,7 +528,8 @@
                         group.classList.remove('mp-day-hidden');
                         group.style.display = '';
                         group.classList.remove('collapsed');
-                        totalVisible += dayMatches;
+                        totalFilteredPicks += dayMatches;
+                        totalFilteredWins += dayWins;
                     } else {
                         group.style.display = 'none';
                     }
@@ -499,22 +538,41 @@
                     group.style.display = '';
                     if (idx < visibleDaysCount) {
                         group.classList.remove('mp-day-hidden');
+                        totalFilteredPicks += dayMatches;
+                        totalFilteredWins += dayWins;
                     } else {
                         group.classList.add('mp-day-hidden');
-                    }
-                    if (idx < visibleDaysCount) {
-                        totalVisible += dayMatches;
                     }
                 }
             });
 
+            // Dynamically update top summary stats when filtered
+            const statTotal = document.getElementById('mp-stat-total');
+            const statWins = document.getElementById('mp-stat-wins');
+            const statLosses = document.getElementById('mp-stat-losses');
+            const statRate = document.getElementById('mp-stat-rate');
+
+            if (isFiltered) {
+                const totalLosses = totalFilteredPicks - totalFilteredWins;
+                const overallRate = totalFilteredPicks === 0 ? 0 : Math.round((totalFilteredWins / totalFilteredPicks) * 100);
+                if (statTotal) statTotal.textContent = totalFilteredPicks;
+                if (statWins) statWins.textContent = totalFilteredWins;
+                if (statLosses) statLosses.textContent = totalLosses;
+                if (statRate) statRate.textContent = `${overallRate}%`;
+            } else {
+                if (statTotal) statTotal.textContent = @Model.TotalCount;
+                if (statWins) statWins.textContent = @Model.WinCount;
+                if (statLosses) statLosses.textContent = @Model.LossCount;
+                if (statRate) statRate.textContent = "@(Model.TotalCount == 0 ? "—" : $"{Model.OverallHitRate:P0}")";
+            }
+
             // Count & empty state handling
             if (visibleCountEl) {
-                visibleCountEl.textContent = isFiltered ? totalVisible : @Model.TotalCount;
+                visibleCountEl.textContent = isFiltered ? totalFilteredPicks : @Model.TotalCount;
             }
 
             if (noResultsMatchEl) {
-                noResultsMatchEl.style.display = (totalVisible === 0 && isFiltered) ? 'block' : 'none';
+                noResultsMatchEl.style.display = (totalFilteredPicks === 0 && isFiltered) ? 'block' : 'none';
             }
 
             // Hide/show load more button when filters are active
