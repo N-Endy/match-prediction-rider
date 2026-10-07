@@ -16,4 +16,7 @@ public class MatchScore
     public string LeagueKey { get; set; } = string.Empty;
     public bool BTTSLabel { get; set; }
     public bool IsLive { get; set; }
+    public string? RegularTimeScore { get; set; }
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public bool IsExtraTime { get; set; }
 }

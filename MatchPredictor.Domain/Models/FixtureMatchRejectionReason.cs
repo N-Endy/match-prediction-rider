@@ -9,5 +9,6 @@ public enum FixtureMatchRejectionReason
     AmbiguousMargin,
     ReciprocalMismatch,
     DateMiss,
-    NoCandidates
+    NoCandidates,
+    ScoreFormatMismatch
 }

@@ -180,15 +180,23 @@
     }
     else if (isSgm || Model.BookingStatus == BetslipBookingStatuses.Guide)
     {
+        var firstPick = Model.Selections.FirstOrDefault();
+        var guideUrl = !string.IsNullOrWhiteSpace(Model.BookingUrl)
+            && !Model.BookingUrl.TrimEnd('/').EndsWith("/sport/football", StringComparison.OrdinalIgnoreCase)
+                ? Model.BookingUrl
+                : (firstPick != null && !string.IsNullOrWhiteSpace(firstPick.HomeTeam)
+                    ? $"https://www.sportybet.com/ng/sport/football?search={Uri.EscapeDataString(firstPick.HomeTeam)}"
+                    : "https://www.sportybet.com/ng/sport/football");
         <div class="mp-betslip-code-row mp-betslip-guide-row">
             <span class="mp-betslip-guide-badge">
                 <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Bet Builder Guide
             </span>
             <div class="mp-betslip-code-actions">
                 <a class="mp-book-btn"
-                   href="@(string.IsNullOrWhiteSpace(Model.BookingUrl) ? "https://www.sportybet.com/ng/sport/football" : Model.BookingUrl)"
+                   href="@guideUrl"
                    target="_blank"
-                   rel="noopener noreferrer">
+                   rel="noopener noreferrer"
+                   title="Open fixture in SportyBet to build these picks in Bet Builder">
                     Open in SportyBet
                 </a>
             </div>

@@ -21,7 +21,7 @@ public partial class AnalyzerService
     /// [now - trail, now + lead]. Outside that window, hourly backfill covers leftovers.
     /// </summary>
     private static readonly TimeSpan LiveScrapeLead = TimeSpan.FromMinutes(20);
-    private static readonly TimeSpan LiveScrapeTrail = TimeSpan.FromHours(3.5);
+    private static readonly TimeSpan LiveScrapeTrail = TimeSpan.FromHours(4.5);
     private static readonly TimeSpan AdjacentDateKickoffTolerance = TimeSpan.FromHours(4);
     private const int MaxFlashScoreListingPagesPerRun = 7;
 
@@ -123,7 +123,7 @@ public partial class AnalyzerService
 
         var today = DateOnly.FromDateTime(DateTimeProvider.GetLocalTime());
         var earliestSettlementDate = today.AddDays(-lookbackDays);
-        var settlementDates = Enumerable.Range(0, lookbackDays + 1)
+        var settlementDates = Enumerable.Range(0, lookbackDays + 2)
             .Select(offset => earliestSettlementDate.AddDays(offset))
             .ToHashSet();
 
@@ -230,9 +230,10 @@ public partial class AnalyzerService
     /// </summary>
     private async Task<IReadOnlyList<DateOnly>> ResolveFlashScoreListingDatesAsync(int lookbackDays)
     {
-        var today = DateOnly.FromDateTime(DateTimeProvider.GetLocalTime());
+        var nowLocal = DateTimeProvider.GetLocalTime();
+        var today = DateOnly.FromDateTime(nowLocal);
         var earliestSettlementDate = today.AddDays(-lookbackDays);
-        var settlementDates = Enumerable.Range(0, lookbackDays + 1)
+        var settlementDates = Enumerable.Range(0, lookbackDays + 2)
             .Select(offset => earliestSettlementDate.AddDays(offset))
             .ToHashSet();
 
@@ -262,13 +263,22 @@ public partial class AnalyzerService
             .Distinct()
             .ToListAsync();
 
+        var maxDate = (nowLocal.Hour >= 22) ? today.AddDays(1) : today;
+
         var dates = predictionDates
             .Concat(forecastDates)
-            .Where(date => date != default && date >= earliestSettlementDate && date <= today)
+            .Where(date => date != default && date >= earliestSettlementDate && date <= maxDate)
             .Distinct()
             .OrderByDescending(date => date)
             .Take(MaxFlashScoreListingPagesPerRun)
             .ToList();
+
+        // If running during early morning (00:00 - 06:00 WAT), always ensure yesterday is included
+        // so late-night finishes from yesterday evening are scraped even if earlier fixtures are settled.
+        if (nowLocal.Hour <= 6 && !dates.Contains(today.AddDays(-1)))
+        {
+            dates.Add(today.AddDays(-1));
+        }
 
         if (dates.Count == 0)
         {
@@ -345,6 +355,8 @@ public partial class AnalyzerService
 
         var startOfWindowUtc = DateTimeProvider.ConvertLocalToUtc(earliestSettlementDate.ToDateTime(new TimeOnly(0, 0), DateTimeKind.Unspecified));
         var endOfWindowUtc = DateTimeProvider.ConvertLocalToUtc(today.AddDays(1).ToDateTime(new TimeOnly(0, 0), DateTimeKind.Unspecified));
+        var queryStartUtc = startOfWindowUtc.AddHours(-12);
+        var queryEndUtc = endOfWindowUtc.AddHours(12);
 
         if (_teamResolutionService is not null)
         {
@@ -405,7 +417,8 @@ public partial class AnalyzerService
 
         // ── Primary: FlashScore (faster final-status updates) ──
         var scores = await _dbContext.MatchScores
-            .Where(s => s.MatchTime >= startOfWindowUtc && s.MatchTime < endOfWindowUtc)
+            .Where(s => (s.MatchTime >= queryStartUtc && s.MatchTime < queryEndUtc) ||
+                        (s.MatchLocalDate != default && settlementDates.Contains(s.MatchLocalDate)))
             .ToListAsync();
 
         var consolidatedFlashScores = ConsolidateFixtureSnapshots(
@@ -475,9 +488,18 @@ public partial class AnalyzerService
                         score => score.IsLive,
                         aliasLookup))
                 {
-                    ApplyFixtureSettlement(fixture, flashMatch.Score, flashMatch.BTTSLabel, flashMatch.IsLive, "FlashScore", null);
-                    flashMatchedFixtures++;
-                    unmatchedDiagnostics.Remove(fixture);
+                    if (flashMatch.IsExtraTime && string.IsNullOrWhiteSpace(flashMatch.RegularTimeScore))
+                    {
+                        // Match ended in extra time but FlashScore mobile did not provide the 90m regular time subscore.
+                        // Skip FlashScore settlement so fallback sources (AiScore/SofaScore/API-Football) supply the true 90-minute score.
+                        unmatchedDiagnostics[fixture] = (FixtureMatchRejectionReason.ScoreFormatMismatch, "FlashScore match concluded after extra time without explicit 90m regular-time score.");
+                    }
+                    else
+                    {
+                        ApplyFixtureSettlement(fixture, flashMatch.Score, flashMatch.BTTSLabel, flashMatch.IsLive, "FlashScore", null, flashMatch.RegularTimeScore);
+                        flashMatchedFixtures++;
+                        unmatchedDiagnostics.Remove(fixture);
+                    }
                 }
                 else if (flashMatch is null)
                 {
@@ -494,7 +516,8 @@ public partial class AnalyzerService
 
         // ── Fallback: AiScore for any fixtures still missing a score or still marked live ──
         var aiScores = await _dbContext.AiScoreMatchScores
-            .Where(s => s.MatchTime >= startOfWindowUtc && s.MatchTime < endOfWindowUtc)
+            .Where(s => (s.MatchTime >= queryStartUtc && s.MatchTime < queryEndUtc) ||
+                        (s.MatchLocalDate != default && settlementDates.Contains(s.MatchLocalDate)))
             .ToListAsync();
 
         var consolidatedAiScores = ConsolidateFixtureSnapshots(
@@ -1044,6 +1067,7 @@ public partial class AnalyzerService
 
             var regularTimeScore = resolved switch
             {
+                MatchScore flashScore => flashScore.RegularTimeScore,
                 AiScoreMatchScore aiScore => aiScore.RegularTimeScore,
                 _ => null
             };
@@ -1165,6 +1189,7 @@ public partial class AnalyzerService
 
             var regularTimeScore = resolved switch
             {
+                MatchScore flashScore => flashScore.RegularTimeScore,
                 AiScoreMatchScore aiScore => aiScore.RegularTimeScore,
                 _ => null
             };
@@ -1732,12 +1757,17 @@ public partial class AnalyzerService
                 if (ShouldOverwriteStoredScore(existingRecord.Score, existingRecord.BTTSLabel, existingRecord.IsLive, existingRecord.MatchTime, incomingScore))
                 {
                     existingRecord.Score = incomingScore.Score;
+                    existingRecord.RegularTimeScore = incomingScore.RegularTimeScore;
                     existingRecord.IsLive = incomingScore.IsLive;
                     existingRecord.BTTSLabel = incomingScore.BTTSLabel;
                     existingRecord.HomeTeam = incomingScore.HomeTeam;
                     existingRecord.AwayTeam = incomingScore.AwayTeam;
                     existingRecord.League = incomingScore.League;
                     ScoreSnapshotKeyFactory.Apply(existingRecord);
+                }
+                else if (!string.IsNullOrWhiteSpace(incomingScore.RegularTimeScore) && string.IsNullOrWhiteSpace(existingRecord.RegularTimeScore))
+                {
+                    existingRecord.RegularTimeScore = incomingScore.RegularTimeScore;
                 }
             }
             else

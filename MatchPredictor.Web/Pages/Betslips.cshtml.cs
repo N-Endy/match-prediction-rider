@@ -44,8 +44,8 @@ public class BetslipsModel : PageModel
         string? record = null,
         DateOnly? date = null,
         string? month = null,
-        CancellationToken ct = default,
-        string? run = null)
+        string? run = null,
+        CancellationToken ct = default)
     {
         ApplyStake();
         await LoadCurrentSetAsync(run, ct);

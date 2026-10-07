@@ -53,6 +53,9 @@ public class DataAnalyzerServiceTests
     public void OverTwoGoals_CarriesRawAndCalibratedProbability()
     {
         var match = CreateMatch();
+        match.OverTwoGoals = 0.55;
+        match.UnderTwoGoals = 0.45;
+        match.NormalizeSourceProbabilities();
         var service = new DataAnalyzerService(
             new FakeProbabilityCalculator
             {
@@ -84,6 +87,9 @@ public class DataAnalyzerServiceTests
     public void OverTwoGoals_PreservesExistingNormalizedWatTime()
     {
         var match = CreateMatch();
+        match.OverTwoGoals = 0.55;
+        match.UnderTwoGoals = 0.45;
+        match.NormalizeSourceProbabilities();
         match.Time = "19:00";
         match.MatchDateTime = new DateTime(2026, 3, 12, 18, 0, 0, DateTimeKind.Utc);
 

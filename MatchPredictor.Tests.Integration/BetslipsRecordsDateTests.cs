@@ -29,7 +29,7 @@ public class BetslipsRecordsDateTests
         await context.SaveChangesAsync();
 
         var page = CreatePage(context);
-        await page.OnGetAsync("ladder", date: null, month: null, CancellationToken.None);
+        await page.OnGetAsync("ladder", date: null, month: null, run: null, ct: CancellationToken.None);
 
         Assert.Equal(BetslipRecordSection.Ladder, page.RecordSection);
         Assert.Equal(threeDaysAgo, page.RecordDate);
@@ -47,7 +47,7 @@ public class BetslipsRecordsDateTests
         await context.SaveChangesAsync();
 
         var page = CreatePage(context);
-        await page.OnGetAsync("rollover", date: threeDaysAgo, month: null, CancellationToken.None);
+        await page.OnGetAsync("rollover", date: threeDaysAgo, month: null, run: null, ct: CancellationToken.None);
 
         Assert.Equal(BetslipRecordSection.Rollover, page.RecordSection);
         Assert.Equal(today, page.RecordDate);
