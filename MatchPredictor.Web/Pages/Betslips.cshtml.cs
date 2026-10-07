@@ -40,15 +40,12 @@ public class BetslipsModel : PageModel
 
     public string RecordSectionSlug => BetslipKinds.ToSlug(RecordSection);
 
-    public Task OnGetAsync(string? record, DateOnly? date, string? month, CancellationToken ct) =>
-        OnGetAsync(record, date, month, run: null, ct);
-
     public async Task OnGetAsync(
         string? record = null,
         DateOnly? date = null,
         string? month = null,
-        string? run = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? run = null)
     {
         ApplyStake();
         await LoadCurrentSetAsync(run, ct);
