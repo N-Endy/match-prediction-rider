@@ -124,6 +124,7 @@ public sealed class SameGameMultiService : ISameGameMultiService
 
         SameGameMultiLeg[][] candidateSets =
         [
+            // Home-favored 2-leg combinations
             [
                 new(SameGameMultiMarket.HomeWin, "Home Win"),
                 new(SameGameMultiMarket.Over15Goals, "Over 1.5 Goals")
@@ -141,13 +142,57 @@ public sealed class SameGameMultiService : ISameGameMultiService
                 new(SameGameMultiMarket.HomeOver15Goals, "Home Score 2+ Goals")
             ],
             [
-                new(SameGameMultiMarket.DoubleChance1X, "Home / Draw"),
+                new(SameGameMultiMarket.HomeWin, "Home Win"),
                 new(SameGameMultiMarket.Under35Goals, "Under 3.5 Goals")
             ],
             [
                 new(SameGameMultiMarket.DoubleChance1X, "Home / Draw"),
                 new(SameGameMultiMarket.Over15Goals, "Over 1.5 Goals")
             ],
+            [
+                new(SameGameMultiMarket.DoubleChance1X, "Home / Draw"),
+                new(SameGameMultiMarket.Under35Goals, "Under 3.5 Goals")
+            ],
+            [
+                new(SameGameMultiMarket.DoubleChance1X, "Home / Draw"),
+                new(SameGameMultiMarket.BothTeamsScoreYes, "Both Teams To Score")
+            ],
+
+            // Away-favored 2-leg combinations
+            [
+                new(SameGameMultiMarket.AwayWin, "Away Win"),
+                new(SameGameMultiMarket.Over15Goals, "Over 1.5 Goals")
+            ],
+            [
+                new(SameGameMultiMarket.AwayWin, "Away Win"),
+                new(SameGameMultiMarket.Over25Goals, "Over 2.5 Goals")
+            ],
+            [
+                new(SameGameMultiMarket.AwayWin, "Away Win"),
+                new(SameGameMultiMarket.BothTeamsScoreYes, "Both Teams To Score")
+            ],
+            [
+                new(SameGameMultiMarket.AwayWin, "Away Win"),
+                new(SameGameMultiMarket.AwayOver15Goals, "Away Score 2+ Goals")
+            ],
+            [
+                new(SameGameMultiMarket.AwayWin, "Away Win"),
+                new(SameGameMultiMarket.Under35Goals, "Under 3.5 Goals")
+            ],
+            [
+                new(SameGameMultiMarket.DoubleChanceX2, "Away / Draw"),
+                new(SameGameMultiMarket.Over15Goals, "Over 1.5 Goals")
+            ],
+            [
+                new(SameGameMultiMarket.DoubleChanceX2, "Away / Draw"),
+                new(SameGameMultiMarket.Under35Goals, "Under 3.5 Goals")
+            ],
+            [
+                new(SameGameMultiMarket.DoubleChanceX2, "Away / Draw"),
+                new(SameGameMultiMarket.BothTeamsScoreYes, "Both Teams To Score")
+            ],
+
+            // Neutral / Goals 2-leg combinations
             [
                 new(SameGameMultiMarket.BothTeamsScoreYes, "Both Teams To Score"),
                 new(SameGameMultiMarket.Over25Goals, "Over 2.5 Goals")
@@ -157,13 +202,10 @@ public sealed class SameGameMultiService : ISameGameMultiService
                 new(SameGameMultiMarket.Under25Goals, "Under 2.5 Goals")
             ],
             [
-                new(SameGameMultiMarket.AwayWin, "Away Win"),
-                new(SameGameMultiMarket.Over15Goals, "Over 1.5 Goals")
-            ],
-            [
-                new(SameGameMultiMarket.AwayWin, "Away Win"),
+                new(SameGameMultiMarket.Draw, "Draw"),
                 new(SameGameMultiMarket.BothTeamsScoreYes, "Both Teams To Score")
             ],
+
             // 3-leg combinations
             [
                 new(SameGameMultiMarket.HomeWin, "Home Win"),
@@ -172,6 +214,16 @@ public sealed class SameGameMultiService : ISameGameMultiService
             ],
             [
                 new(SameGameMultiMarket.DoubleChance1X, "Home / Draw"),
+                new(SameGameMultiMarket.BothTeamsScoreYes, "Both Teams To Score"),
+                new(SameGameMultiMarket.Over25Goals, "Over 2.5 Goals")
+            ],
+            [
+                new(SameGameMultiMarket.AwayWin, "Away Win"),
+                new(SameGameMultiMarket.BothTeamsScoreYes, "Both Teams To Score"),
+                new(SameGameMultiMarket.Over25Goals, "Over 2.5 Goals")
+            ],
+            [
+                new(SameGameMultiMarket.DoubleChanceX2, "Away / Draw"),
                 new(SameGameMultiMarket.BothTeamsScoreYes, "Both Teams To Score"),
                 new(SameGameMultiMarket.Over25Goals, "Over 2.5 Goals")
             ]

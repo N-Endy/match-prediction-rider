@@ -10,8 +10,11 @@
     var isBanker = Model.SlipNumber == BetslipGenerationService.BankerSlipNumber
                    || Model.TierLabel.StartsWith("Banker", StringComparison.OrdinalIgnoreCase);
     var isDrawSlip = string.Equals(Model.TierLabel, "AI Draws (5)", StringComparison.Ordinal);
+    var isSgm = Model.SlipNumber == BetslipGenerationService.SgmSlipNumber
+                || Model.TierLabel.Contains("SGM", StringComparison.OrdinalIgnoreCase)
+                || Model.TierLabel.Contains("Bet Builder", StringComparison.OrdinalIgnoreCase);
     var isMega = Model.TierLabel.StartsWith("Mega", StringComparison.OrdinalIgnoreCase);
-    var isPayoutBand = !isBanker && !isRollover && !isDrawSlip && Model.CombinedDecimalOdds is > 1;
+    var isPayoutBand = !isBanker && !isRollover && !isDrawSlip && !isSgm && Model.CombinedDecimalOdds is > 1;
     var referenceStake = ViewData["ReferenceStakeNaira"] as decimal? ?? 100m;
     var estimatedReturn = isPayoutBand
         ? referenceStake * (decimal)Model.CombinedDecimalOdds!.Value
@@ -24,8 +27,12 @@
     {
         BetslipBookingStatuses.Booked => "mp-betslip-status-booked",
         BetslipBookingStatuses.Partial => "mp-betslip-status-partial",
-        _ => "mp-betslip-status-failed"
+        BetslipBookingStatuses.Guide => "mp-betslip-status-guide",
+        _ => isSgm ? "mp-betslip-status-guide" : "mp-betslip-status-failed"
     };
+    var displayStatus = Model.BookingStatus == BetslipBookingStatuses.Guide || isSgm
+        ? "Builder Guide"
+        : Model.BookingStatus;
     var bookedCount = Model.Selections.Count(s => s.WasBooked);
     var cardClass = isRollover
         ? "mp-betslip-card mp-betslip-card-rollover"
@@ -33,9 +40,11 @@
             ? "mp-betslip-card mp-betslip-card-banker"
             : isDrawSlip
                 ? "mp-betslip-card mp-betslip-card-ai"
-                : isMega
-                    ? "mp-betslip-card mp-betslip-card-mega"
-                    : "mp-betslip-card";
+                : isSgm
+                    ? "mp-betslip-card mp-betslip-card-sgm"
+                    : isMega
+                        ? "mp-betslip-card mp-betslip-card-mega"
+                        : "mp-betslip-card";
 
     static string FormatNaira(decimal amount)
     {
@@ -59,14 +68,14 @@
             <span class="mp-betslip-tier">@displayTierLabel</span>
             <h2 class="mp-betslip-title">@Model.Title</h2>
         </div>
-        <span class="mp-betslip-status @statusClass">@Model.BookingStatus</span>
+        <span class="mp-betslip-status @statusClass">@displayStatus</span>
     </header>
 
-    @if ((isBanker || isRollover) && Model.CombinedDecimalOdds is > 1)
+    @if ((isBanker || isRollover || isSgm) && Model.CombinedDecimalOdds is > 1)
     {
-        <div class="@(isRollover ? "mp-betslip-rollover-odds" : "mp-betslip-banker-odds")">
-            <span class="@(isRollover ? "mp-betslip-rollover-odds-value" : "mp-betslip-banker-odds-value")">@Model.CombinedDecimalOdds.Value.ToString("0.00")x</span>
-            <span class="@(isRollover ? "mp-betslip-rollover-odds-label" : "mp-betslip-banker-odds-label")">@(isRollover ? "single-leg odds" : "total odds")</span>
+        <div class="@(isRollover ? "mp-betslip-rollover-odds" : isSgm ? "mp-betslip-sgm-odds" : "mp-betslip-banker-odds")">
+            <span class="@(isRollover ? "mp-betslip-rollover-odds-value" : isSgm ? "mp-betslip-sgm-odds-value" : "mp-betslip-banker-odds-value")">@Model.CombinedDecimalOdds.Value.ToString("0.00")x</span>
+            <span class="@(isRollover ? "mp-betslip-rollover-odds-label" : isSgm ? "mp-betslip-sgm-odds-label" : "mp-betslip-banker-odds-label")">@(isRollover ? "single-leg odds" : isSgm ? "fair builder odds" : "total odds")</span>
         </div>
     }
 
@@ -96,7 +105,7 @@
         <div>
             <span class="mp-betslip-metric-label">Picks</span>
             <strong>@Model.SelectionCount</strong>
-            @if (!isBanker && !isRollover && !isPayoutBand)
+            @if (!isBanker && !isRollover && !isSgm && !isPayoutBand)
             {
                 <span class="mp-betslip-metric-hint">target @Model.TargetMinSelections–@Model.TargetMaxSelections</span>
             }
@@ -144,7 +153,23 @@
         <p class="mp-betslip-ai-summary">@Model.AiSummary</p>
     }
 
-    @if (!string.IsNullOrWhiteSpace(Model.BookingCode))
+    @if (isSgm || Model.BookingStatus == BetslipBookingStatuses.Guide)
+    {
+        <div class="mp-betslip-code-row mp-betslip-guide-row">
+            <span class="mp-betslip-guide-badge">
+                <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Bet Builder Guide
+            </span>
+            <div class="mp-betslip-code-actions">
+                <a class="mp-book-btn"
+                   href="@(string.IsNullOrWhiteSpace(Model.BookingUrl) ? "https://www.sportybet.com/ng/sport/football" : Model.BookingUrl)"
+                   target="_blank"
+                   rel="noopener noreferrer">
+                    Open in SportyBet
+                </a>
+            </div>
+        </div>
+    }
+    else if (!string.IsNullOrWhiteSpace(Model.BookingCode))
     {
         <div class="mp-betslip-code-row">
             <code class="mp-betslip-code" id="betslip-code-@Model.Id">@Model.BookingCode</code>
@@ -176,7 +201,7 @@
         <p class="mp-betslip-status-message">@Model.StatusMessage</p>
     }
 
-    <details class="mp-betslip-details"@(isBanker || isRollover ? " open" : "")>
+    <details class="mp-betslip-details"@(isBanker || isRollover || isSgm ? " open" : "")>
         <summary>View @Model.SelectionCount selections</summary>
         <ul class="mp-betslip-selection-list">
             @foreach (var selection in Model.Selections
@@ -199,7 +224,9 @@
                         <span>@selection.League</span>
                         @if (selection.ConfidenceScore.HasValue)
                         {
-                            <span>@((selection.ConfidenceScore.Value * 100m).ToString("0.0"))%</span>
+                            var confVal = selection.ConfidenceScore.Value;
+                            var confPct = confVal > 1m ? confVal : confVal * 100m;
+                            <span>@confPct.ToString("0.0")%</span>
                         }
                         @if (selection.DecimalOdds is > 1)
                         {

@@ -2774,6 +2774,59 @@ a:hover {
   color: #f87171;
 }
 
+.mp-betslip-status-guide {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
+
+.mp-betslip-card-sgm {
+  border-color: rgba(59, 130, 246, 0.45);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.15);
+}
+
+.mp-betslip-sgm-odds {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--radius-sm, 8px);
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.mp-betslip-sgm-odds-value {
+  font-size: 2rem;
+  font-weight: 800;
+  color: #60a5fa;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.mp-betslip-sgm-odds-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mp-betslip-guide-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.mp-betslip-guide-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #60a5fa;
+}
+
 .mp-betslip-metrics {
   display: flex;
   flex-wrap: wrap;

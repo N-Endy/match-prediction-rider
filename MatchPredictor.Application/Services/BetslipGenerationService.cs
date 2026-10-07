@@ -985,6 +985,47 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
     private async Task<Betslip?> BookAndBuildSlipAsync(ComposedBetslip composed, BetslipSettings settings)
     {
+        if (composed.IsSgm)
+        {
+            var sgmOdds = Math.Round(composed.TargetCombinedOdds ?? 2.50, 2);
+            var sgmSelections = composed.Selections.Select(c => new BetslipSelection
+            {
+                PredictionId = c.PredictionId,
+                League = c.League,
+                HomeTeam = c.HomeTeam,
+                AwayTeam = c.AwayTeam,
+                Market = c.Market,
+                PredictedOutcome = c.PredictedOutcome,
+                ConfidenceScore = c.Confidence,
+                MatchDateTimeUtc = c.MatchDateTimeUtc,
+                DecimalOdds = sgmOdds,
+                AiNote = c.AiNote,
+                WasBooked = true
+            }).ToList();
+
+            return new Betslip
+            {
+                SlipNumber = composed.SlipNumber,
+                Title = composed.Title,
+                TierLabel = composed.TierLabel,
+                TargetMinSelections = composed.TargetMinSelections,
+                TargetMaxSelections = composed.TargetMaxSelections,
+                SelectionCount = sgmSelections.Count,
+                BookingCode = string.Empty,
+                BookingUrl = "https://www.sportybet.com/ng/sport/football",
+                BookingStatus = BetslipBookingStatuses.Guide,
+                StatusMessage = "Bet Builder Guide: Combine these correlated selections in your bookmaker's Bet Builder.",
+                EarliestKickoffUtc = sgmSelections
+                    .Where(s => s.MatchDateTimeUtc.HasValue)
+                    .Select(s => (DateTime?)s.MatchDateTimeUtc!.Value)
+                    .DefaultIfEmpty(null)
+                    .Min(),
+                CombinedDecimalOdds = sgmOdds,
+                AiSummary = composed.AiSummary,
+                Selections = sgmSelections
+            };
+        }
+
         var selections = composed.Selections.Select(c => new BetslipSelection
         {
             PredictionId = c.PredictionId,
@@ -2025,9 +2066,12 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             return null;
         }
 
+        // Marquee match hierarchy:
+        // Tier 1 (UEFA / Big 5) -> Tier 2 (Eredivisie / Championship / etc.) -> Highest Model Confidence
         var marqueeGroup = predictions
             .GroupBy(p => p.FixtureKey, StringComparer.OrdinalIgnoreCase)
-            .OrderByDescending(g => g.Count())
+            .OrderByDescending(g => GetLeagueTierScore(g.First().League))
+            .ThenByDescending(g => g.Count())
             .ThenByDescending(g => g.Average(p => (double)(p.ConfidenceScore ?? 0.5m)))
             .FirstOrDefault();
 
@@ -2037,31 +2081,41 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         }
 
         var marqueeFixture = marqueeGroup.First();
-        var homeWinPred = marqueeGroup.FirstOrDefault(p =>
-            string.Equals(p.PredictionCategory, "StraightWin", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(p.PredictedOutcome, "Home", StringComparison.OrdinalIgnoreCase));
-        var awayWinPred = marqueeGroup.FirstOrDefault(p =>
-            string.Equals(p.PredictionCategory, "StraightWin", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(p.PredictedOutcome, "Away", StringComparison.OrdinalIgnoreCase));
+        var straightWinPred = marqueeGroup.FirstOrDefault(p =>
+            string.Equals(p.PredictionCategory, "StraightWin", StringComparison.OrdinalIgnoreCase));
         var over25Pred = marqueeGroup.FirstOrDefault(p =>
             string.Equals(p.PredictionCategory, "Over2.5Goals", StringComparison.OrdinalIgnoreCase));
 
         var over25Prob = over25Pred?.ConfidenceScore != null
-            ? (double)over25Pred.ConfidenceScore.Value / (over25Pred.ConfidenceScore.Value > 1m ? 100d : 1d)
+            ? (double)(over25Pred.ConfidenceScore.Value > 1m ? over25Pred.ConfidenceScore.Value / 100m : over25Pred.ConfidenceScore.Value)
             : 0.52;
 
-        var homeProb = homeWinPred?.ConfidenceScore != null
-            ? (double)homeWinPred.ConfidenceScore.Value / (homeWinPred.ConfidenceScore.Value > 1m ? 100d : 1d)
-            : 0.45;
+        var predictedDirection = straightWinPred?.PredictedOutcome?.Trim().ToLowerInvariant() ?? string.Empty;
+        var straightWinConfidence = straightWinPred?.ConfidenceScore != null
+            ? (double)(straightWinPred.ConfidenceScore.Value > 1m ? straightWinPred.ConfidenceScore.Value / 100m : straightWinPred.ConfidenceScore.Value)
+            : 0.40;
 
-        var awayProb = awayWinPred?.ConfidenceScore != null
-            ? (double)awayWinPred.ConfidenceScore.Value / (awayWinPred.ConfidenceScore.Value > 1m ? 100d : 1d)
-            : 0.28;
+        double homeProb, awayProb;
+        if (predictedDirection.Contains("home") || predictedDirection == "1")
+        {
+            homeProb = Math.Clamp(straightWinConfidence, 0.40, 0.85);
+            awayProb = Math.Clamp(1.0 - homeProb - 0.22, 0.05, 0.40);
+        }
+        else if (predictedDirection.Contains("away") || predictedDirection == "2")
+        {
+            awayProb = Math.Clamp(straightWinConfidence, 0.40, 0.85);
+            homeProb = Math.Clamp(1.0 - awayProb - 0.22, 0.05, 0.40);
+        }
+        else
+        {
+            homeProb = 0.35;
+            awayProb = 0.35;
+        }
 
         var totalXg = Math.Clamp(1.8 + (over25Prob - 0.4) * 2.5, 1.2, 3.8);
-        var homeShare = Math.Clamp((homeProb + 0.1) / (homeProb + awayProb + 0.2), 0.3, 0.7);
-        var homeLambda = Math.Clamp(totalXg * homeShare, 0.5, 3.0);
-        var awayMu = Math.Clamp(totalXg * (1.0 - homeShare), 0.5, 3.0);
+        var homeShare = Math.Clamp((homeProb + 0.1) / (homeProb + awayProb + 0.2), 0.15, 0.85);
+        var homeLambda = Math.Clamp(totalXg * homeShare, 0.4, 3.2);
+        var awayMu = Math.Clamp(totalXg * (1.0 - homeShare), 0.4, 3.2);
 
         var curated = _sameGameMultiService.FindCuratedCombinations(homeLambda, awayMu, -0.11, 2.0, 6.0);
         if (curated.Count == 0)
@@ -2069,7 +2123,29 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             return null;
         }
 
-        var bestCombo = curated.OrderByDescending(c => c.ExactJointProbability).First();
+        // Directional alignment: Only accept combinations matching the favored team
+        var alignedCombos = curated.Where(c => IsComboAlignedWithDirection(c, predictedDirection)).ToList();
+        if (alignedCombos.Count == 0)
+        {
+            alignedCombos = curated.ToList();
+        }
+
+        // Target Balanced Value band (2.2x - 4.5x)
+        const double targetMinOdds = 2.2;
+        const double targetMaxOdds = 4.5;
+        var inBand = alignedCombos
+            .Where(c => c.FairDecimalOdds >= targetMinOdds && c.FairDecimalOdds <= targetMaxOdds)
+            .ToList();
+
+        var pool = inBand.Count > 0 ? inBand : alignedCombos;
+        // Rank by balanced value score: joint probability * sqrt(odds)
+        var bestCombo = pool
+            .OrderByDescending(c => c.ExactJointProbability * Math.Sqrt(Math.Min(c.FairDecimalOdds, 4.5)))
+            .First();
+
+        var jointProb = Math.Clamp(bestCombo.ExactJointProbability, 0.01, 0.99);
+        var fairOdds = Math.Round(bestCombo.FairDecimalOdds, 2);
+
         var candidates = bestCombo.Legs.Select(leg => new BetslipComposerCandidate
         {
             PredictionId = marqueeFixture.Id,
@@ -2080,8 +2156,8 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             Market = leg.Market.ToString(),
             PredictedOutcome = leg.DisplayName,
             PredictionCategory = "BetBuilder",
-            Confidence = (decimal)Math.Round(bestCombo.ExactJointProbability * 100.0, 2),
-            DecimalOdds = bestCombo.FairDecimalOdds,
+            Confidence = (decimal)Math.Round(jointProb, 4),
+            DecimalOdds = fairOdds,
             MatchDateTimeUtc = marqueeFixture.MatchDateTime,
             AiNote = $"SGM Leg: {leg.DisplayName}"
         }).ToList();
@@ -2095,10 +2171,88 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             TargetMaxSelections = bestCombo.Legs.Count,
             Selections = candidates,
             IsSgm = true,
-            TargetCombinedOdds = bestCombo.FairDecimalOdds,
-            JointProbability = bestCombo.ExactJointProbability,
-            AiSummary = $"Same-Game Multi (Dixon-Coles exact score matrix): joint probability {bestCombo.ExactJointProbability:P1} (fair odds {bestCombo.FairDecimalOdds:0.00}). Legs: {string.Join(" + ", bestCombo.Legs.Select(l => l.DisplayName))}"
+            TargetCombinedOdds = fairOdds,
+            JointProbability = jointProb,
+            AiSummary = $"Same-Game Multi (Dixon-Coles model): {marqueeFixture.HomeTeam} vs {marqueeFixture.AwayTeam} — joint probability {jointProb:P1} (fair odds {fairOdds:0.00}x). Legs: {string.Join(" + ", bestCombo.Legs.Select(l => l.DisplayName))}"
         };
+    }
+
+    private static int GetLeagueTierScore(string? league)
+    {
+        if (string.IsNullOrWhiteSpace(league)) return 0;
+        var norm = league.ToLowerInvariant();
+
+        // Tier 1: UEFA Competitions & Top 5 European Leagues
+        if (norm.Contains("champions league") ||
+            norm.Contains("europa league") ||
+            norm.Contains("conference league") ||
+            norm.Contains("premier league") ||
+            norm.Contains("laliga") || norm.Contains("la liga") || norm.Contains("primera division") ||
+            norm.Contains("serie a") ||
+            norm.Contains("bundesliga") ||
+            norm.Contains("ligue 1") ||
+            norm.Contains("world cup") ||
+            norm.Contains("euro"))
+        {
+            return 100;
+        }
+
+        // Tier 2: Leading secondary European leagues & domestic cups
+        if (norm.Contains("championship") ||
+            norm.Contains("eredivisie") ||
+            norm.Contains("primeira liga") ||
+            norm.Contains("pro league") ||
+            norm.Contains("super lig") ||
+            norm.Contains("premiership") ||
+            norm.Contains("copa libertadores") ||
+            norm.Contains("fa cup") ||
+            norm.Contains("copa del rey") ||
+            norm.Contains("dfb pokal") ||
+            norm.Contains("coppa italia") ||
+            norm.Contains("coupe de france") ||
+            norm.Contains("mls") ||
+            norm.Contains("brasileiro") ||
+            norm.Contains("serie b") ||
+            norm.Contains("2. bundesliga") ||
+            norm.Contains("segunda"))
+        {
+            return 60;
+        }
+
+        // Tier 3: Other standard domestic leagues
+        if (!norm.Contains("women") && !norm.Contains("u21") && !norm.Contains("u19") && !norm.Contains("reserve") && !norm.Contains("amateur"))
+        {
+            return 30;
+        }
+
+        // Tier 4: Youth, reserve, lower cup
+        return 10;
+    }
+
+    private static bool IsComboAlignedWithDirection(SameGameMultiResult combo, string predictedDirection)
+    {
+        var isHome = predictedDirection.Contains("home") || predictedDirection == "1";
+        var isAway = predictedDirection.Contains("away") || predictedDirection == "2";
+
+        foreach (var leg in combo.Legs)
+        {
+            if (isHome)
+            {
+                if (leg.Market is SameGameMultiMarket.AwayWin or SameGameMultiMarket.DoubleChanceX2 or SameGameMultiMarket.AwayOver15Goals)
+                {
+                    return false;
+                }
+            }
+            else if (isAway)
+            {
+                if (leg.Market is SameGameMultiMarket.HomeWin or SameGameMultiMarket.DoubleChance1X or SameGameMultiMarket.HomeOver15Goals)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     private sealed record SignalPayload(string? Summary, bool AllSignalsAlign, bool ModelDivergesFromBookmaker);

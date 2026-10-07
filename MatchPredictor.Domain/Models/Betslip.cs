@@ -60,6 +60,7 @@ public static class BetslipBookingStatuses
     public const string Booked = "Booked";
     public const string Partial = "Partial";
     public const string Failed = "Failed";
+    public const string Guide = "Guide";
 }
 
 public static class BetslipDayKinds

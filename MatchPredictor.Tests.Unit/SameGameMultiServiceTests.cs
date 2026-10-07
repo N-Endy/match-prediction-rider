@@ -79,4 +79,20 @@ public class SameGameMultiServiceTests
             Assert.True(c.Legs.Count >= 2);
         });
     }
+
+    [Fact]
+    public void FindCuratedCombinations_ForAwayFavorite_IncludesAwayFavoredCombinations()
+    {
+        var curated = _service.FindCuratedCombinations(
+            homeLambda: 0.6,
+            awayMu: 2.1,
+            rho: -0.04,
+            minFairOdds: 2.0,
+            maxFairOdds: 6.0);
+
+        Assert.NotEmpty(curated);
+        var hasAwayCombo = curated.Any(c => c.Legs.Any(l =>
+            l.Market is SameGameMultiMarket.AwayWin or SameGameMultiMarket.DoubleChanceX2));
+        Assert.True(hasAwayCombo, "Expected curated combinations for an away favorite to include Away Win or Double Chance X2.");
+    }
 }
