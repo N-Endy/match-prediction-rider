@@ -1,25 +1,24 @@
-﻿FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
 
-# 1. Install basic tools needed to add the Google repository, plus ML.NET LightGBM runtime deps
-RUN apt-get update && apt-get install -y \
+# Configure apt for fast cloud builder execution:
+# 1. Force IPv4 to eliminate 120s IPv6 DNS/mirror connection timeouts on cloud builders
+# 2. Add retries for transient mirror glitches
+# 3. Consolidate LightGBM runtime deps and Google Chrome into a single cached layer
+RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4 \
+ && echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80retries \
+ && apt-get update && apt-get install -y --no-install-recommends \
     wget \
     curl \
     gnupg \
     ca-certificates \
     libgomp1 \
     libunwind8 \
-    --no-install-recommends \
+ && curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/trusted.gpg.d/google.gpg \
+ && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+ && apt-get update && apt-get install -y --no-install-recommends \
+    google-chrome-stable \
  && apt-get clean \
- && rm -rf /var/lib/apt/lists/*
-
-# 2. Add Google's official repository and install Chrome
-# apt-get will automatically resolve and install all the necessary graphical dependencies
-RUN curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/trusted.gpg.d/google.gpg && \
-    echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list && \
-    apt-get update && \
-    apt-get install -y google-chrome-stable --no-install-recommends && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* /etc/apt/apt.conf.d/99force-ipv4 /etc/apt/apt.conf.d/80retries
 
 # Set working directory and ports
 WORKDIR /app

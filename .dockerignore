@@ -1,0 +1,16 @@
+**/.git
+**/.github
+**/.vs
+**/.vscode
+**/.idea
+**/bin
+**/obj
+**/TestResults
+**/*.user
+**/*.suo
+**/*.log
+publish/
+logs/
+.agent/
+.cursor/
+*.md
