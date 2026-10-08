@@ -191,6 +191,7 @@ public sealed class MarketTimingService : IMarketTimingService
 
         var predictionsToSnapshot = upcomingPredictions
             .Where(p => !recentSnapshotPredictionIds.Contains(p.Id))
+            .DistinctBy(p => p.Id)
             .ToList();
 
         if (predictionsToSnapshot.Count == 0)
@@ -214,9 +215,15 @@ public sealed class MarketTimingService : IMarketTimingService
             return;
         }
 
+        var seenPredictionIds = new HashSet<int>();
         var newSnapshots = new List<PredictionOddsSnapshot>();
         foreach (var pred in predictionsToSnapshot)
         {
+            if (!seenPredictionIds.Add(pred.Id))
+            {
+                continue;
+            }
+
             var matchFixture = SourceMarketFixtureMatcher.FindBestFixture(
                 sourceFixtures, pred.HomeTeam, pred.AwayTeam, pred.League, pred.MatchDateTime);
 
@@ -246,10 +253,18 @@ public sealed class MarketTimingService : IMarketTimingService
 
         if (newSnapshots.Count > 0)
         {
-            _db.PredictionOddsSnapshots.AddRange(newSnapshots);
-            await _db.SaveChangesAsync(ct);
-            _logger.LogInformation("Saved {Count} interim odds snapshots across {FixtureCount} fixtures.",
-                newSnapshots.Count, predictionsToSnapshot.Count);
+            try
+            {
+                _db.PredictionOddsSnapshots.AddRange(newSnapshots);
+                await _db.SaveChangesAsync(ct);
+                _logger.LogInformation("Saved {Count} interim odds snapshots across {FixtureCount} fixtures.",
+                    newSnapshots.Count, predictionsToSnapshot.Count);
+            }
+            catch (DbUpdateException ex)
+            {
+                _logger.LogError(ex, "Failed to save {Count} interim odds snapshots due to database update exception.", newSnapshots.Count);
+                throw;
+            }
         }
     }
 

@@ -177,6 +177,9 @@ builder.Services.Configure<MatchPredictor.Domain.Models.PredictionSettings>(
     builder.Configuration.GetSection("PredictionSettings"));
 builder.Services.Configure<MatchPredictor.Domain.Models.BetslipSettings>(
     builder.Configuration.GetSection(MatchPredictor.Domain.Models.BetslipSettings.SectionName));
+builder.Services.PostConfigure<MatchPredictor.Domain.Models.BetslipSettings>(settings =>
+    MatchPredictor.Infrastructure.Configuration.BetslipSettingsResolver.ApplyEnvironmentOverrides(
+        settings, builder.Configuration));
 builder.Services.Configure<MatchPredictor.Domain.Models.ProbabilityCalculatorSettings>(
     builder.Configuration.GetSection("ProbabilityCalculator"));
 
@@ -312,7 +315,7 @@ if (runtimeMode.RunBackgroundJobs)
             // Do not RemoveIfExists every active job first: that fights the previous
             // Railway/Render instance for hangfire.lock rows and can crash deploys.
             HangfireRecurringJobs.RemoveLegacy(recurringJobs, logger);
-            HangfireRecurringJobs.Register(recurringJobs, logger);
+            HangfireRecurringJobs.Register(recurringJobs, logger, app.Configuration);
             startupState.MarkRecurringJobsRegistered();
             logger.LogInformation("Recurring jobs registered successfully (WAT timezone).");
         }

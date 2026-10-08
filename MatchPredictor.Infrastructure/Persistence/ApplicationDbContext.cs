@@ -153,7 +153,9 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
 
         modelBuilder.Entity<PredictionOddsSnapshot>(entity =>
         {
-            entity.HasIndex(e => new { e.PredictionId, e.SourceName, e.SnapshotKind }).IsUnique();
+            entity.HasIndex(e => new { e.PredictionId, e.SourceName, e.SnapshotKind })
+                .IsUnique()
+                .HasFilter("\"SnapshotKind\" IN (1, 2)");
             entity.HasIndex(e => new { e.SnapshotKind, e.CapturedAtUtc });
             entity.HasIndex(e => new { e.PredictionRunId, e.SnapshotKind });
         });

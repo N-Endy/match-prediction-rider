@@ -2,6 +2,8 @@ using Hangfire;
 using Hangfire.PostgreSql;
 using Hangfire.Storage;
 using MatchPredictor.Domain.Interfaces;
+using MatchPredictor.Domain.Models;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace MatchPredictor.Web.Configuration;
@@ -27,6 +29,7 @@ internal static class HangfireRecurringJobs
         "statistical-coverage-diagnostics-job",
         "cleanup-old-predictions",
         "betslip-generation-job",
+        "betslip-generation-midday-job",
         "lineup-refresh-job",
         "interim-odds-snapshot-job",
         "challenger-training-job",
@@ -69,7 +72,7 @@ internal static class HangfireRecurringJobs
         }
     }
 
-    internal static void Register(IRecurringJobManager recurringJobs, ILogger logger)
+    internal static void Register(IRecurringJobManager recurringJobs, ILogger logger, IConfiguration? configuration = null)
     {
         var watTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Africa/Lagos");
 
@@ -164,11 +167,27 @@ internal static class HangfireRecurringJobs
                 "0 1 * * *",
                 new RecurringJobOptions { TimeZone = watTimeZone }));
 
+        var morningCron = configuration?["BETSLIP_MORNING_CRON"]
+            ?? configuration?["BETSLIP_CRON"]
+            ?? configuration?["Betslips:MorningCron"]
+            ?? "45 4 * * *";
+
+        var middayCron = configuration?["BETSLIP_MIDDAY_CRON"]
+            ?? configuration?["Betslips:MiddayCron"]
+            ?? "0 13 * * *";
+
         TryWithLockRetry(logger, "register:betslip-generation-job", () =>
             recurringJobs.AddOrUpdate<IBetslipGenerationService>(
                 "betslip-generation-job",
-                service => service.GenerateDailyBetslipsAsync(null),
-                "0 2,13 * * *",
+                service => service.GenerateDailyBetslipsAsync(BetslipRunLabels.Morning),
+                morningCron,
+                new RecurringJobOptions { TimeZone = watTimeZone }));
+
+        TryWithLockRetry(logger, "register:betslip-generation-midday-job", () =>
+            recurringJobs.AddOrUpdate<IBetslipGenerationService>(
+                "betslip-generation-midday-job",
+                service => service.GenerateDailyBetslipsAsync(BetslipRunLabels.Midday),
+                middayCron,
                 new RecurringJobOptions { TimeZone = watTimeZone }));
 
         TryWithLockRetry(logger, "register:lineup-refresh-job", () =>

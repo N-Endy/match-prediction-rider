@@ -385,6 +385,12 @@ public partial class AnalyzerService : IAnalyzerService
             .Where(s => s.MatchLocalDate < featureCutoffDateOnly)
             .ExecuteDeleteAsync();
 
+        // Cleanup interim odds snapshots older than 30 days to keep the time-series table bounded.
+        var interimOddsCutoffUtc = DateTime.SpecifyKind(localNow.AddDays(-30).Date, DateTimeKind.Utc);
+        await _dbContext.PredictionOddsSnapshots
+            .Where(s => s.SnapshotKind == PredictionOddsSnapshotKind.Interim && s.CapturedAtUtc < interimOddsCutoffUtc)
+            .ExecuteDeleteAsync();
+
         // Cleanup scraping logs older than 2 days
         var logCutoff = localNow.AddDays(-2);
         var deletedLogs = await _dbContext.ScrapingLogs

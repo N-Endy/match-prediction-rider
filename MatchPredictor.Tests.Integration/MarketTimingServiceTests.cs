@@ -11,6 +11,7 @@ namespace MatchPredictor.Tests.Integration;
 public class MarketTimingServiceTests
 {
     private readonly ApplicationDbContext _db;
+    private readonly FakePricingService _pricing;
     private readonly MarketTimingService _service;
 
     public MarketTimingServiceTests()
@@ -19,7 +20,8 @@ public class MarketTimingServiceTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
         _db = new ApplicationDbContext(options);
-        _service = new MarketTimingService(_db, new FakePricingService(), NullLogger<MarketTimingService>.Instance);
+        _pricing = new FakePricingService();
+        _service = new MarketTimingService(_db, _pricing, NullLogger<MarketTimingService>.Instance);
     }
 
     [Fact]
@@ -217,16 +219,178 @@ public class MarketTimingServiceTests
         Assert.Contains("Stable Market Price", advisory.Summary);
     }
 
+    [Fact]
+    public async Task CaptureInterimOddsSnapshotsAsync_SavesInitialInterimSnapshot()
+    {
+        var kickoff = DateTime.UtcNow.AddHours(3);
+        var prediction = new Prediction
+        {
+            Id = 10,
+            Date = "08-10-2026",
+            Time = "15:00",
+            League = "EPL",
+            HomeTeam = "Arsenal",
+            AwayTeam = "Chelsea",
+            FixtureKey = "Arsenal|Chelsea|EPL",
+            PredictionCategory = "StraightWin",
+            PredictedOutcome = "Home Win",
+            MatchDateTime = kickoff,
+            MatchLocalDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            WasPublished = true,
+            IsCurrentRevision = true
+        };
+        _db.Predictions.Add(prediction);
+        await _db.SaveChangesAsync();
+
+        _pricing.Fixtures =
+        [
+            new SourceMarketFixture
+            {
+                HomeTeam = "Arsenal",
+                AwayTeam = "Chelsea",
+                League = "EPL",
+                MatchTimeUtc = kickoff,
+                HomeWinOdds = 1.95
+            }
+        ];
+
+        await _service.CaptureInterimOddsSnapshotsAsync();
+
+        var snapshots = await _db.PredictionOddsSnapshots
+            .Where(s => s.PredictionId == 10 && s.SnapshotKind == PredictionOddsSnapshotKind.Interim)
+            .ToListAsync();
+
+        Assert.Single(snapshots);
+        Assert.Equal(1.95, snapshots[0].DecimalOdds);
+        Assert.Equal("SportyBet", snapshots[0].SourceName);
+    }
+
+    [Fact]
+    public async Task CaptureInterimOddsSnapshotsAsync_WithinTwoHours_SkipsSnapshot()
+    {
+        var kickoff = DateTime.UtcNow.AddHours(4);
+        var prediction = new Prediction
+        {
+            Id = 11,
+            Date = "08-10-2026",
+            Time = "15:00",
+            League = "EPL",
+            HomeTeam = "Liverpool",
+            AwayTeam = "Everton",
+            FixtureKey = "Liverpool|Everton|EPL",
+            PredictionCategory = "StraightWin",
+            PredictedOutcome = "Home Win",
+            MatchDateTime = kickoff,
+            MatchLocalDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            WasPublished = true,
+            IsCurrentRevision = true
+        };
+        _db.Predictions.Add(prediction);
+        _db.PredictionOddsSnapshots.Add(new PredictionOddsSnapshot
+        {
+            PredictionId = 11,
+            SourceName = "SportyBet",
+            Market = "StraightWin",
+            Outcome = "Home Win",
+            DecimalOdds = 1.50,
+            ImpliedProbability = 1.0 / 1.50,
+            SnapshotKind = PredictionOddsSnapshotKind.Interim,
+            CapturedAtUtc = DateTime.UtcNow.AddMinutes(-45)
+        });
+        await _db.SaveChangesAsync();
+
+        _pricing.Fixtures =
+        [
+            new SourceMarketFixture
+            {
+                HomeTeam = "Liverpool",
+                AwayTeam = "Everton",
+                League = "EPL",
+                MatchTimeUtc = kickoff,
+                HomeWinOdds = 1.48
+            }
+        ];
+
+        await _service.CaptureInterimOddsSnapshotsAsync();
+
+        var snapshots = await _db.PredictionOddsSnapshots
+            .Where(s => s.PredictionId == 11 && s.SnapshotKind == PredictionOddsSnapshotKind.Interim)
+            .ToListAsync();
+
+        Assert.Single(snapshots);
+        Assert.Equal(1.50, snapshots[0].DecimalOdds);
+    }
+
+    [Fact]
+    public async Task CaptureInterimOddsSnapshotsAsync_AfterTwoHours_RecordsSubsequentSnapshot()
+    {
+        var kickoff = DateTime.UtcNow.AddHours(5);
+        var prediction = new Prediction
+        {
+            Id = 12,
+            Date = "08-10-2026",
+            Time = "15:00",
+            League = "La Liga",
+            HomeTeam = "Real Madrid",
+            AwayTeam = "Barcelona",
+            FixtureKey = "Real Madrid|Barcelona|La Liga",
+            PredictionCategory = "StraightWin",
+            PredictedOutcome = "Home Win",
+            MatchDateTime = kickoff,
+            MatchLocalDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            WasPublished = true,
+            IsCurrentRevision = true
+        };
+        _db.Predictions.Add(prediction);
+        _db.PredictionOddsSnapshots.Add(new PredictionOddsSnapshot
+        {
+            PredictionId = 12,
+            SourceName = "SportyBet",
+            Market = "StraightWin",
+            Outcome = "Home Win",
+            DecimalOdds = 2.10,
+            ImpliedProbability = 1.0 / 2.10,
+            SnapshotKind = PredictionOddsSnapshotKind.Interim,
+            CapturedAtUtc = DateTime.UtcNow.AddHours(-3)
+        });
+        await _db.SaveChangesAsync();
+
+        _pricing.Fixtures =
+        [
+            new SourceMarketFixture
+            {
+                HomeTeam = "Real Madrid",
+                AwayTeam = "Barcelona",
+                League = "La Liga",
+                MatchTimeUtc = kickoff,
+                HomeWinOdds = 1.85
+            }
+        ];
+
+        await _service.CaptureInterimOddsSnapshotsAsync();
+
+        var snapshots = await _db.PredictionOddsSnapshots
+            .Where(s => s.PredictionId == 12 && s.SnapshotKind == PredictionOddsSnapshotKind.Interim)
+            .OrderBy(s => s.CapturedAtUtc)
+            .ToListAsync();
+
+        Assert.Equal(2, snapshots.Count);
+        Assert.Equal(2.10, snapshots[0].DecimalOdds);
+        Assert.Equal(1.85, snapshots[1].DecimalOdds);
+    }
+
     private sealed class FakePricingService : ISourceMarketPricingService
     {
+        public IReadOnlyList<SourceMarketFixture> Fixtures { get; set; } = [];
+
         public Task<IReadOnlyList<SourceMarketFixture>> GetTodaySourceMarketFixturesAsync(CancellationToken ct = default)
         {
-            return Task.FromResult<IReadOnlyList<SourceMarketFixture>>([]);
+            return Task.FromResult(Fixtures);
         }
 
         public Task<IReadOnlyList<SourceMarketFixture>> GetSourceMarketFixturesForDateAsync(DateOnly targetLocalDate, CancellationToken ct = default)
         {
-            return Task.FromResult<IReadOnlyList<SourceMarketFixture>>([]);
+            return Task.FromResult(Fixtures);
         }
     }
 }
