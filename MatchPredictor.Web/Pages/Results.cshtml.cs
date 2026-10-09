@@ -86,6 +86,35 @@ public class ResultsModel : PageModel
                     heading = date.ToString("ddd, dd MMM yyyy");
                 }
 
+                var dayRows = group.OrderByDescending(r => r.Prediction.MatchLocalTime ?? TimeOnly.MinValue).ToList();
+
+                var fixtures = group
+                    .GroupBy(r => GetFixtureKey(r.Prediction))
+                    .Select(fg =>
+                    {
+                        var first = fg.First();
+                        var p = first.Prediction;
+                        var picks = fg
+                            .OrderBy(r => r.MarketLabel)
+                            .ToList();
+                        var actualScore = fg
+                            .Select(r => r.Prediction.ActualScore)
+                            .FirstOrDefault(s => !string.IsNullOrWhiteSpace(s)) ?? p.ActualScore;
+                        return new SettledFixtureGroup(
+                            fg.Key,
+                            p.League,
+                            p.HomeTeam,
+                            p.AwayTeam,
+                            first.KickoffTime,
+                            actualScore,
+                            p.MatchLocalTime ?? DateTimeProvider.ParseLocalTimeOrNull(p.Time),
+                            picks);
+                    })
+                    .OrderByDescending(f => f.SortTime ?? TimeOnly.MinValue)
+                    .ThenBy(f => f.League)
+                    .ThenBy(f => f.HomeTeam)
+                    .ToList();
+
                 return new ResultDayGroup(
                     date,
                     heading,
@@ -94,7 +123,8 @@ public class ResultsModel : PageModel
                     wins,
                     losses,
                     hitRate,
-                    group.OrderByDescending(r => r.Prediction.MatchLocalTime ?? TimeOnly.MinValue).ToList());
+                    dayRows,
+                    fixtures);
             })
             .ToList();
 
@@ -114,6 +144,15 @@ public class ResultsModel : PageModel
             .OrderByDescending(summary => summary.Total)
             .ThenBy(summary => summary.MarketLabel)
             .ToList();
+    }
+
+    private static string GetFixtureKey(Prediction p)
+    {
+        if (!string.IsNullOrWhiteSpace(p.FixtureKey))
+        {
+            return p.FixtureKey;
+        }
+        return $"{p.MatchLocalDate:yyyy-MM-dd}|{(p.League ?? string.Empty).Trim().ToLowerInvariant()}|{(p.HomeTeam ?? string.Empty).Trim().ToLowerInvariant()}|{(p.AwayTeam ?? string.Empty).Trim().ToLowerInvariant()}";
     }
 
     public static string FormatMarketLabel(string? category)
@@ -137,7 +176,18 @@ public class ResultsModel : PageModel
         int WinCount,
         int LossCount,
         double HitRate,
-        IReadOnlyList<SettledResultRow> Rows);
+        IReadOnlyList<SettledResultRow> Rows,
+        IReadOnlyList<SettledFixtureGroup> Fixtures);
+
+    public sealed record SettledFixtureGroup(
+        string FixtureKey,
+        string League,
+        string HomeTeam,
+        string AwayTeam,
+        string KickoffTime,
+        string? ActualScore,
+        TimeOnly? SortTime,
+        IReadOnlyList<SettledResultRow> Picks);
 
     public sealed record SettledResultRow(
         Prediction Prediction,

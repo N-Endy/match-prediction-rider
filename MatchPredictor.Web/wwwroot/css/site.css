@@ -1812,6 +1812,48 @@ a:hover {
   font-weight: 600;
 }
 
+.mp-multi-market-tag {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-sm);
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--accent-emerald);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  margin-top: 0.25rem;
+  white-space: nowrap;
+}
+
+.mp-cell-picks {
+  vertical-align: middle;
+}
+
+.mp-picks-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.mp-result-pick-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+}
+
+.mp-result-pick-item .mp-pick-val {
+  font-size: 0.84rem;
+  color: var(--text-primary);
+  flex: 1;
+  text-align: left;
+  margin-left: 0.5rem;
+}
+
 /* ─── Mobile Match Cards ─── */
 .mp-results-mobile-list {
   display: none;
@@ -1905,6 +1947,46 @@ a:hover {
 
   .mp-mobile-pick strong {
     color: var(--text-primary);
+  }
+
+  .mp-mobile-top-right {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .mp-mobile-card-picks {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding-top: 0.55rem;
+    border-top: 1px solid var(--border-color);
+  }
+
+  .mp-mobile-pick-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.35rem 0.55rem;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    gap: 0.5rem;
+  }
+
+  .mp-mobile-pick-left {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+
+  .mp-mobile-pick-left .mp-pick-val {
+    font-size: 0.82rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 

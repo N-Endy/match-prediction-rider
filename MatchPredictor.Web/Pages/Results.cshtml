@@ -171,36 +171,45 @@
                                         <th style="width: 80px;">Time</th>
                                         <th style="width: 140px;">League</th>
                                         <th>Fixture</th>
-                                        <th style="width: 110px;">Market</th>
-                                        <th style="width: 120px;">Pick</th>
                                         <th style="width: 90px; text-align: center;">Score</th>
-                                        <th style="width: 110px; text-align: right;">Outcome</th>
+                                        <th style="width: 330px;">Markets &amp; Outcomes</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                @foreach (var row in day.Rows)
+                                @foreach (var fixture in day.Fixtures)
                                 {
-                                    var p = row.Prediction;
-                                    <tr class="mp-result-item" 
-                                        data-market="@row.MarketLabel" 
-                                        data-outcome="@(row.IsWin ? "win" : "loss")" 
-                                        data-search="@($"{p.HomeTeam} {p.AwayTeam} {p.League}".ToLowerInvariant())">
-                                        <td class="mp-cell-time">@row.KickoffTime</td>
-                                        <td class="mp-cell-league" title="@p.League"><span class="mp-league-pill">@p.League</span></td>
+                                    <tr class="mp-result-fixture-row" 
+                                        data-search="@($"{fixture.HomeTeam} {fixture.AwayTeam} {fixture.League}".ToLowerInvariant())">
+                                        <td class="mp-cell-time">@fixture.KickoffTime</td>
+                                        <td class="mp-cell-league" title="@fixture.League"><span class="mp-league-pill">@fixture.League</span></td>
                                         <td class="mp-cell-fixture">
                                             <div class="mp-fixture-teams">
-                                                <span class="mp-team mp-home">@p.HomeTeam</span>
+                                                <span class="mp-team mp-home">@fixture.HomeTeam</span>
                                                 <span class="mp-vs">vs</span>
-                                                <span class="mp-team mp-away">@p.AwayTeam</span>
+                                                <span class="mp-team mp-away">@fixture.AwayTeam</span>
                                             </div>
+                                            @if (fixture.Picks.Count > 1)
+                                            {
+                                                <span class="mp-multi-market-tag">@fixture.Picks.Count markets</span>
+                                            }
                                         </td>
-                                        <td><span class="mp-badge-market">@row.MarketLabel</span></td>
-                                        <td><strong>@p.PredictedOutcome</strong></td>
-                                        <td style="text-align: center;"><span class="mp-score-badge">@(p.ActualScore ?? "—")</span></td>
-                                        <td style="text-align: right;">
-                                            <span class="mp-outcome-badge @(row.IsWin ? "mp-badge-win" : "mp-badge-loss")">
-                                                @(row.IsWin ? "✓ Correct" : "✗ Incorrect")
-                                            </span>
+                                        <td style="text-align: center;"><span class="mp-score-badge">@(fixture.ActualScore ?? "—")</span></td>
+                                        <td class="mp-cell-picks">
+                                            <div class="mp-picks-stack">
+                                            @foreach (var row in fixture.Picks)
+                                            {
+                                                var p = row.Prediction;
+                                                <div class="mp-result-pick-item" 
+                                                     data-market="@row.MarketLabel" 
+                                                     data-outcome="@(row.IsWin ? "win" : "loss")">
+                                                    <span class="mp-badge-market">@row.MarketLabel</span>
+                                                    <strong class="mp-pick-val">@p.PredictedOutcome</strong>
+                                                    <span class="mp-outcome-badge @(row.IsWin ? "mp-badge-win" : "mp-badge-loss")">
+                                                        @(row.IsWin ? "✓ Correct" : "✗ Incorrect")
+                                                    </span>
+                                                </div>
+                                            }
+                                            </div>
                                         </td>
                                     </tr>
                                 }
@@ -210,34 +219,45 @@
 
                         <!-- Mobile Card View -->
                         <div class="mp-results-mobile-list">
-                            @foreach (var row in day.Rows)
+                            @foreach (var fixture in day.Fixtures)
                             {
-                                var p = row.Prediction;
-                                <div class="mp-result-item mp-mobile-card" 
-                                     data-market="@row.MarketLabel" 
-                                     data-outcome="@(row.IsWin ? "win" : "loss")" 
-                                     data-search="@($"{p.HomeTeam} {p.AwayTeam} {p.League}".ToLowerInvariant())">
+                                <div class="mp-result-fixture-card mp-mobile-card" 
+                                     data-search="@($"{fixture.HomeTeam} {fixture.AwayTeam} {fixture.League}".ToLowerInvariant())">
                                     <div class="mp-mobile-card-top">
-                                        <span class="mp-league-pill">@p.League</span>
-                                        <span class="mp-cell-time">@row.KickoffTime</span>
+                                        <span class="mp-league-pill">@fixture.League</span>
+                                        <div class="mp-mobile-top-right">
+                                            @if (fixture.Picks.Count > 1)
+                                            {
+                                                <span class="mp-multi-market-tag">@fixture.Picks.Count markets</span>
+                                            }
+                                            <span class="mp-cell-time">@fixture.KickoffTime</span>
+                                        </div>
                                     </div>
                                     <div class="mp-mobile-card-fixture">
                                         <div class="mp-mobile-teams">
-                                            <div class="mp-team-row"><span>@p.HomeTeam</span></div>
-                                            <div class="mp-team-row"><span>@p.AwayTeam</span></div>
+                                            <div class="mp-team-row"><span>@fixture.HomeTeam</span></div>
+                                            <div class="mp-team-row"><span>@fixture.AwayTeam</span></div>
                                         </div>
                                         <div class="mp-score-badge mp-score-mobile">
-                                            @(p.ActualScore ?? "—")
+                                            @(fixture.ActualScore ?? "—")
                                         </div>
                                     </div>
-                                    <div class="mp-mobile-card-bottom">
-                                        <div class="mp-mobile-pick">
-                                            <span class="mp-badge-market">@row.MarketLabel</span>
-                                            <strong>@p.PredictedOutcome</strong>
+                                    <div class="mp-mobile-card-picks">
+                                    @foreach (var row in fixture.Picks)
+                                    {
+                                        var p = row.Prediction;
+                                        <div class="mp-result-pick-item mp-mobile-pick-row" 
+                                             data-market="@row.MarketLabel" 
+                                             data-outcome="@(row.IsWin ? "win" : "loss")">
+                                            <div class="mp-mobile-pick-left">
+                                                <span class="mp-badge-market">@row.MarketLabel</span>
+                                                <strong class="mp-pick-val">@p.PredictedOutcome</strong>
+                                            </div>
+                                            <span class="mp-outcome-badge @(row.IsWin ? "mp-badge-win" : "mp-badge-loss")">
+                                                @(row.IsWin ? "✓ Correct" : "✗ Incorrect")
+                                            </span>
                                         </div>
-                                        <span class="mp-outcome-badge @(row.IsWin ? "mp-badge-win" : "mp-badge-loss")">
-                                            @(row.IsWin ? "✓ Correct" : "✗ Incorrect")
-                                        </span>
+                                    }
                                     </div>
                                 </div>
                             }
@@ -466,31 +486,48 @@
             }
 
             dayGroups.forEach((group, idx) => {
-                const desktopRows = group.querySelectorAll('tbody tr.mp-result-item');
-                const mobileCards = group.querySelectorAll('.mp-results-mobile-list .mp-result-item');
+                const desktopFixtureRows = group.querySelectorAll('tbody tr.mp-result-fixture-row');
+                const mobileFixtureCards = group.querySelectorAll('.mp-results-mobile-list .mp-result-fixture-card');
                 let dayMatches = 0;
                 let dayWins = 0;
 
-                desktopRows.forEach((row, i) => {
-                    const mobileCard = mobileCards[i];
-                    const itemMarket = row.getAttribute('data-market');
-                    const itemOutcome = row.getAttribute('data-outcome');
-                    const itemSearch = row.getAttribute('data-search') || '';
+                desktopFixtureRows.forEach((fixtureRow, i) => {
+                    const mobileCard = mobileFixtureCards[i];
+                    const fixtureSearch = fixtureRow.getAttribute('data-search') || '';
+                    const searchMatch = (!searchQuery || fixtureSearch.includes(searchQuery));
 
-                    const marketMatch = (selectedMarket === 'all' || itemMarket === selectedMarket);
-                    const outcomeMatch = (selectedOutcome === 'all' || itemOutcome === selectedOutcome);
-                    const searchMatch = (!searchQuery || itemSearch.includes(searchQuery));
-                    const isVisible = (marketMatch && outcomeMatch && searchMatch);
+                    const desktopPicks = fixtureRow.querySelectorAll('.mp-result-pick-item');
+                    const mobilePicks = mobileCard ? mobileCard.querySelectorAll('.mp-result-pick-item') : [];
+                    let visiblePicksInFixture = 0;
 
-                    if (isVisible) {
-                        row.style.display = '';
-                        if (mobileCard) mobileCard.style.display = '';
-                        dayMatches++;
-                        if (itemOutcome === 'win') {
-                            dayWins++;
+                    desktopPicks.forEach((pickItem, pIdx) => {
+                        const mobilePickItem = mobilePicks[pIdx];
+                        const itemMarket = pickItem.getAttribute('data-market');
+                        const itemOutcome = pickItem.getAttribute('data-outcome');
+
+                        const marketMatch = (selectedMarket === 'all' || itemMarket === selectedMarket);
+                        const outcomeMatch = (selectedOutcome === 'all' || itemOutcome === selectedOutcome);
+                        const isVisible = (searchMatch && marketMatch && outcomeMatch);
+
+                        if (isVisible) {
+                            pickItem.style.display = '';
+                            if (mobilePickItem) mobilePickItem.style.display = '';
+                            visiblePicksInFixture++;
+                            dayMatches++;
+                            if (itemOutcome === 'win') {
+                                dayWins++;
+                            }
+                        } else {
+                            pickItem.style.display = 'none';
+                            if (mobilePickItem) mobilePickItem.style.display = 'none';
                         }
+                    });
+
+                    if (visiblePicksInFixture > 0) {
+                        fixtureRow.style.display = '';
+                        if (mobileCard) mobileCard.style.display = '';
                     } else {
-                        row.style.display = 'none';
+                        fixtureRow.style.display = 'none';
                         if (mobileCard) mobileCard.style.display = 'none';
                     }
                 });
