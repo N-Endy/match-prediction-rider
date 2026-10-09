@@ -241,7 +241,7 @@ public static class WeekendPayoutSlipComposer
             .ThenByDescending(x => x.Candidate.Confidence)
             .ThenBy(x => band.PreferHigherSingles
                 ? -(x.Candidate.DecimalOdds ?? 0d)
-                : (x.Candidate.DecimalOdds ?? 0d))
+                : 0d)
             .ThenBy(x => x.Candidate.PredictionId)
             .Select(x => x.Candidate)
             .ToList();
@@ -317,7 +317,7 @@ public static class WeekendPayoutSlipComposer
         double maxSingleMarketShare,
         bool useFallback)
     {
-        var shortlist = ordered.Take(40).ToList();
+        var shortlist = ordered.Take(50).ToList();
         if (shortlist.Count == 0)
         {
             return BandPackResult.Empty;
@@ -334,7 +334,7 @@ public static class WeekendPayoutSlipComposer
         var bestProduct = 0d;
         var bestAvgScore = double.MinValue;
         var nodes = 0;
-        const int maxNodes = 20_000;
+        const int maxNodes = 50_000;
 
         void Dfs(
             int idx,
@@ -345,16 +345,19 @@ public static class WeekendPayoutSlipComposer
         {
             if (nodes++ >= maxNodes) return;
 
-            if (cur.Count > 0 && prod >= minOdds && prod <= maxOdds)
+            if (cur.Count > 0 && prod <= maxOdds)
             {
-                var avgScore = cur.Average(c => (double)c.Confidence);
-                if (bestSelections is null || cur.Count < bestSelections.Count || (cur.Count == bestSelections.Count && avgScore > bestAvgScore))
+                if (prod >= minOdds)
                 {
-                    bestSelections = cur.ToList();
-                    bestProduct = prod;
-                    bestAvgScore = avgScore;
+                    var avgScore = cur.Average(c => (double)c.Confidence);
+                    if (bestSelections is null || cur.Count < bestSelections.Count || (cur.Count == bestSelections.Count && avgScore > bestAvgScore))
+                    {
+                        bestSelections = cur.ToList();
+                        bestProduct = prod;
+                        bestAvgScore = avgScore;
+                    }
+                    return;
                 }
-                return;
             }
 
             if (cur.Count >= maxPicks || idx >= shortlist.Count) return;

@@ -581,17 +581,14 @@ public class AiAdvisorService : IAiAdvisorService
                 StringComparison.Ordinal);
 
             var systemPrompt =
-                "You are a football betting analyst. From the candidate draw predictions, select the best ones " +
-                "for a short draw accumulator. Blend calibrated confidence, supplied ResearchScore, and footballInsight " +
-                "(form, venue draw rates, and head-to-head) when dataQuality is not Low. Prefer higher " +
-                "ResearchScore unless later research contradicts it. Prefer higher confidence when research is thin " +
-                "or Low quality. Diversify leagues when quality is similar. " +
-                "Use only the supplied predictionIds. Do not invent fixtures. " +
+                "You are an expert football betting analyst selecting the 5 highest-probability draw predictions for a specialized draw accumulator. " +
+                "Blend calibrated confidence, supplied ResearchScore, and footballInsight (venue draw rates, low-scoring tendencies, head-to-head draw frequency). " +
+                "Look for tactical deadlock profiles: closely matched defenses, low combined xG, local derbies, or match situations where a draw benefits both sides. " +
+                "Diversify leagues when quality is similar. Use only the supplied predictionIds. Do not invent fixtures. " +
                 (useWebSearch
-                    ? "You may use web_search for last-minute news (injuries, suspensions, likely XI) on fixtures you " +
-                      "are considering. Search at most 4 times. Skip search when news would not change the pick. " +
-                      "If search contradicts a high-confidence pick, demote it. When search was used, cite one " +
-                      "concrete finding in reason. "
+                    ? "You may use web_search for last-minute news (injuries to key attackers, defensive tactical setups, weather conditions). " +
+                      "Search at most 4 times. Skip search when news would not change the pick. " +
+                      "If search confirms defensive strategies or missing strikers, promote the pick. When search was used, cite one concrete finding in reason. "
                     : string.Empty) +
                 "Respond with JSON only: {\"picks\":[{\"predictionId\":123,\"reason\":\"one short sentence\"}]}.";
 
@@ -706,18 +703,18 @@ public class AiAdvisorService : IAiAdvisorService
                 StringComparison.Ordinal);
 
             var systemPrompt =
-                "You are selecting the single high-stakes banker slip of the day. Users put large stakes on it. " +
-                "Rank using calibrated confidence, supplied ResearchScore, AND footballInsight (form, venue, BTTS/totals rates, " +
-                "and head-to-head) when dataQuality is not Low. Prefer higher ResearchScore unless web_search or insight " +
-                "contradicts it. Prefer picks where model/bookmaker signals agree " +
-                "and research supports the market. When footballInsight contradicts a high-confidence pick, you may " +
-                "demote it. Do not include draws. Use only the supplied predictionIds. Do not invent fixtures or odds. " +
+                "You are selecting the single high-stakes banker slip of the day. Users stake serious capital on it, so hit rate is paramount. " +
+                "Act as an adversarial betting risk auditor. Rank using calibrated confidence, supplied ResearchScore, and footballInsight " +
+                "(form, home/away splits, goal averages, head-to-head). " +
+                "Prefer picks where model and market signals align. When data shows defensive instability or fixture risk, demote the pick. " +
+                "Do not include draws. Use only the supplied predictionIds. Do not invent fixtures or odds. " +
                 "The decimal-odds product of your picks MUST land between the provided min and max. " +
                 (useWebSearch
-                    ? "You may use web_search for last-minute news (injuries, suspensions, likely XI) on fixtures you " +
-                      "are considering as banker legs only. Search at most 8 times. Skip search when the card is thin " +
-                      "or news would not change the pick. If search contradicts a high-confidence pick, demote it. " +
-                      "When search was used, cite one concrete finding in reason. "
+                    ? "You may use web_search for breaking team news (starting XI, key player injuries/suspensions, coach rotation, weather) " +
+                      "on fixtures you are considering as banker legs only. Search at most 8 times. " +
+                      "Specifically investigate whether key scorers or starting center-backs/goalkeepers are missing. " +
+                      "If search reveals rotation, injury doubts, or fixture congestion ahead of cup ties, DEMOTE the pick immediately. " +
+                      "When search was used, cite one concrete finding (e.g., 'Starting striker confirmed; opponent missing 2 defenders') in reason. "
                     : string.Empty) +
                 "Respond with JSON only: {\"picks\":[{\"predictionId\":123,\"reason\":\"one short sentence\"}],\"riskNote\":\"one short risk caution\"}.";
 
@@ -841,18 +838,17 @@ public class AiAdvisorService : IAiAdvisorService
                 StringComparison.Ordinal);
 
             var systemPrompt =
-                "You are selecting ONE rollover pick. The entire bankroll from this bet is staked on the next one, " +
-                "so it must be a well-researched short. Pick exactly one predictionId. " +
+                "You are selecting the ONE safest rollover pick of the day. The user's entire bankroll rolls into the next bet, " +
+                "so this pick must be virtually bulletproof. Pick exactly one predictionId with zero tolerance for fragility. " +
                 "Decimal odds MUST be between the provided min and max. Do not include draws. " +
-                "Rank using calibrated confidence, supplied ResearchScore, AND footballInsight (form, venue, BTTS/totals rates, " +
-                "head-to-head) when dataQuality is not Low. Prefer higher ResearchScore unless web_search or insight contradicts it. " +
-                "Prefer picks where model/bookmaker signals agree. " +
+                "Rank using calibrated confidence, supplied ResearchScore, and footballInsight. " +
+                "Prefer picks with dominant home advantage, rock-solid defensive records, and complete market agreement. " +
                 "Use only the supplied predictionIds. Do not invent fixtures or odds. " +
                 (useWebSearch
-                    ? "You may use web_search for last-minute news (injuries, suspensions, likely XI) on fixtures you " +
-                      "are considering. Search at most 4 times. Skip search when news would not change the pick. " +
-                      "If search contradicts a high-confidence pick, demote it. When search was used, cite one " +
-                      "concrete finding in reason. "
+                    ? "You may use web_search for last-minute news (confirmed lineups, injuries, suspensions, likely XI) on candidate fixtures. " +
+                      "Search at most 4 times. Verify that star players are starting and no unexpected benching or fatigue exists. " +
+                      "If search reveals any doubt, demote it and choose an uncompromised pick. " +
+                      "When search was used, cite one concrete verified finding in reason. "
                     : string.Empty) +
                 "Respond with JSON only: {\"picks\":[{\"predictionId\":123,\"reason\":\"one short sentence\"}],\"riskNote\":\"one short risk caution\"}.";
 
@@ -1051,12 +1047,14 @@ public class AiAdvisorService : IAiAdvisorService
             });
 
             var systemPrompt =
-                "You are scoring live-priced football predictions for today's betslips. " +
-                "Score EVERY supplied candidate 0-100 after blending calibrated confidence with supplied footballInsight " +
-                "(form, venue, BTTS/totals rates, head-to-head) when dataQuality is not Low. " +
+                "You are an expert, skeptical football betting analyst scoring predictions for high-conviction betslips. " +
+                "The goal is consistent user wins and bankroll preservation. Score EVERY supplied candidate 0-100. " +
+                "Blend calibrated confidence with supplied footballInsight (recent form, venue home/away rates, BTTS/totals, and head-to-head). " +
+                "Actively hunt for trap games: discount fragile favorites with defensive vulnerabilities, volatile conversion, or bad H2H (score below 40). " +
+                "Reward robust profiles: dominant home defensive records, reliable goal conversion, and aligned bookmaker pricing (score 75-95). " +
                 "Return one score object per predictionId. Do not omit ids. Do not pass or fail. Do not pack slips. " +
                 "Use only the supplied predictionIds. Do not invent fixtures. " +
-                "Respond with JSON only: {\"scores\":[{\"predictionId\":123,\"score\":0-100,\"reason\":\"one short sentence\"}]}.";
+                "Respond with JSON only: {\"scores\":[{\"predictionId\":123,\"score\":0-100,\"reason\":\"one short analytical sentence\"}]}.";
 
             var userPrompt =
                 $"Score these {candidates.Count} live-quoted candidates. Return a score for every predictionId.\n{payload}";
@@ -1177,8 +1175,8 @@ public class AiAdvisorService : IAiAdvisorService
 
             var systemPrompt =
                 "You are building payout-band football accumulators from live-priced candidates. " +
-                "C# will validate IDs, fixture exclusivity, and odds product — you choose the legs. " +
-                "Prefer higher ResearchScore unless web_search or footballInsight contradicts it. " +
+                "C# will validate IDs, fixture exclusivity, and odds product — you choose the highest-conviction legs. " +
+                "Prefer higher ResearchScore and consistent form profiles unless web_search or footballInsight contradicts it. " +
                 "Use only the supplied predictionIds. Do not invent fixtures or odds. " +
                 "Each fixture may appear on at most one slip. Do not include draws. " +
                 "For each band, pick legs so the decimal-odds product lands between minOdds and maxOdds " +
@@ -1187,7 +1185,7 @@ public class AiAdvisorService : IAiAdvisorService
                 (useWebSearch
                     ? "You may use web_search for last-minute news (injuries, suspensions, likely XI) on fixtures you " +
                       "are considering as acca legs. Search at most 8 times. Skip search when the card is thin " +
-                      "or news would not change the pick. If search contradicts a high-confidence pick, demote it. " +
+                      "or news would not change the pick. If search reveals key player absence, demote the pick. " +
                       "Keep JSON ids only even when search was used. "
                     : string.Empty) +
                 "Respond with JSON only: {\"slips\":[{\"slipNumber\":1,\"predictionIds\":[123,456]}]}.";

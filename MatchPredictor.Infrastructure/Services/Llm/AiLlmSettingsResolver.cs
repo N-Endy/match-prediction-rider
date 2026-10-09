@@ -39,7 +39,7 @@ public sealed class AiLlmSettingsResolver : IAiLlmSettingsResolver
     public const string DefaultGroqBaseUrl = "https://api.groq.com/openai/v1";
     public const string DefaultGroqModel = "openai/gpt-oss-120b";
     public const string DefaultOpenAiBaseUrl = "https://api.openai.com/v1";
-    public const string DefaultOpenAiModel = "gpt-5.6-luna";
+    public const string DefaultOpenAiModel = "gpt-6.1-sol";
 
     private readonly IConfiguration _configuration;
 

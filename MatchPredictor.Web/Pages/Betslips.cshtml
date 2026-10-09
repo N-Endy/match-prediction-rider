@@ -28,7 +28,7 @@
         <div class="mp-empty-state">
             <div class="mp-empty-state-icon">🎫</div>
             <h2>No selection lists yet</h2>
-            <p>Lists appear after the next scheduled generation run (5:00 AM or 1:00 PM WAT).</p>
+            <p>Lists appear after the next scheduled generation run (4:45 AM or 1:00 PM WAT).</p>
         </div>
     }
     else
@@ -37,7 +37,7 @@
             <span>@Model.CurrentSet.DayKind · @BetslipsModel.FormatRunLabel(Model.CurrentSet.RunLabel) run</span>
             <span>@Model.CurrentSet.SlipCount slip@(Model.CurrentSet.SlipCount == 1 ? "" : "s")</span>
             <span>@Model.CurrentSet.SlipLocalDate.ToString("dddd d MMMM")</span>
-            <span>2:00 AM and 1:00 PM WAT</span>
+            <span>4:45 AM and 1:00 PM WAT</span>
             @if (Model.AvailableTodayRuns.Count > 1)
             {
                 <span class="mp-betslip-run-toggle-group">

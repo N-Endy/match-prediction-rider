@@ -163,19 +163,19 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             }
 
             AddFixtureKeys(usedFixtureKeys, composed.Where(s => s.IsBanker));
-            var bands = dayKind == BetslipDayKinds.Weekend
-                ? WeekendPayoutSlipComposer.BuildWeekendPlan(settings)
-                : WeekendPayoutSlipComposer.BuildWeekdayPlan(settings);
 
             var freshLadderKeys = new HashSet<string>(usedFixtureKeys, StringComparer.OrdinalIgnoreCase);
             UnionFixtureKeys(freshLadderKeys, morningLadderFixtures);
-            var             ladderPassers = ExcludeUsedFixtures(
+            var ladderPassers = ExcludeUsedFixtures(
                 FilterByCategory(mainPool, MainCategories),
                 freshLadderKeys);
             if (_ladderMinimumEdge > 0d)
             {
                 ladderPassers = FilterByMinimumEdge(ladderPassers, _ladderMinimumEdge);
             }
+            var bands = dayKind == BetslipDayKinds.Weekend
+                ? WeekendPayoutSlipComposer.BuildWeekendPlan(settings)
+                : WeekendPayoutSlipComposer.BuildWeekdayPlan(settings);
 
             _logger.LogInformation(
                 "Ladder pool after exclusivity and edge gate: {PoolCount} live-quoted picks ({RemovedCount} removed from main).",
@@ -704,6 +704,56 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 riskNote = validated.Value.RiskNote;
                 aiVetted = true;
             }
+            else if (aiResult.Picks.Count > 0)
+            {
+                var aiPicksById = aiResult.Picks
+                    .Where(p => !string.IsNullOrWhiteSpace(p.Reason))
+                    .ToDictionary(p => p.PredictionId, p => p.Reason);
+
+                var prioritizedEligible = eligible
+                    .Select(c => aiPicksById.TryGetValue(c.PredictionId, out var reason)
+                        ? new BetslipComposerCandidate
+                        {
+                            PredictionId = c.PredictionId,
+                            FixtureKey = c.FixtureKey,
+                            League = c.League,
+                            HomeTeam = c.HomeTeam,
+                            AwayTeam = c.AwayTeam,
+                            Market = c.Market,
+                            PredictedOutcome = c.PredictedOutcome,
+                            PredictionCategory = c.PredictionCategory,
+                            Confidence = c.Confidence,
+                            MatchDateTimeUtc = c.MatchDateTimeUtc,
+                            DecimalOdds = c.DecimalOdds,
+                            AiNote = reason,
+                            ResearchScore = (c.ResearchScore ?? 80d) + 200d
+                        }
+                        : c)
+                    .ToList();
+
+                var aiAssisted = BankerSlipComposer.Compose(
+                    prioritizedEligible,
+                    activeMin,
+                    activeMax,
+                    settings.BankerFallbackMinOdds,
+                    settings.BankerFallbackMaxOdds,
+                    settings.BankerMaxPicks,
+                    minConfidence: settings.BankerMinConfidence,
+                    shortlistSize: settings.BankerShortlistSize);
+
+                if (!aiAssisted.IsEmpty)
+                {
+                    selected = aiAssisted.Selections.ToList();
+                    riskNote = !string.IsNullOrWhiteSpace(aiResult.RiskNote)
+                        ? aiResult.RiskNote
+                        : "AI-researched banker legs fitted to optimal odds range.";
+                    aiVetted = true;
+                }
+                else
+                {
+                    shortfallNotes.Add("AI banker selection invalid or unavailable; using deterministic composer (not AI-vetted).");
+                }
+            }
             else
             {
                 shortfallNotes.Add("AI banker selection invalid or unavailable; using deterministic composer (not AI-vetted).");
@@ -734,7 +784,9 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         {
             SlipNumber = BankerSlipNumber,
             Title = "Banker of the Day",
-            TierLabel = BankerTierLabel,
+            TierLabel = deterministic.UsedFallbackRange
+                ? $"Banker ({activeMin:0.#}-{activeMax:0.#}x)"
+                : $"Banker ({settings.BankerMinOdds:0.#}-{settings.BankerMaxOdds:0.#}x)",
             TargetMinSelections = 1,
             TargetMaxSelections = settings.BankerMaxPicks,
             Selections = selected,
@@ -1302,11 +1354,14 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
         if (settings.OmitLadderLastResort)
         {
-            _logger.LogInformation(
-                "Ladder omitted {MissingCount} band(s) rather than last-resort packing: {Titles}.",
-                missingBands.Count,
-                string.Join(", ", missingBands.Select(b => b.Title)));
-            return slips;
+            if (bands.Count > 1)
+            {
+                _logger.LogInformation(
+                    "Ladder omitted {MissingCount} band(s) rather than last-resort packing: {Titles}.",
+                    missingBands.Count,
+                    string.Join(", ", missingBands.Select(b => b.Title)));
+                return slips;
+            }
         }
 
         var lastResortMin = Math.Max(1.01, settings.LadderLastResortMinOdds);

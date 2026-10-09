@@ -34,6 +34,19 @@ public class WeekendPayoutSlipComposerTests
     }
 
     [Fact]
+    public void Compose_PacksDailyAccaWithinBand()
+    {
+        var candidates = BuildLadder(25, odds: 1.55);
+        var settings = new BetslipSettings();
+        var plan = WeekendPayoutSlipComposer.BuildWeekdayPlan(settings);
+
+        var slips = WeekendPayoutSlipComposer.Compose(candidates, plan);
+        var slip = Assert.Single(slips);
+        Assert.True(slip.IsPayoutBand);
+        Assert.InRange(slip.TargetCombinedOdds!.Value, 20, 120);
+    }
+
+    [Fact]
     public void Compose_PacksSmallBandWithinOddsRange()
     {
         var candidates = BuildLadder(60, odds: 1.55);
