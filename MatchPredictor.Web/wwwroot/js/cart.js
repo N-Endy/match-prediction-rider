@@ -282,6 +282,15 @@ document.addEventListener('DOMContentLoaded', () => {
             predictionId: btn.dataset.predictionId ? Number(btn.dataset.predictionId) : null,
             matchDateTimeUtc: btn.dataset.matchDatetimeUtc || null
         });
+
+        // Animated visual feedback
+        btn.classList.add('mp-btn-added');
+        const origText = btn.innerHTML;
+        btn.innerHTML = '✓ Added';
+        setTimeout(() => {
+            btn.innerHTML = origText;
+            btn.classList.remove('mp-btn-added');
+        }, 1800);
     });
 });
 

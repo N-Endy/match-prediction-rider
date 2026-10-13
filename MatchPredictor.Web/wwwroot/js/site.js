@@ -1,4 +1,4 @@
-﻿window.dataLayer = window.dataLayer || [];
+window.dataLayer = window.dataLayer || [];
 function gtag() {
     window.dataLayer.push(arguments);
 }
@@ -210,6 +210,104 @@ document.addEventListener("DOMContentLoaded", function () {
             setAnalyticsConsentCookie(false);
             applyConsentMode(false);
             consentBanner.style.display = "none";
+        });
+    }
+
+    // Support / Tip Modal handling
+    const supportModal = document.getElementById("supportModal");
+    const openSupportBtn = document.getElementById("openSupportModalBtn");
+    const closeSupportBtn = document.getElementById("closeSupportModalBtn");
+
+    function openSupportModal() {
+        if (!supportModal) return;
+        supportModal.style.display = "flex";
+        document.body.style.overflow = "hidden";
+    }
+
+    function closeSupportModal() {
+        if (!supportModal) return;
+        supportModal.style.display = "none";
+        document.body.style.overflow = "";
+    }
+
+    window.openSupportModal = openSupportModal;
+    window.closeSupportModal = closeSupportModal;
+
+    openSupportBtn?.addEventListener("click", openSupportModal);
+    closeSupportBtn?.addEventListener("click", closeSupportModal);
+    supportModal?.addEventListener("click", function (e) {
+        if (e.target === supportModal) {
+            closeSupportModal();
+        }
+    });
+
+    document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && supportModal && supportModal.style.display === "flex") {
+            closeSupportModal();
+        }
+    });
+
+    // Globally delegate [data-support-trigger] clicks
+    document.addEventListener("click", function (e) {
+        const trigger = e.target.closest("[data-support-trigger]");
+        if (trigger) {
+            e.preventDefault();
+            openSupportModal();
+        }
+    });
+
+    // Copy to clipboard handler for bank accounts
+    document.addEventListener("click", function (e) {
+        const btn = e.target.closest(".mp-copy-acc-btn");
+        if (!btn) return;
+
+        const textToCopy = btn.getAttribute("data-copy-account") || btn.getAttribute("data-copy-target");
+        if (!textToCopy) return;
+
+        navigator.clipboard.writeText(textToCopy).then(() => {
+            const originalHtml = btn.innerHTML;
+            btn.classList.add("mp-btn-copied");
+            btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Copied!</span>`;
+            setTimeout(() => {
+                btn.innerHTML = originalHtml;
+                btn.classList.remove("mp-btn-copied");
+            }, 2500);
+        }).catch(() => {
+            const textArea = document.createElement("textarea");
+            textArea.value = textToCopy;
+            document.body.appendChild(textArea);
+            textArea.select();
+            try {
+                document.execCommand("copy");
+                btn.classList.add("mp-btn-copied");
+                btn.innerText = "✓ Copied!";
+                setTimeout(() => {
+                    btn.classList.remove("mp-btn-copied");
+                    btn.innerText = "Copy";
+                }, 2500);
+            } catch {
+                // Ignore fallback failure
+            }
+            document.body.removeChild(textArea);
+        });
+    });
+
+    // Markets Dropdown Toggle on Desktop
+    const marketsToggle = document.getElementById("marketsDropdownToggle");
+    const marketsDropdownMenu = document.getElementById("marketsDropdownMenu");
+
+    if (marketsToggle && marketsDropdownMenu) {
+        marketsToggle.addEventListener("click", function (e) {
+            e.stopPropagation();
+            const isOpen = marketsDropdownMenu.classList.toggle("show");
+            marketsToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+        });
+
+        document.addEventListener("click", function (e) {
+            if (!marketsToggle.contains(e.target) && !marketsDropdownMenu.contains(e.target)) {
+                marketsDropdownMenu.classList.remove("show");
+                marketsToggle.setAttribute("aria-expanded", "false");
+            }
         });
     }
 });

@@ -9,88 +9,158 @@
 <section class="mp-hero">
     <div class="mp-hero-badge">
         <span class="mp-live-dot"></span>
-        Updated daily
+        Grounded with Live Mathematical Models
     </div>
-    <h1>Smart Football<br>Predictions</h1>
-    <p>Today’s BTTS, Over 2.5, Under 2.5, Straight Win, and Draw card — analysed, threshold-gated, and published twice a day.</p>
+    <h1>Smart Football<br>Predictions &amp; Selections</h1>
+    <p>Calibrated daily football cards for BTTS, Over 2.5, Under 2.5, Straight Win, and Draw — mathematically analyzed, threshold-gated, and published twice daily.</p>
+    
+    <div class="mp-hero-stat-strip">
+        <span class="mp-hero-stat-pill">⚡ Runs at 4:45 AM &amp; 1:00 PM WAT</span>
+        <span class="mp-hero-stat-pill">📊 5 Mathematical Markets</span>
+        <span class="mp-hero-stat-pill">🛡️ 100% Honest Public Ledger</span>
+    </div>
+
     <div class="mp-hero-actions">
         <a href="/predictions/btts" class="mp-hero-cta">
-            Open today’s card
+            Open Today’s Card
+        </a>
+        <a href="/betslips" class="mp-hero-cta mp-hero-cta-secondary">
+            View Curated Slips
         </a>
         <a href="/results" class="mp-hero-cta mp-hero-cta-secondary">
-            Settled results
+            Settled Results
         </a>
     </div>
 </section>
 
 <div class="mp-container">
-    <h2 class="mp-section-heading">Today’s Predictions</h2>
-    <p class="mp-section-subtitle">Pick a market to see the published card</p>
+    <div class="mp-section-header-row" style="margin-bottom: 1.5rem;">
+        <div>
+            <h2 class="mp-section-heading">Today’s Prediction Markets</h2>
+            <p class="mp-section-subtitle">Select a market below to inspect today's gated match card</p>
+        </div>
+    </div>
 
     <div class="mp-category-grid">
-        <a href="/predictions/btts" class="mp-category-card">
-            <div class="mp-category-icon mp-icon-btts">⚽</div>
+        <a href="/predictions/btts" class="mp-category-card mp-card-accent-amber" aria-label="Explore Both Teams to Score predictions card">
+            <div class="mp-category-icon mp-icon-btts">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path>
+                    <path d="M2 12h20"></path>
+                </svg>
+            </div>
             <div class="mp-category-info">
                 <h3>Both Teams to Score</h3>
-                <p>Matches where both teams are likely to score</p>
+                <p>High joint expected goal matches where both sides have strong scoring probabilities</p>
+                <span class="mp-category-link-text">Explore BTTS Card &rarr;</span>
             </div>
         </a>
-        <a href="/predictions/over2" class="mp-category-card">
-            <div class="mp-category-icon mp-icon-over">🎯</div>
-            <div class="mp-category-info">
-                <h3>Over 2.5 Goals</h3>
-                <p>Matches likely to have 3 or more total goals</p>
+
+        <a href="/predictions/straightwin" class="mp-category-card mp-card-accent-emerald" aria-label="Explore Straight Win predictions card">
+            <div class="mp-category-icon mp-icon-win">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path>
+                    <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path>
+                    <path d="M4 22h16"></path>
+                    <path d="M10 14.66V17c0 .55-.45 1-1 1H7v2h10v-2h-2c-.55 0-1-.45-1-1v-2.34c3.42-.87 5-3.66 5-7.66V4H6v5c0 4 1.58 6.79 5 7.66z"></path>
+                </svg>
             </div>
-        </a>
-        <a href="/predictions/straightwin" class="mp-category-card">
-            <div class="mp-category-icon mp-icon-win">🏆</div>
             <div class="mp-category-info">
                 <h3>Straight Win</h3>
-                <p>Strong home or away win predictions</p>
+                <p>High model separation fixtures with dominant home or away victory likelihood</p>
+                <span class="mp-category-link-text">Explore Win Card &rarr;</span>
             </div>
         </a>
-        <a href="/predictions/draw" class="mp-category-card">
-            <div class="mp-category-icon mp-icon-draw">🤝</div>
+
+        <a href="/predictions/over2" class="mp-category-card mp-card-accent-cyan" aria-label="Explore Over 2.5 Goals predictions card">
+            <div class="mp-category-icon mp-icon-over">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="12" x2="16" y2="14"></line>
+                </svg>
+            </div>
             <div class="mp-category-info">
-                <h3>Draw</h3>
-                <p>Low-separation fixtures where the model sees draw value</p>
+                <h3>Over 2.5 Goals</h3>
+                <p>Fast-paced fixtures with high combined expected goals (xG &gt; 2.70)</p>
+                <span class="mp-category-link-text">Explore Over 2.5 Card &rarr;</span>
             </div>
         </a>
-        <a href="/predictions/under2" class="mp-category-card">
-            <div class="mp-category-icon mp-icon-under">🧊</div>
+
+        <a href="/predictions/under2" class="mp-category-card mp-card-accent-sky" aria-label="Explore Under 2.5 Goals predictions card">
+            <div class="mp-category-icon mp-icon-under">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                </svg>
+            </div>
             <div class="mp-category-info">
                 <h3>Under 2.5 Goals</h3>
-                <p>Matches likely to stay at two goals or fewer</p>
+                <p>Low-variance, compact defensive encounters projected at two goals or fewer</p>
+                <span class="mp-category-link-text">Explore Under 2.5 Card &rarr;</span>
+            </div>
+        </a>
+
+        <a href="/predictions/draw" class="mp-category-card mp-card-accent-slate" aria-label="Explore Draw predictions card">
+            <div class="mp-category-icon mp-icon-draw">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="4" y1="9" x2="20" y2="9"></line>
+                    <line x1="4" y1="15" x2="20" y2="15"></line>
+                </svg>
+            </div>
+            <div class="mp-category-info">
+                <h3>Draw Value</h3>
+                <p>Evenly matched, low-separation contests where market prices offer model edge</p>
+                <span class="mp-category-link-text">Explore Draw Card &rarr;</span>
             </div>
         </a>
     </div>
 
     <div class="mp-home-block">
-        <h2 class="mp-section-heading">How It Works</h2>
-        <p class="mp-section-subtitle">From market inputs to a settled track record</p>
+        <h2 class="mp-section-heading">How Our Modeling Works</h2>
+        <p class="mp-section-subtitle">From live market feeds to an honest, settled track record</p>
 
         <div class="mp-features">
             <div class="mp-feature-card">
-                <div class="mp-feature-icon mp-icon-over">📥</div>
-                <h3>Collect market &amp; model inputs</h3>
-                <p>We combine bookmaker prices (margin removed), statistical goals models, and checked third-party probability feeds for each fixture.</p>
+                <div class="mp-feature-icon mp-icon-over">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                </div>
+                <h3>1. Ingest Market &amp; Model Inputs</h3>
+                <p>We blend real-time bookmaker prices (margin stripped), bivariate Poisson &amp; Dixon-Coles goal distributions, and verified probability feeds.</p>
             </div>
             <div class="mp-feature-card">
-                <div class="mp-feature-icon mp-icon-btts">🧠</div>
-                <h3>Blend, calibrate &amp; threshold</h3>
-                <p>Signals are blended into one probability, calibrated for honesty, and published only when they clear a market-specific gate.</p>
+                <div class="mp-feature-icon mp-icon-btts">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <path d="m4.93 4.93 4.24 4.24"></path>
+                        <path d="m14.83 9.17 4.24-4.24"></path>
+                        <path d="m14.83 14.83 4.24 4.24"></path>
+                        <path d="m9.17 14.83-4.24 4.24"></path>
+                        <circle cx="12" cy="12" r="4"></circle>
+                    </svg>
+                </div>
+                <h3>2. Calibrate &amp; Threshold-Gate</h3>
+                <p>Every match passes strict confidence and positive-edge gates before publishing. Low-edge picks are ruthlessly suppressed.</p>
             </div>
             <div class="mp-feature-card">
-                <div class="mp-feature-icon mp-icon-cyan">📊</div>
-                <h3>Settle &amp; learn</h3>
-                <p>Finished matches update the public <a href="/results">results</a> record and feed overnight recalibration — past performance is not a guarantee.</p>
+                <div class="mp-feature-icon mp-icon-cyan">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                    </svg>
+                </div>
+                <h3>3. Settle &amp; Continuously Recalibrate</h3>
+                <p>Final scores automatically settle the public <a href="/results">results ledger</a>, feeding overnight parameter tuning. Full transparency — losses included.</p>
             </div>
         </div>
 
         <p class="mp-section-subtitle" style="margin-top: 1.5rem;">
-            Read the full pipeline on <a href="/methodology">Methodology</a> ·
-            Who we are on <a href="/about">About</a> ·
-            Common questions in the <a href="/faq">FAQ</a>
+            Read the full math on <a href="/methodology">Methodology</a> ·
+            About the platform on <a href="/about">About</a> ·
+            Frequently asked questions in the <a href="/faq">FAQ</a>
         </p>
     </div>
 
@@ -100,10 +170,10 @@
 
     <div class="mp-home-cta">
         <a href="/betslips" class="mp-hero-cta">
-            View today’s selection lists
+            View Today’s Selection Lists
         </a>
         <a href="/results" class="mp-hero-cta mp-hero-cta-secondary" style="margin-left: 0.75rem;">
-            View settled results
+            View Settled Results
         </a>
     </div>
 </div>

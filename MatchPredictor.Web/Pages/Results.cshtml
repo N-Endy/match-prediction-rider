@@ -43,6 +43,32 @@
         </div>
     </div>
 
+    <!-- Winner's Appreciation Banner -->
+    <div class="mp-results-tip-banner">
+        <div class="mp-results-tip-content">
+            <span class="mp-results-tip-trophy" aria-hidden="true">🏆</span>
+            <div class="mp-results-tip-text">
+                <h3>Cashed out on today's picks? Support the Creator</h3>
+                <p>
+                    MatchPredictor is free and run independently. If our models helped you win today, consider sending a token to <strong>Okafor Nelson</strong> to support server costs and daily research!
+                </p>
+            </div>
+        </div>
+        <div class="mp-results-tip-actions">
+            <button type="button" class="mp-tip-chip-btn mp-copy-acc-btn" data-copy-account="1401602266" title="Copy Access Bank account (Okafor Nelson)">
+                <span>Access: <strong>1401602266</strong></span>
+                <span class="mp-copy-text" style="color: #38bdf8; font-size: 0.75rem;">📋 Copy</span>
+            </button>
+            <button type="button" class="mp-tip-chip-btn mp-copy-acc-btn" data-copy-account="1100979917" title="Copy Kuda Bank account (Okafor Nelson)">
+                <span>Kuda: <strong>1100979917</strong></span>
+                <span class="mp-copy-text" style="color: #38bdf8; font-size: 0.75rem;">📋 Copy</span>
+            </button>
+            <button type="button" class="mp-tip-chip-btn" onclick="openSupportModal()" style="background: rgba(16, 185, 129, 0.2); border-color: rgba(16, 185, 129, 0.5); color: #34d399;">
+                <span>Details &rarr;</span>
+            </button>
+        </div>
+    </div>
+
     <!-- Interactive Market Performance Cards -->
     @if (Model.MarketSummaries.Count > 0)
     {

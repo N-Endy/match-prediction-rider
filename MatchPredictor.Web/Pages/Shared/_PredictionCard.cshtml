@@ -45,6 +45,19 @@
             <span class="mp-insight-chip">@MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetThresholdChip(Model)</span>
             <span class="mp-insight-chip">@MatchPredictor.Web.Helpers.PredictionDisplayHelper.GetSourceChip(Model)</span>
         </div>
+        @if (Model.ConfidenceScore.HasValue)
+        {
+            var probPercent = Math.Clamp((int)Math.Round(Model.ConfidenceScore.Value * 100), 0, 100);
+            <div class="mp-prob-meter" title="Calibrated model probability: @probPercent%">
+                <div class="mp-prob-meter-labels">
+                    <span>Model Confidence</span>
+                    <strong>@probPercent%</strong>
+                </div>
+                <div class="mp-prob-meter-bar">
+                    <div class="mp-prob-meter-fill" style="width: @probPercent%;"></div>
+                </div>
+            </div>
+        }
         <p class="mp-prediction-reason">@MatchPredictor.Web.Helpers.PredictionDisplayHelper.BuildPredictionReason(Model)</p>
     </div>
 
