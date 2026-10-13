@@ -1,11 +1,13 @@
 using System.Net;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MatchPredictor.Tests.Integration;
@@ -272,6 +274,42 @@ public class WebApplicationFactorySmokeTests
         Assert.Equal(HttpStatusCode.TooManyRequests, lastResponse.StatusCode);
     }
 
+    [Fact]
+    public async Task AdminSelections_WhenValidPasskeySupplied_RedirectsAndRendersSuccessfully()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var response = await client.GetAsync("/Admin/Selections?key=mp-synergy-owner-2026");
+        var html = await response.Content.ReadAsStringAsync();
+        Assert.True(response.IsSuccessStatusCode, $"Status: {response.StatusCode}, Head: {(html.Length > 300 ? html[..300] : html)}");
+        Assert.Contains("Private Selections Hub", html);
+        Assert.Contains("CONFIDENTIAL OWNER PORTAL", html);
+        Assert.Contains("Under Fortress", html);
+    }
+
+    [Fact]
+    public async Task AdminSelections_WhenNoPasskeySupplied_ReturnsNotFound()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var response = await client.GetAsync("/Admin/Selections");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AdminSelections_WhenInvalidPasskeySupplied_ReturnsNotFound()
+    {
+        await using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        var response = await client.GetAsync("/Admin/Selections?key=wrong-passkey");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
     private static WebApplicationFactory<Program> CreateFactory()
     {
         return new WebApplicationFactory<Program>()
@@ -296,6 +334,11 @@ public class WebApplicationFactorySmokeTests
                     services.AddScoped<IPredictionQueries, StubPredictionQueries>();
                     services.RemoveAll<IValueBetsService>();
                     services.AddScoped<IValueBetsService, StubValueBetsService>();
+                    services.RemoveAll<IBetslipQueries>();
+                    services.AddScoped<IBetslipQueries, StubBetslipQueries>();
+                    services.RemoveAll<IBetslipGenerationService>();
+                    services.AddScoped<IBetslipGenerationService, StubBetslipGenerationService>();
+                    services.AddSingleton<IDataProtectionProvider, EphemeralDataProtectionProvider>();
                 });
             });
     }
@@ -342,5 +385,64 @@ public class WebApplicationFactorySmokeTests
                 GeneratedAtLocal = DateTime.UtcNow
             });
         }
+    }
+
+    private sealed class StubBetslipQueries : IBetslipQueries
+    {
+        public Task<BetslipSet?> GetCurrentSetAsync(CancellationToken ct = default) =>
+            Task.FromResult<BetslipSet?>(new BetslipSet
+            {
+                Id = 1,
+                RunLabel = "Morning",
+                IsCurrent = true,
+                GeneratedAtUtc = DateTime.UtcNow,
+                SlipLocalDate = DateOnly.FromDateTime(DateTime.UtcNow),
+                DayKind = BetslipDayKinds.Weekday,
+                Slips =
+                [
+                    new Betslip
+                    {
+                        Id = 101,
+                        SlipNumber = 101,
+                        Title = "Under Fortress",
+                        IsPrivate = true,
+                        BookingStatus = BetslipBookingStatuses.Booked,
+                        BookingCode = "SYNERGY1",
+                        CombinedDecimalOdds = 3.5,
+                        SelectionCount = 1,
+                        Selections =
+                        [
+                            new BetslipSelection
+                            {
+                                HomeTeam = "Arsenal",
+                                AwayTeam = "Chelsea",
+                                League = "Premier League",
+                                Market = "Under 2.5",
+                                PredictedOutcome = "Under 2.5",
+                                ConfidenceScore = 0.68m,
+                                DecimalOdds = 1.85,
+                                WasBooked = true
+                            }
+                        ]
+                    }
+                ]
+            });
+
+        public Task<IReadOnlyList<BetslipSet>> GetTodaySetsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<BetslipSet>>([]);
+
+        public Task<IReadOnlyList<DateOnly>> GetSlipDatesAsync(BetslipRecordSection section, int year, int month, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<DateOnly>>([]);
+
+        public Task<DateOnly?> GetLatestSlipDateAsync(BetslipRecordSection section, CancellationToken ct = default) =>
+            Task.FromResult<DateOnly?>(null);
+
+        public Task<BetslipRecordsForDate> GetSlipsForDateAsync(BetslipRecordSection section, DateOnly date, CancellationToken ct = default) =>
+            Task.FromResult(new BetslipRecordsForDate { Section = section, Date = date, Runs = [] });
+    }
+
+    private sealed class StubBetslipGenerationService : IBetslipGenerationService
+    {
+        public Task GenerateDailyBetslipsAsync(string? runLabel = null) => Task.CompletedTask;
     }
 }

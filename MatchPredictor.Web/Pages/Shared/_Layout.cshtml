@@ -114,6 +114,12 @@
     </script>
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=@(Configuration["AdSense:ClientId"] ?? "ca-pub-123456789")"
          crossorigin="anonymous"></script>
+
+    @if (ViewData["Robots"] != null && !IsSectionDefined("Head"))
+    {
+        <meta name="robots" content="@ViewData["Robots"]" />
+    }
+    @await RenderSectionAsync("Head", required: false)
 </head>
 <body data-max-booking-selections="@(Configuration.GetValue("SportyBet:MaxBookingSelections", 50))"
       data-review-safe-public-ui="@(reviewSafePublicUi ? "true" : "false")">
