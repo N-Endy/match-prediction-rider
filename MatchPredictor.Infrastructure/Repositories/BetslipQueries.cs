@@ -94,7 +94,7 @@ public class BetslipQueries : IBetslipQueries
         foreach (var set in sets)
         {
             var slips = set.Slips
-                .Where(slip => BetslipKinds.MatchesSection(slip, section))
+                .Where(slip => !slip.IsPrivate && BetslipKinds.MatchesSection(slip, section))
                 .OrderBy(slip => slip.SlipNumber)
                 .ToList();
             if (slips.Count == 0)
@@ -159,6 +159,7 @@ public class BetslipQueries : IBetslipQueries
     {
         return await _context.Betslips
             .AsNoTracking()
+            .Where(slip => !slip.IsPrivate)
             .Where(predicate)
             .Select(slip => new SlipDateRow(
                 slip.SlipNumber,

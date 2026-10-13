@@ -267,6 +267,22 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 }
             }
 
+            // Compose the 6 private synergy slips
+            try
+            {
+                var synergyCandidates = universe.Count > 0
+                    ? universe.Select(u => u.Candidate).ToList()
+                    : predictions.Select(p => ToCandidate(p, new Dictionary<int, double>())).ToList();
+
+                var synergySlips = SynergyBetslipComposer.ComposeSynergySlips(synergyCandidates, settings.Synergy);
+                composed.AddRange(synergySlips);
+                _logger.LogInformation("Composed {Count} private synergy slips.", synergySlips.Count);
+            }
+            catch (Exception synEx)
+            {
+                _logger.LogWarning(synEx, "Failed to compose private synergy slips; continuing with main slips.");
+            }
+
             var betslipSet = new BetslipSet
             {
                 SlipLocalDate = today,
@@ -278,8 +294,33 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 Slips = []
             };
 
-            foreach (var slip in composed.Where(s => s.Selections.Count > 0))
+            foreach (var slip in composed)
             {
+                if (slip.Selections.Count == 0)
+                {
+                    if (slip.IsSynergy)
+                    {
+                        betslipSet.Slips.Add(new Betslip
+                        {
+                            SlipNumber = slip.SlipNumber,
+                            Title = slip.Title,
+                            TierLabel = slip.TierLabel,
+                            TargetMinSelections = 1,
+                            TargetMaxSelections = slip.TargetMaxSelections,
+                            SelectionCount = 0,
+                            BookingCode = string.Empty,
+                            BookingUrl = string.Empty,
+                            BookingStatus = BetslipBookingStatuses.Failed,
+                            StatusMessage = slip.ShortfallNote ?? "No qualifying fixtures today",
+                            CombinedDecimalOdds = null,
+                            AiSummary = slip.AiSummary,
+                            Selections = [],
+                            IsPrivate = true
+                        });
+                    }
+                    continue;
+                }
+
                 var entity = await BookAndBuildSlipAsync(slip, settings);
                 if (entity is null)
                 {
@@ -294,16 +335,17 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
 
                 var bookedCount = entity.Selections.Count(s => s.WasBooked);
                 _logger.LogInformation(
-                    "Booked slip {SlipNumber} '{Title}': {Status} ({BookedCount}/{SelectionCount}), code={CodePresent}.",
+                    "Booked slip {SlipNumber} '{Title}': {Status} ({BookedCount}/{SelectionCount}), code={CodePresent}, private={IsPrivate}.",
                     entity.SlipNumber,
                     entity.Title,
                     entity.BookingStatus,
                     bookedCount,
                     entity.SelectionCount,
-                    string.IsNullOrWhiteSpace(entity.BookingCode) ? "absent" : "present");
+                    string.IsNullOrWhiteSpace(entity.BookingCode) ? "absent" : "present",
+                    entity.IsPrivate);
             }
 
-            betslipSet.SlipCount = betslipSet.Slips.Count;
+            betslipSet.SlipCount = betslipSet.Slips.Count(s => !s.IsPrivate);
 
             var previousSets = await _dbContext.BetslipSets
                 .Where(s => s.SlipLocalDate == today && s.IsCurrent)
@@ -320,14 +362,16 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             var hasBanker = betslipSet.Slips.Any(IsBankerSlip);
             var ladderPersisted = betslipSet.Slips.Count(IsLadderSlip);
             var hasDraws = betslipSet.Slips.Any(IsDrawSlip);
+            var synergyPersisted = betslipSet.Slips.Count(IsSynergySlip);
 
             _logger.LogInformation(
-                "Betslip generation finished: {SlipCount} slips persisted (rollover={HasRollover}, banker={HasBanker}, ladder={LadderCount}, draws={HasDraws}).",
+                "Betslip generation finished: {SlipCount} public slips persisted (rollover={HasRollover}, banker={HasBanker}, ladder={LadderCount}, draws={HasDraws}, synergy={SynergyCount}).",
                 betslipSet.SlipCount,
                 hasRollover ? "yes" : "no",
                 hasBanker ? "yes" : "no",
                 ladderPersisted,
-                hasDraws ? "yes" : "no");
+                hasDraws ? "yes" : "no",
+                synergyPersisted);
 
             await LogStatusAsync(
                 "Success",
@@ -418,6 +462,8 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
     public static bool IsLadderSlip(Betslip slip) => BetslipKinds.IsLadderSlip(slip);
 
     public static bool IsBetBuilderSlip(Betslip slip) => BetslipKinds.IsBetBuilderSlip(slip);
+
+    public static bool IsSynergySlip(Betslip slip) => BetslipKinds.IsSynergySlip(slip);
 
     private async Task<ComposedBetslip?> ComposeRolloverFromPassersAsync(
         IReadOnlyList<LiveQuotedCandidate> mainPool,
@@ -1224,7 +1270,8 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
                 .Min(),
             CombinedDecimalOdds = combinedOdds,
             AiSummary = composed.AiSummary,
-            Selections = selections
+            Selections = selections,
+            IsPrivate = composed.IsPrivate
         };
     }
 

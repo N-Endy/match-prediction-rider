@@ -55,6 +55,14 @@ public class AdminUsageBasicAuthMiddleware
             context.Items[AdminOperatorKeys.HttpContextItem] = true;
         }
 
+        // Allow /admin/selections to pass through to its dedicated passkey-gated PrivateSelectionsAuthAttribute
+        // which returns HTTP 404 for unauthenticated callers rather than prompting for Basic Auth.
+        if (context.Request.Path.StartsWithSegments("/admin/selections", StringComparison.OrdinalIgnoreCase))
+        {
+            await _next(context);
+            return;
+        }
+
         var isProtected = ProtectedPathPrefixes.Any(prefix =>
             context.Request.Path.StartsWithSegments(prefix, StringComparison.OrdinalIgnoreCase));
         if (!isProtected)

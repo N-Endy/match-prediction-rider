@@ -9,24 +9,50 @@ public static class BetslipKinds
     public const int SgmSlipNumber = 20;
     public const string DrawsTierLabel = "AI Draws (5)";
 
+    public const int SynergyUnderFortressSlipNumber = 101;
+    public const int SynergyFavoriteWinSlipNumber = 102;
+    public const int SynergyFavoriteOverSlipNumber = 103;
+    public const int SynergyGoalFrenzyOverSlipNumber = 104;
+    public const int SynergyGoalFrenzyBttsSlipNumber = 105;
+    public const int SynergyDrawBttsStrikeSlipNumber = 106;
+
+    public const string SynergyUnderFortressTierLabel = "Synergy: Under 2.5 Fortress";
+    public const string SynergyFavoriteWinTierLabel = "Synergy: Favorite Machine (Win)";
+    public const string SynergyFavoriteOverTierLabel = "Synergy: Favorite Machine (Over 2.5)";
+    public const string SynergyGoalFrenzyOverTierLabel = "Synergy: Goal Frenzy (Over 2.5)";
+    public const string SynergyGoalFrenzyBttsTierLabel = "Synergy: Goal Frenzy (BTTS)";
+    public const string SynergyDrawBttsStrikeTierLabel = "Synergy: Draw/BTTS Strike (BTTS)";
+
+    public static bool IsSynergySlip(Betslip slip) =>
+        slip.IsPrivate ||
+        IsSynergySlip(slip.SlipNumber) ||
+        slip.TierLabel.StartsWith("Synergy:", StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsSynergySlip(int slipNumber) =>
+        slipNumber >= SynergyUnderFortressSlipNumber && slipNumber <= SynergyDrawBttsStrikeSlipNumber;
+
     public static bool IsRolloverSlip(Betslip slip) =>
-        slip.SlipNumber == RolloverSlipNumber ||
-        slip.TierLabel.StartsWith("Rollover", StringComparison.OrdinalIgnoreCase);
+        !slip.IsPrivate &&
+        (slip.SlipNumber == RolloverSlipNumber ||
+        slip.TierLabel.StartsWith("Rollover", StringComparison.OrdinalIgnoreCase));
 
     public static bool IsBankerSlip(Betslip slip) =>
-        slip.SlipNumber == BankerSlipNumber ||
-        slip.TierLabel.StartsWith("Banker", StringComparison.OrdinalIgnoreCase);
+        !slip.IsPrivate &&
+        (slip.SlipNumber == BankerSlipNumber ||
+        slip.TierLabel.StartsWith("Banker", StringComparison.OrdinalIgnoreCase));
 
     public static bool IsDrawSlip(Betslip slip) =>
+        !slip.IsPrivate &&
         string.Equals(slip.TierLabel, DrawsTierLabel, StringComparison.Ordinal);
 
     public static bool IsBetBuilderSlip(Betslip slip) =>
-        slip.SlipNumber == SgmSlipNumber ||
+        !slip.IsPrivate &&
+        (slip.SlipNumber == SgmSlipNumber ||
         slip.TierLabel.Contains("Bet Builder", StringComparison.OrdinalIgnoreCase) ||
-        slip.TierLabel.Contains("SGM", StringComparison.OrdinalIgnoreCase);
+        slip.TierLabel.Contains("SGM", StringComparison.OrdinalIgnoreCase));
 
     public static bool IsLadderSlip(Betslip slip) =>
-        !IsRolloverSlip(slip) && !IsBankerSlip(slip) && !IsDrawSlip(slip) && !IsBetBuilderSlip(slip);
+        !slip.IsPrivate && !IsSynergySlip(slip) && !IsRolloverSlip(slip) && !IsBankerSlip(slip) && !IsDrawSlip(slip) && !IsBetBuilderSlip(slip);
 
     public static bool MatchesSection(Betslip slip, BetslipRecordSection section) =>
         section switch

@@ -33,6 +33,7 @@ public class Betslip
     public DateTime? EarliestKickoffUtc { get; set; }
     public double? CombinedDecimalOdds { get; set; }
     public string? AiSummary { get; set; }
+    public bool IsPrivate { get; set; }
     public List<BetslipSelection> Selections { get; set; } = [];
 }
 

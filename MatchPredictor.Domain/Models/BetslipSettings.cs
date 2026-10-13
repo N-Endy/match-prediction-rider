@@ -94,4 +94,23 @@ public class BetslipSettings
 
     /// <summary>Weekday single ladder slip uses the Small odds band with this pick cap.</summary>
     public int DailyMaxPicks { get; set; } = 18;
+
+    public SynergySlipSettings Synergy { get; set; } = new();
+}
+
+public class SynergySlipSettings
+{
+    public double UnderFortressDrawMin { get; set; } = 0.35;
+    public double UnderFortressUnderMin { get; set; } = 0.65;
+
+    public double FavoriteMachineWinMin { get; set; } = 0.75;
+    public double FavoriteMachineOverMin { get; set; } = 0.65;
+
+    public double GoalFrenzyBttsMin { get; set; } = 0.60;
+    public double GoalFrenzyOverMin { get; set; } = 0.65;
+
+    public double DrawBttsStrikeDrawMin { get; set; } = 0.30;
+    public double DrawBttsStrikeBttsMin { get; set; } = 0.57;
+
+    public int MaxPicksPerSlip { get; set; } = 50;
 }

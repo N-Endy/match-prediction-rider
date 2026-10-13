@@ -180,6 +180,11 @@ namespace MatchPredictor.Infrastructure.Migrations
                     b.Property<DateTime?>("EarliestKickoffUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<bool>("IsPrivate")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
                     b.Property<int>("SelectionCount")
                         .HasColumnType("integer");
 
@@ -208,6 +213,8 @@ namespace MatchPredictor.Infrastructure.Migrations
                         .HasColumnType("character varying(120)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("IsPrivate");
 
                     b.HasIndex("BetslipSetId", "SlipNumber")
                         .IsUnique();

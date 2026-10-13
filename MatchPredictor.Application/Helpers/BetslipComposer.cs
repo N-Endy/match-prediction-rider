@@ -44,6 +44,8 @@ public sealed class ComposedBetslip
     public bool IsPayoutBand { get; init; }
     public bool IsMega { get; init; }
     public bool IsSgm { get; init; }
+    public bool IsPrivate { get; init; }
+    public bool IsSynergy { get; init; }
     public double? ActiveMinOdds { get; init; }
     public double? ActiveMaxOdds { get; init; }
     public double? JointProbability { get; init; }

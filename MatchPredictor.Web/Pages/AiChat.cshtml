@@ -3,89 +3,177 @@
 
 @{
     ViewData["Title"] = "AI Chat";
+    ViewData["HideAds"] = true;
 }
 
-<div class="mp-container">
-    <div class="mp-page-header">
-        <div>
-            <p class="mp-page-kicker">Companion</p>
-            <div class="mp-page-title">
-                <div class="mp-page-title-icon mp-chat-title-icon" aria-hidden="true">🤖</div>
-                <h1>AI Betting Companion</h1>
-            </div>
-        </div>
-        @if (Model.ShowLogout)
-        {
-            <form method="post" asp-page-handler="Logout">
+<div class="mp-chat-cockpit-page" id="chatCockpit">
+    @if (!Model.IsAuthenticated)
+    {
+        <div class="mp-chat-auth">
+            <h2 class="mp-chat-auth-title">Access restricted</h2>
+            <p class="mp-chat-auth-copy">
+                Enter the password to unlock Nelson, your AI prediction companion.
+            </p>
+
+            @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+            {
+                <div class="mp-chat-auth-error" role="alert">
+                    @Model.ErrorMessage
+                </div>
+            }
+
+            <form method="post" class="mp-chat-auth-form">
                 @Html.AntiForgeryToken()
-                <button type="submit" class="mp-book-btn mp-chat-logout">
-                    Log Out
+                <label class="mp-chat-auth-label" asp-for="Password">Companion Password</label>
+                <input type="password" asp-for="Password"
+                       class="mp-chat-input"
+                       autocomplete="current-password"
+                       required autofocus />
+                <button type="submit" class="mp-chat-auth-submit">
+                    Unlock AI Companion
                 </button>
             </form>
-        }
-    </div>
-
-@if (!Model.IsAuthenticated)
-{
-    <div class="mp-chat-auth">
-        <h2 class="mp-chat-auth-title">Access restricted</h2>
-        <p class="mp-chat-auth-copy">
-            Enter the password to open the AI prediction advisor.
-        </p>
-
-        @if (!string.IsNullOrEmpty(Model.ErrorMessage))
-        {
-            <div class="mp-chat-auth-error" role="alert">
-                @Model.ErrorMessage
+        </div>
+    }
+    else
+    {
+        <!-- Immersive Cockpit Header -->
+        <header class="mp-chat-topbar">
+            <div class="mp-chat-topbar-left">
+                <div class="mp-chat-status-pill">
+                    <span class="mp-chat-pulse-dot" aria-hidden="true"></span>
+                    <h1 class="mp-chat-title">Nelson AI</h1>
+                </div>
+                <span class="mp-chat-topbar-subtitle">
+                    Live Odds &amp; Historical Grounding
+                </span>
             </div>
-        }
 
-        <form method="post" class="mp-chat-auth-form">
-            @Html.AntiForgeryToken()
-            <label class="mp-chat-auth-label" asp-for="Password">Password</label>
-            <input type="password" asp-for="Password"
-                   class="mp-chat-input"
-                   autocomplete="current-password"
-                   required autofocus />
-            <button type="submit" class="mp-book-btn mp-chat-auth-submit">
-                Unlock Chat
-            </button>
-        </form>
-    </div>
-}
-else
-{
-    <div class="mp-chat-container" id="chatContainer">
-        <div class="mp-chat-messages" id="chatMessages">
-            <div class="mp-chat-message mp-chat-ai">
-                <div class="mp-chat-avatar" aria-hidden="true">🤖</div>
-                <div class="mp-chat-bubble">
-                    <p>Hello! I'm Nelson, your grounded betting companion. I work from MatchPredictor's live card, recent published history, and the app's public analytics logic, so I can help you build slips, refine them, and explain what the app is showing without guessing.</p>
-                    <p class="mp-chat-hint">Try asking</p>
-                    <div class="mp-chat-chip-row">
-                        <button type="button" class="mp-chat-chip" data-chat-prompt="Give me 10 of the best BTTS predictions">Give me 10 of the best BTTS predictions</button>
-                        <button type="button" class="mp-chat-chip" data-chat-prompt="Give me a mixture of btts, over 2.5 and straight win">Give me a mixture of BTTS, Over 2.5 and Straight Win</button>
-                        <button type="button" class="mp-chat-chip" data-chat-prompt="Which draw games would you recommend?">Which draw games would you recommend?</button>
-                        <button type="button" class="mp-chat-chip" data-chat-prompt="Which is riskiest?">Which is riskiest?</button>
-                        <button type="button" class="mp-chat-chip" data-chat-prompt="Why isn't this in value bets?">Why isn't this in value bets?</button>
-                        <button type="button" class="mp-chat-chip" data-chat-prompt="What does reliability mean?">What does reliability mean?</button>
+            <div class="mp-chat-topbar-right">
+                <button type="button" class="mp-chat-btn-ghost" id="newChatBtn" onclick="resetChatConversation()" title="Start a fresh conversation">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12 20h9"></path>
+                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                    </svg>
+                    <span>New Chat</span>
+                </button>
+
+                @if (Model.ShowLogout)
+                {
+                    <form method="post" asp-page-handler="Logout" style="margin: 0;">
+                        @Html.AntiForgeryToken()
+                        <button type="submit" class="mp-chat-btn-ghost mp-chat-btn-danger" title="Lock AI Chat session">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                            </svg>
+                            <span>Lock</span>
+                        </button>
+                    </form>
+                }
+            </div>
+        </header>
+
+        <!-- Messages Region -->
+        <div class="mp-chat-messages" id="chatMessages" role="log" aria-live="polite">
+            <!-- Welcome Hero & Categorized Guidance -->
+            <div class="mp-welcome-hero" id="welcomeHero">
+                <div class="mp-welcome-badge">
+                    <div class="mp-welcome-avatar" aria-hidden="true">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="11" width="18" height="10" rx="2"></rect>
+                            <circle cx="12" cy="5" r="2"></circle>
+                            <path d="M12 7v4"></path>
+                            <line x1="8" y1="16" x2="8" y2="16"></line>
+                            <line x1="16" y1="16" x2="16" y2="16"></line>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2>Meet Nelson</h2>
+                        <p>Your grounded AI betting analyst. Powered by live fixture probabilities, Poisson &amp; Dixon-Coles goal rates, and published track records without guesswork.</p>
+                    </div>
+                </div>
+
+                <!-- Categorized Prompts Grid -->
+                <div class="mp-welcome-grid">
+                    <!-- Category 1: Accumulator & Slip Builder -->
+                    <div class="mp-welcome-card">
+                        <div class="mp-welcome-card-header">
+                            <div class="mp-card-icon mp-icon-emerald" aria-hidden="true">🎯</div>
+                            <h3>Slip &amp; Acca Builder</h3>
+                        </div>
+                        <p>Build disciplined slips with custom odds targets and balanced markets.</p>
+                        <div class="mp-welcome-card-chips">
+                            <button type="button" class="mp-chat-chip" data-chat-prompt="Give me 10 of the best BTTS predictions">Top 10 BTTS picks</button>
+                            <button type="button" class="mp-chat-chip" data-chat-prompt="Give me a mixture of btts, over 2.5 and straight win">Mix BTTS, Over &amp; Straight Win</button>
+                            <button type="button" class="mp-chat-chip" data-chat-prompt="Build a 5-leg accumulator for today with good balance">Build 5-leg accumulator</button>
+                        </div>
+                    </div>
+
+                    <!-- Category 2: Value & Edge Hunter -->
+                    <div class="mp-welcome-card">
+                        <div class="mp-welcome-card-header">
+                            <div class="mp-card-icon mp-icon-cyan" aria-hidden="true">💎</div>
+                            <h3>Value &amp; Edge Finder</h3>
+                        </div>
+                        <p>Find matches where the algorithmic probability outprices bookmakers.</p>
+                        <div class="mp-welcome-card-chips">
+                            <button type="button" class="mp-chat-chip" data-chat-prompt="Which draw games would you recommend?">Recommended Draw games</button>
+                            <button type="button" class="mp-chat-chip" data-chat-prompt="Which match is riskiest?">Riskiest matches to avoid</button>
+                            <button type="button" class="mp-chat-chip" data-chat-prompt="Which matches offer the highest statistical edge today?">Highest edge picks today</button>
+                        </div>
+                    </div>
+
+                    <!-- Category 3: Tactical Reads & Explanations -->
+                    <div class="mp-welcome-card">
+                        <div class="mp-welcome-card-header">
+                            <div class="mp-card-icon mp-icon-amber" aria-hidden="true">🧠</div>
+                            <h3>Tactical Explanations</h3>
+                        </div>
+                        <p>Understand the mathematics, suppression filters, and model health.</p>
+                        <div class="mp-welcome-card-chips">
+                            <button type="button" class="mp-chat-chip" data-chat-prompt="Why isn't this in value bets?">Why a game misses Value bar</button>
+                            <button type="button" class="mp-chat-chip" data-chat-prompt="What does reliability mean?">What reliability score means</button>
+                            <button type="button" class="mp-chat-chip" data-chat-prompt="Explain how Poisson and Dixon-Coles models predict goals">How goal models work</button>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <div class="mp-chat-input-area">
-            <div class="mp-chat-composer">
-                <input type="text" id="chatInput" class="mp-chat-input"
-                       placeholder="Ask about today's picks or a recent settled match..."
-                       autocomplete="off" />
-                <button type="button" id="chatSendBtn" class="mp-chat-send-btn" onclick="sendChatMessage()">
-                    Send
-                </button>
+        <!-- Floating Scroll to Bottom Button -->
+        <button type="button" class="mp-chat-scroll-bottom" id="scrollBottomBtn" aria-label="Scroll to newest message" style="display: none;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <polyline points="19 12 12 19 5 12"></polyline>
+            </svg>
+        </button>
+
+        <!-- Pinned Bottom Composer Dock -->
+        <div class="mp-chat-dock">
+            <div class="mp-chat-composer" id="composerContainer">
+                <textarea id="chatInput" class="mp-chat-textarea"
+                          placeholder="Ask Nelson about today's picks, accumulator combinations, or match stats..."
+                          rows="1"
+                          aria-label="Type your message"
+                          autocomplete="off"></textarea>
+                <div class="mp-chat-composer-actions">
+                    <span class="mp-chat-kbd-hint" aria-hidden="true">Enter ↵</span>
+                    <button type="button" id="chatSendBtn" class="mp-chat-send-circle" onclick="sendChatMessage()" aria-label="Send message">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <div class="mp-chat-dock-footer">
+                <span>Press Enter to send &bull; Shift+Enter for new line</span>
+                <span>MatchPredictor AI &bull; Grounded statistics</span>
             </div>
         </div>
-    </div>
-}
+    }
 </div>
 
 @section Scripts {
@@ -93,7 +181,15 @@ else
     const chatMessages = document.getElementById('chatMessages');
     const chatInput = document.getElementById('chatInput');
     const chatSendBtn = document.getElementById('chatSendBtn');
+    const scrollBottomBtn = document.getElementById('scrollBottomBtn');
+
+    // Auto-resizing textarea & keyboard submission
     if (chatInput && chatSendBtn) {
+        chatInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 160) + 'px';
+        });
+
         chatInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -102,17 +198,44 @@ else
         });
     }
 
+    // Scroll-to-bottom visibility listener
+    if (chatMessages && scrollBottomBtn) {
+        chatMessages.addEventListener('scroll', () => {
+            const distanceFromBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight;
+            scrollBottomBtn.style.display = distanceFromBottom > 150 ? 'flex' : 'none';
+        });
+
+        scrollBottomBtn.addEventListener('click', () => {
+            chatMessages.scrollTo({ top: chatMessages.scrollHeight, behavior: 'smooth' });
+        });
+    }
+
+    function createSvgAvatar(role) {
+        const avatar = document.createElement('div');
+        avatar.className = `mp-chat-avatar mp-avatar-${role}`;
+        avatar.setAttribute('aria-hidden', 'true');
+
+        if (role === 'ai') {
+            avatar.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"></rect><circle cx="12" cy="5" r="2"></circle><path d="M12 7v4"></path><line x1="8" y1="16" x2="8" y2="16"></line><line x1="16" y1="16" x2="16" y2="16"></line></svg>`;
+        } else {
+            avatar.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>`;
+        }
+        return avatar;
+    }
+
     function appendTextMessage(role, text) {
         const div = document.createElement('div');
         div.className = `mp-chat-message mp-chat-${role}`;
 
-        const avatar = document.createElement('div');
-        avatar.className = 'mp-chat-avatar';
-        avatar.textContent = role === 'ai' ? '🤖' : '👤';
+        const avatar = createSvgAvatar(role);
 
         const bubble = document.createElement('div');
         bubble.className = 'mp-chat-bubble';
         bubble.innerHTML = formatMessageHtml(text);
+
+        if (role === 'ai') {
+            attachMessageToolbar(bubble, text);
+        }
 
         div.appendChild(avatar);
         div.appendChild(bubble);
@@ -120,13 +243,37 @@ else
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 
+    function attachMessageToolbar(bubble, textToCopy) {
+        const toolbar = document.createElement('div');
+        toolbar.className = 'mp-msg-toolbar';
+
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'mp-msg-copy-btn';
+        copyBtn.title = 'Copy response to clipboard';
+        copyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><span>Copy</span>`;
+
+        copyBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                const span = copyBtn.querySelector('span');
+                if (span) span.textContent = 'Copied!';
+                copyBtn.style.color = '#34d399';
+                setTimeout(() => {
+                    if (span) span.textContent = 'Copy';
+                    copyBtn.style.color = '';
+                }, 2000);
+            });
+        });
+
+        toolbar.appendChild(copyBtn);
+        bubble.appendChild(toolbar);
+    }
+
     function appendAiResponse(response) {
         const div = document.createElement('div');
         div.className = 'mp-chat-message mp-chat-ai';
 
-        const avatar = document.createElement('div');
-        avatar.className = 'mp-chat-avatar';
-        avatar.textContent = '🤖';
+        const avatar = createSvgAvatar('ai');
 
         const bubble = document.createElement('div');
         bubble.className = 'mp-chat-bubble';
@@ -178,6 +325,8 @@ else
             bubble.appendChild(buildSuggestedPromptChips(response.suggestedPrompts));
         }
 
+        attachMessageToolbar(bubble, response.message || '');
+
         div.appendChild(avatar);
         div.appendChild(bubble);
         chatMessages.appendChild(div);
@@ -227,50 +376,77 @@ else
         const card = document.createElement('div');
         card.className = 'mp-chat-action';
 
-        const title = document.createElement('div');
-        title.className = 'mp-chat-action-title';
-        title.textContent = `${action.homeTeam} vs ${action.awayTeam}`;
-        card.appendChild(title);
+        // Header with teams and odds pill
+        const header = document.createElement('div');
+        header.className = 'mp-action-card-header';
 
-        const meta = document.createElement('div');
-        meta.className = 'mp-chat-action-meta';
+        const teams = document.createElement('div');
+        teams.className = 'mp-action-teams';
+        teams.textContent = `${action.homeTeam} vs ${action.awayTeam}`;
+        header.appendChild(teams);
+
+        const pills = document.createElement('div');
+        pills.className = 'mp-action-pills';
+
+        if (Number.isFinite(Number(action.estimatedOdds))) {
+            const oddsPill = document.createElement('span');
+            oddsPill.className = 'mp-pill-odds';
+            oddsPill.textContent = `~${Number(action.estimatedOdds).toFixed(2)} odds`;
+            pills.appendChild(oddsPill);
+        }
+
+        if (Number.isFinite(Number(action.edgePoints))) {
+            const edgeVal = Number(action.edgePoints);
+            const edgePill = document.createElement('span');
+            edgePill.className = 'mp-pill-edge';
+            edgePill.textContent = `${edgeVal >= 0 ? '+' : ''}${edgeVal.toFixed(1)} pts edge`;
+            pills.appendChild(edgePill);
+        }
+
+        header.appendChild(pills);
+        card.appendChild(header);
+
+        // Metadata bar (date, league, market, pick, kickoff, status)
+        const metaBar = document.createElement('div');
+        metaBar.className = 'mp-action-meta-bar';
+
         const metaParts = [
             action.matchDateLabel || 'Today',
             action.league || 'Card',
             action.market || 'Market',
             action.prediction || 'Pick'
         ];
-        if (action.kickoffTime) {
-            metaParts.push(action.kickoffTime);
-        }
-        if (action.status) {
-            metaParts.push(action.status);
-        }
-        if (Number.isFinite(Number(action.estimatedOdds))) {
-            metaParts.push(`~${Number(action.estimatedOdds).toFixed(2)} odds`);
-        }
-        meta.textContent = metaParts.join(' • ');
-        card.appendChild(meta);
+        if (action.kickoffTime) metaParts.push(action.kickoffTime);
+        if (action.status) metaParts.push(action.status);
 
-        const statParts = [];
-        if (Number.isFinite(Number(action.modelProbability))) {
-            statParts.push(`Model ${(Number(action.modelProbability) * 100).toFixed(1)}%`);
-        }
-        if (Number.isFinite(Number(action.marketProbability))) {
-            statParts.push(`Market ${(Number(action.marketProbability) * 100).toFixed(1)}%`);
-        }
-        if (Number.isFinite(Number(action.edgePoints))) {
-            const edge = Number(action.edgePoints);
-            statParts.push(`Edge ${edge >= 0 ? '+' : ''}${edge.toFixed(1)} pts`);
+        metaBar.textContent = metaParts.join(' • ');
+        card.appendChild(metaBar);
+
+        // Statistical Probability Grid (if available)
+        const hasModel = Number.isFinite(Number(action.modelProbability));
+        const hasMarket = Number.isFinite(Number(action.marketProbability));
+        if (hasModel || hasMarket) {
+            const probGrid = document.createElement('div');
+            probGrid.className = 'mp-action-prob-grid';
+
+            if (hasModel) {
+                const item = document.createElement('div');
+                item.className = 'mp-prob-item';
+                item.innerHTML = `<span class="mp-prob-label">Model Prob</span><span class="mp-prob-val" style="color:#38bdf8;">${(Number(action.modelProbability) * 100).toFixed(1)}%</span>`;
+                probGrid.appendChild(item);
+            }
+
+            if (hasMarket) {
+                const item = document.createElement('div');
+                item.className = 'mp-prob-item';
+                item.innerHTML = `<span class="mp-prob-label">Market Prob</span><span class="mp-prob-val" style="color:#94a3b8;">${(Number(action.marketProbability) * 100).toFixed(1)}%</span>`;
+                probGrid.appendChild(item);
+            }
+
+            card.appendChild(probGrid);
         }
 
-        if (statParts.length > 0) {
-            const stats = document.createElement('div');
-            stats.className = 'mp-chat-action-stats';
-            stats.textContent = statParts.join(' • ');
-            card.appendChild(stats);
-        }
-
+        // Explanation text
         if (action.explanation) {
             const explanation = document.createElement('div');
             explanation.className = 'mp-chat-action-explanation';
@@ -278,6 +454,7 @@ else
             card.appendChild(explanation);
         }
 
+        // Football Read / Insight section
         if (action.analysisSummary || (Array.isArray(action.insightBullets) && action.insightBullets.length > 0) || action.analysisConfidence || action.insightSource) {
             const insightPanel = document.createElement('div');
             insightPanel.className = 'mp-chat-insight';
@@ -337,8 +514,10 @@ else
             card.appendChild(settledScore);
         }
 
+        // Interactive "+ Add Market" button with animated checkmark feedback
         if (action.canBook !== false) {
             const btn = document.createElement('button');
+            btn.type = 'button';
             btn.className = 'mp-add-cart-btn mp-btn-sm';
             btn.textContent = `+ Add ${action.market}`;
             btn.dataset.home = action.homeTeam || '';
@@ -348,6 +527,27 @@ else
             btn.dataset.prediction = action.prediction || '';
             btn.dataset.predictionId = action.predictionId ? String(action.predictionId) : '';
             btn.dataset.matchDatetimeUtc = action.matchDateTimeUtc || '';
+
+            btn.addEventListener('click', () => {
+                if (typeof addToCart === 'function') {
+                    addToCart({
+                        homeTeam: btn.dataset.home || '',
+                        awayTeam: btn.dataset.away || '',
+                        league: btn.dataset.league || '',
+                        market: btn.dataset.market || '',
+                        prediction: btn.dataset.prediction || '',
+                        predictionId: btn.dataset.predictionId ? Number(btn.dataset.predictionId) : null,
+                        matchDateTimeUtc: btn.dataset.matchDatetimeUtc || null
+                    });
+                }
+                btn.textContent = '✓ Added to Slip';
+                btn.classList.add('mp-btn-added');
+                setTimeout(() => {
+                    btn.textContent = `+ Add ${action.market}`;
+                    btn.classList.remove('mp-btn-added');
+                }, 2500);
+            });
+
             card.appendChild(btn);
         }
 
@@ -462,7 +662,6 @@ else
             .replace(/`(.*?)`/g, '<code>$1</code>');
     }
 
-    // Agentic UI Action
     function addAllAndBook(btn) {
         const bubble = btn.closest('.mp-chat-bubble');
         if (!bubble) return;
@@ -470,7 +669,7 @@ else
         const addedCount = addAllAndBookFromBubble(bubble);
         if (addedCount <= 0) return;
 
-        btn.textContent = `Added ${addedCount} picks!`;
+        btn.textContent = `✓ Added ${addedCount} picks to slip!`;
         btn.disabled = true;
     }
 
@@ -505,14 +704,18 @@ else
         const div = document.createElement('div');
         div.className = 'mp-chat-message mp-chat-ai mp-chat-typing';
         div.id = 'typingIndicator';
-        div.innerHTML = `
-            <div class="mp-chat-avatar">🤖</div>
-            <div class="mp-chat-bubble">
-                <div class="mp-typing-dots">
-                    <span></span><span></span><span></span>
-                </div>
+
+        const avatar = createSvgAvatar('ai');
+        const bubble = document.createElement('div');
+        bubble.className = 'mp-chat-bubble';
+        bubble.innerHTML = `
+            <div class="mp-typing-dots">
+                <span></span><span></span><span></span>
             </div>
         `;
+
+        div.appendChild(avatar);
+        div.appendChild(bubble);
         chatMessages.appendChild(div);
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
@@ -525,16 +728,35 @@ else
     function sendSuggestedPrompt(prompt) {
         if (!chatInput || !chatSendBtn) return;
         chatInput.value = prompt;
+        chatInput.style.height = 'auto';
         sendChatMessage();
+    }
+
+    function resetChatConversation() {
+        if (!chatMessages) return;
+        const welcome = document.getElementById('welcomeHero');
+        chatMessages.innerHTML = '';
+        if (welcome) {
+            chatMessages.appendChild(welcome);
+        } else {
+            location.reload();
+            return;
+        }
+        if (chatInput) {
+            chatInput.value = '';
+            chatInput.style.height = 'auto';
+            chatInput.focus();
+        }
     }
 
     async function sendChatMessage() {
         const message = chatInput.value.trim();
         if (!message) return;
 
-        // Show user message
+        // Display user message in chat
         appendTextMessage('user', message);
         chatInput.value = '';
+        chatInput.style.height = 'auto';
         chatSendBtn.disabled = true;
 
         showTypingIndicator();
@@ -576,9 +798,7 @@ else
 
             const messageDiv = document.createElement('div');
             messageDiv.className = 'mp-chat-message mp-chat-ai';
-            const avatar = document.createElement('div');
-            avatar.className = 'mp-chat-avatar';
-            avatar.textContent = '🤖';
+            const avatar = createSvgAvatar('ai');
 
             const bubble = document.createElement('div');
             bubble.className = 'mp-chat-bubble';
@@ -618,11 +838,7 @@ else
                         const eventType = chunk.EventType || chunk.eventType;
                         if (eventType === 'thinking') {
                             thinkingDiv.style.display = 'flex';
-                            thinkingDiv.style.alignItems = 'center';
-                            thinkingDiv.style.color = '#94a3b8';
-                            thinkingDiv.style.fontSize = '0.85rem';
-                            thinkingDiv.style.marginBottom = '6px';
-                            thinkingDiv.querySelector('.thinking-text').textContent = chunk.Content || chunk.content || 'Analyzing...';
+                            thinkingDiv.querySelector('.thinking-text').textContent = chunk.Content || chunk.content || 'Analyzing live data...';
                             chatMessages.scrollTop = chatMessages.scrollHeight;
                         } else if (eventType === 'text') {
                             thinkingDiv.style.display = 'none';
@@ -700,6 +916,7 @@ else
             }
 
             thinkingDiv.remove();
+            attachMessageToolbar(bubble, accumulatedText);
 
         } catch (err) {
             removeTypingIndicator();

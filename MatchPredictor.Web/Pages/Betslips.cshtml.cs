@@ -154,16 +154,16 @@ public class BetslipsModel : PageModel
         GeneratedLocalLabel = $"{local:ddd d MMM yyyy, HH:mm} WAT";
 
         RolloverSlip = CurrentSet.Slips
-            .FirstOrDefault(s => BetslipKinds.IsRolloverSlip(s));
+            .FirstOrDefault(s => !s.IsPrivate && BetslipKinds.IsRolloverSlip(s));
 
         BankerSlip = CurrentSet.Slips
-            .FirstOrDefault(s => BetslipKinds.IsBankerSlip(s));
+            .FirstOrDefault(s => !s.IsPrivate && BetslipKinds.IsBankerSlip(s));
 
         BetBuilderSlip = CurrentSet.Slips
-            .FirstOrDefault(s => BetslipKinds.IsBetBuilderSlip(s));
+            .FirstOrDefault(s => !s.IsPrivate && BetslipKinds.IsBetBuilderSlip(s));
 
         OtherSlips = CurrentSet.Slips
-            .Where(s => s != RolloverSlip && s != BankerSlip && s != BetBuilderSlip)
+            .Where(s => !s.IsPrivate && s != RolloverSlip && s != BankerSlip && s != BetBuilderSlip)
             .OrderBy(s => s.SlipNumber)
             .ToList();
     }

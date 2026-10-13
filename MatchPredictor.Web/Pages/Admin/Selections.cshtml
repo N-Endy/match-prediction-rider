@@ -1,0 +1,837 @@
+@page "/Admin/Selections"
+@model MatchPredictor.Web.Pages.Admin.SelectionsModel
+@using MatchPredictor.Domain.Models
+@using MatchPredictor.Infrastructure.Utils
+@{
+    ViewData["Title"] = "Private Selections · Synergy Hub";
+    ViewData["Robots"] = "noindex, nofollow";
+}
+
+@section Head {
+    <meta name="robots" content="noindex, nofollow" />
+}
+
+<div class="mp-container mp-synergy-container">
+    @if (!string.IsNullOrWhiteSpace(Model.StatusAlertMessage))
+    {
+        <div class="mp-alert @(Model.StatusAlertSuccess ? "mp-alert-success" : "mp-alert-danger")" style="margin-top: 1rem;">
+            <span>@(Model.StatusAlertSuccess ? "✓" : "⚠")</span>
+            <div>@Model.StatusAlertMessage</div>
+        </div>
+    }
+
+    <header class="mp-page-header mp-synergy-header">
+        <div class="mp-synergy-title-wrap">
+            <div class="mp-synergy-confidential-tag">
+                <span class="mp-live-pulse-dot"></span>
+                <span>CONFIDENTIAL OWNER PORTAL · 6-SLIP SYNERGY EXPLOIT</span>
+            </div>
+            <h1 class="mp-synergy-heading">Private Selections Hub</h1>
+            <p class="mp-synergy-lead">
+                Algorithmic betslips powered by 4 empirical cross-market correlation patterns discovered in the production historical database.
+            </p>
+        </div>
+
+        <div class="mp-synergy-header-actions">
+            @if (Model.CurrentSet is not null)
+            {
+                <span class="mp-date-badge">@Model.GeneratedLocalLabel</span>
+            }
+            <form method="post" asp-page-handler="Refresh" class="mp-refresh-form">
+                <button type="submit" class="mp-btn-action mp-btn-refresh" title="Re-run pipeline and re-book slips on demand">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+                    </svg>
+                    <span>Refresh &amp; Book Today</span>
+                </button>
+            </form>
+        </div>
+    </header>
+
+    @if (Model.CurrentSet is null)
+    {
+        <div class="mp-empty-state">
+            <div class="mp-empty-state-icon">🔒</div>
+            <h2>No betslips generated yet</h2>
+            <p>Click "Refresh &amp; Book Today" above to evaluate today's fixtures and compose your private slips.</p>
+        </div>
+    }
+    else
+    {
+        <!-- Meta strip & Run Switcher -->
+        <div class="mp-page-meta-strip mp-synergy-meta-strip">
+            <span>@Model.CurrentSet.DayKind · @(Model.CurrentSet.RunLabel) run</span>
+            <span>@Model.SynergySlips.Count(s => s.SelectionCount > 0) active of @Model.SynergySlips.Count synergy slips</span>
+            <span>@Model.CurrentSet.SlipLocalDate.ToString("dddd d MMMM yyyy")</span>
+            @if (Model.AvailableTodayRuns.Count > 1)
+            {
+                <span class="mp-betslip-run-toggle-group">
+                    Run:
+                    @foreach (var r in Model.AvailableTodayRuns)
+                    {
+                        var isActive = string.Equals(Model.SelectedRun, r, StringComparison.OrdinalIgnoreCase);
+                        <a href="/Admin/Selections?run=@r" class="mp-run-pill @(isActive ? "active" : "")">
+                            @r
+                        </a>
+                    }
+                </span>
+            }
+        </div>
+
+        <!-- Strategy Explainer Strip -->
+        <section class="mp-synergy-explainer-grid" aria-label="Strategy Overview">
+            <div class="mp-synergy-strategy-pill">
+                <div class="mp-strategy-dot mp-dot-cyan"></div>
+                <div>
+                    <strong>Under Fortress</strong>
+                    <span>Draw ≥ 0.35 &amp; Under ≥ 0.65 · 69.5% win rate</span>
+                </div>
+            </div>
+            <div class="mp-synergy-strategy-pill">
+                <div class="mp-strategy-dot mp-dot-emerald"></div>
+                <div>
+                    <strong>Favorite Machine</strong>
+                    <span>Win ≥ 0.75 &amp; Over ≥ 0.65 · 82.5% Win / 72.0% Over</span>
+                </div>
+            </div>
+            <div class="mp-synergy-strategy-pill">
+                <div class="mp-strategy-dot mp-dot-amber"></div>
+                <div>
+                    <strong>Goal Frenzy</strong>
+                    <span>BTTS ≥ 0.60 &amp; Over ≥ 0.65 · 70.5% Over / 64.1% BTTS</span>
+                </div>
+            </div>
+            <div class="mp-synergy-strategy-pill">
+                <div class="mp-strategy-dot mp-dot-blue"></div>
+                <div>
+                    <strong>Draw / BTTS Strike</strong>
+                    <span>Draw Qualified &amp; BTTS ≥ 0.57 · 62.2% win rate</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- 6 Synergy Betslips Grid -->
+        <section class="mp-synergy-grid" aria-label="Synergy Betslips">
+            @foreach (var slip in Model.SynergySlips)
+            {
+                var isBooked = slip.BookingStatus == BetslipBookingStatuses.Booked;
+                var isEmpty = slip.SelectionCount == 0;
+                var bookedCount = slip.Selections.Count(s => s.WasBooked);
+
+                var badgeInfo = slip.SlipNumber switch
+                {
+                    101 => ("Under 2.5", "Draw ≥ 0.35 + Under ≥ 0.65", "69.52% Win Rate", "pill-cyan"),
+                    102 => ("Straight Win", "Win ≥ 0.75 + Over ≥ 0.65", "82.49% Win Rate", "pill-emerald"),
+                    103 => ("Over 2.5", "Win ≥ 0.75 + Over ≥ 0.65", "71.96% Win Rate", "pill-emerald"),
+                    104 => ("Over 2.5", "BTTS ≥ 0.60 + Over ≥ 0.65", "70.49% Win Rate", "pill-amber"),
+                    105 => ("BTTS (Yes)", "BTTS ≥ 0.60 + Over ≥ 0.65", "64.10% Win Rate", "pill-amber"),
+                    106 => ("BTTS (Yes)", "Draw Qualified + BTTS ≥ 0.57", "62.20% Win Rate", "pill-blue"),
+                    _ => ("Synergy", "Statistical Correlation", "High Hit Rate", "pill-blue")
+                };
+
+                <article class="mp-synergy-card @(isEmpty ? "mp-card-empty" : "")" id="slip-@slip.SlipNumber">
+                    <header class="mp-synergy-card-header">
+                        <div>
+                            <div class="mp-synergy-card-subhead">
+                                <span class="mp-synergy-num-badge">Slip #@(slip.SlipNumber - 100)</span>
+                                <span class="mp-synergy-market-tag @badgeInfo.Item4">@badgeInfo.Item1</span>
+                                <span class="mp-synergy-winrate-tag">@badgeInfo.Item3</span>
+                            </div>
+                            <h2 class="mp-synergy-card-title">@slip.Title</h2>
+                            <p class="mp-synergy-criteria">@badgeInfo.Item2</p>
+                        </div>
+
+                        <div>
+                            @if (isEmpty)
+                            {
+                                <span class="mp-status-pill mp-status-empty">No Qualifiers</span>
+                            }
+                            else if (isBooked)
+                            {
+                                <span class="mp-status-pill mp-status-booked">Booked</span>
+                            }
+                            else
+                            {
+                                <span class="mp-status-pill mp-status-partial">@(slip.BookingStatus)</span>
+                            }
+                        </div>
+                    </header>
+
+                    <!-- Metrics bar -->
+                    <div class="mp-synergy-metrics">
+                        <div class="mp-metric-block">
+                            <span class="mp-metric-label">Picks</span>
+                            <span class="mp-metric-val">@slip.SelectionCount</span>
+                        </div>
+                        <div class="mp-metric-block">
+                            <span class="mp-metric-label">Booked</span>
+                            <span class="mp-metric-val">@bookedCount</span>
+                        </div>
+                        <div class="mp-metric-block">
+                            <span class="mp-metric-label">Combined Odds</span>
+                            <span class="mp-metric-val mp-odds-val">
+                                @(slip.CombinedDecimalOdds.HasValue && slip.CombinedDecimalOdds.Value > 1 ? $"{slip.CombinedDecimalOdds.Value:0.00}x" : "—")
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Booking action row -->
+                    @if (!string.IsNullOrWhiteSpace(slip.BookingCode))
+                    {
+                        var resolvedBookingUrl = !string.IsNullOrWhiteSpace(slip.BookingUrl)
+                            && !slip.BookingUrl.TrimEnd('/').EndsWith("/sport/football", StringComparison.OrdinalIgnoreCase)
+                                ? slip.BookingUrl
+                                : $"https://www.sportybet.com/ng/?shareCode={slip.BookingCode}";
+
+                        <div class="mp-synergy-booking-box">
+                            <div class="mp-code-label-row">
+                                <span>SportyBet Booking Code</span>
+                                <span class="mp-code-tag">Instant Load</span>
+                            </div>
+                            <div class="mp-synergy-code-row">
+                                <code class="mp-synergy-code" id="booking-code-@slip.Id">@slip.BookingCode</code>
+                                <div class="mp-code-btn-group">
+                                    <button type="button"
+                                            class="mp-btn-copy"
+                                            onclick="copySlipCode('@slip.BookingCode', this)">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                        </svg>
+                                        <span>Copy</span>
+                                    </button>
+                                    <a href="@resolvedBookingUrl"
+                                       target="_blank"
+                                       rel="noopener noreferrer"
+                                       class="mp-btn-sporty">
+                                        Open in SportyBet &rarr;
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    else if (!isEmpty)
+                    {
+                        <div class="mp-synergy-no-code-box">
+                            <span>@(string.IsNullOrWhiteSpace(slip.StatusMessage) ? "Booking code pending generation or retry." : slip.StatusMessage)</span>
+                        </div>
+                    }
+
+                    <!-- Selections Content -->
+                    @if (isEmpty)
+                    {
+                        <div class="mp-synergy-empty-banner">
+                            <span class="mp-empty-banner-icon">ℹ</span>
+                            <div>
+                                <strong>No qualifying fixtures today</strong>
+                                <p>No matches in today's active pool satisfied the strict threshold criteria (@badgeInfo.Item2).</p>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <details class="mp-synergy-details" open>
+                            <summary class="mp-synergy-summary">
+                                <span>View @slip.SelectionCount qualified fixtures</span>
+                                <span class="mp-summary-chevron">▾</span>
+                            </summary>
+
+                            <div class="mp-synergy-picks-table-wrap">
+                                <table class="mp-picks-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Match / League</th>
+                                            <th>Kickoff (WAT)</th>
+                                            <th>Market</th>
+                                            <th>Pick</th>
+                                            <th>Conf.</th>
+                                            <th>Odds</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var pick in slip.Selections
+                                            .OrderBy(s => s.MatchDateTimeUtc ?? DateTime.MaxValue)
+                                            .ThenBy(s => s.League)
+                                            .ThenBy(s => s.HomeTeam))
+                                        {
+                                            var matchTime = pick.MatchDateTimeUtc.HasValue
+                                                ? DateTimeProvider.ConvertUtcToLocal(pick.MatchDateTimeUtc.Value).ToString("HH:mm")
+                                                : "—";
+
+                                            var confVal = pick.ConfidenceScore.HasValue
+                                                ? (pick.ConfidenceScore.Value > 1m ? pick.ConfidenceScore.Value : pick.ConfidenceScore.Value * 100m)
+                                                : 0m;
+
+                                            <tr class="@(pick.WasBooked ? "" : "mp-pick-unbooked")">
+                                                <td class="mp-pick-fixture-col">
+                                                    <div class="mp-pick-teams">@pick.HomeTeam vs @pick.AwayTeam</div>
+                                                    <div class="mp-pick-league">@pick.League</div>
+                                                </td>
+                                                <td class="mp-pick-time-col">@matchTime</td>
+                                                <td class="mp-pick-market-col">
+                                                    <span class="mp-market-tag">@pick.Market</span>
+                                                </td>
+                                                <td class="mp-pick-outcome-col">
+                                                    <span class="mp-outcome-badge">@pick.PredictedOutcome</span>
+                                                </td>
+                                                <td class="mp-pick-conf-col">
+                                                    @if (confVal > 0m)
+                                                    {
+                                                        <strong>@confVal.ToString("0.0")%</strong>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span>—</span>
+                                                    }
+                                                </td>
+                                                <td class="mp-pick-odds-col">
+                                                    @(pick.DecimalOdds.HasValue && pick.DecimalOdds.Value > 1 ? pick.DecimalOdds.Value.ToString("0.00") : "—")
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        </details>
+                    }
+                </article>
+            }
+        </section>
+    }
+</div>
+
+<style>
+/* ─── Private Synergy Portal Layout & Cards ─── */
+.mp-synergy-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 1.5rem 1rem 4rem;
+}
+
+.mp-synergy-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 1.5rem;
+}
+
+.mp-synergy-confidential-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.75rem;
+    background: rgba(14, 165, 233, 0.12);
+    border: 1px solid rgba(14, 165, 233, 0.35);
+    border-radius: var(--radius-full);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: #38bdf8;
+    margin-bottom: 0.75rem;
+}
+
+.mp-live-pulse-dot {
+    width: 7px;
+    height: 7px;
+    background: #38bdf8;
+    border-radius: 50%;
+    box-shadow: 0 0 8px #38bdf8;
+    animation: mpPulse 2s infinite ease-in-out;
+}
+
+@@keyframes mpPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+.mp-synergy-heading {
+    font-size: 2rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    margin: 0 0 0.5rem;
+    letter-spacing: -0.02em;
+}
+
+.mp-synergy-lead {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    margin: 0;
+    max-width: 750px;
+    line-height: 1.5;
+}
+
+.mp-synergy-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.mp-btn-refresh {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: linear-gradient(135deg, #0ea5e9, #0284c7);
+    color: #ffffff;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 0.65rem 1.15rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(14, 165, 233, 0.35);
+    transition: var(--transition);
+}
+
+.mp-btn-refresh:hover {
+    background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(14, 165, 233, 0.45);
+}
+
+.mp-alert {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.85rem 1.25rem;
+    border-radius: var(--radius-md);
+    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.mp-alert-success {
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    color: #34d399;
+}
+
+.mp-alert-danger {
+    background: rgba(244, 63, 94, 0.12);
+    border: 1px solid rgba(244, 63, 94, 0.35);
+    color: #fb7185;
+}
+
+/* ─── Explainer Strip ─── */
+.mp-synergy-explainer-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 0.85rem;
+    margin-bottom: 1.5rem;
+}
+
+.mp-synergy-strategy-pill {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 0.75rem 1rem;
+}
+
+.mp-strategy-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.mp-dot-cyan { background: #06b6d4; box-shadow: 0 0 8px rgba(6, 182, 212, 0.5); }
+.mp-dot-emerald { background: #10b981; box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
+.mp-dot-amber { background: #f59e0b; box-shadow: 0 0 8px rgba(245, 158, 11, 0.5); }
+.mp-dot-blue { background: #3b82f6; box-shadow: 0 0 8px rgba(59, 130, 246, 0.5); }
+
+.mp-synergy-strategy-pill strong {
+    display: block;
+    font-size: 0.825rem;
+    color: var(--text-primary);
+}
+
+.mp-synergy-strategy-pill span {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+/* ─── Slips Grid ─── */
+.mp-synergy-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(580px, 1fr));
+    gap: 1.5rem;
+}
+
+@@media (max-width: 640px) {
+    .mp-synergy-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.mp-synergy-card {
+    background: var(--bg-card);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: var(--radius-lg);
+    padding: 1.4rem;
+    box-shadow: var(--shadow-md);
+    display: flex;
+    flex-direction: column;
+    gap: 1.15rem;
+    transition: var(--transition);
+}
+
+.mp-synergy-card:hover {
+    border-color: rgba(56, 189, 248, 0.3);
+    box-shadow: var(--shadow-lg);
+}
+
+.mp-synergy-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+}
+
+.mp-synergy-card-subhead {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.35rem;
+}
+
+.mp-synergy-num-badge {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-primary);
+    padding: 0.15rem 0.5rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.725rem;
+    font-weight: 700;
+}
+
+.mp-synergy-market-tag {
+    font-size: 0.725rem;
+    font-weight: 700;
+    padding: 0.15rem 0.55rem;
+    border-radius: var(--radius-sm);
+}
+
+.pill-cyan { background: rgba(6, 182, 212, 0.15); color: #22d3ee; }
+.pill-emerald { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+.pill-amber { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+.pill-blue { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+
+.mp-synergy-winrate-tag {
+    font-size: 0.725rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.mp-synergy-card-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 0.25rem;
+}
+
+.mp-synergy-criteria {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+.mp-status-pill {
+    padding: 0.25rem 0.65rem;
+    border-radius: var(--radius-full);
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.mp-status-booked { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35); }
+.mp-status-partial { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); }
+.mp-status-empty { background: rgba(148, 163, 184, 0.12); color: var(--text-muted); border: 1px solid rgba(148, 163, 184, 0.2); }
+
+/* ─── Metrics ─── */
+.mp-synergy-metrics {
+    display: flex;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 0.65rem 1rem;
+    gap: 1.5rem;
+}
+
+.mp-metric-block {
+    display: flex;
+    flex-direction: column;
+}
+
+.mp-metric-label {
+    font-size: 0.725rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.mp-metric-val {
+    font-size: 1.1rem;
+    font-weight: 800;
+    color: var(--text-primary);
+}
+
+.mp-odds-val {
+    color: #38bdf8;
+}
+
+/* ─── Booking Box ─── */
+.mp-synergy-booking-box {
+    background: rgba(14, 165, 233, 0.06);
+    border: 1px dashed rgba(14, 165, 233, 0.35);
+    border-radius: var(--radius-md);
+    padding: 0.75rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.mp-code-label-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.mp-code-tag {
+    color: #38bdf8;
+    font-weight: 700;
+}
+
+.mp-synergy-code-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.mp-synergy-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 1.35rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    color: #ffffff;
+    background: rgba(0, 0, 0, 0.35);
+    padding: 0.3rem 0.75rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.mp-code-btn-group {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.mp-btn-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: var(--bg-box-hover);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 0.45rem 0.85rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.mp-btn-copy:hover {
+    background: #334155;
+    color: #ffffff;
+}
+
+.mp-btn-sporty {
+    display: inline-flex;
+    align-items: center;
+    background: #0ea5e9;
+    color: #ffffff;
+    border-radius: var(--radius-sm);
+    padding: 0.45rem 0.95rem;
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-decoration: none;
+    transition: var(--transition);
+}
+
+.mp-btn-sporty:hover {
+    background: #38bdf8;
+    color: #ffffff;
+}
+
+.mp-synergy-no-code-box {
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.25);
+    border-radius: var(--radius-md);
+    padding: 0.65rem 0.9rem;
+    font-size: 0.825rem;
+    color: #fbbf24;
+}
+
+.mp-synergy-empty-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    background: rgba(148, 163, 184, 0.06);
+    border: 1px solid rgba(148, 163, 184, 0.15);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    color: var(--text-secondary);
+}
+
+.mp-empty-banner-icon {
+    font-size: 1.1rem;
+    color: var(--text-muted);
+}
+
+.mp-synergy-empty-banner strong {
+    display: block;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    margin-bottom: 0.2rem;
+}
+
+.mp-synergy-empty-banner p {
+    margin: 0;
+    font-size: 0.825rem;
+    line-height: 1.4;
+}
+
+/* ─── Picks Table ─── */
+.mp-synergy-details summary {
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #38bdf8;
+    padding: 0.35rem 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    user-select: none;
+}
+
+.mp-synergy-picks-table-wrap {
+    overflow-x: auto;
+    margin-top: 0.5rem;
+}
+
+.mp-picks-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.825rem;
+}
+
+.mp-picks-table th {
+    text-align: left;
+    padding: 0.5rem 0.65rem;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-muted);
+    font-size: 0.725rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+}
+
+.mp-picks-table td {
+    padding: 0.6rem 0.65rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+    color: var(--text-primary);
+    vertical-align: middle;
+}
+
+.mp-pick-unbooked {
+    opacity: 0.6;
+}
+
+.mp-pick-fixture-col {
+    min-width: 180px;
+}
+
+.mp-pick-teams {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.mp-pick-league {
+    font-size: 0.725rem;
+    color: var(--text-muted);
+}
+
+.mp-pick-time-col {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    white-space: nowrap;
+}
+
+.mp-market-tag {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-secondary);
+    padding: 0.15rem 0.45rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.725rem;
+}
+
+.mp-outcome-badge {
+    font-weight: 700;
+    color: #38bdf8;
+}
+
+.mp-pick-conf-col {
+    white-space: nowrap;
+}
+
+.mp-pick-odds-col {
+    font-weight: 700;
+    color: #f1f5f9;
+}
+</style>
+
+<script>
+function copySlipCode(code, btn) {
+    if (!navigator.clipboard) {
+        var textArea = document.createElement("textarea");
+        textArea.value = code;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            showCopied(btn);
+        } catch (err) {}
+        document.body.removeChild(textArea);
+        return;
+    }
+    navigator.clipboard.writeText(code).then(function() {
+        showCopied(btn);
+    });
+}
+
+function showCopied(btn) {
+    var span = btn.querySelector('span');
+    var original = span ? span.innerText : 'Copy';
+    if (span) span.innerText = 'Copied!';
+    btn.style.borderColor = '#10b981';
+    btn.style.color = '#34d399';
+    setTimeout(function() {
+        if (span) span.innerText = original;
+        btn.style.borderColor = '';
+        btn.style.color = '';
+    }, 2000);
+}
+</script>

@@ -302,6 +302,8 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
             entity.Property(e => e.BookingUrl).HasMaxLength(512);
             entity.Property(e => e.BookingStatus).HasMaxLength(32);
             entity.Property(e => e.StatusMessage).HasMaxLength(512);
+            entity.Property(e => e.IsPrivate).HasDefaultValue(false);
+            entity.HasIndex(e => e.IsPrivate);
             entity.HasIndex(e => new { e.BetslipSetId, e.SlipNumber }).IsUnique();
             entity.HasMany(e => e.Selections)
                 .WithOne(e => e.Betslip)
