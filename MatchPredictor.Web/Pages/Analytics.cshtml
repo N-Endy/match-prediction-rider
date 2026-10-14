@@ -86,6 +86,10 @@
                 <div class="mp-stat-value mp-stat-value-compact">@Model.MarketMlProfiles.Count(profile => profile.IsPromoted)</div>
             </div>
             <div class="mp-stat-card">
+                <div class="mp-stat-label">Shadow ML Challengers</div>
+                <div class="mp-stat-value mp-stat-value-compact">@Model.MarketMlProfiles.Count(profile => profile.IsShadow)</div>
+            </div>
+            <div class="mp-stat-card">
                 <div class="mp-stat-label">Recommended Isotonic</div>
                 <div class="mp-stat-value mp-stat-value-compact">@Model.IsotonicProfiles.Values.Count(profile => profile.IsRecommended)</div>
             </div>
@@ -150,19 +154,35 @@
 
         <div class="mp-category-stats mp-analytics-panel-gap">
             <h3 class="mp-analytics-panel-title">ML Promotion Status</h3>
+            <p class="mp-read-detail" style="margin-bottom: 12px;">
+                Models are trained per-market on 180-day settled history. Promoted champions blend into live probabilities. Challengers run in shadow mode until reaching 50+ live settled predictions with statistically significant improvement (p &lt; 0.05).
+            </p>
             @if (Model.MarketMlProfiles.Any())
             {
                 @foreach (var profile in Model.MarketMlProfiles)
                 {
+                    var statusLabel = profile.IsPromoted ? "Champion" : (profile.IsShadow ? "Shadow Challenger" : "Candidate");
+                    var badgeClass = profile.IsPromoted ? "mp-read-badge-strong" : (profile.IsShadow ? "mp-read-badge-caution" : "");
                     <div class="mp-category-row">
                         <div class="mp-cat-header">
                             <span class="mp-cat-name">@profile.Market.ToDisplayName()</span>
-                            <span class="mp-cat-details">@(profile.IsPromoted ? "Promoted" : "Candidate") · @profile.HoldoutSampleCount holdout</span>
+                            <span class="mp-cat-details">
+                                <span class="mp-read-badge @badgeClass" style="margin-right: 4px;">@statusLabel</span>
+                                @profile.HoldoutSampleCount holdout
+                                @if (profile.IsShadow && profile.ShadowSampleCount > 0)
+                                {
+                                    <span> · @profile.ShadowSampleCount settled live (p = @(profile.PromotionPValue?.ToString("0.000") ?? "--"))</span>
+                                }
+                            </span>
                         </div>
                         <div class="mp-read-strip">
                             <span class="mp-read-badge mp-read-badge-caution">Base @profile.BaselineBrierScore.ToString("0.000")</span>
                             <span class="mp-read-badge mp-read-badge-caution">Model @profile.CandidateBrierScore.ToString("0.000")</span>
-                            <span class="mp-read-badge @(profile.Improvement > 0 ? "mp-read-badge-strong" : "mp-read-badge-avoid")">Delta @profile.Improvement.ToString("+0.000;-0.000;0.000")</span>
+                            <span class="mp-read-badge @(profile.Improvement > 0 ? "mp-read-badge-strong" : "mp-read-badge-avoid")">Holdout Delta @profile.Improvement.ToString("+0.000;-0.000;0.000")</span>
+                            @if (profile.ShadowBrierScore.HasValue)
+                            {
+                                <span class="mp-read-badge mp-read-badge-caution">Live Shadow Brier @profile.ShadowBrierScore.Value.ToString("0.000")</span>
+                            }
                         </div>
                     </div>
                 }
@@ -175,6 +195,9 @@
 
         <div class="mp-category-stats">
             <h3 class="mp-analytics-panel-title">Isotonic Calibration Profiles</h3>
+            <p class="mp-read-detail" style="margin-bottom: 12px;">
+                Non-parametric step calibration. Requires holdout Brier improvement &gt; +0.0025 over parametric Beta calibration to be recommended for live promotion, preventing step-function overfitting on thin tails.
+            </p>
             @if (Model.IsotonicProfiles.Any())
             {
                 @foreach (var profile in Model.IsotonicProfiles.Values.OrderBy(profile => profile.Market))
@@ -182,12 +205,18 @@
                     <div class="mp-category-row">
                         <div class="mp-cat-header">
                             <span class="mp-cat-name">@profile.Market.ToDisplayName()</span>
-                            <span class="mp-cat-details">@(profile.IsRecommended ? "Recommended" : "Shadow") · @profile.ValidationSampleCount validation</span>
+                            <span class="mp-cat-details">
+                                <span class="mp-read-badge @(profile.IsRecommended ? "mp-read-badge-strong" : "mp-read-badge-caution")" style="margin-right: 4px;">
+                                    @(profile.IsRecommended ? "Recommended (Live)" : "Shadow (Evaluating)")
+                                </span>
+                                @profile.ValidationSampleCount validation
+                            </span>
                         </div>
                         <div class="mp-read-strip">
                             <span class="mp-read-badge mp-read-badge-caution">Base @profile.BaselineBrierScore.ToString("0.000")</span>
                             <span class="mp-read-badge mp-read-badge-caution">Iso @profile.ValidationBrierScore.ToString("0.000")</span>
                             <span class="mp-read-badge @(profile.Improvement > 0 ? "mp-read-badge-strong" : "mp-read-badge-avoid")">Delta @profile.Improvement.ToString("+0.000;-0.000;0.000")</span>
+                            <span class="mp-read-badge @(profile.Improvement >= 0.0025 ? "mp-read-badge-strong" : "mp-read-badge-caution")">Threshold: +0.0025</span>
                         </div>
                     </div>
                 }

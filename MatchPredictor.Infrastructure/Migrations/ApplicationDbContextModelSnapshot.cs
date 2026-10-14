@@ -821,8 +821,15 @@ namespace MatchPredictor.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Market")
-                        .IsUnique();
+                    b.HasIndex("Market", "IsPromoted", "IsShadow");
+
+                    b.HasIndex(new[] { "Market" }, "IX_MarketMlModelProfiles_Market_Promoted")
+                        .IsUnique()
+                        .HasFilter("\"IsPromoted\" = true");
+
+                    b.HasIndex(new[] { "Market" }, "IX_MarketMlModelProfiles_Market_Shadow")
+                        .IsUnique()
+                        .HasFilter("\"IsShadow\" = true");
 
                     b.ToTable("MarketMlModelProfiles");
                 });

@@ -372,6 +372,19 @@ public class DataAnalyzerService : IDataAnalyzerService
         {
             candidate.FeatureContributionsJson = BuildFeatureContributionSummary(
                 match, probabilities, marketProbabilities, statisticalSignal, bookmakerSignal, candidate.Market);
+
+            var challengerMl = _marketPredictionModelService?.TryPredictChallenger(
+                match,
+                candidate.Market,
+                GetMarketProbability(marketProbabilities, candidate.Market),
+                statisticalSignal is null ? null : GetMarketProbability(statisticalSignal, candidate.Market),
+                bookmakerSignal is null ? null : GetMarketProbability(bookmakerSignal, candidate.Market));
+
+            if (challengerMl is double rawChallenger)
+            {
+                var correctedChallenger = _probabilityCorrectionService.ApplyCorrection(candidate.Market, rawChallenger);
+                candidate.ChallengerCalibratedProbability = _calibrationService.Calibrate(candidate.Market, correctedChallenger, match.League?.Trim());
+            }
         }
 
         return realizedCandidates;
@@ -443,10 +456,11 @@ public class DataAnalyzerService : IDataAnalyzerService
         MatchProbabilities? statistical,
         PartialMatchProbabilities? bookmaker)
     {
-        double BlendFor(PredictionMarket market, double? bookmakerValue, double calculatorValue, double? statisticalValue)
+        (double Probability, bool HasMl) BlendFor(PredictionMarket market, double? bookmakerValue, double calculatorValue, double? statisticalValue)
         {
             var weights = ResolveWeights(market);
             var mlValue = _marketPredictionModelService?.TryPredict(match, market, calculatorValue, statisticalValue, bookmakerValue);
+            var hasMl = mlValue is not null;
             var marketWeight = weights.Market;
             if (_settings.RetireProbabilityCalculatorWhenMlPromoted && mlValue is > 0)
             {
@@ -454,18 +468,25 @@ public class DataAnalyzerService : IDataAnalyzerService
                 marketWeight = 0d;
             }
 
-            return EnsembleProbabilityBlender.BlendLogit(
+            var blended = EnsembleProbabilityBlender.BlendLogit(
                 (bookmakerValue, weights.Bookmaker),
                 (calculatorValue, marketWeight),
                 (statisticalValue, weights.DixonColes),
                 (mlValue, weights.Ml));
+
+            return (blended, hasMl);
         }
 
-        var homeWin = BlendFor(PredictionMarket.HomeWin, bookmaker?.HomeWin, calculator.HomeWin, statistical?.HomeWin);
-        var draw = BlendFor(PredictionMarket.Draw, bookmaker?.Draw, calculator.Draw, statistical?.Draw);
-        var awayWin = BlendFor(PredictionMarket.AwayWin, bookmaker?.AwayWin, calculator.AwayWin, statistical?.AwayWin);
-        var over25 = BlendFor(PredictionMarket.Over25Goals, bookmaker?.Over25, calculator.Over25, statistical?.Over25);
-        var btts = BlendFor(PredictionMarket.BothTeamsScore, bookmaker?.Btts, calculator.Btts, statistical?.Btts);
+        var (homeWin, _) = BlendFor(PredictionMarket.HomeWin, bookmaker?.HomeWin, calculator.HomeWin, statistical?.HomeWin);
+        var (draw, _) = BlendFor(PredictionMarket.Draw, bookmaker?.Draw, calculator.Draw, statistical?.Draw);
+        var (awayWin, _) = BlendFor(PredictionMarket.AwayWin, bookmaker?.AwayWin, calculator.AwayWin, statistical?.AwayWin);
+
+        var bookmakerUnder25 = bookmaker?.Under25 ?? (bookmaker?.Over25 is double bkOver ? 1.0 - bkOver : null);
+        var statisticalUnder25 = statistical?.Under25 ?? (statistical?.Over25 is double stOver ? 1.0 - stOver : null);
+
+        var (over25, hasOverMl) = BlendFor(PredictionMarket.Over25Goals, bookmaker?.Over25, calculator.Over25, statistical?.Over25);
+        var (under25, hasUnderMl) = BlendFor(PredictionMarket.Under25Goals, bookmakerUnder25, calculator.Under25, statisticalUnder25);
+        var (btts, _) = BlendFor(PredictionMarket.BothTeamsScore, bookmaker?.Btts, calculator.Btts, statistical?.Btts);
 
         var total = homeWin + draw + awayWin;
         if (total > 0)
@@ -475,10 +496,37 @@ public class DataAnalyzerService : IDataAnalyzerService
             awayWin /= total;
         }
 
+        double resolvedOver25;
+        double resolvedUnder25;
+        if (hasUnderMl && !hasOverMl)
+        {
+            resolvedUnder25 = Math.Clamp(under25, 0.0, 1.0);
+            resolvedOver25 = Math.Clamp(1.0 - resolvedUnder25, 0.0, 1.0);
+        }
+        else if (hasOverMl && !hasUnderMl)
+        {
+            resolvedOver25 = Math.Clamp(over25, 0.0, 1.0);
+            resolvedUnder25 = Math.Clamp(1.0 - resolvedOver25, 0.0, 1.0);
+        }
+        else
+        {
+            var totalTotals = over25 + under25;
+            if (totalTotals > 0)
+            {
+                resolvedOver25 = Math.Clamp(over25 / totalTotals, 0.0, 1.0);
+                resolvedUnder25 = Math.Clamp(1.0 - resolvedOver25, 0.0, 1.0);
+            }
+            else
+            {
+                resolvedOver25 = Math.Clamp(over25, 0.0, 1.0);
+                resolvedUnder25 = Math.Clamp(1.0 - resolvedOver25, 0.0, 1.0);
+            }
+        }
+
         return new MatchProbabilities(
             Btts: Math.Clamp(btts, 0.0, 1.0),
-            Over25: Math.Clamp(over25, 0.0, 1.0),
-            Under25: Math.Clamp(1.0 - over25, 0.0, 1.0),
+            Over25: resolvedOver25,
+            Under25: resolvedUnder25,
             Draw: Math.Clamp(draw, 0.0, 1.0),
             HomeWin: Math.Clamp(homeWin, 0.0, 1.0),
             AwayWin: Math.Clamp(awayWin, 0.0, 1.0));

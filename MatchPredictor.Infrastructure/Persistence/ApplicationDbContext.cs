@@ -194,7 +194,13 @@ public class ApplicationDbContext : DbContext, IDataProtectionKeyContext
 
         modelBuilder.Entity<MarketMlModelProfile>(entity =>
         {
-            entity.HasIndex(e => e.Market).IsUnique();
+            entity.HasIndex([nameof(MarketMlModelProfile.Market)], "IX_MarketMlModelProfiles_Market_Promoted")
+                .IsUnique()
+                .HasFilter("\"IsPromoted\" = true");
+            entity.HasIndex([nameof(MarketMlModelProfile.Market)], "IX_MarketMlModelProfiles_Market_Shadow")
+                .IsUnique()
+                .HasFilter("\"IsShadow\" = true");
+            entity.HasIndex(e => new { e.Market, e.IsPromoted, e.IsShadow });
         });
 
         modelBuilder.Entity<Team>(entity =>

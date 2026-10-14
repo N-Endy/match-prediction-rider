@@ -49,6 +49,7 @@ public partial class AnalyzerService : IAnalyzerService
     private readonly ILearningLoopService _learningLoopService;
     private readonly IPredictionRiskAuditorService? _predictionRiskAuditorService;
     private readonly ITeamResolutionService? _teamResolutionService;
+    private readonly IMarketPredictionModelService? _marketPredictionModelService;
 
     public AnalyzerService(
         IDataAnalyzerService dataAnalyzerService,
@@ -67,7 +68,8 @@ public partial class AnalyzerService : IAnalyzerService
         ILearningLoopService? learningLoopService = null,
         IFixtureFeatureService? fixtureFeatureService = null,
         IPredictionRiskAuditorService? predictionRiskAuditorService = null,
-        ITeamResolutionService? teamResolutionService = null)
+        ITeamResolutionService? teamResolutionService = null,
+        IMarketPredictionModelService? marketPredictionModelService = null)
     {
         _dataAnalyzerService = dataAnalyzerService;
         _webScraperService = webScraperService;
@@ -85,6 +87,7 @@ public partial class AnalyzerService : IAnalyzerService
         _logger = logger;
         _predictionRiskAuditorService = predictionRiskAuditorService;
         _teamResolutionService = teamResolutionService;
+        _marketPredictionModelService = marketPredictionModelService;
         _learningLoopService = learningLoopService ?? new LearningLoopService(
             calibrationService,
             probabilityCorrectionService,

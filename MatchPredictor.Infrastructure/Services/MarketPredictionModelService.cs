@@ -137,6 +137,9 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
             .Where(snapshot => snapshot.CapturedAtUtc >= cutoff.AddDays(-14))
             .ToListAsync(cancellationToken);
         var pointInTime = PointInTimeBacktestingSelector.SelectForecasts(forecasts);
+        var ensembleWeights = await _dbContext.EnsembleWeightProfiles
+            .AsNoTracking()
+            .ToDictionaryAsync(p => p.Market, cancellationToken);
         var nextProfiles = new List<MarketMlModelProfile>();
 
         foreach (var market in Markets)
@@ -171,7 +174,16 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
             var predictions = model.Transform(_mlContext.Data.LoadFromEnumerable(holdout));
             var scored = _mlContext.Data.CreateEnumerable<MarketModelOutput>(predictions, reuseRowObject: false).ToList();
 
-            var baselineBrier = WeightedBrier(holdout, holdout.Select(ResolveEnsembleBaselineProbability).ToList());
+            var weights = ensembleWeights.TryGetValue(market, out var tuned)
+                ? new EnsembleWeights
+                {
+                    Bookmaker = tuned.BookmakerWeight,
+                    Market = tuned.CalculatorWeight,
+                    DixonColes = tuned.DixonColesWeight
+                }
+                : EnsembleWeights.ProductionDefault;
+
+            var baselineBrier = WeightedBrier(holdout, holdout.Select(row => ResolveEnsembleBaselineProbability(row, weights)).ToList());
             var candidateBrier = WeightedBrier(holdout, scored.Select(row => (double)row.Probability).ToList());
             var improvement = baselineBrier - candidateBrier;
             if (improvement < MinimumBrierImprovement)
@@ -253,6 +265,9 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
             .ToListAsync(cancellationToken);
 
         var pointInTime = PointInTimeBacktestingSelector.SelectForecasts(forecasts);
+        var ensembleWeights = await _dbContext.EnsembleWeightProfiles
+            .AsNoTracking()
+            .ToDictionaryAsync(p => p.Market, cancellationToken);
         var challengerProfiles = new List<MarketMlModelProfile>();
 
         foreach (var market in Markets)
@@ -289,7 +304,16 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
             var predictions = model.Transform(_mlContext.Data.LoadFromEnumerable(holdout));
             var scored = _mlContext.Data.CreateEnumerable<MarketModelOutput>(predictions, reuseRowObject: false).ToList();
 
-            var baselineBrier = WeightedBrier(holdout, holdout.Select(ResolveEnsembleBaselineProbability).ToList());
+            var weights = ensembleWeights.TryGetValue(market, out var tuned)
+                ? new EnsembleWeights
+                {
+                    Bookmaker = tuned.BookmakerWeight,
+                    Market = tuned.CalculatorWeight,
+                    DixonColes = tuned.DixonColesWeight
+                }
+                : EnsembleWeights.ProductionDefault;
+
+            var baselineBrier = WeightedBrier(holdout, holdout.Select(row => ResolveEnsembleBaselineProbability(row, weights)).ToList());
             var candidateBrier = WeightedBrier(holdout, scored.Select(row => (double)row.Probability).ToList());
             var improvement = baselineBrier - candidateBrier;
 
@@ -434,7 +458,7 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
                         .FirstOrDefaultAsync(p => p.Market == market && p.IsPromoted, cancellationToken);
                     if (currentChampion is not null)
                     {
-                        currentChampion.IsPromoted = false;
+                        _dbContext.MarketMlModelProfiles.Remove(currentChampion);
                     }
 
                     shadowProfile.IsPromoted = true;
@@ -660,15 +684,15 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         return weightedError / Math.Max(totalWeight, 1e-9);
     }
 
-    private static double ResolveEnsembleBaselineProbability(MarketModelInput row)
+    private static double ResolveEnsembleBaselineProbability(MarketModelInput row, EnsembleWeights weights)
     {
         var bookmaker = row.HasBookmaker > 0.5f ? (double?)row.BookmakerProbability : null;
         var statistical = row.HasStatistical > 0.5f ? (double?)row.StatisticalProbability : null;
         var calculator = (double)row.CalculatorProbability;
         return EnsembleProbabilityBlender.BlendLogit(
-            (bookmaker, EnsembleWeights.ProductionDefault.Bookmaker),
-            (calculator, EnsembleWeights.ProductionDefault.Market),
-            (statistical, EnsembleWeights.ProductionDefault.DixonColes));
+            (bookmaker, weights.Bookmaker),
+            (calculator, weights.Market),
+            (statistical, weights.DixonColes));
     }
 
     public sealed class MarketModelInput

@@ -21,5 +21,6 @@ public class PredictionCandidate
     public double ThresholdUsed { get; set; }
     public string ThresholdSource { get; set; } = "Configured";
     public bool WasPublished { get; set; }
+    public double? ChallengerCalibratedProbability { get; set; }
     public string FeatureContributionsJson { get; set; } = "{}";
 }

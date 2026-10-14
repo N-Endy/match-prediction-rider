@@ -202,6 +202,7 @@ public partial class AnalyzerService
         RestoreLockedPredictionCurrents(candidateList, currentByKey, historicalByKey, nowUtc);
 
         var createdPredictions = new List<Prediction>();
+        var createdPairs = new List<(Prediction Prediction, PredictionCandidate Candidate)>();
         foreach (var existingRecord in currentPredictions.Where(prediction =>
                      touchedFixtureKeys.Contains(GetPredictionFixtureKey(prediction)) &&
                      !lockedFixtureKeys.Contains(GetPredictionFixtureKey(prediction))))
@@ -255,6 +256,7 @@ public partial class AnalyzerService
             };
 
             createdPredictions.Add(prediction);
+            createdPairs.Add((prediction, candidate));
             _dbContext.Predictions.Add(prediction);
         }
 
@@ -266,6 +268,31 @@ public partial class AnalyzerService
         }
 
         await _dbContext.SaveChangesAsync();
+
+        if (_marketPredictionModelService is not null)
+        {
+            foreach (var (prediction, candidate) in createdPairs)
+            {
+                if (candidate.ChallengerCalibratedProbability is double challengerProb)
+                {
+                    try
+                    {
+                        await _marketPredictionModelService.LogShadowPredictionAsync(
+                            prediction.Id,
+                            prediction.FixtureKey,
+                            candidate.Market,
+                            prediction.PredictedOutcome,
+                            (double)prediction.ConfidenceScore,
+                            challengerProb);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to log shadow prediction for prediction {Id}.", prediction.Id);
+                    }
+                }
+            }
+        }
+
         return createdPredictions;
     }
 
