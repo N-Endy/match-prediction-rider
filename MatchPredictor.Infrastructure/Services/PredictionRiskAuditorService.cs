@@ -144,7 +144,8 @@ public sealed class PredictionRiskAuditorService : IPredictionRiskAuditorService
             new ChatCompletionsRequest
             {
                 Temperature = 0.1,
-                MaxTokens = 1200,
+                MaxTokens = 8000,
+                TimeoutSeconds = 120,
                 JsonMode = true,
                 Messages =
                 [

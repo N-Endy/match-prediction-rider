@@ -214,17 +214,41 @@ public sealed class MarketPredictionModelService : IMarketPredictionModelService
         }
 
         var promotedMarkets = nextProfiles.Select(profile => profile.Market).ToHashSet();
-        var retainedProfiles = await _dbContext.MarketMlModelProfiles
+        var candidateRetained = await _dbContext.MarketMlModelProfiles
             .AsNoTracking()
             .Where(profile => profile.IsPromoted && !promotedMarkets.Contains(profile.Market))
             .ToListAsync(cancellationToken);
-        nextProfiles.AddRange(retainedProfiles);
 
-        var existingShadows = await _dbContext.MarketMlModelProfiles
+        foreach (var retained in candidateRetained)
+        {
+            if (!string.Equals(retained.FeatureSchemaJson, _expectedFeatureSchemaJson, StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    "Retiring champion ML model for {Market} because feature schema changed.",
+                    retained.Market);
+                continue;
+            }
+
+            nextProfiles.Add(retained);
+        }
+
+        var candidateShadows = await _dbContext.MarketMlModelProfiles
             .AsNoTracking()
             .Where(profile => profile.IsShadow)
             .ToListAsync(cancellationToken);
-        nextProfiles.AddRange(existingShadows);
+
+        foreach (var shadow in candidateShadows)
+        {
+            if (!string.Equals(shadow.FeatureSchemaJson, _expectedFeatureSchemaJson, StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    "Retiring shadow ML model for {Market} because feature schema changed.",
+                    shadow.Market);
+                continue;
+            }
+
+            nextProfiles.Add(shadow);
+        }
 
         try
         {

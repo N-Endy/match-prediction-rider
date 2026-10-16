@@ -48,7 +48,7 @@ public class LearningLoopService : ILearningLoopService
                 _logger.LogInformation("Starting ensemble stacking weight rebuild...");
                 await _ensembleWeightTuningService.RebuildProfilesAsync();
                 var weightProfileCount = await _dbContext.EnsembleWeightProfiles.CountAsync();
-                _logger.LogInformation("✅ Ensemble weight rebuild completed ({Count} promoted profiles).", weightProfileCount);
+                _logger.LogInformation("✅ Ensemble weight rebuild completed ({Count} active profiles in database).", weightProfileCount);
             }
             catch (Exception ex)
             {
@@ -62,8 +62,8 @@ public class LearningLoopService : ILearningLoopService
             {
                 _logger.LogInformation("Starting ML.NET LightGBM model rebuild...");
                 await _marketPredictionModelService.RebuildProfilesAsync();
-                var mlProfileCount = await _dbContext.MarketMlModelProfiles.CountAsync();
-                _logger.LogInformation("✅ ML.NET LightGBM rebuild completed ({Count} promoted profiles).", mlProfileCount);
+                var mlProfileCount = await _dbContext.MarketMlModelProfiles.CountAsync(p => p.IsPromoted);
+                _logger.LogInformation("✅ ML.NET LightGBM rebuild completed ({Count} active champion profiles in database).", mlProfileCount);
             }
             catch (Exception ex)
             {
