@@ -5,6 +5,7 @@
 @inject Microsoft.Extensions.Configuration.IConfiguration Configuration
 @{
     var reviewSafe = Configuration.GetValue("AdSense:ReviewSafePublicUi", true);
+    var enableBooking = Configuration.GetValue<bool>("SportyBet:EnableBooking", false);
     var slip = Model.Slip;
     var isRollover = slip.SlipNumber == BetslipGenerationService.RolloverSlipNumber
                      || slip.TierLabel.StartsWith("Rollover", StringComparison.OrdinalIgnoreCase);
@@ -170,12 +171,15 @@
                             ? slip.BookingUrl
                             : $"https://www.sportybet.com/ng/?shareCode={slip.BookingCode}";
                 }
-                <a class="mp-book-btn"
-                   href="@resolvedBookingUrl"
-                   target="_blank"
-                   rel="noopener noreferrer">
-                    @openSlipLabel
-                </a>
+                @if (enableBooking)
+                {
+                    <a class="mp-book-btn"
+                       href="@resolvedBookingUrl"
+                       target="_blank"
+                       rel="noopener noreferrer">
+                        @openSlipLabel
+                    </a>
+                }
             </div>
         </div>
     }

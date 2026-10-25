@@ -5,6 +5,7 @@
 @inject Microsoft.Extensions.Configuration.IConfiguration Configuration
 @{
     var reviewSafe = Configuration.GetValue("AdSense:ReviewSafePublicUi", true);
+    var enableBooking = Configuration.GetValue<bool>("SportyBet:EnableBooking", false);
     var isRollover = Model.SlipNumber == BetslipGenerationService.RolloverSlipNumber
                      || Model.TierLabel.StartsWith("Rollover", StringComparison.OrdinalIgnoreCase);
     var isBanker = Model.SlipNumber == BetslipGenerationService.BankerSlipNumber
@@ -169,12 +170,15 @@
                             ? Model.BookingUrl
                             : $"https://www.sportybet.com/ng/?shareCode={Model.BookingCode}";
                 }
-                <a class="mp-book-btn"
-                   href="@resolvedBookingUrl"
-                   target="_blank"
-                   rel="noopener noreferrer">
-                    @openSlipLabel
-                </a>
+                @if (enableBooking)
+                {
+                    <a class="mp-book-btn"
+                       href="@resolvedBookingUrl"
+                       target="_blank"
+                       rel="noopener noreferrer">
+                        @openSlipLabel
+                    </a>
+                }
             </div>
         </div>
     }
@@ -191,23 +195,26 @@
             <span class="mp-betslip-guide-badge">
                 <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Bet Builder Guide
             </span>
-            <div class="mp-betslip-code-actions">
-                <a class="mp-book-btn"
-                   href="@guideUrl"
-                   target="_blank"
-                   rel="noopener noreferrer"
-                   title="Open fixture in SportyBet to build these picks in Bet Builder">
-                    Open in SportyBet
-                </a>
-            </div>
+            @if (enableBooking)
+            {
+                <div class="mp-betslip-code-actions">
+                    <a class="mp-book-btn"
+                       href="@guideUrl"
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       title="Open fixture in SportyBet to build these picks in Bet Builder">
+                        Open in SportyBet
+                    </a>
+                </div>
+            }
         </div>
         <p class="mp-betslip-warning" style="margin-top: 0.35rem;">
-            Auto-booking code unavailable for this fixture; combine the selections above in SportyBet Bet Builder.
+            Auto-booking code unavailable for this fixture@(enableBooking ? "; combine the selections above in SportyBet Bet Builder." : ".")
         </p>
     }
     else
     {
-        <p class="mp-betslip-warning">Booking code unavailable; retrying next run.</p>
+        <p class="mp-betslip-warning">@(enableBooking ? "Booking code unavailable; retrying next run." : "Curated selections list from daily ensemble analysis.")</p>
     }
 
     @if (!string.IsNullOrWhiteSpace(Model.StatusMessage))

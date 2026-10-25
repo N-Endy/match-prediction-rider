@@ -3,6 +3,7 @@
 @{
     var currentPath = Context.Request.Path.Value ?? "/";
     var reviewSafePublicUi = Configuration.GetValue("AdSense:ReviewSafePublicUi", true);
+    var enableBooking = Configuration.GetValue<bool>("SportyBet:EnableBooking", false);
     string NavClass(string href)
     {
         var isHome = href == "/";
@@ -122,6 +123,7 @@
     @await RenderSectionAsync("Head", required: false)
 </head>
 <body data-max-booking-selections="@(Configuration.GetValue("SportyBet:MaxBookingSelections", 50))"
+      data-enable-booking="@(enableBooking ? "true" : "false")"
       data-review-safe-public-ui="@(reviewSafePublicUi ? "true" : "false")">
 
 <!-- Navbar -->
@@ -255,12 +257,13 @@
         <div id="bookingResult" style="display:none;"></div>
         <div class="mp-cart-footer" id="cartFooter" style="display:none;">
             <button class="mp-clear-cart-btn" data-cart-action="clear">Clear All</button>
-            <button class="mp-book-btn" id="bookGamesBtn" data-cart-action="book">@(reviewSafePublicUi ? "Show Games" : "🎫 Book Games")</button>
+            <button class="mp-book-btn" id="bookGamesBtn" data-cart-action="book">@(!enableBooking ? "📋 Copy Selections" : (reviewSafePublicUi ? "Show Games" : "🎫 Book Games"))</button>
         </div>
     </div>
 </div>
 
 <script src="~/js/cart.js" asp-append-version="true"></script>
+<script src="~/js/quick-slip.js" asp-append-version="true"></script>
 <script src="~/js/score-confirm.js" asp-append-version="true"></script>
 
 <partial name="_StreamModal" />

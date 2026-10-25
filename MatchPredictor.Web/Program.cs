@@ -131,6 +131,7 @@ builder.Services.AddSingleton<IAiSecurityGuardrailService, AiSecurityGuardrailSe
 builder.Services.AddScoped<IDeepMatchResearchService, DeepMatchResearchService>();
 builder.Services.AddSingleton<IAiLlmRouter, AiLlmRouter>();
 builder.Services.AddScoped<IAiAdvisorService, AiAdvisorService>();
+builder.Services.AddScoped<IQuickSlipService, QuickSlipService>();
 builder.Services.AddScoped<IPredictionRiskAuditorService, PredictionRiskAuditorService>();
 builder.Services.AddScoped<IValueBetsService, ValueBetsService>();
 builder.Services.AddScoped<ILineupAvailabilityService, LineupAvailabilityService>();

@@ -17,6 +17,7 @@ public class BookingController : ControllerBase
     private readonly ISportyBetBookingService _bookingService;
     private readonly IUserTrackingService _userTrackingService;
     private readonly int _maxSelections;
+    private readonly bool _enableBooking;
 
     public BookingController(
         ISportyBetBookingService bookingService,
@@ -30,11 +31,21 @@ public class BookingController : ControllerBase
         {
             _maxSelections = DefaultMaxSelections;
         }
+        _enableBooking = configuration.GetValue<bool>("SportyBet:EnableBooking", false);
     }
 
     [HttpPost("book")]
     public async Task<IActionResult> Book([FromBody] BookingRequest request)
     {
+        if (!_enableBooking)
+        {
+            return Ok(new BookingResult
+            {
+                Success = false,
+                Message = "Booking code generation is currently disabled."
+            });
+        }
+
         // Same-origin guard: this endpoint drives an external booking flow and must
         // only be callable from our own pages, not cross-site.
         var origin = Request.Headers.Origin.ToString();

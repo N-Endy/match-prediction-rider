@@ -1,0 +1,75 @@
+@* Quick Slip Natural Language Co-Pilot Bar *@
+<div class="mp-quick-slip-widget" id="quickSlipWidget">
+    <div class="mp-quick-slip-card">
+        <div class="mp-quick-slip-header">
+            <div class="mp-quick-slip-title">
+                <span class="mp-quick-slip-icon">⚡</span>
+                <span class="mp-quick-slip-heading">Quick Slip Co-Pilot</span>
+                <span class="mp-quick-slip-pill">Natural Language</span>
+            </div>
+            <div class="mp-quick-slip-tip">Type your desired slip or tap a shortcut</div>
+        </div>
+
+        <form id="quickSlipForm" class="mp-quick-slip-form" onsubmit="window.handleQuickSlipSubmit(event)">
+            <div class="mp-quick-slip-input-wrap">
+                <input type="text"
+                       id="quickSlipInput"
+                       class="mp-quick-slip-input"
+                       placeholder="e.g. '3 safe EPL home wins with odds > 1.5' or '4 GG matches tonight'"
+                       autocomplete="off"
+                       maxlength="200" />
+                <button type="submit" id="quickSlipSubmitBtn" class="mp-quick-slip-btn" title="Generate slip">
+                    <span class="btn-text">Build Slip</span>
+                    <span class="btn-spinner d-none" aria-hidden="true"></span>
+                </button>
+            </div>
+        </form>
+
+        <div class="mp-quick-slip-chips">
+            <button type="button" class="mp-qs-chip" onclick="window.setQuickSlipPrompt('3 safe Premier League home wins')">3 Safe EPL Wins</button>
+            <button type="button" class="mp-qs-chip" onclick="window.setQuickSlipPrompt('4 both teams to score picks tonight')">4 BTTS Matches</button>
+            <button type="button" class="mp-qs-chip" onclick="window.setQuickSlipPrompt('3 over 2.5 goals with odds > 1.70')">Over 2.5 Goals (>1.70)</button>
+            <button type="button" class="mp-qs-chip" onclick="window.setQuickSlipPrompt('High value under 2.5 picks')">Value Under 2.5</button>
+            <button type="button" class="mp-qs-chip" onclick="window.setQuickSlipPrompt('3 draws in Serie A')">Serie A Draws</button>
+        </div>
+
+        <!-- Staged Results Container -->
+        <div id="quickSlipStagedContainer" class="mp-qs-staged-wrap d-none">
+            <div class="mp-qs-staged-header">
+                <div class="mp-qs-staged-meta">
+                    <span id="quickSlipSummaryText" class="mp-qs-summary-text"></span>
+                    <div class="mp-qs-metrics">
+                        <span class="mp-qs-metric-badge" id="quickSlipTotalOddsBadge">Odds: <strong>--</strong></span>
+                        <span class="mp-qs-metric-badge mp-qs-metric-prob" id="quickSlipAvgProbBadge">Avg Prob: <strong>--</strong></span>
+                        <span class="mp-qs-metric-badge mp-qs-metric-ev d-none" id="quickSlipEdgeBadge">Edge: <strong>--</strong></span>
+                    </div>
+                </div>
+                <button type="button" class="mp-qs-dismiss-btn" onclick="window.dismissQuickSlipStaged()" title="Dismiss preview">✕</button>
+            </div>
+
+            <!-- Clarification Questions (if needed) -->
+            <div id="quickSlipQuestions" class="mp-qs-questions-bar d-none">
+                <span class="mp-qs-q-label">Needs clarification:</span>
+                <div id="quickSlipQuestionChips" class="mp-qs-q-chips"></div>
+            </div>
+
+            <!-- Staged Legs List -->
+            <div id="quickSlipLegsList" class="mp-qs-legs-list"></div>
+
+            <div class="mp-qs-actions-row">
+                <button type="button" id="quickSlipApplyBtn" class="mp-qs-action-btn mp-qs-btn-stage" onclick="window.applyQuickSlip('add')">
+                    ➕ Add All to Slip
+                </button>
+                <button type="button" id="quickSlipReplaceBtn" class="mp-qs-action-btn mp-qs-btn-replace" onclick="window.applyQuickSlip('replace')">
+                    🔄 Replace Current Slip
+                </button>
+                <button type="button" class="mp-qs-action-btn mp-qs-btn-cancel" onclick="window.dismissQuickSlipStaged()">
+                    Cancel
+                </button>
+            </div>
+        </div>
+
+        <!-- Error Feedback -->
+        <div id="quickSlipError" class="mp-qs-error-banner d-none"></div>
+    </div>
+</div>

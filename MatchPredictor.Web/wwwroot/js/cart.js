@@ -2,11 +2,18 @@
 const CART_KEY = 'mp_cart';
 const fixtureConfirmations = new Map();
 
+function isBookingEnabled() {
+    return document.body?.dataset?.enableBooking === 'true';
+}
+
 function isReviewSafePublicUi() {
     return document.body?.dataset?.reviewSafePublicUi === 'true';
 }
 
 function getBookButtonLabel() {
+    if (!isBookingEnabled()) {
+        return '📋 Copy Selections';
+    }
     return isReviewSafePublicUi() ? 'Show Games' : '🎫 Book Games';
 }
 
@@ -183,6 +190,17 @@ async function bookGames() {
 
     if (activeCart.length > maxSelections) {
         showToast(`A maximum of ${maxSelections} selections is allowed.`);
+        return;
+    }
+
+    if (!isBookingEnabled()) {
+        const textSummary = activeCart.map(item => `${item.home || ''} vs ${item.away || ''} — ${item.prediction || ''} (${item.market || ''})`).join('\n');
+        try {
+            await navigator.clipboard.writeText(textSummary);
+            showToast('Selections copied to clipboard!');
+        } catch {
+            showToast('Selections ready');
+        }
         return;
     }
 
@@ -412,7 +430,7 @@ function renderBookingResultHtml(result) {
     const pendingHintHtml = `<div id="fixtureConfirmationsHint" class="mp-booking-confirm-hint" style="display:none;"></div>`;
 
     if (result.success) {
-        const urlHtml = result.bookingUrl
+        const urlHtml = (result.bookingUrl && isBookingEnabled())
             ? `<button type="button" class="mp-booking-url-btn" onclick='openSportyBetBooking(${JSON.stringify(result.bookingUrl)})'>${isReviewSafePublicUi() ? 'Open slip' : '🔗 Open in SportyBet'}</button>`
             : '';
 

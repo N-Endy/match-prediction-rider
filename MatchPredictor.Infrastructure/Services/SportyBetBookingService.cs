@@ -89,6 +89,17 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         if (selections.Count == 0)
             return new BookingResult { Success = false, Message = "No games selected." };
 
+        var enableBooking = _configuration.GetValue<bool>("SportyBet:EnableBooking", false);
+        if (!enableBooking)
+        {
+            _logger.LogInformation("SportyBet booking is disabled via configuration (SportyBet:EnableBooking=false).");
+            return new BookingResult
+            {
+                Success = false,
+                Message = "Booking code generation is currently disabled."
+            };
+        }
+
         var baseUrl = _configuration["SportyBet:BaseUrl"] ?? "https://www.sportybet.com";
         var soccerSportId = _configuration["SportyBet:SoccerSportId"] ?? "sr:sport:1";
         var market1X2 = _configuration["SportyBet:Market1X2"] ?? "1";
