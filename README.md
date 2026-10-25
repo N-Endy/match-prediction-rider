@@ -59,6 +59,23 @@ AI chat / advisor defaults to **GPT-5.6 Luna** (`AiLlm:Provider=openai`) with au
 | `CronJob__Secret` | Shared secret for `X-Cron-Secret` header on `POST /api/ops/jobs/{jobName}` (worker only). |
 | `Hangfire__WorkerCount` | Hangfire parallel workers (defaults to **1** on Render/Railway; override only if you have enough RAM). |
 
+### Railway & Cloud Operational Flags
+
+All major operational toggles support simplified, case-insensitive environment variables directly in Railway:
+
+| Railway Variable | Aliases | Default | Description |
+|---|---|---|---|
+| `ENABLE_BOOKING` | `SPORTYBET_ENABLE_BOOKING`, `SportyBet__EnableBooking` | `false` | Enable/disable SportyBet booking code generation in UI and background slips. |
+| `MAX_BOOKING_SELECTIONS` | `SPORTYBET_MAX_BOOKING_SELECTIONS` | `50` | Maximum picks permitted per booking code. |
+| `ADSENSE_REVIEW_SAFE_PUBLIC_UI` | `ADSENSE_REVIEW_SAFE`, `REVIEW_SAFE` | `true` | When true, renders compliant neutral UI terminology for Google AdSense site approval. |
+| `ENABLE_AD_UNITS` | `ADSENSE_ENABLE_AD_UNITS`, `ENABLE_ADSENSE` | `false` | Renders `<ins class="adsbygoogle">` ad banners. Keep false until AdSense approval. |
+| `ADSENSE_CLIENT_ID` | `ADSENSE_PUB_ID`, `AdSense__ClientId` | `ca-pub-2894269106561971` | Google AdSense account ID (auto-renders site verification meta tag). |
+| `DATABASE_URL` | `POSTGRES_URL`, `ConnectionStrings__DefaultConnection` | — | PostgreSQL connection string or Railway `postgresql://` URI (automatically converted). |
+| `ADMIN_SELECTIONS_PASSKEY` | `SELECTIONS_PASSKEY` | `mp-synergy-owner-2026` | Passkey required to access private `/Admin/Selections` route. |
+| `API_FOOTBALL_KEY` | `APIFOOTBALL_API_KEY`, `ApiFootball__ApiKey` | — | API-Football access key for AI chat insights. |
+| `GEMINI_API_KEY` | `AiLlm__ApiKey` | — | Gemini LLM API key for AI assistant and quick-slip parsing. |
+
+
 ### Worker deployment (Render)
 
 The worker runs Chrome-based scraping and needs more memory than the web service.

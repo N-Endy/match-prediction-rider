@@ -1,5 +1,6 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Configuration;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Utils;
 using Microsoft.Extensions.Configuration;
@@ -89,10 +90,10 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         if (selections.Count == 0)
             return new BookingResult { Success = false, Message = "No games selected." };
 
-        var enableBooking = _configuration.GetValue<bool>("SportyBet:EnableBooking", false);
+        var enableBooking = _configuration.IsBookingEnabled(defaultValue: true);
         if (!enableBooking)
         {
-            _logger.LogInformation("SportyBet booking is disabled via configuration (SportyBet:EnableBooking=false).");
+            _logger.LogInformation("SportyBet booking is disabled via configuration (SportyBet:EnableBooking=false). Set ENABLE_BOOKING=true to enable.");
             return new BookingResult
             {
                 Success = false,

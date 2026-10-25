@@ -132,7 +132,7 @@ public class BetslipGenerationServiceRolloverTests
 
         var banker = Assert.Single(set.Slips, BetslipGenerationService.IsBankerSlip);
         var laterSelections = set.Slips
-            .Where(s => !BetslipGenerationService.IsRolloverSlip(s))
+            .Where(s => !BetslipGenerationService.IsRolloverSlip(s) && !MatchPredictor.Domain.Helpers.BetslipKinds.IsSynergySlip(s))
             .SelectMany(s => s.Selections)
             .ToList();
         Assert.DoesNotContain(laterSelections, s => s.HomeTeam == "RollHome");

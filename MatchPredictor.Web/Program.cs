@@ -4,6 +4,7 @@ using Hangfire.PostgreSql;
 using MatchPredictor.Application.Services;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Infrastructure;
+using MatchPredictor.Infrastructure.Configuration;
 using MatchPredictor.Infrastructure.Persistence;
 using MatchPredictor.Infrastructure.Repositories;
 using MatchPredictor.Infrastructure.Services;
@@ -38,7 +39,8 @@ builder.Services.AddRedisMemoryCache(builder.Configuration);
 builder.Configuration
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
     .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
-    .AddEnvironmentVariables();
+    .AddEnvironmentVariables()
+    .AddRailwayEnvironmentAliases();
 
 var runtimeMode = RuntimeModeOptions.FromConfiguration(builder.Configuration);
 if (builder.Environment.IsEnvironment("Testing"))
@@ -54,10 +56,22 @@ if (builder.Environment.IsEnvironment("Testing"))
 
 var skipStartupInitialization =
     builder.Environment.IsEnvironment("Testing") ||
-    builder.Configuration.GetValue<bool>("SKIP_STARTUP_INITIALIZATION");
+    builder.Configuration.GetBooleanFlag("SKIP_STARTUP_INITIALIZATION", false, "SKIP_STARTUP_INIT");
 
 // Configure database
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (string.IsNullOrWhiteSpace(connectionString) ||
+    connectionString.Contains("Use env var ConnectionStrings__DefaultConnection", StringComparison.OrdinalIgnoreCase))
+{
+    var rawDbUrl = builder.Configuration["DATABASE_URL"] ??
+                   builder.Configuration["POSTGRES_URL"] ??
+                   builder.Configuration["DATABASE_PUBLIC_URL"];
+    if (!string.IsNullOrWhiteSpace(rawDbUrl))
+    {
+        connectionString = ConfigurationFlagExtensions.NormalizePostgresConnectionString(rawDbUrl);
+    }
+}
+
 if (string.IsNullOrWhiteSpace(connectionString))
 {
     if (!builder.Environment.IsEnvironment("Testing"))

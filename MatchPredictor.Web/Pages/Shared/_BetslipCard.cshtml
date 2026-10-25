@@ -4,8 +4,8 @@
 @using MatchPredictor.Web.Helpers
 @inject Microsoft.Extensions.Configuration.IConfiguration Configuration
 @{
-    var reviewSafe = Configuration.GetValue("AdSense:ReviewSafePublicUi", true);
-    var enableBooking = Configuration.GetValue<bool>("SportyBet:EnableBooking", false);
+    var reviewSafe = Configuration.IsReviewSafePublicUi();
+    var enableBooking = Configuration.IsBookingEnabled();
     var isRollover = Model.SlipNumber == BetslipGenerationService.RolloverSlipNumber
                      || Model.TierLabel.StartsWith("Rollover", StringComparison.OrdinalIgnoreCase);
     var isBanker = Model.SlipNumber == BetslipGenerationService.BankerSlipNumber

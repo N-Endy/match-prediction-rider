@@ -1,5 +1,6 @@
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
+using MatchPredictor.Infrastructure.Configuration;
 using MatchPredictor.Web.Services;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
@@ -26,12 +27,8 @@ public class BookingController : ControllerBase
     {
         _bookingService = bookingService;
         _userTrackingService = userTrackingService;
-        _maxSelections = configuration.GetValue("SportyBet:MaxBookingSelections", DefaultMaxSelections);
-        if (_maxSelections < 1)
-        {
-            _maxSelections = DefaultMaxSelections;
-        }
-        _enableBooking = configuration.GetValue<bool>("SportyBet:EnableBooking", false);
+        _maxSelections = configuration.GetMaxBookingSelections(DefaultMaxSelections);
+        _enableBooking = configuration.IsBookingEnabled();
     }
 
     [HttpPost("book")]

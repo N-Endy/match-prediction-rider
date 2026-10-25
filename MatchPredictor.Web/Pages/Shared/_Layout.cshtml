@@ -2,8 +2,10 @@
 @inject IConfiguration Configuration
 @{
     var currentPath = Context.Request.Path.Value ?? "/";
-    var reviewSafePublicUi = Configuration.GetValue("AdSense:ReviewSafePublicUi", true);
-    var enableBooking = Configuration.GetValue<bool>("SportyBet:EnableBooking", false);
+    var reviewSafePublicUi = Configuration.IsReviewSafePublicUi();
+    var enableBooking = Configuration.IsBookingEnabled();
+    var enableAdUnits = Configuration.AreAdUnitsEnabled();
+    var adClientId = Configuration.GetAdSenseClientId();
     string NavClass(string href)
     {
         var isHome = href == "/";
@@ -45,9 +47,9 @@
     <meta name="description" content="@ogDescription">
     <meta name="keywords" content="football predictions, btts, over 2.5, betting tips, match predictor, AI football tips">
     <meta name="author" content="MatchPredictor">
-    @if (!string.IsNullOrWhiteSpace(Configuration["AdSense:ClientId"]))
+    @if (!string.IsNullOrWhiteSpace(adClientId))
     {
-        <meta name="google-adsense-account" content="@Configuration["AdSense:ClientId"]">
+        <meta name="google-adsense-account" content="@adClientId">
     }
     <link rel="canonical" href="@canonicalUrl" />
 
@@ -113,8 +115,11 @@
         window.adsbygoogle = window.adsbygoogle || [];
         window.adsbygoogle.requestNonPersonalizedAds = 1;
     </script>
-    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=@(Configuration["AdSense:ClientId"] ?? "ca-pub-123456789")"
-         crossorigin="anonymous"></script>
+    @if (enableAdUnits && !string.IsNullOrWhiteSpace(adClientId))
+    {
+        <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=@adClientId"
+             crossorigin="anonymous"></script>
+    }
 
     @if (ViewData["Robots"] != null && !IsSectionDefined("Head"))
     {
@@ -122,7 +127,7 @@
     }
     @await RenderSectionAsync("Head", required: false)
 </head>
-<body data-max-booking-selections="@(Configuration.GetValue("SportyBet:MaxBookingSelections", 50))"
+<body data-max-booking-selections="@(Configuration.GetMaxBookingSelections())"
       data-enable-booking="@(enableBooking ? "true" : "false")"
       data-review-safe-public-ui="@(reviewSafePublicUi ? "true" : "false")">
 

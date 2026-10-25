@@ -1,24 +1,29 @@
 @using Microsoft.Extensions.Configuration
+@using MatchPredictor.Infrastructure.Configuration
 @inject IConfiguration Configuration
 
 @{
-    var adClientId = Configuration["AdSense:ClientId"] ?? "ca-pub-123456789";
+    var enableAdUnits = Configuration.AreAdUnitsEnabled();
+    var adClientId = Configuration.GetAdSenseClientId() ?? "ca-pub-123456789";
 }
 
-<div class="mp-ad-wrapper">
-    <!-- MatchPredictor - In-article banner (non-personalized) -->
-    <ins class="adsbygoogle mp-ad-ins"
-         style="display:block"
-         data-ad-client="@adClientId"
-         data-ad-slot="9092164564"
-         data-ad-format="auto"
-         data-full-width-responsive="true"
-         data-npa="1"></ins>
-    <script>
-        (adsbygoogle = window.adsbygoogle || []).requestNonPersonalizedAds = 1;
-        (adsbygoogle = window.adsbygoogle || []).push({});
-    </script>
-    <div class="mp-ad-fallback">
-        <span>Advertisement</span>
+@if (enableAdUnits)
+{
+    <div class="mp-ad-wrapper">
+        <!-- MatchPredictor - In-article banner (non-personalized) -->
+        <ins class="adsbygoogle mp-ad-ins"
+             style="display:block"
+             data-ad-client="@adClientId"
+             data-ad-slot="9092164564"
+             data-ad-format="auto"
+             data-full-width-responsive="true"
+             data-npa="1"></ins>
+        <script>
+            (adsbygoogle = window.adsbygoogle || []).requestNonPersonalizedAds = 1;
+            (adsbygoogle = window.adsbygoogle || []).push({});
+        </script>
+        <div class="mp-ad-fallback">
+            <span>Advertisement</span>
+        </div>
     </div>
-</div>
+}

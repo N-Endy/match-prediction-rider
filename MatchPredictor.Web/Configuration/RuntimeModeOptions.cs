@@ -1,3 +1,6 @@
+using MatchPredictor.Infrastructure.Configuration;
+using Microsoft.Extensions.Configuration;
+
 namespace MatchPredictor.Web.Configuration;
 
 public sealed record RuntimeModeOptions(
@@ -8,36 +11,27 @@ public sealed record RuntimeModeOptions(
 {
     public static RuntimeModeOptions FromConfiguration(IConfiguration configuration)
     {
-        var runBackgroundJobs = GetBoolean(configuration, "RUN_BACKGROUND_JOBS", true);
-        var browserScrapingEnabled = GetBoolean(configuration, "ENABLE_BROWSER_SCRAPING", runBackgroundJobs);
-        var userTrackingEnabled = GetBoolean(configuration, "ENABLE_USER_TRACKING", true);
-        var useExternalCron = GetBoolean(configuration, "USE_EXTERNAL_CRON", false);
+        var runBackgroundJobs = configuration.GetBooleanFlag(
+            "RUN_BACKGROUND_JOBS",
+            defaultValue: true,
+            "ENABLE_BACKGROUND_JOBS",
+            "BACKGROUND_JOBS_ENABLED");
+
+        var browserScrapingEnabled = configuration.GetBooleanFlag(
+            "ENABLE_BROWSER_SCRAPING",
+            defaultValue: runBackgroundJobs,
+            "BROWSER_SCRAPING_ENABLED");
+
+        var userTrackingEnabled = configuration.GetBooleanFlag(
+            "ENABLE_USER_TRACKING",
+            defaultValue: true,
+            "USER_TRACKING_ENABLED");
+
+        var useExternalCron = configuration.GetBooleanFlag(
+            "USE_EXTERNAL_CRON",
+            defaultValue: false,
+            "EXTERNAL_CRON");
 
         return new RuntimeModeOptions(runBackgroundJobs, browserScrapingEnabled, userTrackingEnabled, useExternalCron);
-    }
-
-    private static bool GetBoolean(IConfiguration configuration, string key, bool defaultValue)
-    {
-        var rawValue = configuration[key];
-        if (string.IsNullOrWhiteSpace(rawValue))
-        {
-            return defaultValue;
-        }
-
-        if (bool.TryParse(rawValue, out var parsed))
-        {
-            return parsed;
-        }
-
-        return rawValue.Trim().ToLowerInvariant() switch
-        {
-            "1" => true,
-            "0" => false,
-            "yes" => true,
-            "no" => false,
-            "on" => true,
-            "off" => false,
-            _ => defaultValue
-        };
     }
 }

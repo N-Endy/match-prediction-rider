@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using MatchPredictor.Infrastructure.Configuration;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
@@ -27,7 +28,7 @@ public sealed class PrivateSelectionsAuthAttribute : Attribute, IAsyncAuthorizat
         var dataProtection = httpContext.RequestServices.GetRequiredService<IDataProtectionProvider>();
         var protector = dataProtection.CreateProtector(ProtectorPurpose);
 
-        var configuredPasskey = configuration["AdminSettings:SelectionsPasskey"];
+        var configuredPasskey = configuration.GetSelectionsPasskey();
         if (string.IsNullOrWhiteSpace(configuredPasskey))
         {
             // If passkey is not configured in environment or appsettings, fail closed with 404.
