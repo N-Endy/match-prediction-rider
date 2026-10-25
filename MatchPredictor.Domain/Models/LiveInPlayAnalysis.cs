@@ -1,5 +1,17 @@
 namespace MatchPredictor.Domain.Models;
 
+public class LiveInPlayMarketRecommendation
+{
+    public string Tier { get; set; } = "Primary"; // "Primary Best Read", "Value / Momentum Angle", "Safety / Hedge"
+    public string Market { get; set; } = string.Empty;
+    public string Outcome { get; set; } = string.Empty;
+    public double Confidence { get; set; }
+    public double? EstimatedOdds { get; set; }
+    public string TacticalRationale { get; set; } = string.Empty;
+    public string KeyRisk { get; set; } = string.Empty;
+    public string ActionKey { get; set; } = string.Empty;
+}
+
 public class LiveInPlayAnalysis
 {
     public int PredictionId { get; set; }
@@ -26,4 +38,6 @@ public class LiveInPlayAnalysis
     public string KeyRisk { get; set; } = string.Empty;
     public string ActionKey { get; set; } = string.Empty;
     public List<string> LiveInsightBullets { get; set; } = [];
+
+    public List<LiveInPlayMarketRecommendation> Recommendations { get; set; } = [];
 }

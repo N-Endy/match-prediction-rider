@@ -2275,7 +2275,8 @@ public class AiAdvisorService : IAiAdvisorService
             .ToList();
 
         var actions = liveCandidates
-            .Zip(analyses, (candidate, analysis) => _liveInPlayResearchEngine.CreateInPlayAction(candidate, analysis))
+            .Zip(analyses, (candidate, analysis) => _liveInPlayResearchEngine.CreateInPlayActions(candidate, analysis))
+            .SelectMany(a => a)
             .ToList();
 
         string message;
@@ -2709,22 +2710,13 @@ public class AiAdvisorService : IAiAdvisorService
             if (candidate.MatchState == "Live")
             {
                 var liveAnalysis = _liveInPlayResearchEngine.Analyze(candidate, DateTime.UtcNow);
-                var inPlayAction = _liveInPlayResearchEngine.CreateInPlayAction(candidate, liveAnalysis);
-                var sb = new StringBuilder();
-                sb.AppendLine($"⚡ **{candidate.HomeTeam} vs {candidate.AwayTeam}** is currently live at **{liveAnalysis.LiveScore}** ({liveAnalysis.ElapsedMinutes}', {liveAnalysis.MatchPhase}).");
-                sb.AppendLine();
-                sb.AppendLine($"> **Pre-Match Baseline:** {liveAnalysis.PreMatchOutcome} ({liveAnalysis.PreMatchConfidence:P0} model confidence)");
-                sb.AppendLine($"> **⚡ Live In-Play Pivot:** **{liveAnalysis.InPlayOutcome}** ({liveAnalysis.InPlayMarket}) @ ~{liveAnalysis.InPlayOdds:F2} odds ({liveAnalysis.InPlayConfidence:P0} live confidence)");
-                sb.AppendLine($"> **Pre-Match vs. Live Contrast:** {liveAnalysis.ContrastSummary}");
-                sb.AppendLine();
-                sb.AppendLine($"**Tactical Read:** {liveAnalysis.TacticalReasoning}");
-                sb.AppendLine();
-                sb.AppendLine($"*Key Risk: {liveAnalysis.KeyRisk}*");
+                var inPlayActions = _liveInPlayResearchEngine.CreateInPlayActions(candidate, liveAnalysis);
+                var summaryMessage = _liveInPlayResearchEngine.BuildInPlaySummaryMessage([liveAnalysis], userPrompt);
 
                 return new AiChatResponse
                 {
-                    Message = sb.ToString().Trim(),
-                    Actions = [inPlayAction],
+                    Message = summaryMessage,
+                    Actions = inPlayActions.ToList(),
                     ShowBookAll = false
                 };
             }

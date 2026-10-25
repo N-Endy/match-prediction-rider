@@ -394,6 +394,18 @@
             livePill.style.cssText = 'background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: 700; padding: 2px 8px; border-radius: 9999px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px;';
             livePill.innerHTML = '<span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#ef4444; box-shadow: 0 0 6px #ef4444;"></span> LIVE';
             pills.appendChild(livePill);
+
+            if (action.matchDateLabel && (action.matchDateLabel.includes('🎯') || action.matchDateLabel.includes('💎') || action.matchDateLabel.includes('🛡️'))) {
+                const tierPill = document.createElement('span');
+                const isValue = action.matchDateLabel.includes('💎');
+                const isSafety = action.matchDateLabel.includes('🛡️');
+                const tierColor = isValue ? '#f59e0b' : isSafety ? '#10b981' : '#38bdf8';
+                const tierBg = isValue ? 'rgba(245, 158, 11, 0.15)' : isSafety ? 'rgba(16, 185, 129, 0.15)' : 'rgba(56, 189, 248, 0.15)';
+                const tierBorder = isValue ? 'rgba(245, 158, 11, 0.3)' : isSafety ? 'rgba(16, 185, 129, 0.3)' : 'rgba(56, 189, 248, 0.3)';
+                tierPill.style.cssText = `background: ${tierBg}; color: ${tierColor}; border: 1px solid ${tierBorder}; font-weight: 600; padding: 2px 8px; border-radius: 9999px; font-size: 11px;`;
+                tierPill.textContent = action.matchDateLabel;
+                pills.appendChild(tierPill);
+            }
         }
 
         if (Number.isFinite(Number(action.estimatedOdds))) {

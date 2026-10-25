@@ -41,10 +41,16 @@ public class LiveInPlayResearchEngineTests
         Assert.Equal("Over/Under Goals", analysis.InPlayMarket);
         Assert.Contains("Under", analysis.InPlayOutcome);
         Assert.Contains("Pre-match model favored Over 2.5", analysis.ContrastSummary);
-        Assert.Contains("pivoting to Under", analysis.ContrastSummary);
+        Assert.Contains("pivots tactical focus to Under", analysis.ContrastSummary);
         Assert.NotEmpty(analysis.TacticalReasoning);
         Assert.NotEmpty(analysis.KeyRisk);
         Assert.NotEmpty(analysis.LiveInsightBullets);
+
+        // Portfolio assertions
+        Assert.Equal(3, analysis.Recommendations.Count);
+        Assert.Contains(analysis.Recommendations, r => r.Tier == "Primary");
+        Assert.Contains(analysis.Recommendations, r => r.Tier == "Value");
+        Assert.Contains(analysis.Recommendations, r => r.Tier == "Safety");
     }
 
     [Fact]
@@ -79,115 +85,116 @@ public class LiveInPlayResearchEngineTests
         Assert.Equal(35, analysis.ElapsedMinutes);
         Assert.Equal("1st Half", analysis.MatchPhase);
         Assert.Equal("Over 2.5 Goals", analysis.InPlayOutcome);
-        Assert.Contains("Pre-match model leaned Under 2.5", analysis.ContrastSummary);
-        Assert.Contains("pivoting to Over 2.5 Goals", analysis.ContrastSummary);
+        Assert.Contains("Pre-match model favored Under 2.5", analysis.ContrastSummary);
+        Assert.Contains("pivots tactical focus to Over 2.5 Goals", analysis.ContrastSummary);
     }
 
     [Fact]
-    public void Analyze_Btts_BothScored_PivotsToGoalTotal()
+    public void Analyze_FirstHalf_ScorelessAt25Min_RecommendsFirstHalfOver05()
     {
-        var nowUtc = new DateTime(2026, 10, 25, 16, 10, 0, DateTimeKind.Utc);
-        var kickoffUtc = nowUtc.AddMinutes(-70); // ~55'
+        var nowUtc = new DateTime(2026, 10, 25, 15, 25, 0, DateTimeKind.Utc);
+        var kickoffUtc = nowUtc.AddMinutes(-25); // 25'
 
         var candidate = new AiChatContextBuilder.AiChatContextCandidate
         {
-            ActionKey = "P103",
-            PredictionId = 103,
-            MatchLocalDate = new DateOnly(2026, 10, 25),
-            MatchDateTimeUtc = kickoffUtc,
-            League = "Bundesliga",
-            KickoffTime = "15:00",
-            HomeTeam = "Dortmund",
-            AwayTeam = "Bayern",
-            PredictionCategory = "BothTeamsScore",
-            PredictedOutcome = "Yes",
-            ActualScore = "1 - 2",
-            ConfidenceScore = 0.70m,
-            MatchState = "Live",
-            CanBook = false,
-            FixtureKey = "Bundesliga|Dortmund|Bayern|15:00",
-            SearchTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Dortmund", "Bayern" }
-        };
-
-        var analysis = _engine.Analyze(candidate, nowUtc);
-
-        Assert.Equal("1 - 2", analysis.LiveScore);
-        Assert.Contains("Pre-match BTTS", analysis.ContrastSummary);
-        Assert.Contains("already won", analysis.ContrastSummary);
-        Assert.Equal("Over 3.5 Goals", analysis.InPlayOutcome);
-    }
-
-    [Fact]
-    public void Analyze_Btts_OneTeamStifledLate_PivotsToBttsNo()
-    {
-        var nowUtc = new DateTime(2026, 10, 25, 16, 30, 0, DateTimeKind.Utc);
-        var kickoffUtc = nowUtc.AddMinutes(-95); // ~80'
-
-        var candidate = new AiChatContextBuilder.AiChatContextCandidate
-        {
-            ActionKey = "P104",
-            PredictionId = 104,
-            MatchLocalDate = new DateOnly(2026, 10, 25),
-            MatchDateTimeUtc = kickoffUtc,
-            League = "Serie A",
-            KickoffTime = "15:00",
-            HomeTeam = "Inter",
-            AwayTeam = "Milan",
-            PredictionCategory = "BothTeamsScore",
-            PredictedOutcome = "Yes",
-            ActualScore = "1 - 0",
-            ConfidenceScore = 0.69m,
-            MatchState = "Live",
-            CanBook = false,
-            FixtureKey = "SerieA|Inter|Milan|15:00",
-            SearchTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Inter", "Milan" }
-        };
-
-        var analysis = _engine.Analyze(candidate, nowUtc);
-
-        Assert.Equal("1 - 0", analysis.LiveScore);
-        Assert.True(analysis.ElapsedMinutes >= 75);
-        Assert.Equal("Both Teams To Score", analysis.InPlayMarket);
-        Assert.Equal("BTTS: No", analysis.InPlayOutcome);
-        Assert.Contains("pivoting to BTTS: No", analysis.ContrastSummary);
-    }
-
-    [Fact]
-    public void Analyze_1X2_DeadlockLate_PivotsToDraw()
-    {
-        var nowUtc = new DateTime(2026, 10, 25, 16, 25, 0, DateTimeKind.Utc);
-        var kickoffUtc = nowUtc.AddMinutes(-90); // ~75'
-
-        var candidate = new AiChatContextBuilder.AiChatContextCandidate
-        {
-            ActionKey = "P105",
-            PredictionId = 105,
+            ActionKey = "P110",
+            PredictionId = 110,
             MatchLocalDate = new DateOnly(2026, 10, 25),
             MatchDateTimeUtc = kickoffUtc,
             League = "Premier League",
             KickoffTime = "15:00",
             HomeTeam = "Liverpool",
-            AwayTeam = "Man City",
-            PredictionCategory = "1X2",
-            PredictedOutcome = "Liverpool",
-            ActualScore = "1 - 1",
-            ConfidenceScore = 0.62m,
+            AwayTeam = "Everton",
+            PredictionCategory = "Over2.5Goals",
+            PredictedOutcome = "Over 2.5 Goals",
+            ActualScore = "0 - 0",
+            ConfidenceScore = 0.75m,
             MatchState = "Live",
             CanBook = false,
-            FixtureKey = "PL|Liverpool|ManCity|15:00",
-            SearchTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Liverpool", "ManCity" }
+            FixtureKey = "PL|Liverpool|Everton|15:00",
+            SearchTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Liverpool", "Everton" }
         };
 
         var analysis = _engine.Analyze(candidate, nowUtc);
 
-        Assert.Equal("1 - 1", analysis.LiveScore);
-        Assert.Equal("Match Winner / 1X2", analysis.InPlayMarket);
-        Assert.Equal("Draw (X)", analysis.InPlayOutcome);
-        Assert.Contains("pivots to Draw (X)", analysis.ContrastSummary);
+        Assert.Equal(3, analysis.Recommendations.Count);
+        var valueRec = Assert.Single(analysis.Recommendations, r => r.Tier == "Value");
+        Assert.Equal("1st Half Goals", valueRec.Market);
+        Assert.Equal("Over 0.5 1st Half Goals", valueRec.Outcome);
+        Assert.True(valueRec.Confidence >= 0.65);
     }
 
     [Fact]
-    public void CreateInPlayAction_SetsStatusLiveAndCanBookFalse()
+    public void Analyze_SecondHalf_ScorelessAtHT_RecommendsSecondHalfOver05()
+    {
+        var nowUtc = new DateTime(2026, 10, 25, 16, 05, 0, DateTimeKind.Utc);
+        var kickoffUtc = nowUtc.AddMinutes(-55); // ~HT / 45'
+
+        var candidate = new AiChatContextBuilder.AiChatContextCandidate
+        {
+            ActionKey = "P111",
+            PredictionId = 111,
+            MatchLocalDate = new DateOnly(2026, 10, 25),
+            MatchDateTimeUtc = kickoffUtc,
+            League = "Serie A",
+            KickoffTime = "15:00",
+            HomeTeam = "Juventus",
+            AwayTeam = "Roma",
+            PredictionCategory = "1X2",
+            PredictedOutcome = "Juventus",
+            ActualScore = "0 - 0",
+            ConfidenceScore = 0.66m,
+            MatchState = "Live",
+            CanBook = false,
+            FixtureKey = "SerieA|Juventus|Roma|15:00",
+            SearchTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Juventus", "Roma" }
+        };
+
+        var analysis = _engine.Analyze(candidate, nowUtc);
+
+        Assert.Equal(3, analysis.Recommendations.Count);
+        var valueRec = Assert.Single(analysis.Recommendations, r => r.Tier == "Value");
+        Assert.Equal("2nd Half Goals", valueRec.Market);
+        Assert.Equal("2nd Half Over 0.5 Goals", valueRec.Outcome);
+        Assert.True(valueRec.Confidence >= 0.70);
+    }
+
+    [Fact]
+    public void Analyze_TrailingFavorite_EvaluatesTeamToScore()
+    {
+        var nowUtc = new DateTime(2026, 10, 25, 16, 15, 0, DateTimeKind.Utc);
+        var kickoffUtc = nowUtc.AddMinutes(-65); // ~50'
+
+        var candidate = new AiChatContextBuilder.AiChatContextCandidate
+        {
+            ActionKey = "P112",
+            PredictionId = 112,
+            MatchLocalDate = new DateOnly(2026, 10, 25),
+            MatchDateTimeUtc = kickoffUtc,
+            League = "Bundesliga",
+            KickoffTime = "15:00",
+            HomeTeam = "Bayern Munich",
+            AwayTeam = "Bochum",
+            PredictionCategory = "1X2",
+            PredictedOutcome = "Bayern Munich",
+            ActualScore = "0 - 1",
+            ConfidenceScore = 0.80m,
+            MatchState = "Live",
+            CanBook = false,
+            FixtureKey = "Bundesliga|Bayern|Bochum|15:00",
+            SearchTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Bayern Munich", "Bochum" }
+        };
+
+        var analysis = _engine.Analyze(candidate, nowUtc);
+
+        Assert.Equal(3, analysis.Recommendations.Count);
+        var valueRec = Assert.Single(analysis.Recommendations, r => r.Tier == "Value");
+        Assert.Equal("Team to Score", valueRec.Market);
+        Assert.Contains("Bayern Munich to Score", valueRec.Outcome);
+    }
+
+    [Fact]
+    public void CreateInPlayActions_GeneratesThreeTieredActionCards()
     {
         var nowUtc = new DateTime(2026, 10, 25, 16, 20, 0, DateTimeKind.Utc);
         var kickoffUtc = nowUtc.AddMinutes(-85);
@@ -213,20 +220,25 @@ public class LiveInPlayResearchEngineTests
         };
 
         var analysis = _engine.Analyze(candidate, nowUtc);
-        var action = _engine.CreateInPlayAction(candidate, analysis);
+        var actions = _engine.CreateInPlayActions(candidate, analysis);
 
-        Assert.Equal("inplay_pick", action.Type);
-        Assert.Equal("Live", action.Status);
-        Assert.False(action.CanBook);
-        Assert.Equal("2 - 0", action.ActualScore);
-        Assert.Equal("Match Winner / 1X2", action.Market);
-        Assert.Equal("Tottenham to Win", action.Prediction);
-        Assert.Equal(analysis.ContrastSummary, action.AnalysisSummary);
-        Assert.NotNull(action.Explanation);
+        Assert.Equal(3, actions.Count);
+        Assert.All(actions, action =>
+        {
+            Assert.Equal("Live", action.Status);
+            Assert.False(action.CanBook);
+            Assert.Equal("2 - 0", action.ActualScore);
+            Assert.NotEmpty(action.Prediction);
+            Assert.NotEmpty(action.Explanation);
+        });
+
+        Assert.Contains(actions, a => a.MatchDateLabel.Contains("🎯"));
+        Assert.Contains(actions, a => a.MatchDateLabel.Contains("💎"));
+        Assert.Contains(actions, a => a.MatchDateLabel.Contains("🛡️"));
     }
 
     [Fact]
-    public void BuildInPlaySummaryMessage_ReturnsExpectedMarkdownSections()
+    public void BuildInPlaySummaryMessage_RendersMultiMarketPortfolio()
     {
         var nowUtc = new DateTime(2026, 10, 25, 16, 20, 0, DateTimeKind.Utc);
         var candidate = new AiChatContextBuilder.AiChatContextCandidate
@@ -255,9 +267,9 @@ public class LiveInPlayResearchEngineTests
         Assert.Contains("🔴 Live In-Play Match Research", message);
         Assert.Contains("⚡ Newcastle vs Aston Villa — **0 - 0**", message);
         Assert.Contains("Pre-Match Baseline:", message);
-        Assert.Contains("Live In-Play Pivot:", message);
-        Assert.Contains("Pre-Match vs. Live Contrast:", message);
-        Assert.Contains("Tactical Read:", message);
-        Assert.Contains("Key Risk:", message);
+        Assert.Contains("Multi-Market Tactical Portfolio:", message);
+        Assert.Contains("🎯 **Primary Best Read:**", message);
+        Assert.Contains("💎 **Value / Momentum Angle:**", message);
+        Assert.Contains("🛡️ **Safety / Banker Hedge:**", message);
     }
 }

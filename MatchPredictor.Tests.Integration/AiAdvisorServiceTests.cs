@@ -1785,12 +1785,17 @@ public class AiAdvisorServiceTests
         Assert.Contains("🔴 Live In-Play Match Research", response.Message);
         Assert.Contains("Arsenal vs Chelsea", response.Message);
         Assert.Contains("Pre-Match Baseline:", response.Message);
-        Assert.Contains("⚡ Live In-Play Pivot:", response.Message);
-        var action = Assert.Single(response.Actions);
-        Assert.Equal("Live", action.Status);
-        Assert.False(action.CanBook);
-        Assert.Equal("0 - 0", action.ActualScore);
-        Assert.Equal("Over/Under Goals", action.Market);
+        Assert.Contains("Multi-Market Tactical Portfolio:", response.Message);
+        Assert.Equal(3, response.Actions.Count);
+        Assert.All(response.Actions, action =>
+        {
+            Assert.Equal("Live", action.Status);
+            Assert.False(action.CanBook);
+            Assert.Equal("0 - 0", action.ActualScore);
+        });
+        Assert.Contains(response.Actions, a => a.MatchDateLabel.Contains("🎯"));
+        Assert.Contains(response.Actions, a => a.MatchDateLabel.Contains("💎"));
+        Assert.Contains(response.Actions, a => a.MatchDateLabel.Contains("🛡️"));
     }
 
     [Fact]
