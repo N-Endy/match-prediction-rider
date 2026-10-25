@@ -469,6 +469,39 @@ public class AiChatRequestParserTests
         Assert.Empty(result.Request.EntityTerms);
     }
 
+    [Theory]
+    [InlineData("What live games can I bet in-play on?")]
+    [InlineData("Show me inplay matches")]
+    [InlineData("Any live games right now?")]
+    [InlineData("Give me inplay picks")]
+    [InlineData("What's playing now?")]
+    [InlineData("Live betting picks")]
+    public void ParseDeterministic_DetectsLiveInPlayIntent(string prompt)
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            prompt,
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.Equal(AiChatIntent.LiveInPlayRecommendation, result.Request.Intent);
+        Assert.Equal("live", result.Request.Scope);
+        Assert.False(result.Request.BookableOnly);
+    }
+
+    [Fact]
+    public void ParseDeterministic_LiveInPlayWithTeam_ExtractsEntityTerm()
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            "How is Arsenal doing live in-play?",
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.Equal(AiChatIntent.LiveInPlayRecommendation, result.Request.Intent);
+        Assert.Contains(result.Request.EntityTerms, term => term.Equals("arsenal", StringComparison.OrdinalIgnoreCase));
+    }
+
     private sealed class StubSchemaFallbackService : IAiChatSchemaFallbackService
     {
         private readonly AiChatNormalizedRequest? _response;

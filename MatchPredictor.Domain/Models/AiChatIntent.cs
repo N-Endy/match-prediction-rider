@@ -9,5 +9,6 @@ public enum AiChatIntent
     MatchDiscussion,
     SettlementExplanation,
     AppHelp,
-    SecurityRefusal
+    SecurityRefusal,
+    LiveInPlayRecommendation
 }

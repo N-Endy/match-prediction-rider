@@ -144,6 +144,7 @@ builder.Services.AddScoped<IAiChatFootballInsightService, AiChatFootballInsightS
 builder.Services.AddSingleton<IAiSecurityGuardrailService, AiSecurityGuardrailService>();
 builder.Services.AddScoped<IDeepMatchResearchService, DeepMatchResearchService>();
 builder.Services.AddSingleton<IAiLlmRouter, AiLlmRouter>();
+builder.Services.AddScoped<ILiveInPlayResearchEngine, LiveInPlayResearchEngine>();
 builder.Services.AddScoped<IAiAdvisorService, AiAdvisorService>();
 builder.Services.AddScoped<IQuickSlipService, QuickSlipService>();
 builder.Services.AddScoped<IPredictionRiskAuditorService, PredictionRiskAuditorService>();

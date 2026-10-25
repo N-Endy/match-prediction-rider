@@ -29,7 +29,8 @@ public static partial class AiChatContextBuilder
         "who", "when", "where", "how", "think", "thinking", "believe", "expect", "predict", "predicted",
         "tell", "say", "mention", "provide", "generate", "create", "build", "selections", "selection", "select", "choose", "choice", "choices",
         "against", "versus", "vs", "at", "favorite", "favourite", "favorites", "favourites", "underdog", "underdogs",
-        "score", "scores", "scoring", "goal", "goals", "premier", "league", "leagues", "cup", "tournament"
+        "score", "scores", "scoring", "goal", "goals", "premier", "league", "leagues", "cup", "tournament",
+        "live", "inplay", "inplays", "in-play", "playing", "right"
     };
 
     /// <summary>
@@ -493,6 +494,12 @@ public static partial class AiChatContextBuilder
 
     private static SelectionIntent DetectSelectionIntent(AiChatNormalizedRequest request)
     {
+        if (request.Intent == AiChatIntent.LiveInPlayRecommendation ||
+            string.Equals(request.Scope, "live", StringComparison.OrdinalIgnoreCase))
+        {
+            return new SelectionIntent(DateScope.Live, BookableOnly: false, DisplayLabel: "Live In-Play");
+        }
+
         if (string.Equals(request.Scope, "yesterday", StringComparison.OrdinalIgnoreCase))
         {
             return new SelectionIntent(DateScope.Yesterday, BookableOnly: false, DisplayLabel: "Yesterday");
@@ -525,6 +532,7 @@ public static partial class AiChatContextBuilder
 
         return intent.Scope switch
         {
+            DateScope.Live => candidate.MatchState == "Live",
             DateScope.Today => candidate.MatchLocalDate == todayLocalDate,
             DateScope.Yesterday => candidate.MatchLocalDate == yesterday,
             DateScope.RecentFinished => candidate.MatchState == "Finished",
@@ -544,7 +552,7 @@ public static partial class AiChatContextBuilder
 
     private static bool ShouldApplyNamedFixtureFilter(AiChatNormalizedRequest request)
     {
-        return request.Intent == AiChatIntent.MatchDiscussion && request.EntityTerms.Count > 0;
+        return (request.Intent is AiChatIntent.MatchDiscussion or AiChatIntent.LiveInPlayRecommendation) && request.EntityTerms.Count > 0;
     }
 
     private static int ResolveRequestedCandidateCount(AiChatNormalizedRequest request)
@@ -1494,6 +1502,7 @@ public static partial class AiChatContextBuilder
 
     private enum DateScope
     {
+        Live,
         Today,
         Yesterday,
         RecentFinished,

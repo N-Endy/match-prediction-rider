@@ -388,6 +388,14 @@
         const pills = document.createElement('div');
         pills.className = 'mp-action-pills';
 
+        if (action.status === 'Live') {
+            const livePill = document.createElement('span');
+            livePill.className = 'mp-pill-live';
+            livePill.style.cssText = 'background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: 700; padding: 2px 8px; border-radius: 9999px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px;';
+            livePill.innerHTML = '<span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#ef4444; box-shadow: 0 0 6px #ef4444;"></span> LIVE';
+            pills.appendChild(livePill);
+        }
+
         if (Number.isFinite(Number(action.estimatedOdds))) {
             const oddsPill = document.createElement('span');
             oddsPill.className = 'mp-pill-odds';
@@ -464,7 +472,7 @@
 
             const insightTitle = document.createElement('div');
             insightTitle.className = 'mp-chat-insight-title';
-            insightTitle.textContent = 'Football Read';
+            insightTitle.textContent = action.status === 'Live' ? '⚡ Live In-Play Research & Contrast' : 'Football Read';
             insightHeader.appendChild(insightTitle);
 
             if (action.analysisConfidence) {
@@ -508,10 +516,15 @@
         }
 
         if (action.actualScore) {
-            const settledScore = document.createElement('div');
-            settledScore.className = 'mp-chat-action-score';
-            settledScore.textContent = `Final score: ${action.actualScore}`;
-            card.appendChild(settledScore);
+            const scoreDiv = document.createElement('div');
+            scoreDiv.className = 'mp-chat-action-score';
+            if (action.status === 'Live') {
+                scoreDiv.style.cssText = 'color: #ef4444; font-weight: 600; display: flex; align-items: center; gap: 6px;';
+                scoreDiv.innerHTML = `<span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#ef4444; box-shadow: 0 0 6px #ef4444;"></span> Live Score: <strong>${action.actualScore}</strong>`;
+            } else {
+                scoreDiv.textContent = `Final score: ${action.actualScore}`;
+            }
+            card.appendChild(scoreDiv);
         }
 
         // Interactive "+ Add Market" button with animated checkmark feedback
@@ -549,6 +562,11 @@
             });
 
             card.appendChild(btn);
+        } else if (action.status === 'Live') {
+            const inplayBadge = document.createElement('div');
+            inplayBadge.style.cssText = 'margin-top: 8px; padding: 6px 12px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; color: #fca5a5; font-size: 12px; font-weight: 500; text-align: center;';
+            inplayBadge.innerHTML = '⚡ <strong>Live In-Play</strong> • Bet live directly on bookmaker';
+            card.appendChild(inplayBadge);
         }
 
         return card;

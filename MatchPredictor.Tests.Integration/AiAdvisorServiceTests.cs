@@ -1743,6 +1743,72 @@ public class AiAdvisorServiceTests
         Assert.DoesNotContain("chat/completions", handler.RequestUris[0], StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task GetAdviceAsync_WithLiveMatches_ReturnsInPlayRecommendationAndLiveActions()
+    {
+        await using var context = CreateContext();
+        var localNow = DateTimeProvider.GetLocalTime();
+        var nowUtc = DateTime.UtcNow;
+
+        var livePrediction = new Prediction
+        {
+            Date = localNow.ToString("dd-MM-yyyy"),
+            Time = localNow.AddMinutes(-60).ToString("HH:mm"),
+            MatchLocalDate = DateOnly.FromDateTime(localNow),
+            MatchLocalTime = TimeOnly.FromDateTime(localNow.AddMinutes(-60)),
+            MatchDateTime = nowUtc.AddMinutes(-60),
+            League = "England - Premier League",
+            HomeTeam = "Arsenal",
+            AwayTeam = "Chelsea",
+            PredictionCategory = "Over2.5Goals",
+            PredictedOutcome = "Over 2.5 Goals",
+            ConfidenceScore = 0.72m,
+            RawConfidenceScore = 0.70m,
+            ThresholdUsed = 0.60,
+            ThresholdSource = "Configured",
+            CalibratorUsed = "Bucket",
+            WasPublished = true,
+            IsCurrentRevision = true,
+            IsLive = true,
+            ActualScore = "0 - 0"
+        };
+
+        context.Predictions.Add(livePrediction);
+        await context.SaveChangesAsync();
+
+        var handler = new SequenceHttpMessageHandler();
+        var service = CreateService(context, handler);
+
+        var response = await service.GetAdviceAsync("What live games can I bet in-play on?", "live-session-1");
+
+        Assert.NotNull(response);
+        Assert.Contains("🔴 Live In-Play Match Research", response.Message);
+        Assert.Contains("Arsenal vs Chelsea", response.Message);
+        Assert.Contains("Pre-Match Baseline:", response.Message);
+        Assert.Contains("⚡ Live In-Play Pivot:", response.Message);
+        var action = Assert.Single(response.Actions);
+        Assert.Equal("Live", action.Status);
+        Assert.False(action.CanBook);
+        Assert.Equal("0 - 0", action.ActualScore);
+        Assert.Equal("Over/Under Goals", action.Market);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_WhenNoMatchesAreLive_ReturnsInformativeNoLiveMessage()
+    {
+        await using var context = CreateContext();
+        await SeedPredictionsAsync(context, 2);
+
+        var handler = new SequenceHttpMessageHandler();
+        var service = CreateService(context, handler);
+
+        var response = await service.GetAdviceAsync("Any live games right now?", "live-session-2");
+
+        Assert.NotNull(response);
+        Assert.Contains("There are currently no active live in-play games", response.Message);
+        Assert.Empty(response.Actions);
+    }
+
     private static ApplicationDbContext CreateContext()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()

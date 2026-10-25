@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
@@ -35,6 +36,7 @@ public class AiAdvisorService : IAiAdvisorService
     private readonly IAiSecurityGuardrailService _securityGuardrailService;
     private readonly IDeepMatchResearchService? _deepMatchResearchService;
     private readonly IAiLlmRouter? _llmRouter;
+    private readonly ILiveInPlayResearchEngine _liveInPlayResearchEngine;
 
     public AiAdvisorService(
         ApplicationDbContext dbContext,
@@ -47,7 +49,8 @@ public class AiAdvisorService : IAiAdvisorService
         IAiChatFootballInsightService footballInsightService,
         IAiSecurityGuardrailService? securityGuardrailService = null,
         IDeepMatchResearchService? deepMatchResearchService = null,
-        IAiLlmRouter? llmRouter = null)
+        IAiLlmRouter? llmRouter = null,
+        ILiveInPlayResearchEngine? liveInPlayResearchEngine = null)
     {
         _dbContext = dbContext;
         _logger = logger;
@@ -60,6 +63,7 @@ public class AiAdvisorService : IAiAdvisorService
         _securityGuardrailService = securityGuardrailService ?? new AiSecurityGuardrailService(Microsoft.Extensions.Logging.Abstractions.NullLogger<AiSecurityGuardrailService>.Instance);
         _deepMatchResearchService = deepMatchResearchService;
         _llmRouter = llmRouter;
+        _liveInPlayResearchEngine = liveInPlayResearchEngine ?? new LiveInPlayResearchEngine();
     }
 
     public async IAsyncEnumerable<AiChatStreamChunk> StreamAdviceAsync(
@@ -212,6 +216,31 @@ public class AiAdvisorService : IAiAdvisorService
             FinalizeResponse(followUp, "working_slip_refinement");
             await SaveSessionTurnAsync(sessionId, sessionState, normalizedPrompt, followUp, null, followUp.Actions.Select(action => action.PredictionId).ToList(), normalizedRequest, ct);
             return followUp;
+        }
+
+        if (normalizedRequest.Intent == AiChatIntent.LiveInPlayRecommendation)
+        {
+            var liveResponse = await BuildLiveInPlayResponseAsync(
+                normalizedPrompt,
+                normalizedRequest,
+                candidateCatalog,
+                sessionId,
+                sessionState,
+                _chatClient.IsConfigured,
+                ct);
+            MergeSelectionWarnings(liveResponse, null, normalizedRequest, parseResult);
+            FinalizeResponse(liveResponse, "live_inplay");
+            await SaveSessionTurnAsync(
+                sessionId,
+                sessionState,
+                normalizedPrompt,
+                liveResponse,
+                null,
+                liveResponse.Actions.Select(action => action.PredictionId).ToList(),
+                normalizedRequest,
+                ct,
+                "live-inplay");
+            return liveResponse;
         }
 
         var predictionsForSelection = contextCandidates.Count > 0
@@ -2172,6 +2201,128 @@ public class AiAdvisorService : IAiAdvisorService
         };
     }
 
+    private async Task<AiChatResponse> BuildLiveInPlayResponseAsync(
+        string userPrompt,
+        AiChatNormalizedRequest normalizedRequest,
+        IReadOnlyList<AiChatContextBuilder.AiChatContextCandidate> candidateCatalog,
+        string sessionId,
+        AiChatSessionState sessionState,
+        bool llmConfigured,
+        CancellationToken ct)
+    {
+        var nowUtc = DateTime.UtcNow;
+        var liveCandidates = candidateCatalog
+            .Where(candidate => candidate.MatchState == "Live")
+            .ToList();
+
+        if (normalizedRequest.EntityTerms.Count > 0)
+        {
+            var entityTerms = normalizedRequest.EntityTerms.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var matchedLive = liveCandidates
+                .Where(candidate => candidate.SearchTokens.Intersect(entityTerms, StringComparer.OrdinalIgnoreCase).Any())
+                .ToList();
+
+            if (matchedLive.Count > 0)
+            {
+                liveCandidates = matchedLive;
+            }
+            else
+            {
+                var namedUpcoming = candidateCatalog
+                    .Where(c => c.MatchState == "Upcoming" && c.SearchTokens.Intersect(entityTerms, StringComparer.OrdinalIgnoreCase).Any())
+                    .ToList();
+
+                if (namedUpcoming.Count > 0)
+                {
+                    var fixture = namedUpcoming[0];
+                    var upcomingMsg = $"**{fixture.HomeTeam} vs {fixture.AwayTeam}** is not live right now. It is scheduled to kick off today at **{fixture.KickoffTime}** ({fixture.League}).";
+                    if (liveCandidates.Count > 0)
+                    {
+                        upcomingMsg += "\n\nHere are the active live matches currently in-play right now:";
+                    }
+                    else
+                    {
+                        upcomingMsg += "\n\nThere are currently no other live matches active in today's card. Check back once kickoff arrives for dynamic in-play research!";
+                        return new AiChatResponse
+                        {
+                            Message = upcomingMsg,
+                            ShowBookAll = false
+                        };
+                    }
+                }
+                else if (liveCandidates.Count == 0)
+                {
+                    return new AiChatResponse
+                    {
+                        Message = $"I couldn't find an active live match for \"{string.Join(", ", normalizedRequest.EntityTerms)}\" in today's tracked games, and there are currently no other live fixtures in progress. In-play analysis activates as soon as matches kick off!",
+                        ShowBookAll = false
+                    };
+                }
+            }
+        }
+
+        if (liveCandidates.Count == 0)
+        {
+            return new AiChatResponse
+            {
+                Message = "There are currently no active live in-play games in today's tracked matches. In-play research and dynamic alternative predictions activate automatically as soon as matches kick off. Check back once today's card is underway!",
+                ShowBookAll = false
+            };
+        }
+
+        var analyses = liveCandidates
+            .Select(candidate => _liveInPlayResearchEngine.Analyze(candidate, nowUtc))
+            .ToList();
+
+        var actions = liveCandidates
+            .Zip(analyses, (candidate, analysis) => _liveInPlayResearchEngine.CreateInPlayAction(candidate, analysis))
+            .ToList();
+
+        string message;
+        if (llmConfigured)
+        {
+            try
+            {
+                var systemPrompt = _liveInPlayResearchEngine.BuildInPlaySystemPrompt(analyses, userPrompt);
+                var rawLlmResponse = await CompleteChatAsync(
+                    systemPrompt,
+                    userPrompt,
+                    sessionState.History,
+                    ct,
+                    jsonMode: false,
+                    temperature: 0.25,
+                    maxTokens: 2500);
+
+                if (!string.IsNullOrWhiteSpace(rawLlmResponse) &&
+                    !rawLlmResponse.StartsWith("❌", StringComparison.Ordinal) &&
+                    !rawLlmResponse.StartsWith("⏳", StringComparison.Ordinal))
+                {
+                    message = rawLlmResponse.Trim();
+                }
+                else
+                {
+                    message = _liveInPlayResearchEngine.BuildInPlaySummaryMessage(analyses, userPrompt);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "LLM completion failed for live in-play research. Falling back to grounded in-play engine.");
+                message = _liveInPlayResearchEngine.BuildInPlaySummaryMessage(analyses, userPrompt);
+            }
+        }
+        else
+        {
+            message = _liveInPlayResearchEngine.BuildInPlaySummaryMessage(analyses, userPrompt);
+        }
+
+        return new AiChatResponse
+        {
+            Message = message,
+            Actions = actions,
+            ShowBookAll = false
+        };
+    }
+
     private static bool TryResolvePendingRolloverRequest(
         string userPrompt,
         AiChatSessionState sessionState,
@@ -2555,10 +2706,32 @@ public class AiAdvisorService : IAiAdvisorService
         if (discussionCandidates.Count == 1)
         {
             var candidate = discussionCandidates[0];
+            if (candidate.MatchState == "Live")
+            {
+                var liveAnalysis = _liveInPlayResearchEngine.Analyze(candidate, DateTime.UtcNow);
+                var inPlayAction = _liveInPlayResearchEngine.CreateInPlayAction(candidate, liveAnalysis);
+                var sb = new StringBuilder();
+                sb.AppendLine($"⚡ **{candidate.HomeTeam} vs {candidate.AwayTeam}** is currently live at **{liveAnalysis.LiveScore}** ({liveAnalysis.ElapsedMinutes}', {liveAnalysis.MatchPhase}).");
+                sb.AppendLine();
+                sb.AppendLine($"> **Pre-Match Baseline:** {liveAnalysis.PreMatchOutcome} ({liveAnalysis.PreMatchConfidence:P0} model confidence)");
+                sb.AppendLine($"> **⚡ Live In-Play Pivot:** **{liveAnalysis.InPlayOutcome}** ({liveAnalysis.InPlayMarket}) @ ~{liveAnalysis.InPlayOdds:F2} odds ({liveAnalysis.InPlayConfidence:P0} live confidence)");
+                sb.AppendLine($"> **Pre-Match vs. Live Contrast:** {liveAnalysis.ContrastSummary}");
+                sb.AppendLine();
+                sb.AppendLine($"**Tactical Read:** {liveAnalysis.TacticalReasoning}");
+                sb.AppendLine();
+                sb.AppendLine($"*Key Risk: {liveAnalysis.KeyRisk}*");
+
+                return new AiChatResponse
+                {
+                    Message = sb.ToString().Trim(),
+                    Actions = [inPlayAction],
+                    ShowBookAll = false
+                };
+            }
+
             var message = candidate.MatchState switch
             {
                 "Finished" => BuildFinishedDiscussionMessage(candidate),
-                "Live" => BuildLiveDiscussionMessage(candidate),
                 _ => BuildUpcomingDiscussionMessage(candidate)
             };
 
@@ -2879,14 +3052,10 @@ public class AiAdvisorService : IAiAdvisorService
         return $"{candidate.HomeTeam} vs {candidate.AwayTeam} finished {candidate.ActualScore}. The published angle was {candidate.PredictedOutcome}, and the settled outcome was {candidate.ActualOutcome ?? "still pending in context"}.";
     }
 
-    private static string BuildLiveDiscussionMessage(AiChatContextBuilder.AiChatContextCandidate candidate)
+    private string BuildLiveDiscussionMessage(AiChatContextBuilder.AiChatContextCandidate candidate)
     {
-        if (!string.IsNullOrWhiteSpace(candidate.ActualScore))
-        {
-            return $"{candidate.HomeTeam} vs {candidate.AwayTeam} is currently live at {candidate.ActualScore}, so the final settlement read is not locked yet.";
-        }
-
-        return $"{candidate.HomeTeam} vs {candidate.AwayTeam} is currently live, so I can only discuss the pre-match angle and not the final settlement yet.";
+        var analysis = _liveInPlayResearchEngine.Analyze(candidate, DateTime.UtcNow);
+        return $"⚡ {candidate.HomeTeam} vs {candidate.AwayTeam} is currently live at {analysis.LiveScore} ({analysis.ElapsedMinutes}', {analysis.MatchPhase}). In-play dynamic research: {analysis.TacticalReasoning} (Pre-match vs live contrast: {analysis.ContrastSummary})";
     }
 
     private static string BuildUpcomingDiscussionMessage(AiChatContextBuilder.AiChatContextCandidate candidate)
@@ -3458,6 +3627,7 @@ public class AiAdvisorService : IAiAdvisorService
     {
         return intent switch
         {
+            AiChatIntent.LiveInPlayRecommendation => "live_inplay",
             AiChatIntent.MixedMarketRecommendation => "mixed_market_recommendation",
             AiChatIntent.WorkingSlipRefinement => "working_slip_refinement",
             AiChatIntent.MatchDiscussion => "match_discussion",

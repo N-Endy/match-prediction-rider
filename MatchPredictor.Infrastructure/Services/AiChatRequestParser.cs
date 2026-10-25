@@ -521,6 +521,11 @@ public partial class AiChatRequestParser
             return AiChatIntent.SettlementExplanation;
         }
 
+        if (IsLiveInPlayPrompt(promptLower))
+        {
+            return AiChatIntent.LiveInPlayRecommendation;
+        }
+
         if (AiChatContextBuilder.IsAppHelpPrompt(promptLower, tokens))
         {
             return AiChatIntent.AppHelp;
@@ -574,6 +579,61 @@ public partial class AiChatRequestParser
                promptLower.Contains("value-positive", StringComparison.Ordinal);
     }
 
+    private static bool IsLiveInPlayPrompt(string promptLower)
+    {
+        if (string.IsNullOrWhiteSpace(promptLower))
+        {
+            return false;
+        }
+
+        if (promptLower.Contains("what does live mean", StringComparison.Ordinal) ||
+            promptLower.Contains("what is live", StringComparison.Ordinal) ||
+            promptLower.Contains("explain live", StringComparison.Ordinal) ||
+            promptLower.Contains("how does live work", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (promptLower.Contains("inplay", StringComparison.Ordinal) ||
+            promptLower.Contains("in-play", StringComparison.Ordinal) ||
+            promptLower.Contains("in play", StringComparison.Ordinal) ||
+            promptLower.Contains("inplays", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (promptLower.Contains("playing now", StringComparison.Ordinal) ||
+            promptLower.Contains("currently playing", StringComparison.Ordinal) ||
+            promptLower.Contains("ongoing match", StringComparison.Ordinal) ||
+            promptLower.Contains("ongoing game", StringComparison.Ordinal) ||
+            promptLower.Contains("ongoing fixture", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (promptLower.Contains("live", StringComparison.Ordinal))
+        {
+            if (promptLower.Contains("game", StringComparison.Ordinal) ||
+                promptLower.Contains("match", StringComparison.Ordinal) ||
+                promptLower.Contains("fixture", StringComparison.Ordinal) ||
+                promptLower.Contains("pick", StringComparison.Ordinal) ||
+                promptLower.Contains("bet", StringComparison.Ordinal) ||
+                promptLower.Contains("score", StringComparison.Ordinal) ||
+                promptLower.Contains("now", StringComparison.Ordinal) ||
+                promptLower.Contains("today", StringComparison.Ordinal) ||
+                promptLower.Contains("predict", StringComparison.Ordinal) ||
+                promptLower.Contains("look", StringComparison.Ordinal) ||
+                promptLower.Contains("what", StringComparison.Ordinal) ||
+                promptLower.Contains("which", StringComparison.Ordinal) ||
+                promptLower.Contains("any", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static string DetermineScope(
         string promptLower,
         HashSet<string> tokens,
@@ -581,6 +641,11 @@ public partial class AiChatRequestParser
         bool isRolloverIntent,
         bool isCatalogListing)
     {
+        if (intent == AiChatIntent.LiveInPlayRecommendation)
+        {
+            return "live";
+        }
+
         if (promptLower.Contains("yesterday", StringComparison.Ordinal))
         {
             return "yesterday";
@@ -830,7 +895,7 @@ public partial class AiChatRequestParser
         bool requireSameFixtureMarkets,
         bool isCatalogListing)
     {
-        if (intent is AiChatIntent.SecurityRefusal or AiChatIntent.AppHelp or AiChatIntent.SettlementExplanation)
+        if (intent is AiChatIntent.SecurityRefusal or AiChatIntent.AppHelp or AiChatIntent.SettlementExplanation or AiChatIntent.LiveInPlayRecommendation)
         {
             return false;
         }
@@ -1075,6 +1140,7 @@ public partial class AiChatRequestParser
         var normalized = (scope ?? string.Empty).Trim().ToLowerInvariant();
         return normalized switch
         {
+            "live" => "live",
             "today" => "today",
             "yesterday" => "yesterday",
             "recent_finished" => "recent_finished",
