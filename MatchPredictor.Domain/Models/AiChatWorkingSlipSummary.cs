@@ -6,4 +6,5 @@ public class AiChatWorkingSlipSummary
     public int BookableCount { get; set; }
     public List<string> Markets { get; set; } = [];
     public double? EstimatedCombinedOdds { get; set; }
+    public string? BookingCode { get; set; }
 }

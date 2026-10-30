@@ -144,13 +144,21 @@ public sealed class QuickSlipService : IQuickSlipService
     {
         var nowUtc = DateTime.UtcNow;
         var targetDate = intent.TargetDate ?? DateOnly.FromDateTime(nowUtc);
-        var endDate = targetDate.AddDays(2); // Look up to 2 days ahead for matching fixtures
+        var endDate = intent.IsTonight ? targetDate : targetDate.AddDays(2); // If tonight, stay strictly on target date
 
         // Query active predictions
         var query = _dbContext.Predictions
             .AsNoTracking()
             .Where(p => p.IsCurrentRevision && p.WasPublished)
             .Where(p => p.MatchLocalDate >= targetDate && p.MatchLocalDate <= endDate);
+
+        if (intent.IsTonight)
+        {
+            var eveningCutoff = new TimeOnly(17, 0);
+            query = query.Where(p =>
+                (p.MatchLocalTime.HasValue && p.MatchLocalTime.Value >= eveningCutoff) ||
+                (p.MatchDateTime.HasValue && p.MatchDateTime.Value.Hour >= 16));
+        }
 
         if (excludePredictionIds is { Count: > 0 })
         {
@@ -186,10 +194,45 @@ public sealed class QuickSlipService : IQuickSlipService
 
         if (predictions.Count == 0)
         {
-            return [];
+            // If tonight yielded 0 games (e.g. late night query), fallback to upcoming published card
+            if (intent.IsTonight)
+            {
+                var fallbackQuery = _dbContext.Predictions
+                    .AsNoTracking()
+                    .Where(p => p.IsCurrentRevision && p.WasPublished)
+                    .Where(p => p.MatchLocalDate >= targetDate && p.MatchLocalDate <= targetDate.AddDays(1));
+
+                if (intent.RequestedMarkets.Count > 0)
+                {
+                    var categories = intent.RequestedMarkets.Select(m => m.ToCategory()).ToList();
+                    fallbackQuery = fallbackQuery.Where(p => categories.Contains(p.PredictionCategory));
+                }
+
+                predictions = await fallbackQuery.ToListAsync(ct);
+                predictions = predictions
+                    .Where(p => !p.MatchDateTime.HasValue || p.MatchDateTime.Value > nowUtc.AddMinutes(-5))
+                    .ToList();
+            }
+
+            if (predictions.Count == 0)
+            {
+                return [];
+            }
         }
 
-        // Load odds from MatchDatas
+        // Tier 1 Odds: Load real captured bookmaker snapshots
+        var predIds = predictions.Select(p => p.Id).ToList();
+        var oddsSnapshots = await _dbContext.PredictionOddsSnapshots
+            .AsNoTracking()
+            .Where(s => predIds.Contains(s.PredictionId))
+            .OrderByDescending(s => s.CapturedAtUtc)
+            .ToListAsync(ct);
+
+        var oddsSnapshotLookup = oddsSnapshots
+            .GroupBy(s => s.PredictionId)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        // Tier 2 Odds: Load odds from MatchDatas
         var dates = predictions.Select(p => p.MatchLocalDate).Distinct().ToList();
         var matchDatas = await _dbContext.MatchDatas
             .AsNoTracking()
@@ -206,8 +249,9 @@ public sealed class QuickSlipService : IQuickSlipService
         {
             var key = $"{pred.MatchLocalDate:yyyy-MM-dd}_{pred.HomeTeam}_{pred.AwayTeam}".ToLowerInvariant();
             matchDataLookup.TryGetValue(key, out var md);
+            oddsSnapshotLookup.TryGetValue(pred.Id, out var snapshot);
 
-            var odds = ResolveOddsForPrediction(pred, md);
+            var odds = ResolveOddsForPrediction(pred, snapshot, md);
             var prob = pred.ConfidenceScore;
             decimal? ev = (odds.HasValue && prob.HasValue && odds.Value > 1.0m)
                 ? (prob.Value * odds.Value) - 1.0m
@@ -243,32 +287,67 @@ public sealed class QuickSlipService : IQuickSlipService
             _ => legs.OrderByDescending(l => (l.ModelProbability ?? 0m) * (l.Odds ?? 1m))
         };
 
-        var targetCount = requestedMaxLegs ?? intent.RequestedCount ?? 3;
-        targetCount = Math.Clamp(targetCount, 1, 10);
+        // Prioritize explicit prompt count over default maxLegs
+        int targetCount;
+        if (intent.RequestedCount.HasValue && intent.RequestedCount.Value > 0)
+        {
+            targetCount = requestedMaxLegs.HasValue
+                ? Math.Min(intent.RequestedCount.Value, requestedMaxLegs.Value)
+                : intent.RequestedCount.Value;
+        }
+        else
+        {
+            targetCount = requestedMaxLegs ?? 3;
+        }
+        targetCount = Math.Clamp(targetCount, 1, 15);
 
         return ranked.Take(targetCount).ToList();
     }
 
-    private static decimal? ResolveOddsForPrediction(Prediction prediction, MatchData? matchData)
+    private static decimal? ResolveOddsForPrediction(Prediction prediction, PredictionOddsSnapshot? snapshot, MatchData? matchData)
     {
-        if (matchData is null) return null;
-
-        var cat = prediction.PredictionCategory;
-        var outcome = prediction.PredictedOutcome ?? string.Empty;
-
-        double rawOdds = cat switch
+        // Tier 1: Real captured bookmaker odds from SportyBet snapshot
+        if (snapshot is not null && snapshot.DecimalOdds > 1.0)
         {
-            "BothTeamsScore" => matchData.BttsYes > 1.0 ? matchData.BttsYes : 0,
-            "Over2.5Goals" => matchData.OverTwoGoals > 1.0 ? matchData.OverTwoGoals : 0,
-            "Under2.5Goals" => matchData.UnderTwoGoals > 1.0 ? matchData.UnderTwoGoals : 0,
-            "StraightWin" => outcome.Contains("Home", StringComparison.OrdinalIgnoreCase) || outcome.Contains(prediction.HomeTeam, StringComparison.OrdinalIgnoreCase)
-                ? matchData.HomeWin
-                : matchData.AwayWin,
-            "Draw" => matchData.Draw > 1.0 ? matchData.Draw : 0,
-            _ => 0
-        };
+            return (decimal)Math.Round(snapshot.DecimalOdds, 2);
+        }
 
-        return rawOdds > 1.0 ? (decimal)Math.Round(rawOdds, 2) : null;
+        // Tier 2: Odds from scraped MatchData
+        if (matchData is not null)
+        {
+            var cat = prediction.PredictionCategory;
+            var outcome = prediction.PredictedOutcome ?? string.Empty;
+
+            double rawOdds = cat switch
+            {
+                "BothTeamsScore" => matchData.BttsYes > 1.0 ? matchData.BttsYes : 0,
+                "Over2.5Goals" => matchData.OverTwoGoals > 1.0 ? matchData.OverTwoGoals : 0,
+                "Under2.5Goals" => matchData.UnderTwoGoals > 1.0 ? matchData.UnderTwoGoals : 0,
+                "StraightWin" => outcome.Contains("Home", StringComparison.OrdinalIgnoreCase) || outcome.Contains(prediction.HomeTeam, StringComparison.OrdinalIgnoreCase)
+                    ? matchData.HomeWin
+                    : matchData.AwayWin,
+                "Draw" => matchData.Draw > 1.0 ? matchData.Draw : 0,
+                _ => 0
+            };
+
+            if (rawOdds > 1.0)
+            {
+                return (decimal)Math.Round(rawOdds, 2);
+            }
+        }
+
+        // Tier 3: Model-derived odds based on Calibrated Confidence / Probability
+        var prob = (double)(prediction.ConfidenceScore ?? 0.5m);
+        if (prob > 0.05 && prob < 0.98)
+        {
+            var derived = BetPricingMath.ConvertProbabilityToDecimalOdds(prob);
+            if (derived.HasValue && derived.Value > 1.0)
+            {
+                return (decimal)Math.Round(derived.Value, 2);
+            }
+        }
+
+        return 1.70m;
     }
 
     private static string BuildSuccessSummary(int legCount, decimal combinedOdds, QuickSlipParsedIntent intent)
@@ -282,8 +361,13 @@ public sealed class QuickSlipService : IQuickSlipService
 
         var leagueLabel = !string.IsNullOrWhiteSpace(intent.LeagueHint) ? $" in {intent.LeagueHint}" : "";
         var biasLabel = intent.Bias == "Safe" ? " high-confidence" : intent.Bias == "Value" ? " positive-EV value" : "";
+        var timeLabel = intent.IsTonight ? " for tonight" : "";
 
-        return $"Staged {legCount}{biasLabel} {marketLabel} picks{leagueLabel} with {combinedOdds:F2} total combined odds.";
+        var shortfallNotice = intent.RequestedCount.HasValue && legCount < intent.RequestedCount.Value
+            ? $" (Found {legCount} of {intent.RequestedCount.Value} requested fixtures on the card)"
+            : "";
+
+        return $"Staged {legCount}{biasLabel} {marketLabel} picks{leagueLabel}{timeLabel} with {combinedOdds:F2}x total combined odds.{shortfallNotice}";
     }
 
     private static string BuildNoMatchExplanation(QuickSlipParsedIntent intent)
@@ -393,7 +477,8 @@ public sealed class QuickSlipService : IQuickSlipService
                     teams,
                     initial.TargetDate,
                     isStillAmbiguous,
-                    questions);
+                    questions,
+                    initial.IsTonight);
             }
         }
         catch (Exception ex)

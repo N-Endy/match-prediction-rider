@@ -68,7 +68,7 @@
             const payload = {
                 input: text,
                 currentSlipPredictionIds: currentIds,
-                maxLegs: 6
+                maxLegs: 10
             };
 
             const response = await fetch('/api/slip/ai-parse', {

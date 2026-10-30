@@ -47,4 +47,5 @@ public sealed record QuickSlipParsedIntent(
     IReadOnlyList<string> TeamHints,
     DateOnly? TargetDate,
     bool IsAmbiguous,
-    IReadOnlyList<string> ClarificationQuestions);
+    IReadOnlyList<string> ClarificationQuestions,
+    bool IsTonight = false);

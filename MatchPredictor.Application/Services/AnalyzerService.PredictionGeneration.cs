@@ -282,7 +282,7 @@ public partial class AnalyzerService
                             prediction.FixtureKey,
                             candidate.Market,
                             prediction.PredictedOutcome,
-                            (double)prediction.ConfidenceScore,
+                            (double)(prediction.ConfidenceScore ?? (decimal)candidate.CalibratedProbability),
                             challengerProb);
                     }
                     catch (Exception ex)

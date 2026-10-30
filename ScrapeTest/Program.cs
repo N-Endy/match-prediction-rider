@@ -78,7 +78,7 @@ services.AddScoped<ISourceMarketPricingService>(provider => provider.GetRequired
 services.AddScoped<IAnalyzerService, AnalyzerService>();
 
 GlobalConfiguration.Configuration.UsePostgreSqlStorage(
-    connectionString,
+    c => c.UseNpgsqlConnection(connectionString),
     new PostgreSqlStorageOptions
     {
         SchemaName = "hangfire",

@@ -608,6 +608,15 @@
         stats.textContent = statParts.join(' • ');
         shell.appendChild(stats);
 
+        const bookingCode = summary.bookingCode || summary.BookingCode;
+        if (bookingCode) {
+            const codeEl = document.createElement('div');
+            codeEl.className = 'mp-chat-booking-code';
+            codeEl.style.cssText = 'margin-top: 6px; font-size: 0.85rem; display: flex; align-items: center; gap: 6px; color: var(--text-secondary);';
+            codeEl.innerHTML = `📋 Code: <code class="mp-copyable-code" title="Click to copy">${escapeHtml(bookingCode)}</code>`;
+            shell.appendChild(codeEl);
+        }
+
         return shell;
     }
 
@@ -684,12 +693,42 @@
     }
 
     function formatMessageHtml(text) {
-        const escaped = escapeHtml(text);
+        if (!text) return '';
+        const lines = text.split('\n');
+        const outputLines = [];
+        let inQuote = false;
+        let quoteLines = [];
+
+        function flushQuote() {
+            if (quoteLines.length > 0) {
+                outputLines.push(`<blockquote class="mp-chat-quote">${quoteLines.join('<br>')}</blockquote>`);
+                quoteLines = [];
+                inQuote = false;
+            }
+        }
+
+        for (let line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('&gt;') || trimmed.startsWith('>')) {
+                inQuote = true;
+                const clean = trimmed.replace(/^(&gt;|>)\s?/, '');
+                quoteLines.push(formatInline(clean));
+            } else {
+                flushQuote();
+                outputLines.push(formatInline(line));
+            }
+        }
+        flushQuote();
+
+        return outputLines.join('<br>');
+    }
+
+    function formatInline(str) {
+        const escaped = escapeHtml(str);
         return escaped
-            .replace(/\n/g, '<br>')
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
             .replace(/\*(.*?)\*/g, '<em>$1</em>')
-            .replace(/`(.*?)`/g, '<code>$1</code>');
+            .replace(/`(.*?)`/g, '<code class="mp-copyable-code" title="Click to copy" onclick="navigator.clipboard.writeText(\'$1\'); this.classList.add(\'copied\'); setTimeout(()=>this.classList.remove(\'copied\'), 1500);">$1</code>');
     }
 
     function addAllAndBook(btn) {

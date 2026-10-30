@@ -2998,6 +2998,37 @@ a:hover {
   box-shadow: var(--shadow-sm);
 }
 
+.mp-chat-quote {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.85rem;
+  background: rgba(255, 255, 255, 0.04);
+  border-left: 3px solid rgba(14, 165, 233, 0.6);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.mp-copyable-code {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-weight: 600;
+  font-family: monospace;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: all;
+}
+
+.mp-copyable-code:hover {
+  background: rgba(14, 165, 233, 0.25);
+  color: #38bdf8;
+}
+
+.mp-copyable-code.copied {
+  background: rgba(16, 185, 129, 0.25);
+  color: #34d399;
+}
+
 .mp-chat-user .mp-chat-bubble {
   background: rgba(14, 165, 233, 0.15);
   border-color: rgba(14, 165, 233, 0.35);

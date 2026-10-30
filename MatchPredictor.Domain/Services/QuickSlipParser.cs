@@ -54,7 +54,7 @@ public static partial class QuickSlipParser
         var bias = DetectBias(lower);
         var league = DetectLeague(lower);
         var teams = DetectTeams(text);
-        var targetDate = DetectTargetDate(lower, today);
+        var (targetDate, isTonight) = DetectTargetDate(lower, today);
 
         // If no market was named and no team specified, ask clarification
         if (markets.Count == 0 && teams.Count == 0)
@@ -75,7 +75,8 @@ public static partial class QuickSlipParser
             teams,
             targetDate,
             isAmbiguous,
-            questions);
+            questions,
+            isTonight);
     }
 
     private static List<PredictionMarket> DetectMarkets(string lower)
@@ -133,10 +134,16 @@ public static partial class QuickSlipParser
             return count;
         }
 
-        var loneDigitMatch = Regex.Match(lower, @"^(give\s*me\s*|build\s*me\s*|find\s*)?(?<num>\d{1,2})\s+[a-z]");
+        var loneDigitMatch = Regex.Match(lower, @"^(give\s*me\s*|build\s*me\s*|find\s*|select\s*|get\s*me\s*|i\s*need\s*|i\s*want\s*)?(?<num>\d{1,2})\s+[a-z]");
         if (loneDigitMatch.Success && int.TryParse(loneDigitMatch.Groups["num"].Value, out var loneCount) && loneCount is > 0 and <= 20)
         {
             return loneCount;
+        }
+
+        var marketCountMatch = Regex.Match(lower, @"\b(?<num>\d{1,2})\s+(btts|gg|both\s*teams|over|under|straight|wins?|draws?|accas?|combos?|fixtures?)\b");
+        if (marketCountMatch.Success && int.TryParse(marketCountMatch.Groups["num"].Value, out var mCount) && mCount is > 0 and <= 20)
+        {
+            return mCount;
         }
 
         return null;
@@ -231,20 +238,22 @@ public static partial class QuickSlipParser
         return teams;
     }
 
-    private static DateOnly DetectTargetDate(string lower, DateOnly today)
+    private static (DateOnly TargetDate, bool IsTonight) DetectTargetDate(string lower, DateOnly today)
     {
+        var isTonight = Regex.IsMatch(lower, @"\b(tonight|this\s*evening|night)\b");
+
         if (lower.Contains("tomorrow"))
         {
-            return today.AddDays(1);
+            return (today.AddDays(1), false);
         }
 
         if (lower.Contains("weekend") || lower.Contains("saturday") || lower.Contains("sunday"))
         {
             var daysUntilSaturday = ((int)DayOfWeek.Saturday - (int)today.DayOfWeek + 7) % 7;
             if (daysUntilSaturday == 0 && today.DayOfWeek != DayOfWeek.Saturday) daysUntilSaturday = 7;
-            return today.AddDays(daysUntilSaturday);
+            return (today.AddDays(daysUntilSaturday), false);
         }
 
-        return today;
+        return (today, isTonight);
     }
 }

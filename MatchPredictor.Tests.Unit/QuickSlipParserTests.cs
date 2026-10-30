@@ -37,7 +37,13 @@ public class QuickSlipParserTests
         var intent = QuickSlipParser.Parse("4 GG matches tonight");
 
         Assert.Equal(4, intent.RequestedCount);
+        Assert.True(intent.IsTonight);
         Assert.Contains(PredictionMarket.BothTeamsScore, intent.RequestedMarkets);
+
+        var promptIntent = QuickSlipParser.Parse("4 both teams to score tonight");
+        Assert.Equal(4, promptIntent.RequestedCount);
+        Assert.True(promptIntent.IsTonight);
+        Assert.Contains(PredictionMarket.BothTeamsScore, promptIntent.RequestedMarkets);
     }
 
     [Fact]

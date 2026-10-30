@@ -169,7 +169,7 @@ public partial class WebScraperService : IWebScraperService
                             throw;
                         }
 
-                        var rawHtml = container.GetAttribute("innerHTML");
+                        var rawHtml = container.GetAttribute("innerHTML") ?? string.Empty;
                         allScores.AddRange(ParseScoreDataHtml(rawHtml, listingDate));
                     }
 
@@ -1712,6 +1712,9 @@ public partial class WebScraperService : IWebScraperService
         var eventUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var processed = 0;
 
+        var consecutiveEmptySitemaps = 0;
+        const int maxConsecutiveEmptySitemaps = 5;
+
         while (queue.Count > 0 && processed < maxSitemaps)
         {
             var sitemapUrl = queue.Dequeue();
@@ -1738,11 +1741,12 @@ public partial class WebScraperService : IWebScraperService
                 continue;
             }
 
+            var previousCount = eventUrls.Count;
             foreach (var entry in entries
                          .OrderByDescending(entry => ScoreSofaScoreLocationPriority(entry.Location))
                          .ThenByDescending(entry => entry.LastModifiedUtc ?? DateTime.MinValue))
             {
-                if (entry.Location.Contains("/football/match/", StringComparison.OrdinalIgnoreCase))
+                if (IsSofaScoreEventUrl(entry.Location))
                 {
                     eventUrls.Add(entry.Location);
                     continue;
@@ -1754,6 +1758,22 @@ public partial class WebScraperService : IWebScraperService
                     !visited.Contains(entry.Location))
                 {
                     queue.Enqueue(entry.Location);
+                }
+            }
+
+            if (eventUrls.Count > previousCount)
+            {
+                consecutiveEmptySitemaps = 0;
+            }
+            else
+            {
+                consecutiveEmptySitemaps++;
+                if (consecutiveEmptySitemaps >= maxConsecutiveEmptySitemaps && eventUrls.Count == 0 && queue.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "SofaScore sitemap discovery stopped early after {EmptyCount} consecutive sitemaps yielded zero event URLs.",
+                        consecutiveEmptySitemaps);
+                    break;
                 }
             }
         }
@@ -1942,6 +1962,22 @@ public partial class WebScraperService : IWebScraperService
         return score;
     }
 
+    private static bool IsSofaScoreEventUrl(string location)
+    {
+        if (string.IsNullOrWhiteSpace(location))
+        {
+            return false;
+        }
+
+        return location.Contains("/football/match/", StringComparison.OrdinalIgnoreCase) ||
+               location.Contains("/football/event/", StringComparison.OrdinalIgnoreCase) ||
+               location.Contains("/event/", StringComparison.OrdinalIgnoreCase) ||
+               (location.Contains("/football/", StringComparison.OrdinalIgnoreCase) &&
+                (location.Contains("#id:", StringComparison.OrdinalIgnoreCase) ||
+                 location.EndsWith("m", StringComparison.OrdinalIgnoreCase) ||
+                 Regex.IsMatch(location, @"\/football\/[a-z0-9\-]+\/[a-z0-9\-]+", RegexOptions.IgnoreCase)));
+    }
+
     private static bool LooksLikeAiScoreChallengePage(string html, string? title = null)
     {
         if (string.IsNullOrWhiteSpace(html) && string.IsNullOrWhiteSpace(title))
@@ -2126,10 +2162,14 @@ public partial class WebScraperService : IWebScraperService
 
                         if (next.Name == "#text")
                         {
-                            var candidateTeams = HtmlEntity.DeEntitize(next.InnerText).Trim();
-                            if (TrySplitTeamPair(candidateTeams, out _, out _))
+                            var text = next.InnerText;
+                            if (!string.IsNullOrWhiteSpace(text))
                             {
-                                teams = candidateTeams;
+                                var candidateTeams = HtmlEntity.DeEntitize(text)?.Trim() ?? string.Empty;
+                                if (TrySplitTeamPair(candidateTeams, out _, out _))
+                                {
+                                    teams = candidateTeams;
+                                }
                             }
                         }
                         else if (next.Name == "a")
@@ -2140,7 +2180,13 @@ public partial class WebScraperService : IWebScraperService
                                 continue;
                             }
 
-                            var rawString = HtmlEntity.DeEntitize(next.InnerText).Trim();
+                            var text = next.InnerText;
+                            if (string.IsNullOrWhiteSpace(text))
+                            {
+                                continue;
+                            }
+
+                            var rawString = HtmlEntity.DeEntitize(text)?.Trim() ?? string.Empty;
                             if (rawString.Contains("Postponed", StringComparison.OrdinalIgnoreCase) ||
                                 rawString is "-" or "–" or "—")
                             {
@@ -2280,9 +2326,10 @@ public partial class WebScraperService : IWebScraperService
         var today = DateOnly.FromDateTime(nowLocal);
         var listing = listingDate ?? today;
 
-        if (ClockRegex().IsMatch(rawTime ?? string.Empty))
+        var timeInput = rawTime ?? string.Empty;
+        if (ClockRegex().IsMatch(timeInput))
         {
-            var extractedTime = ExtractClockTime(rawTime);
+            var extractedTime = ExtractClockTime(timeInput);
             var parsedLocal = DateTime.ParseExact(
                 $"{listing:dd-MM-yyyy} {extractedTime}",
                 ["dd-MM-yyyy HH:mm", "dd-MM-yyyy H:mm"],
