@@ -154,6 +154,7 @@ builder.Services.AddScoped<IMarketTimingService, MarketTimingService>();
 builder.Services.AddScoped<IFeatureDriftMonitorService, FeatureDriftMonitorService>();
 builder.Services.AddScoped<ISameGameMultiService, SameGameMultiService>();
 builder.Services.AddScoped<IBetslipGenerationService, BetslipGenerationService>();
+builder.Services.AddScoped<IOperationsTipsterService, OperationsTipsterService>();
 builder.Services.AddScoped<IManualScoreLinkService, ManualScoreLinkService>();
 builder.Services.AddScoped<IUserTrackingService, UserTrackingService>();
 builder.Services.AddScoped<IAiChatAuthTicketService, AiChatAuthTicketService>();

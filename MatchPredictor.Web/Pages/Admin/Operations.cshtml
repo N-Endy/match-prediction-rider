@@ -1,0 +1,1189 @@
+@page "/Admin/Operations"
+@model MatchPredictor.Web.Pages.Admin.OperationsModel
+@using MatchPredictor.Domain.Models
+@using System.Globalization
+@{
+    ViewData["Title"] = "AI Tipster Operations · Owner Cockpit";
+    ViewData["Robots"] = "noindex, nofollow";
+}
+
+@section Head {
+    <meta name="robots" content="noindex, nofollow" />
+}
+
+<div class="mp-container mp-operations-container">
+    @if (!string.IsNullOrWhiteSpace(Model.StatusAlertMessage))
+    {
+        <div class="mp-alert @(Model.StatusAlertSuccess ? "mp-alert-success" : "mp-alert-danger")" style="margin-top: 1rem;">
+            <span>@(Model.StatusAlertSuccess ? "✓" : "⚠")</span>
+            <div>@Model.StatusAlertMessage</div>
+        </div>
+    }
+
+    <!-- Header -->
+    <header class="mp-page-header mp-op-header">
+        <div class="mp-op-title-wrap">
+            <div class="mp-op-confidential-tag">
+                <span class="mp-live-pulse-dot"></span>
+                <span>CONFIDENTIAL OWNER COCKPIT · ADVANCED AI TIPSTER</span>
+            </div>
+            <h1 class="mp-op-heading">AI Tipster Operations</h1>
+            <p class="mp-op-lead">
+                Executive profit generation engine. 3-pillar fractional Kelly allocation designed for systematic mathematical growth, positive expectation (+EV), and ruthless capital preservation.
+            </p>
+        </div>
+
+        <div class="mp-op-header-actions">
+            <div class="mp-op-nav-switch">
+                <a href="/Admin/Operations" class="mp-op-nav-pill active">AI Tipster Cockpit</a>
+                <a href="/Admin/Selections" class="mp-op-nav-pill">Synergy Hub</a>
+            </div>
+            @if (Model.Dossier is not null)
+            {
+                <span class="mp-date-badge">@Model.Dossier.GeneratedLocalLabel</span>
+            }
+            <form method="post" asp-page-handler="Refresh" class="mp-refresh-form">
+                <button type="submit" class="mp-btn-action mp-btn-refresh" title="Re-evaluate board, re-run tipster edge model, and refresh SportyBet booking codes">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+                    </svg>
+                    <span>Re-Analyze Slate &amp; Book</span>
+                </button>
+            </form>
+        </div>
+    </header>
+
+    @if (Model.Dossier is null)
+    {
+        <div class="mp-empty-state">
+            <div class="mp-empty-state-icon">🛡️</div>
+            <h2>No slate dossier generated</h2>
+            <p>Click "Re-Analyze Slate &amp; Book" above to run the tipster evaluation engine.</p>
+        </div>
+    }
+    else
+    {
+        <!-- Interactive Bankroll Control Bar -->
+        <section class="mp-bankroll-cockpit" aria-label="Interactive Bankroll Control Bar">
+            <div class="mp-bankroll-control-grid">
+                <!-- Currency Selector -->
+                <div class="mp-bankroll-field">
+                    <label for="currencySelect" class="mp-bankroll-label">Currency</label>
+                    <div class="mp-select-wrap">
+                        <select id="currencySelect" class="mp-bankroll-select">
+                            <option value="₦" selected>NGN (₦)</option>
+                            <option value="$">USD ($)</option>
+                            <option value="£">GBP (£)</option>
+                            <option value="€">EUR (€)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Bankroll Input -->
+                <div class="mp-bankroll-field">
+                    <label for="bankrollInput" class="mp-bankroll-label">Total Betting Bankroll</label>
+                    <div class="mp-input-prefix-wrap">
+                        <span class="mp-input-prefix" id="currencyPrefix">₦</span>
+                        <input type="number" id="bankrollInput" class="mp-bankroll-input" value="100000" min="100" step="100" />
+                    </div>
+                </div>
+
+                <!-- Daily Risk Budget -->
+                <div class="mp-bankroll-field">
+                    <label for="dailyRiskSelect" class="mp-bankroll-label">Daily Risk Budget (Kelly)</label>
+                    <div class="mp-select-wrap">
+                        <select id="dailyRiskSelect" class="mp-bankroll-select">
+                            <option value="3.0">3.0% · Conservative (Quarter-Kelly)</option>
+                            <option value="5.0" selected>5.0% · Standard Tipster Allocation</option>
+                            <option value="7.5">7.5% · Aggressive Edge Expansion</option>
+                            <option value="10.0">10.0% · Maximum Daily Exposure Cap</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Live Summary Display -->
+                <div class="mp-bankroll-summary">
+                    <div class="mp-summary-item">
+                        <span class="mp-summary-label">Today's Total Risk Budget</span>
+                        <span class="mp-summary-val" id="summaryTotalBudget">₦5,000</span>
+                    </div>
+                    <div class="mp-summary-item">
+                        <span class="mp-summary-label">Active Committed Capital</span>
+                        <span class="mp-summary-val mp-highlight-emerald" id="summaryActiveCapital">₦5,000</span>
+                    </div>
+                    <div class="mp-summary-item">
+                        <span class="mp-summary-label">Unit Value (1.0u = 1%)</span>
+                        <span class="mp-summary-val" id="summaryUnitValue">₦1,000</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Executive Tipster Briefing Card -->
+        <section class="mp-briefing-card" aria-label="Executive Tipster Briefing">
+            <header class="mp-briefing-header">
+                <div class="mp-briefing-badge-wrap">
+                    <span class="mp-slate-grade-badge" style="border-color: @Model.Dossier.SlateBadgeColor; color: @Model.Dossier.SlateBadgeColor;">
+                        <span class="mp-grade-dot" style="background-color: @Model.Dossier.SlateBadgeColor;"></span>
+                        @Model.Dossier.SlateGrade
+                    </span>
+                    <span class="mp-briefing-meta">Analyzed <strong>@Model.Dossier.TotalFixturesAnalyzed</strong> fixtures &middot; <strong>@Model.Dossier.PublishedPicksCount</strong> positive-EV candidates</span>
+                </div>
+                <div class="mp-briefing-date">
+                    Slate: <strong>@Model.Dossier.SlateDate.ToString("dddd, d MMMM yyyy", CultureInfo.InvariantCulture)</strong>
+                </div>
+            </header>
+
+            <div class="mp-briefing-body">
+                <div class="mp-briefing-quote">
+                    <div class="mp-quote-icon">🎙️</div>
+                    <div class="mp-quote-content">
+                        <div class="mp-quote-title">Tipster Master Briefing</div>
+                        <p class="mp-quote-text">@Model.Dossier.ExecutiveSummary</p>
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(Model.Dossier.TacticalWatchouts))
+                {
+                    <div class="mp-watchout-box">
+                        <div class="mp-watchout-icon">⚠️</div>
+                        <div class="mp-watchout-content">
+                            <strong>Tactical Watchouts &amp; Market Traps:</strong>
+                            <span>@Model.Dossier.TacticalWatchouts</span>
+                        </div>
+                    </div>
+                }
+            </div>
+        </section>
+
+        <!-- 3-Pillar Portfolio Grid -->
+        <section class="mp-pillars-grid" aria-label="3-Pillar Portfolio Tickets">
+            @foreach (var ticket in Model.Dossier.Tickets)
+            {
+                var pillarColor = ticket.PillarKind switch
+                {
+                    OperationsPillarKind.Compounder => "#10b981",       // Emerald
+                    OperationsPillarKind.ValueEdge => "#38bdf8",        // Cyan
+                    OperationsPillarKind.MultiplierSniper => "#f59e0b", // Amber
+                    _ => "#94a3b8"
+                };
+
+                var pillarTag = ticket.PillarKind switch
+                {
+                    OperationsPillarKind.Compounder => "PILLAR 1 · LOW VARIANCE",
+                    OperationsPillarKind.ValueEdge => "PILLAR 2 · VALUE DISLOCATION",
+                    OperationsPillarKind.MultiplierSniper => "PILLAR 3 · ASYMMETRIC UPSIDE",
+                    _ => "PORTFOLIO TICKET"
+                };
+
+                <article class="mp-op-card @(ticket.IsPreserved ? "mp-card-preserved" : "")" 
+                         id="ticket-@ticket.PillarKind.ToString().ToLowerInvariant()"
+                         data-pillar="@ticket.PillarKind.ToString().ToLowerInvariant()"
+                         data-allocation="@ticket.AllocationPercent"
+                         data-odds="@ticket.CombinedOdds"
+                         data-preserved="@ticket.IsPreserved.ToString().ToLowerInvariant()">
+                    
+                    <header class="mp-op-card-header">
+                        <div>
+                            <div class="mp-op-card-subhead">
+                                <span class="mp-pillar-tag" style="border-color: @pillarColor; color: @pillarColor;">@pillarTag</span>
+                                <span class="mp-target-odds-tag">Target: @ticket.TargetOddsRange</span>
+                            </div>
+                            <h2 class="mp-op-card-title">@ticket.Title</h2>
+                            <p class="mp-op-card-subtitle">@ticket.Subtitle</p>
+                        </div>
+
+                        <div>
+                            @if (ticket.IsPreserved)
+                            {
+                                <span class="mp-status-pill mp-status-preserved">🛡️ CAPITAL PRESERVED</span>
+                            }
+                            else
+                            {
+                                <span class="mp-status-pill mp-status-active" style="border-color: @pillarColor; color: @pillarColor;">
+                                    ACTIVE POSITION
+                                </span>
+                            }
+                        </div>
+                    </header>
+
+                    @if (ticket.IsPreserved)
+                    {
+                        <!-- Capital Preserved Shield View -->
+                        <div class="mp-preserved-banner">
+                            <div class="mp-preserved-shield">🛡️</div>
+                            <div class="mp-preserved-details">
+                                <h3>NO BET RECOMMENDED TODAY — STAKE: 0.0 UNITS</h3>
+                                <p class="mp-preserved-reason">@ticket.PreservationReason</p>
+                                <p class="mp-preserved-philosophy">@ticket.TacticalAnalysis</p>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <!-- Dynamic Stake & Expectation Dashboard -->
+                        <div class="mp-stake-dashboard" style="border-left-color: @pillarColor;">
+                            <div class="mp-stake-metric">
+                                <span class="mp-stake-label">Recommended Stake</span>
+                                <span class="mp-stake-val mp-op-stake-display" data-allocation="@ticket.AllocationPercent">
+                                    ₦3,000
+                                </span>
+                                <span class="mp-stake-sub mp-op-units-display">@ticket.RecommendedUnits.ToString("0.0", CultureInfo.InvariantCulture) Units (@ticket.AllocationPercent% of daily risk)</span>
+                            </div>
+
+                            <div class="mp-stake-metric">
+                                <span class="mp-stake-label">Combined Odds</span>
+                                <span class="mp-stake-val mp-highlight-cyan">@ticket.CombinedOdds.ToString("0.00", CultureInfo.InvariantCulture)x</span>
+                                <span class="mp-stake-sub">Model Edge: +@ticket.EdgePercent%</span>
+                            </div>
+
+                            <div class="mp-stake-metric">
+                                <span class="mp-stake-label">Potential Return</span>
+                                <span class="mp-stake-val mp-highlight-emerald mp-op-return-display" data-odds="@ticket.CombinedOdds">
+                                    ₦0
+                                </span>
+                                <span class="mp-stake-sub">Net Profit: <strong class="mp-op-profit-display">₦0</strong></span>
+                            </div>
+                        </div>
+
+                        <!-- SportyBet Fast Booking Box -->
+                        @if (!string.IsNullOrWhiteSpace(ticket.BookingCode))
+                        {
+                            var resolvedBookingUrl = !string.IsNullOrWhiteSpace(ticket.BookingUrl)
+                                ? ticket.BookingUrl
+                                : $"https://www.sportybet.com/ng/?shareCode={ticket.BookingCode}";
+
+                            <div class="mp-op-booking-box">
+                                <div class="mp-code-label-row">
+                                    <span>SportyBet Booking Code</span>
+                                    <span class="mp-code-tag">Instant Load</span>
+                                </div>
+                                <div class="mp-op-code-row">
+                                    <code class="mp-op-code" id="booking-code-@ticket.PillarKind">@ticket.BookingCode</code>
+                                    <div class="mp-code-btn-group">
+                                        <button type="button"
+                                                class="mp-btn-copy"
+                                                onclick="copyOperationsCode('@ticket.BookingCode', this)">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                            </svg>
+                                            <span>Copy</span>
+                                        </button>
+                                        <a href="@resolvedBookingUrl"
+                                           target="_blank"
+                                           rel="noopener noreferrer"
+                                           class="mp-btn-sporty">
+                                            <span>Load on SportyBet &rarr;</span>
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+
+                        <!-- Tactical Rationale Callout -->
+                        <div class="mp-op-tactical-note">
+                            <span class="mp-tactical-label">Tactical Edge Breakdown:</span>
+                            <span class="mp-tactical-text">@ticket.TacticalAnalysis</span>
+                        </div>
+
+                        <!-- Selections Table -->
+                        <div class="mp-table-wrapper">
+                            <table class="mp-picks-table">
+                                <thead>
+                                    <tr>
+                                        <th class="mp-th-num">#</th>
+                                        <th class="mp-th-kickoff">Kickoff</th>
+                                        <th class="mp-th-fixture">Fixture &amp; League</th>
+                                        <th class="mp-th-market">Market</th>
+                                        <th class="mp-th-pick">Tipster Pick</th>
+                                        <th class="mp-th-odds">Odds</th>
+                                        <th class="mp-th-edge">Edge</th>
+                                        <th class="mp-th-conviction">Tier</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @for (int i = 0; i < ticket.Legs.Count; i++)
+                                    {
+                                        var leg = ticket.Legs[i];
+                                        var convictionClass = leg.Conviction switch
+                                        {
+                                            "BANKER" => "mp-conv-banker",
+                                            "VALUE" => "mp-conv-value",
+                                            _ => "mp-conv-solid"
+                                        };
+
+                                        <tr>
+                                            <td class="mp-td-num">@(i + 1)</td>
+                                            <td class="mp-td-kickoff">
+                                                <span class="mp-time">@leg.KickoffLocalTime</span>
+                                                <span class="mp-date-sub">@leg.MatchLocalDate.ToString("d MMM", CultureInfo.InvariantCulture)</span>
+                                            </td>
+                                            <td class="mp-td-fixture">
+                                                <div class="mp-fixture-teams">@leg.HomeTeam <span class="mp-vs">vs</span> @leg.AwayTeam</div>
+                                                <div class="mp-fixture-league">@leg.League</div>
+                                                <div class="mp-leg-rationale">@leg.TacticalRationale</div>
+                                            </td>
+                                            <td class="mp-td-market">
+                                                <span class="mp-market-badge">@leg.Market</span>
+                                            </td>
+                                            <td class="mp-td-pick">
+                                                <strong class="mp-pick-text">@leg.Prediction</strong>
+                                            </td>
+                                            <td class="mp-td-odds">
+                                                <span class="mp-odds-badge">@leg.Odds.ToString("0.00", CultureInfo.InvariantCulture)</span>
+                                            </td>
+                                            <td class="mp-td-edge">
+                                                <span class="mp-edge-badge @(leg.EdgePercent >= 0 ? "mp-edge-pos" : "mp-edge-neg")">
+                                                    @(leg.EdgePercent >= 0 ? "+" : "")@leg.EdgePercent%
+                                                </span>
+                                            </td>
+                                            <td class="mp-td-conviction">
+                                                <span class="mp-conviction-tag @convictionClass">@leg.Conviction</span>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </article>
+            }
+        </section>
+    }
+</div>
+
+<style>
+/* ─── Operations Master Theme (Deep Charcoal, Emerald, Cyan & Amber) ─── */
+.mp-operations-container {
+    padding-top: 1.5rem;
+    padding-bottom: 5rem;
+}
+
+.mp-op-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.mp-op-title-wrap {
+    flex: 1;
+}
+
+.mp-op-confidential-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.75rem;
+    border-radius: var(--radius-full);
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    color: #34d399;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 0.75rem;
+}
+
+.mp-op-heading {
+    font-size: 2.2rem;
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    color: var(--text-color);
+    margin: 0 0 0.5rem;
+    line-height: 1.15;
+}
+
+.mp-op-lead {
+    font-size: 0.98rem;
+    color: var(--text-muted);
+    max-width: 760px;
+    line-height: 1.55;
+    margin: 0;
+}
+
+.mp-op-header-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.75rem;
+}
+
+.mp-op-nav-switch {
+    display: inline-flex;
+    padding: 0.25rem;
+    border-radius: var(--radius-md);
+    background: var(--surface-bg-alt);
+    border: 1px solid var(--border-color);
+    gap: 0.25rem;
+}
+
+.mp-op-nav-pill {
+    padding: 0.35rem 0.85rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-decoration: none;
+    color: var(--text-muted);
+    transition: all 0.2s ease;
+}
+
+.mp-op-nav-pill.active {
+    background: rgba(16, 185, 129, 0.18);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.mp-op-nav-pill:hover:not(.active) {
+    color: var(--text-color);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+/* ─── Interactive Bankroll Cockpit ─── */
+.mp-bankroll-cockpit {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+
+.mp-bankroll-control-grid {
+    display: grid;
+    grid-template-columns: 160px 240px 260px 1fr;
+    gap: 1.5rem;
+    align-items: center;
+}
+
+.mp-bankroll-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.mp-bankroll-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.mp-bankroll-select,
+.mp-bankroll-input {
+    background: var(--surface-bg-alt);
+    border: 1px solid var(--border-color);
+    color: var(--text-color);
+    padding: 0.65rem 0.85rem;
+    border-radius: var(--radius-md);
+    font-size: 0.95rem;
+    font-weight: 600;
+    width: 100%;
+    outline: none;
+    transition: border-color 0.2s ease;
+}
+
+.mp-bankroll-select:focus,
+.mp-bankroll-input:focus {
+    border-color: #10b981;
+}
+
+.mp-input-prefix-wrap {
+    display: flex;
+    align-items: center;
+    position: relative;
+}
+
+.mp-input-prefix {
+    position: absolute;
+    left: 0.85rem;
+    font-weight: 700;
+    color: #10b981;
+    pointer-events: none;
+}
+
+.mp-bankroll-input {
+    padding-left: 2rem;
+}
+
+.mp-bankroll-summary {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    background: rgba(15, 23, 42, 0.65);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: var(--radius-md);
+    padding: 0.85rem 1rem;
+    gap: 1rem;
+}
+
+.mp-summary-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.mp-summary-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.mp-summary-val {
+    font-size: 1.15rem;
+    font-weight: 800;
+    color: var(--text-color);
+}
+
+.mp-highlight-emerald {
+    color: #10b981 !important;
+}
+
+.mp-highlight-cyan {
+    color: #38bdf8 !important;
+}
+
+/* ─── Executive Tipster Briefing Card ─── */
+.mp-briefing-card {
+    background: linear-gradient(180deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.85) 100%);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    margin-bottom: 2.25rem;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.mp-briefing-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding-bottom: 1rem;
+    margin-bottom: 1.25rem;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.mp-briefing-badge-wrap {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.mp-slate-grade-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.85rem;
+    border-radius: var(--radius-full);
+    border: 1px solid;
+    background: rgba(0, 0, 0, 0.25);
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+}
+
+.mp-grade-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.mp-briefing-meta {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+.mp-briefing-date {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+.mp-briefing-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.mp-briefing-quote {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+}
+
+.mp-quote-icon {
+    font-size: 1.8rem;
+    line-height: 1;
+}
+
+.mp-quote-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #38bdf8;
+    margin-bottom: 0.3rem;
+}
+
+.mp-quote-text {
+    font-size: 0.98rem;
+    line-height: 1.6;
+    color: var(--text-color);
+    margin: 0;
+}
+
+.mp-watchout-box {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.85rem;
+    padding: 0.85rem 1.15rem;
+    border-radius: var(--radius-md);
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.25);
+    color: #fcd34d;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.mp-watchout-icon {
+    font-size: 1.1rem;
+}
+
+/* ─── 3-Pillar Portfolio Grid ─── */
+.mp-pillars-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 2.25rem;
+}
+
+.mp-op-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 1.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    position: relative;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+.mp-op-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+}
+
+.mp-op-card-subhead {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    margin-bottom: 0.4rem;
+}
+
+.mp-pillar-tag {
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    padding: 0.2rem 0.6rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid;
+    background: rgba(0, 0, 0, 0.25);
+}
+
+.mp-target-odds-tag {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.mp-op-card-title {
+    font-size: 1.45rem;
+    font-weight: 800;
+    margin: 0 0 0.25rem;
+    color: var(--text-color);
+}
+
+.mp-op-card-subtitle {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.mp-status-preserved {
+    background: rgba(148, 163, 184, 0.12);
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    color: #94a3b8;
+    padding: 0.35rem 0.85rem;
+    border-radius: var(--radius-full);
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+}
+
+.mp-status-active {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid;
+    padding: 0.35rem 0.85rem;
+    border-radius: var(--radius-full);
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+}
+
+/* ─── Capital Preserved Banner ─── */
+.mp-card-preserved {
+    opacity: 0.85;
+    background: rgba(15, 23, 42, 0.6);
+}
+
+.mp-preserved-banner {
+    display: flex;
+    gap: 1.5rem;
+    align-items: center;
+    padding: 1.75rem;
+    border-radius: var(--radius-md);
+    background: rgba(30, 41, 59, 0.5);
+    border: 1px dashed rgba(148, 163, 184, 0.3);
+}
+
+.mp-preserved-shield {
+    font-size: 2.75rem;
+}
+
+.mp-preserved-details h3 {
+    margin: 0 0 0.45rem;
+    font-size: 1.05rem;
+    color: #f1f5f9;
+    letter-spacing: 0.03em;
+}
+
+.mp-preserved-reason {
+    font-size: 0.92rem;
+    color: #cbd5e1;
+    margin: 0 0 0.5rem;
+    line-height: 1.5;
+}
+
+.mp-preserved-philosophy {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    font-style: italic;
+    margin: 0;
+}
+
+/* ─── Stake & Expectation Dashboard ─── */
+.mp-stake-dashboard {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    background: rgba(15, 23, 42, 0.75);
+    border: 1px solid var(--border-color);
+    border-left: 4px solid #10b981;
+    border-radius: var(--radius-md);
+    padding: 1.15rem 1.4rem;
+    gap: 1.5rem;
+}
+
+.mp-stake-metric {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.mp-stake-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.mp-stake-val {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--text-color);
+}
+
+.mp-stake-sub {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+/* ─── Booking Box ─── */
+.mp-op-booking-box {
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: var(--radius-md);
+    padding: 1rem 1.25rem;
+}
+
+.mp-op-code-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-top: 0.45rem;
+}
+
+.mp-op-code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 1.6rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    color: #10b981;
+}
+
+.mp-op-tactical-note {
+    font-size: 0.85rem;
+    line-height: 1.55;
+    background: rgba(56, 189, 248, 0.05);
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    border-radius: var(--radius-md);
+    padding: 0.75rem 1rem;
+    color: #bae6fd;
+}
+
+.mp-tactical-label {
+    font-weight: 700;
+    margin-right: 0.4rem;
+    color: #38bdf8;
+}
+
+/* ─── Picks Table ─── */
+.mp-table-wrapper {
+    overflow-x: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+}
+
+.mp-picks-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.mp-picks-table th {
+    background: rgba(15, 23, 42, 0.85);
+    text-align: left;
+    padding: 0.75rem 0.85rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.mp-picks-table td {
+    padding: 0.85rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    vertical-align: middle;
+}
+
+.mp-picks-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.mp-td-num {
+    color: var(--text-muted);
+    font-weight: 600;
+    width: 32px;
+}
+
+.mp-td-kickoff {
+    white-space: nowrap;
+    width: 90px;
+}
+
+.mp-time {
+    display: block;
+    font-weight: 700;
+    color: var(--text-color);
+}
+
+.mp-date-sub {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
+.mp-fixture-teams {
+    font-weight: 700;
+    color: var(--text-color);
+    margin-bottom: 0.15rem;
+}
+
+.mp-vs {
+    color: var(--text-muted);
+    font-weight: 400;
+}
+
+.mp-fixture-league {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 0.3rem;
+}
+
+.mp-leg-rationale {
+    font-size: 0.75rem;
+    color: #94a3b8;
+    line-height: 1.4;
+    font-style: italic;
+}
+
+.mp-market-badge {
+    display: inline-block;
+    padding: 0.2rem 0.5rem;
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.06);
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #cbd5e1;
+}
+
+.mp-pick-text {
+    color: #10b981;
+    font-size: 0.9rem;
+}
+
+.mp-odds-badge {
+    font-family: monospace;
+    font-weight: 800;
+    font-size: 0.95rem;
+    color: #38bdf8;
+}
+
+.mp-edge-badge {
+    font-family: monospace;
+    font-weight: 700;
+    font-size: 0.82rem;
+    padding: 0.2rem 0.45rem;
+    border-radius: var(--radius-sm);
+}
+
+.mp-edge-pos {
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+}
+
+.mp-edge-neg {
+    background: rgba(244, 63, 94, 0.15);
+    color: #fb7185;
+}
+
+.mp-conviction-tag {
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    padding: 0.2rem 0.5rem;
+    border-radius: var(--radius-sm);
+}
+
+.mp-conv-banker {
+    background: rgba(16, 185, 129, 0.2);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.mp-conv-value {
+    background: rgba(56, 189, 248, 0.2);
+    color: #38bdf8;
+    border: 1px solid rgba(56, 189, 248, 0.4);
+}
+
+.mp-conv-solid {
+    background: rgba(245, 158, 11, 0.2);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+/* ─── Responsive Media Queries ─── */
+@@media (max-width: 992px) {
+    .mp-bankroll-control-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+    .mp-bankroll-summary {
+        grid-column: 1 / -1;
+    }
+    .mp-stake-dashboard {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+    }
+}
+
+@@media (max-width: 640px) {
+    .mp-op-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .mp-op-header-actions {
+        width: 100%;
+        align-items: stretch;
+    }
+    .mp-bankroll-control-grid {
+        grid-template-columns: 1fr;
+    }
+    .mp-bankroll-summary {
+        grid-template-columns: 1fr;
+        gap: 0.75rem;
+    }
+    .mp-op-code-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .mp-code-btn-group {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        width: 100%;
+        gap: 0.5rem;
+    }
+    .mp-btn-copy, .mp-btn-sporty {
+        text-align: center;
+        justify-content: center;
+        min-height: 44px;
+    }
+}
+</style>
+
+<script>
+// ─── Bankroll Live Calculator & Persistence ───
+(function() {
+    var LS_BANKROLL = 'mp_op_bankroll';
+    var LS_CURRENCY = 'mp_op_currency';
+    var LS_RISK = 'mp_op_risk_pct';
+
+    var bankrollInput = document.getElementById('bankrollInput');
+    var currencySelect = document.getElementById('currencySelect');
+    var dailyRiskSelect = document.getElementById('dailyRiskSelect');
+    var currencyPrefix = document.getElementById('currencyPrefix');
+
+    var summaryTotalBudget = document.getElementById('summaryTotalBudget');
+    var summaryActiveCapital = document.getElementById('summaryActiveCapital');
+    var summaryUnitValue = document.getElementById('summaryUnitValue');
+
+    if (!bankrollInput || !currencySelect || !dailyRiskSelect) return;
+
+    // Load saved preferences
+    var savedBankroll = localStorage.getItem(LS_BANKROLL);
+    if (savedBankroll) bankrollInput.value = savedBankroll;
+
+    var savedCurrency = localStorage.getItem(LS_CURRENCY);
+    if (savedCurrency) currencySelect.value = savedCurrency;
+
+    var savedRisk = localStorage.getItem(LS_RISK);
+    if (savedRisk) dailyRiskSelect.value = savedRisk;
+
+    function formatMoney(amount, currency) {
+        return currency + Math.round(amount).toLocaleString('en-US');
+    }
+
+    function recalculate() {
+        var currency = currencySelect.value;
+        var bankroll = parseFloat(bankrollInput.value) || 0;
+        var riskPct = parseFloat(dailyRiskSelect.value) || 5.0;
+
+        if (currencyPrefix) currencyPrefix.innerText = currency;
+
+        // Save preferences
+        localStorage.setItem(LS_BANKROLL, bankroll);
+        localStorage.setItem(LS_CURRENCY, currency);
+        localStorage.setItem(LS_RISK, riskPct);
+
+        var totalDailyRiskBudget = bankroll * (riskPct / 100);
+        var unitValue = bankroll * 0.01; // 1 unit = 1% of total bankroll
+
+        if (summaryTotalBudget) summaryTotalBudget.innerText = formatMoney(totalDailyRiskBudget, currency);
+        if (summaryUnitValue) summaryUnitValue.innerText = formatMoney(unitValue, currency);
+
+        var activeCommitted = 0;
+
+        // Iterate ticket cards
+        var cards = document.querySelectorAll('.mp-op-card');
+        cards.forEach(function(card) {
+            var isPreserved = card.getAttribute('data-preserved') === 'true';
+            var allocation = parseFloat(card.getAttribute('data-allocation')) || 0;
+            var odds = parseFloat(card.getAttribute('data-odds')) || 1.0;
+
+            var stakeDisplay = card.querySelector('.mp-op-stake-display');
+            var returnDisplay = card.querySelector('.mp-op-return-display');
+            var profitDisplay = card.querySelector('.mp-op-profit-display');
+            var unitsDisplay = card.querySelector('.mp-op-units-display');
+
+            if (isPreserved || allocation <= 0) {
+                if (stakeDisplay) stakeDisplay.innerText = formatMoney(0, currency);
+                if (returnDisplay) returnDisplay.innerText = formatMoney(0, currency);
+                if (profitDisplay) profitDisplay.innerText = formatMoney(0, currency);
+                return;
+            }
+
+            var ticketStake = totalDailyRiskBudget * (allocation / 100);
+            var potentialReturn = ticketStake * odds;
+            var netProfit = potentialReturn - ticketStake;
+            var units = (ticketStake / unitValue);
+
+            activeCommitted += ticketStake;
+
+            if (stakeDisplay) stakeDisplay.innerText = formatMoney(ticketStake, currency);
+            if (returnDisplay) returnDisplay.innerText = formatMoney(potentialReturn, currency);
+            if (profitDisplay) profitDisplay.innerText = '+' + formatMoney(netProfit, currency);
+            if (unitsDisplay) unitsDisplay.innerText = units.toFixed(1) + ' Units (' + allocation + '% of daily risk)';
+        });
+
+        if (summaryActiveCapital) summaryActiveCapital.innerText = formatMoney(activeCommitted, currency);
+    }
+
+    bankrollInput.addEventListener('input', recalculate);
+    currencySelect.addEventListener('change', function() {
+        // Adjust default bankroll sensible for foreign currency if still on 100,000 NGN default
+        if (currencySelect.value !== '₦' && bankrollInput.value === '100000') {
+            bankrollInput.value = '500';
+        } else if (currencySelect.value === '₦' && bankrollInput.value === '500') {
+            bankrollInput.value = '100000';
+        }
+        recalculate();
+    });
+    dailyRiskSelect.addEventListener('change', recalculate);
+
+    // Initial run
+    recalculate();
+})();
+
+// ─── Copy Code Utility ───
+function copyOperationsCode(code, btn) {
+    if (!navigator.clipboard) {
+        var textArea = document.createElement("textarea");
+        textArea.value = code;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            showCopiedOp(btn);
+        } catch (err) {}
+        document.body.removeChild(textArea);
+        return;
+    }
+    navigator.clipboard.writeText(code).then(function() {
+        showCopiedOp(btn);
+    });
+}
+
+function showCopiedOp(btn) {
+    var span = btn.querySelector('span');
+    var original = span ? span.innerText : 'Copy';
+    if (span) span.innerText = 'Copied!';
+    btn.style.borderColor = '#10b981';
+    btn.style.color = '#34d399';
+    setTimeout(function() {
+        if (span) span.innerText = original;
+        btn.style.borderColor = '';
+        btn.style.color = '';
+    }, 2000);
+}
+</script>

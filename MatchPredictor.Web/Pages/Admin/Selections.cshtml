@@ -33,6 +33,10 @@
         </div>
 
         <div class="mp-synergy-header-actions">
+            <div class="mp-op-nav-switch" style="display: inline-flex; padding: 0.25rem; border-radius: var(--radius-md); background: var(--surface-bg-alt); border: 1px solid var(--border-color); gap: 0.25rem;">
+                <a href="/Admin/Operations" class="mp-op-nav-pill" style="padding: 0.35rem 0.85rem; border-radius: var(--radius-sm); font-size: 0.8rem; font-weight: 600; text-decoration: none; color: var(--text-muted);">AI Tipster Cockpit</a>
+                <a href="/Admin/Selections" class="mp-op-nav-pill active" style="padding: 0.35rem 0.85rem; border-radius: var(--radius-sm); font-size: 0.8rem; font-weight: 600; text-decoration: none; background: rgba(16, 185, 129, 0.18); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.35);">Synergy Hub</a>
+            </div>
             @if (Model.CurrentSet is not null)
             {
                 <span class="mp-date-badge">@Model.GeneratedLocalLabel</span>

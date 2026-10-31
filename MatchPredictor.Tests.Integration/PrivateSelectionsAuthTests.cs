@@ -51,6 +51,37 @@ public class PrivateSelectionsAuthTests
     }
 
     [Fact]
+    public async Task AdminUsageBasicAuthMiddleware_ExemptsAdminOperations_BypassesBasicAuth()
+    {
+        var nextCalled = false;
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["UsageDashboard:Username"] = "admin",
+                ["UsageDashboard:Password"] = "secret"
+            })
+            .Build();
+
+        var middleware = new AdminUsageBasicAuthMiddleware(
+            _ =>
+            {
+                nextCalled = true;
+                return Task.CompletedTask;
+            },
+            configuration,
+            new StubAdminUiTicketService(),
+            NullLogger<AdminUsageBasicAuthMiddleware>.Instance);
+
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/admin/operations";
+
+        await middleware.InvokeAsync(context);
+
+        Assert.True(nextCalled);
+        Assert.NotEqual(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+    }
+
+    [Fact]
     public async Task PrivateSelectionsAuthAttribute_WhenNoPasskeyOrCookie_ReturnsNotFound()
     {
         var (attribute, filterContext) = CreateFilterContext();
