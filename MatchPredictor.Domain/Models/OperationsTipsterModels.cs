@@ -57,6 +57,32 @@ public sealed class OperationsDossierDto
     public string SlateBadgeColor { get; set; } = "#10b981";
     public string ExecutiveSummary { get; set; } = string.Empty;
     public string TacticalWatchouts { get; set; } = string.Empty;
+    public string EngineMode { get; set; } = "Autonomous Reasoning Agent";
+    public string EngineBadgeColor { get; set; } = "#10b981";
     public decimal TotalDailyRiskBudgetPercent { get; set; } = 5.0m;
     public List<OperationsPillarTicketDto> Tickets { get; set; } = [];
+}
+
+public sealed class AutonomousSlateLlmResponse
+{
+    public string SlateGrade { get; set; } = "GRADE B — SOLID SLATE";
+    public string ExecutiveBriefing { get; set; } = string.Empty;
+    public string TacticalWatchouts { get; set; } = string.Empty;
+    public decimal RecommendedTotalDailyRiskPercent { get; set; } = 5.0m;
+    public List<AutonomousTicketLlmDto> Tickets { get; set; } = [];
+}
+
+public sealed class AutonomousTicketLlmDto
+{
+    public string PillarKind { get; set; } = "Compounder";
+    public string Title { get; set; } = string.Empty;
+    public string Subtitle { get; set; } = string.Empty;
+    public string TargetOddsRange { get; set; } = string.Empty;
+    public decimal AllocationPercent { get; set; }
+    public decimal RecommendedUnits { get; set; }
+    public string TacticalAnalysis { get; set; } = string.Empty;
+    public bool IsPreserved { get; set; }
+    public string PreservationReason { get; set; } = string.Empty;
+    public List<int> SelectedPredictionIds { get; set; } = [];
+    public Dictionary<int, string> CustomLegRationales { get; set; } = [];
 }

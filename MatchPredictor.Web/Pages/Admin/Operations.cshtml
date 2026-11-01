@@ -26,6 +26,12 @@
             <div class="mp-op-confidential-tag">
                 <span class="mp-live-pulse-dot"></span>
                 <span>CONFIDENTIAL OWNER COCKPIT · ADVANCED AI TIPSTER</span>
+                @if (Model.Dossier is not null && !string.IsNullOrWhiteSpace(Model.Dossier.EngineMode))
+                {
+                    <span class="mp-engine-pill" style="border-left: 1px solid rgba(255, 255, 255, 0.2); padding-left: 0.5rem; margin-left: 0.25rem; color: @Model.Dossier.EngineBadgeColor;">
+                        @(Model.Dossier.EngineMode.Contains("Autonomous", StringComparison.OrdinalIgnoreCase) ? "🧠 Autonomous Reasoning Agent" : "⚡ Algorithmic Fallback Engine")
+                    </span>
+                }
             </div>
             <h1 class="mp-op-heading">AI Tipster Operations</h1>
             <p class="mp-op-lead">

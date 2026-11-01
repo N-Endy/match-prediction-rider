@@ -12,15 +12,18 @@ public class OperationsTipsterService : IOperationsTipsterService
     private readonly ApplicationDbContext _dbContext;
     private readonly ISportyBetBookingService _bookingService;
     private readonly ILogger<OperationsTipsterService> _logger;
+    private readonly IAutonomousTipsterAgentService? _agentService;
 
     public OperationsTipsterService(
         ApplicationDbContext dbContext,
         ISportyBetBookingService bookingService,
-        ILogger<OperationsTipsterService> logger)
+        ILogger<OperationsTipsterService> logger,
+        IAutonomousTipsterAgentService? agentService = null)
     {
         _dbContext = dbContext;
         _bookingService = bookingService;
         _logger = logger;
+        _agentService = agentService;
     }
 
     public async Task<OperationsDossierDto> GetOperationsDossierAsync(DateOnly? targetDate = null, CancellationToken ct = default)
@@ -103,7 +106,33 @@ public class OperationsTipsterService : IOperationsTipsterService
             });
         }
 
-        // Assess Slate Grade
+        var resolvedOddsLookup = candidates.ToDictionary(c => c.Prediction.Id, c => c.Odds);
+
+        // Attempt Autonomous AI Tipster Reasoning Agent first
+        if (_agentService is not null)
+        {
+            try
+            {
+                var autonomousDossier = await _agentService.ReasonAndComposeDossierAsync(
+                    date,
+                    upcomingPredictions,
+                    resolvedOddsLookup,
+                    totalFixturesOnDate,
+                    ct);
+
+                if (autonomousDossier is not null)
+                {
+                    _logger.LogInformation("Successfully composed Operations Dossier via Autonomous AI Tipster Agent.");
+                    return autonomousDossier;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Autonomous AI Tipster Agent failed. Continuing with deterministic fallback engine.");
+            }
+        }
+
+        // Assess Slate Grade (Deterministic Fallback)
         var (slateGrade, badgeColor, executiveSummary, watchouts) = AssessSlate(totalFixturesOnDate, candidates.Count, date);
 
         // Build 3 Pillars
@@ -126,6 +155,8 @@ public class OperationsTipsterService : IOperationsTipsterService
             ExecutiveSummary = executiveSummary,
             TacticalWatchouts = watchouts,
             TotalDailyRiskBudgetPercent = 5.0m,
+            EngineMode = "Algorithmic Fallback Engine",
+            EngineBadgeColor = "#38bdf8",
             Tickets = tickets
         };
     }
