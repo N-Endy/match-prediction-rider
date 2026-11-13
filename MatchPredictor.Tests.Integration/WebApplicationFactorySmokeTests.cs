@@ -22,9 +22,11 @@ public class WebApplicationFactorySmokeTests
 
         var bttsResponse = await client.GetAsync("/predictions/btts");
         var drawResponse = await client.GetAsync("/predictions/draw");
+        var aiTipsterResponse = await client.GetAsync("/aitipster");
 
         bttsResponse.EnsureSuccessStatusCode();
         drawResponse.EnsureSuccessStatusCode();
+        aiTipsterResponse.EnsureSuccessStatusCode();
     }
 
     [Fact]
