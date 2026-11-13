@@ -90,7 +90,8 @@ public class DataAnalyzerService : IDataAnalyzerService
         published.AddRange(MarkPublished(forecasts.Where(candidate =>
             candidate.Market == PredictionMarket.Draw &&
             HasExplicitDrawMarket(candidate) &&
-            candidate.CalibratedProbability >= candidate.ThresholdUsed)));
+            candidate.CalibratedProbability >= candidate.ThresholdUsed &&
+            QualifiesForDrawAffinity(candidate, forecasts))));
 
         foreach (var totalsGroup in forecasts
                      .Where(candidate => candidate.Market is PredictionMarket.Over25Goals or PredictionMarket.Under25Goals)
@@ -298,6 +299,84 @@ public class DataAnalyzerService : IDataAnalyzerService
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Precision Draw Gating (Sniper Draw): Ensures candidate draws only publish when total goals
+    /// expectation is not high-scoring (Over 2.5 <= MaxOver25ProbabilityForDraw) and the Draw Affinity
+    /// Index (P(Under 2.5) * (1 - |P_Home - P_Away|)) satisfies the structural low-scoring parity threshold.
+    /// </summary>
+    private bool QualifiesForDrawAffinity(PredictionCandidate drawCandidate, IReadOnlyList<PredictionCandidate> allForecasts)
+    {
+        if (_settings.MinDrawAffinity <= 0 && _settings.MaxOver25ProbabilityForDraw >= 1.0)
+        {
+            return true;
+        }
+
+        var companionMatches = allForecasts.Where(c => IsSameFixture(c, drawCandidate)).ToList();
+        if (companionMatches.Count <= 1)
+        {
+            // Isolated single-market forecast (e.g. mock unit tests without companion candidates).
+            return true;
+        }
+
+        var over25Candidate = companionMatches.FirstOrDefault(c => c.Market == PredictionMarket.Over25Goals);
+        var under25Candidate = companionMatches.FirstOrDefault(c => c.Market == PredictionMarket.Under25Goals);
+        var homeCandidate = companionMatches.FirstOrDefault(c => c.Market == PredictionMarket.HomeWin);
+        var awayCandidate = companionMatches.FirstOrDefault(c => c.Market == PredictionMarket.AwayWin);
+
+        var hasExplicitTotals = (over25Candidate is not null && HasExplicitTotalsMarket(over25Candidate))
+            || (under25Candidate is not null && HasExplicitTotalsMarket(under25Candidate));
+
+        // 1. Total Goals Gate: Reject draw if explicit Over 2.5 probability indicates high goal expectancy.
+        // Draws in games with Over 2.5 occur <18% of the time in professional football.
+        if (hasExplicitTotals && _settings.MaxOver25ProbabilityForDraw < 1.0)
+        {
+            var over25Prob = over25Candidate?.CalibratedProbability
+                ?? (under25Candidate is not null && under25Candidate.CalibratedProbability > 0
+                    ? 1.0 - under25Candidate.CalibratedProbability
+                    : (double?)null);
+
+            if (over25Prob is > 0 && over25Prob.Value > _settings.MaxOver25ProbabilityForDraw)
+            {
+                return false;
+            }
+        }
+
+        // 2. Draw Affinity Index Gate (P(Under 2.5) * (1 - |P_Home - P_Away|))
+        if (_settings.MinDrawAffinity > 0 && homeCandidate is not null && awayCandidate is not null)
+        {
+            var under25Prob = under25Candidate?.CalibratedProbability
+                ?? (over25Candidate is not null && over25Candidate.CalibratedProbability > 0
+                    ? 1.0 - over25Candidate.CalibratedProbability
+                    : (double?)null);
+
+            if (under25Prob is > 0)
+            {
+                var paritySpread = Math.Abs(homeCandidate.CalibratedProbability - awayCandidate.CalibratedProbability);
+                var drawAffinity = under25Prob.Value * (1.0 - paritySpread);
+
+                if (drawAffinity < _settings.MinDrawAffinity)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsSameFixture(PredictionCandidate a, PredictionCandidate b)
+    {
+        if (!string.IsNullOrEmpty(a.FixtureKey) && !string.IsNullOrEmpty(b.FixtureKey))
+        {
+            return string.Equals(a.FixtureKey, b.FixtureKey, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return a.MatchLocalDate == b.MatchLocalDate
+            && string.Equals(a.HomeTeam, b.HomeTeam, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(a.AwayTeam, b.AwayTeam, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(a.League, b.League, StringComparison.OrdinalIgnoreCase);
     }
 
     private static IEnumerable<PredictionCandidate> MarkPublished(IEnumerable<PredictionCandidate> candidates)

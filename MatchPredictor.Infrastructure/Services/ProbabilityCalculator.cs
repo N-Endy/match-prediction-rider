@@ -74,7 +74,7 @@ public class ProbabilityCalculator : IProbabilityCalculator
         var homeShare = Math.Clamp(0.5 + (strengthBias * (0.33 * (1.0 - (drawSource * 0.35)))), 0.18, 0.82);
         var homeXg = Math.Max(totalXg * homeShare, 0.05);
         var awayXg = Math.Max(totalXg - homeXg, 0.05);
-        var poisson = ComputePoissonOutcomeModel(homeXg, awayXg);
+        var poisson = ComputePoissonOutcomeModel(homeXg, awayXg, settings.DixonColesRho);
 
         var over25 = BlendAvailable(
             (match.TryGetNormalizedOver25Pair(out var overPair) ? overPair.over25 : (double?)null, settings.Over25SourceWeight),
@@ -454,7 +454,10 @@ public class ProbabilityCalculator : IProbabilityCalculator
         return Math.Exp(-lambda) * Math.Pow(lambda, k) / factorial;
     }
 
-    private static PoissonOutcomeModel ComputePoissonOutcomeModel(double homeLambda, double awayLambda)
+    private static PoissonOutcomeModel ComputePoissonOutcomeModel(
+        double homeLambda,
+        double awayLambda,
+        double rho = -0.11)
     {
         const int goalCap = 10;
         var homeGoalProbabilities = BuildPoissonDistribution(homeLambda, goalCap);
@@ -472,6 +475,22 @@ public class ProbabilityCalculator : IProbabilityCalculator
             for (var awayGoals = 0; awayGoals <= goalCap; awayGoals++)
             {
                 var probability = homeGoalProbabilities[homeGoals] * awayGoalProbabilities[awayGoals];
+
+                // Dixon-Coles low-score dependency adjustment:
+                // Inflates 0-0 and 1-1 scores and deflates 1-0 and 0-1 scores when rho < 0.
+                if (rho != 0.0 && homeGoals <= 1 && awayGoals <= 1)
+                {
+                    var tau = (homeGoals, awayGoals) switch
+                    {
+                        (0, 0) => Math.Max(1.0 - (homeLambda * awayLambda * rho), 0.0),
+                        (0, 1) => Math.Max(1.0 + (homeLambda * rho), 0.0),
+                        (1, 0) => Math.Max(1.0 + (awayLambda * rho), 0.0),
+                        (1, 1) => Math.Max(1.0 - rho, 0.0),
+                        _ => 1.0
+                    };
+                    probability *= tau;
+                }
+
                 includedMass += probability;
 
                 if (homeGoals > awayGoals)

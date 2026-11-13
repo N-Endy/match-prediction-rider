@@ -8,6 +8,20 @@ public class PredictionSettings
     public double OverTwoGoalsStrongThreshold { get; set; } = 0.58;
     public double UnderTwoGoalsStrongThreshold { get; set; } = 0.58;
     public double DrawStrongThreshold { get; set; } = 0.30;
+
+    /// <summary>
+    /// Minimum Draw Affinity Index (P(Under 2.5) * (1 - |P_Home - P_Away|)) required to publish a Draw.
+    /// Filters out volatile high-scoring or lopsided matches. Set to 0.0 to disable.
+    /// </summary>
+    public double MinDrawAffinity { get; set; } = 0.38;
+
+    /// <summary>
+    /// Maximum allowed Over 2.5 calibrated probability for publishing a Draw.
+    /// Draws in matches with elevated goal expectancy have very low empirical hit rates (<18%).
+    /// Set to 1.0 to disable.
+    /// </summary>
+    public double MaxOver25ProbabilityForDraw { get; set; } = 0.52;
+
     public double MinTotalXgRequiredForWin { get; set; } = 2.0;
     public double ValueBetMinimumEdge { get; set; } = 0.03;
 
