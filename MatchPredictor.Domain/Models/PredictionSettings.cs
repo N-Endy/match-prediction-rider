@@ -22,6 +22,32 @@ public class PredictionSettings
     /// </summary>
     public double MaxOver25ProbabilityForDraw { get; set; } = 0.52;
 
+    /// <summary>
+    /// Minimum BTTS Affinity Index required to publish a BTTS Yes pick.
+    /// Filters out lopsided blowouts (3-0, 4-0) where the underdog is held scoreless.
+    /// Set to 0.0 to disable.
+    /// </summary>
+    public double MinBttsAffinity { get; set; } = 0.46;
+
+    /// <summary>
+    /// Minimum Over 1.5 calibrated probability required to publish a BTTS Yes pick.
+    /// BTTS physically requires at least 2 goals. Set to 0.0 to disable.
+    /// </summary>
+    public double MinOver15ForBttsYes { get; set; } = 0.70;
+
+    /// <summary>
+    /// Maximum allowed favourite win-probability spread (|P_Home - P_Away|) for publishing BTTS Yes.
+    /// In heavy mismatches (spread > 0.45), clean sheet risk for the favourite spikes dramatically.
+    /// Set to 1.0 to disable.
+    /// </summary>
+    public double MaxSpreadForBttsYes { get; set; } = 0.45;
+
+    /// <summary>
+    /// When true, enables qualifying and publishing "No BTTS" predictions when clean-sheet or
+    /// low-total dynamics dominate.
+    /// </summary>
+    public bool EnableBttsNoPredictions { get; set; } = true;
+
     public double MinTotalXgRequiredForWin { get; set; } = 2.0;
     public double ValueBetMinimumEdge { get; set; } = 0.03;
 

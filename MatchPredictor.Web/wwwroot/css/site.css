@@ -754,6 +754,12 @@ a:hover {
   border: 1px solid rgba(16, 185, 129, 0.2);
 }
 
+.mp-badge-btts-no {
+  background: rgba(100, 116, 139, 0.14);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
 .mp-badge-over {
   background: rgba(6, 182, 212, 0.12);
   color: var(--accent-cyan);

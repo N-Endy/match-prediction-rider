@@ -38,7 +38,8 @@ public class DataAnalyzerStatisticalBlendTests
         var candidates = service.BuildForecastCandidates([match]);
 
         var over = candidates.Single(candidate => candidate.Market == PredictionMarket.Over25Goals);
-        var btts = candidates.Single(candidate => candidate.Market == PredictionMarket.BothTeamsScore);
+        var btts = candidates.Single(candidate => candidate.Market == PredictionMarket.BothTeamsScore && candidate.PredictedOutcome == "BTTS");
+        var bttsNo = candidates.Single(candidate => candidate.Market == PredictionMarket.BothTeamsScore && candidate.PredictedOutcome == "No BTTS");
 
         // Market weight 1.0, Dixon-Coles weight 1.1, blended in logit space.
         var expectedOver = EnsembleProbabilityBlender.BlendLogit((0.55, 1.0), (0.65, 1.1));
@@ -46,6 +47,7 @@ public class DataAnalyzerStatisticalBlendTests
 
         Assert.Equal(expectedOver, over.RawProbability, 4);
         Assert.Equal(expectedBtts, btts.RawProbability, 4);
+        Assert.Equal(1.0 - expectedBtts, bttsNo.RawProbability, 4);
         // The blended value must sit between the market and statistical inputs.
         Assert.InRange(over.RawProbability, 0.55, 0.65);
     }

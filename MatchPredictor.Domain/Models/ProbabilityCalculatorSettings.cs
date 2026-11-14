@@ -19,6 +19,13 @@ public class ProbabilityCalculatorSettings
     public double BttsDirectWeight { get; set; } = 0.58;
     public double BttsHeuristicWeight { get; set; } = 0.32;
     public double BttsGoalSupportWeight { get; set; } = 0.10;
+
+    /// <summary>
+    /// Minimum individual team expected goals required before full BTTS weight applies.
+    /// If weaker side's lambda falls below this, BTTS is tempered by the weaker team's scoring ceiling.
+    /// Default: 0.85. Set to 0.0 to disable.
+    /// </summary>
+    public double BttsWeakerTeamFloorXg { get; set; } = 0.85;
     public double Over15XgWeight { get; set; } = 0.90;
     public double Over25XgWeight { get; set; } = 1.45;
     public double Over35XgWeight { get; set; } = 0.75;

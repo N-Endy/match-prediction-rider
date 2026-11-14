@@ -178,7 +178,9 @@ public class DataAnalyzerServiceTests
 
         var candidates = service.BuildForecastCandidates([match]);
 
-        Assert.Equal(6, candidates.Count);
+        Assert.Equal(7, candidates.Count);
+        Assert.Contains(candidates, c => c.Market == PredictionMarket.BothTeamsScore && c.PredictedOutcome == "BTTS");
+        Assert.Contains(candidates, c => c.Market == PredictionMarket.BothTeamsScore && c.PredictedOutcome == "No BTTS");
         Assert.Equal(1, probabilityCalculator.CalculateProbabilitiesCalls);
         Assert.Equal(0, probabilityCalculator.SingleMarketCalls);
     }

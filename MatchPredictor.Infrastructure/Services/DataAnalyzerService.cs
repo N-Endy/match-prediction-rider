@@ -82,10 +82,29 @@ public class DataAnalyzerService : IDataAnalyzerService
             candidate.ThresholdSource = leagueDecision.ThresholdSource;
         }
 
-        published.AddRange(MarkPublished(forecasts.Where(candidate =>
-            candidate.Market == PredictionMarket.BothTeamsScore &&
-            HasExplicitBttsMarket(candidate) &&
-            candidate.CalibratedProbability >= candidate.ThresholdUsed)));
+        foreach (var bttsGroup in forecasts
+                     .Where(candidate => candidate.Market == PredictionMarket.BothTeamsScore)
+                     .GroupBy(candidate => (
+                         candidate.MatchLocalDate,
+                         candidate.HomeTeam,
+                         candidate.AwayTeam,
+                         candidate.League)))
+        {
+            var qualifiedBtts = bttsGroup
+                .Where(candidate =>
+                    HasExplicitBttsMarket(candidate) &&
+                    candidate.CalibratedProbability >= candidate.ThresholdUsed &&
+                    QualifiesForBttsAffinity(candidate, forecasts))
+                .OrderByDescending(candidate => candidate.CalibratedProbability)
+                .ThenByDescending(candidate => !IsBttsNoOutcome(candidate.PredictedOutcome) ? 1 : 0)
+                .FirstOrDefault();
+
+            if (qualifiedBtts is not null)
+            {
+                qualifiedBtts.WasPublished = true;
+                published.Add(qualifiedBtts);
+            }
+        }
 
         published.AddRange(MarkPublished(forecasts.Where(candidate =>
             candidate.Market == PredictionMarket.Draw &&
@@ -366,6 +385,88 @@ public class DataAnalyzerService : IDataAnalyzerService
         return true;
     }
 
+    /// <summary>
+    /// Precision BTTS Gating (Sniper BTTS):
+    /// - BTTS Yes: Requires low clean-sheet risk (Under 2.5 <= 0.52), balanced win expectation
+    ///   (|P_Home - P_Away| <= MaxSpreadForBttsYes), and passing the BTTS Affinity Index.
+    /// - BTTS No: Qualifies when low-total (Under 2.5 >= 0.50) or lopsided clean-sheet dynamics (spread >= 0.35) dominate.
+    /// </summary>
+    private bool QualifiesForBttsAffinity(PredictionCandidate bttsCandidate, IReadOnlyList<PredictionCandidate> allForecasts)
+    {
+        var isBttsNo = IsBttsNoOutcome(bttsCandidate.PredictedOutcome);
+
+        if (isBttsNo && !_settings.EnableBttsNoPredictions)
+        {
+            return false;
+        }
+
+        var companionMatches = allForecasts.Where(c => IsSameFixture(c, bttsCandidate)).ToList();
+        if (companionMatches.Count <= 1)
+        {
+            // Isolated single-market forecast (e.g. mock unit tests without companion candidates).
+            return true;
+        }
+
+        var over25Candidate = companionMatches.FirstOrDefault(c => c.Market == PredictionMarket.Over25Goals);
+        var under25Candidate = companionMatches.FirstOrDefault(c => c.Market == PredictionMarket.Under25Goals);
+        var homeCandidate = companionMatches.FirstOrDefault(c => c.Market == PredictionMarket.HomeWin);
+        var awayCandidate = companionMatches.FirstOrDefault(c => c.Market == PredictionMarket.AwayWin);
+
+        var hasExplicitTotals = (over25Candidate is not null && HasExplicitTotalsMarket(over25Candidate))
+            || (under25Candidate is not null && HasExplicitTotalsMarket(under25Candidate));
+
+        var under25Prob = under25Candidate?.CalibratedProbability
+            ?? (over25Candidate is not null && over25Candidate.CalibratedProbability > 0
+                ? 1.0 - over25Candidate.CalibratedProbability
+                : (double?)null);
+
+        var paritySpread = homeCandidate is not null && awayCandidate is not null
+            ? Math.Abs(homeCandidate.CalibratedProbability - awayCandidate.CalibratedProbability)
+            : (double?)null;
+
+        // If no companion 1X2 or totals candidates exist (e.g. isolated BTTS tests), pass through.
+        if (!hasExplicitTotals && paritySpread is null)
+        {
+            return true;
+        }
+
+        if (isBttsNo)
+        {
+            // High conviction for BTTS No: game is expected low-scoring (Under 2.5 >= 0.50) OR lopsided (spread >= 0.35).
+            var lowTotal = under25Prob is not null && under25Prob.Value >= 0.50;
+            var lopsided = paritySpread is not null && paritySpread.Value >= 0.35;
+            return lowTotal || lopsided;
+        }
+
+        // BTTS Yes validation:
+        // 1. Total Goals Gate: Reject BTTS Yes if explicit Under 2.5 indicates defensive/low-scoring game.
+        if (hasExplicitTotals && under25Prob is > 0.52)
+        {
+            return false;
+        }
+
+        // 2. Parity Spread Gate: In heavy mismatches, clean sheet risk for the favourite spikes.
+        if (paritySpread is not null && _settings.MaxSpreadForBttsYes < 1.0 && paritySpread.Value > _settings.MaxSpreadForBttsYes)
+        {
+            return false;
+        }
+
+        // 3. BTTS Affinity Index (BAI) Gate: (1 - spread * 0.5) * (1 - under25 * 0.6)
+        if (_settings.MinBttsAffinity > 0 && under25Prob is not null && paritySpread is not null)
+        {
+            var bttsAffinity = (1.0 - paritySpread.Value * 0.50) * (1.0 - under25Prob.Value * 0.60);
+            if (bttsAffinity < _settings.MinBttsAffinity)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsBttsNoOutcome(string? outcome) =>
+        outcome is not null && (outcome.Equals("No BTTS", StringComparison.OrdinalIgnoreCase) || outcome.Equals("BTTS No", StringComparison.OrdinalIgnoreCase));
+
     private static bool IsSameFixture(PredictionCandidate a, PredictionCandidate b)
     {
         if (!string.IsNullOrEmpty(a.FixtureKey) && !string.IsNullOrEmpty(b.FixtureKey))
@@ -406,13 +507,32 @@ public class DataAnalyzerService : IDataAnalyzerService
             ? marketProbabilities
             : BlendWithPerMarketWeights(match, marketProbabilities, statisticalSignal, bookmakerSignal);
 
-        var candidates = new[]
+        var bttsYesCandidate = BuildCandidate(
+            match,
+            PredictionMarket.BothTeamsScore,
+            "BTTS",
+            probabilities.Btts);
+
+        PredictionCandidate? bttsNoCandidate = null;
+        if (_settings.EnableBttsNoPredictions && bttsYesCandidate != null)
         {
-            BuildCandidate(
+            var rawNo = Math.Clamp(1.0 - bttsYesCandidate.RawProbability, 0.0, 1.0);
+            var corrNo = Math.Clamp(1.0 - bttsYesCandidate.CorrectedProbability, 0.0, 1.0);
+            var calNo = Math.Clamp(1.0 - bttsYesCandidate.CalibratedProbability, 0.0, 1.0);
+            bttsNoCandidate = CreateCandidate(
                 match,
                 PredictionMarket.BothTeamsScore,
-                "BTTS",
-                probabilities.Btts),
+                "No BTTS",
+                rawNo,
+                corrNo,
+                calNo,
+                bttsYesCandidate.CalibratorUsed);
+        }
+
+        var candidates = new List<PredictionCandidate?>
+        {
+            bttsYesCandidate,
+            bttsNoCandidate,
             BuildCandidate(
                 match,
                 PredictionMarket.Over25Goals,
@@ -461,6 +581,10 @@ public class DataAnalyzerService : IDataAnalyzerService
 
             if (challengerMl is double rawChallenger)
             {
+                if (IsBttsNoOutcome(candidate.PredictedOutcome))
+                {
+                    rawChallenger = Math.Clamp(1.0 - rawChallenger, 0.0, 1.0);
+                }
                 var correctedChallenger = _probabilityCorrectionService.ApplyCorrection(candidate.Market, rawChallenger);
                 candidate.ChallengerCalibratedProbability = _calibrationService.Calibrate(candidate.Market, correctedChallenger, match.League?.Trim());
             }
@@ -520,6 +644,27 @@ public class DataAnalyzerService : IDataAnalyzerService
                 var normOver = Math.Clamp(over25.CorrectedProbability / correctedSum, 0.0, 1.0);
                 over25.CorrectedProbability = normOver;
                 under25.CorrectedProbability = Math.Clamp(1.0 - normOver, 0.0, 1.0);
+            }
+        }
+
+        var bttsYes = candidates.FirstOrDefault(c => c.Market == PredictionMarket.BothTeamsScore && !IsBttsNoOutcome(c.PredictedOutcome));
+        var bttsNo = candidates.FirstOrDefault(c => c.Market == PredictionMarket.BothTeamsScore && IsBttsNoOutcome(c.PredictedOutcome));
+        if (bttsYes != null && bttsNo != null)
+        {
+            var calibratedSum = bttsYes.CalibratedProbability + bttsNo.CalibratedProbability;
+            if (calibratedSum > 0)
+            {
+                var normYes = Math.Clamp(bttsYes.CalibratedProbability / calibratedSum, 0.0, 1.0);
+                bttsYes.CalibratedProbability = normYes;
+                bttsNo.CalibratedProbability = Math.Clamp(1.0 - normYes, 0.0, 1.0);
+            }
+
+            var correctedSum = bttsYes.CorrectedProbability + bttsNo.CorrectedProbability;
+            if (correctedSum > 0)
+            {
+                var normYes = Math.Clamp(bttsYes.CorrectedProbability / correctedSum, 0.0, 1.0);
+                bttsYes.CorrectedProbability = normYes;
+                bttsNo.CorrectedProbability = Math.Clamp(1.0 - normYes, 0.0, 1.0);
             }
         }
     }

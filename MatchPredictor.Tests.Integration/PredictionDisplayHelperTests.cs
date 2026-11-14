@@ -118,6 +118,28 @@ public class PredictionDisplayHelperTests
         Assert.Equal("/match/42/real-madrid-vs-barcelona", url);
     }
 
+    [Fact]
+    public void GetPredictionBadgeClass_FormatsBttsNoCorrectly()
+    {
+        var bttsNoPrediction = new Prediction
+        {
+            PredictionCategory = "BothTeamsScore",
+            PredictedOutcome = "No BTTS"
+        };
+
+        var bttsYesPrediction = new Prediction
+        {
+            PredictionCategory = "BothTeamsScore",
+            PredictedOutcome = "BTTS"
+        };
+
+        Assert.Equal("mp-badge-btts-no", PredictionDisplayHelper.GetPredictionBadgeClass(bttsNoPrediction));
+        Assert.Equal("No BTTS", PredictionDisplayHelper.GetPredictionBadgeText(bttsNoPrediction));
+
+        Assert.Equal("mp-badge-btts", PredictionDisplayHelper.GetPredictionBadgeClass(bttsYesPrediction));
+        Assert.Equal("BTTS", PredictionDisplayHelper.GetPredictionBadgeText(bttsYesPrediction));
+    }
+
     private static Prediction CreatePrediction(string predictionCategory, string predictedOutcome, string actualScore)
     {
         return new Prediction

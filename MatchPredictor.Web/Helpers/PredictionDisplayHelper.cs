@@ -66,6 +66,8 @@ public static class PredictionDisplayHelper
     {
         return prediction.PredictionCategory switch
         {
+            "BothTeamsScore" when string.Equals(prediction.PredictedOutcome, "No BTTS", StringComparison.OrdinalIgnoreCase) ||
+                                  string.Equals(prediction.PredictedOutcome, "BTTS No", StringComparison.OrdinalIgnoreCase) => "mp-badge-btts-no",
             "BothTeamsScore" => "mp-badge-btts",
             "Over2.5Goals" => "mp-badge-over",
             "Under2.5Goals" => "mp-badge-under",
@@ -80,7 +82,7 @@ public static class PredictionDisplayHelper
     {
         return prediction.PredictionCategory switch
         {
-            "BothTeamsScore" => "BTTS",
+            "BothTeamsScore" => prediction.PredictedOutcome ?? "BTTS",
             "Over2.5Goals" or "Under2.5Goals" => prediction.PredictedOutcome ?? prediction.PredictionCategory,
             "Draw" => "Draw",
             "StraightWin" => prediction.PredictedOutcome ?? "Win",

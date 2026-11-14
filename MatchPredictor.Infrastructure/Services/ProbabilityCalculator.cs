@@ -121,6 +121,26 @@ public class ProbabilityCalculator : IProbabilityCalculator
             (heuristicBtts, settings.BttsHeuristicWeight),
             (Math.Clamp(goalSupport * (0.70 + (0.25 * competitiveness)), 0.0, 1.0), settings.BttsGoalSupportWeight));
 
+        // Precision BTTS Gating:
+        // 1. Weaker-team scoring floor: BTTS is bottlenecked by the weaker team's offensive expectancy.
+        // In lopsided mismatches where minXg < floor, clean sheet risk for the favourite spikes.
+        var minXg = Math.Min(homeXg, awayXg);
+        if (settings.BttsWeakerTeamFloorXg > 0 && minXg < settings.BttsWeakerTeamFloorXg)
+        {
+            var asymmetryScale = Math.Clamp(minXg / settings.BttsWeakerTeamFloorXg, 0.60, 1.0);
+            btts *= asymmetryScale;
+        }
+
+        // 2. Physical Over 1.5 constraint: BTTS requires at least 2 goals (1-1, 2-1, 1-2, etc.).
+        // P(BTTS) is mathematically bounded by P(Over 1.5) minus clean-sheet 2-0 / 0-2 mass.
+        var effectiveOver15 = match.OverOnePointFive > 0
+            ? match.OverOnePointFive
+            : (1.0 - (Math.Exp(-totalXg) * (1.0 + totalXg)));
+        if (effectiveOver15 > 0)
+        {
+            btts = Math.Min(btts, effectiveOver15 * 0.92);
+        }
+
         return new MatchProbabilities(
             Btts: Math.Clamp(btts, 0.0, 1.0),
             Over25: Math.Clamp(over25, 0.0, 1.0),
