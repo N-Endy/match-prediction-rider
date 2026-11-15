@@ -423,6 +423,162 @@ public class SportyBetBookingServiceTests
         Assert.Equal(2.05, fixture.Under25Odds);
     }
 
+    [Fact]
+    public async Task BookGamesAsync_BooksOver15Selection_Successfully()
+    {
+        await using var context = CreateContext();
+        var cache = CreateCache();
+        var todayLocalDate = DateTimeProvider.GetLocalDate();
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(todayLocalDate.ToDateTime(new TimeOnly(15, 0), DateTimeKind.Unspecified));
+        var handler = new SportyBetTestHandler(
+            upcomingPages: new Dictionary<int, string>
+            {
+                [1] = BuildUpcomingResponse(
+                    new SportyFixtureSpec("evt-o15", "Manchester City", "Liverpool", "England - Premier League", kickoffUtc))
+            },
+            bookingResponse: BuildBookingShareResponse("O15SHARE"));
+        var service = CreateService(context, cache, handler);
+
+        var result = await service.BookGamesAsync(
+        [
+            new BookingSelection
+            {
+                HomeTeam = "Manchester City",
+                AwayTeam = "Liverpool",
+                League = "England - Premier League",
+                Market = "Over1.5",
+                Prediction = "Over 1.5",
+                MatchDateTimeUtc = kickoffUtc
+            }
+        ]);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, result.BookedCount);
+        Assert.Equal("O15SHARE", result.BookingCode);
+        var selection = Assert.Single(handler.SharedSelections);
+        Assert.Equal("evt-o15", selection.EventId);
+        Assert.Equal("18", selection.MarketId);
+        Assert.Equal("12", selection.OutcomeId);
+        Assert.Equal("total=1.5", selection.Specifier);
+    }
+
+    [Fact]
+    public async Task BookGamesAsync_BooksDoubleChanceSelections_Successfully()
+    {
+        await using var context = CreateContext();
+        var cache = CreateCache();
+        var todayLocalDate = DateTimeProvider.GetLocalDate();
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(todayLocalDate.ToDateTime(new TimeOnly(17, 30), DateTimeKind.Unspecified));
+        var handler = new SportyBetTestHandler(
+            upcomingPages: new Dictionary<int, string>
+            {
+                [1] = BuildUpcomingResponse(
+                    new SportyFixtureSpec("evt-dc1", "Real Madrid", "Barcelona", "Spain - LaLiga", kickoffUtc),
+                    new SportyFixtureSpec("evt-dc2", "Juventus", "Inter Milan", "Italy - Serie A", kickoffUtc))
+            },
+            bookingResponse: BuildBookingShareResponse("DCSHARE"));
+        var service = CreateService(context, cache, handler);
+
+        var result = await service.BookGamesAsync(
+        [
+            new BookingSelection
+            {
+                HomeTeam = "Real Madrid",
+                AwayTeam = "Barcelona",
+                League = "Spain - LaLiga",
+                Market = "DoubleChance",
+                Prediction = "1X",
+                MatchDateTimeUtc = kickoffUtc
+            },
+            new BookingSelection
+            {
+                HomeTeam = "Juventus",
+                AwayTeam = "Inter Milan",
+                League = "Italy - Serie A",
+                Market = "DoubleChance",
+                Prediction = "X2",
+                MatchDateTimeUtc = kickoffUtc
+            }
+        ]);
+
+        Assert.True(result.Success);
+        Assert.Equal(2, result.BookedCount);
+        Assert.Equal(2, handler.SharedSelections.Count);
+
+        var sel1 = handler.SharedSelections[0];
+        Assert.Equal("evt-dc1", sel1.EventId);
+        Assert.Equal("10", sel1.MarketId);
+        Assert.Equal("9", sel1.OutcomeId); // 1X
+
+        var sel2 = handler.SharedSelections[1];
+        Assert.Equal("evt-dc2", sel2.EventId);
+        Assert.Equal("10", sel2.MarketId);
+        Assert.Equal("11", sel2.OutcomeId); // X2
+    }
+
+    [Fact]
+    public async Task BookGamesAsync_BooksBttsNoSelection_Successfully()
+    {
+        await using var context = CreateContext();
+        var cache = CreateCache();
+        var todayLocalDate = DateTimeProvider.GetLocalDate();
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(todayLocalDate.ToDateTime(new TimeOnly(20, 0), DateTimeKind.Unspecified));
+        var handler = new SportyBetTestHandler(
+            upcomingPages: new Dictionary<int, string>
+            {
+                [1] = BuildUpcomingResponse(
+                    new SportyFixtureSpec("evt-btts", "Atletico Madrid", "Getafe", "Spain - LaLiga", kickoffUtc))
+            },
+            bookingResponse: BuildBookingShareResponse("BTTSNO"));
+        var service = CreateService(context, cache, handler);
+
+        var result = await service.BookGamesAsync(
+        [
+            new BookingSelection
+            {
+                HomeTeam = "Atletico Madrid",
+                AwayTeam = "Getafe",
+                League = "Spain - LaLiga",
+                Market = "BTTS",
+                Prediction = "No BTTS",
+                MatchDateTimeUtc = kickoffUtc
+            }
+        ]);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, result.BookedCount);
+        var selection = Assert.Single(handler.SharedSelections);
+        Assert.Equal("evt-btts", selection.EventId);
+        Assert.Equal("29", selection.MarketId);
+        Assert.Equal("76", selection.OutcomeId); // No
+    }
+
+    [Fact]
+    public async Task GetTodaySourceMarketFixturesAsync_MapsOver15AndDoubleChanceOdds()
+    {
+        await using var context = CreateContext();
+        var cache = CreateCache();
+        var todayLocalDate = DateTimeProvider.GetLocalDate();
+        var kickoffUtc = DateTimeProvider.ConvertLocalToUtc(todayLocalDate.ToDateTime(new TimeOnly(19, 0), DateTimeKind.Unspecified));
+        var handler = new SportyBetTestHandler(
+            upcomingPages: new Dictionary<int, string>
+            {
+                [1] = BuildUpcomingResponse(
+                    new SportyFixtureSpec("evt-odds", "Bayern Munich", "Dortmund", "Germany - Bundesliga", kickoffUtc))
+            });
+        var service = CreateService(context, cache, handler);
+
+        var fixtures = await service.GetTodaySourceMarketFixturesAsync();
+
+        var fixture = Assert.Single(fixtures);
+        Assert.Equal("evt-odds", fixture.EventId);
+        Assert.Equal(1.25, fixture.Over15Odds);
+        Assert.Equal(3.80, fixture.Under15Odds);
+        Assert.Equal(1.35, fixture.DoubleChance1XOdds);
+        Assert.Equal(1.55, fixture.DoubleChanceX2Odds);
+        Assert.Equal(2.00, fixture.BttsNoOdds);
+    }
+
     private static SportyBetBookingService CreateService(
         ApplicationDbContext context,
         IDistributedCache cache,
@@ -554,6 +710,34 @@ public class SportyBetBookingServiceTests
             });
         }
 
+        if (fixture.IncludeDoubleChance)
+        {
+            markets.Add(new
+            {
+                id = "10",
+                outcomes = new[]
+                {
+                    new { id = "9", desc = "1X", probability = "0.70", odds = "1.35" },
+                    new { id = "11", desc = "X2", probability = "0.60", odds = "1.55" },
+                    new { id = "10", desc = "12", probability = "0.70", odds = "1.35" }
+                }
+            });
+        }
+
+        if (fixture.IncludeOver15)
+        {
+            markets.Add(new
+            {
+                id = "18",
+                specifier = "total=1.5",
+                outcomes = new[]
+                {
+                    new { id = "12", desc = "Over 1.5", probability = "0.80", odds = "1.25" },
+                    new { id = "13", desc = "Under 1.5", probability = "0.20", odds = "3.80" }
+                }
+            });
+        }
+
         return markets.ToArray();
     }
 
@@ -584,7 +768,9 @@ public class SportyBetBookingServiceTests
         bool Include1X2 = true,
         bool IncludeTotals = true,
         bool IncludeBtts = true,
-        string TotalsSpecifier = "total=2.5");
+        string TotalsSpecifier = "total=2.5",
+        bool IncludeDoubleChance = true,
+        bool IncludeOver15 = true);
 
     private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
@@ -606,6 +792,7 @@ public class SportyBetBookingServiceTests
 
         public List<int> RequestedPages { get; } = [];
         public List<string> SharedEventIds { get; } = [];
+        public List<(string EventId, string MarketId, string OutcomeId, string? Specifier)> SharedSelections { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -625,10 +812,15 @@ public class SportyBetBookingServiceTests
             {
                 var payload = await request.Content!.ReadAsStringAsync(cancellationToken);
                 using var document = JsonDocument.Parse(payload);
-                SharedEventIds.AddRange(document.RootElement
-                    .GetProperty("selections")
-                    .EnumerateArray()
-                    .Select(selection => selection.GetProperty("eventId").GetString() ?? string.Empty));
+                foreach (var s in document.RootElement.GetProperty("selections").EnumerateArray())
+                {
+                    var eid = s.GetProperty("eventId").GetString() ?? string.Empty;
+                    var mid = s.GetProperty("marketId").GetString() ?? string.Empty;
+                    var oid = s.GetProperty("outcomeId").GetString() ?? string.Empty;
+                    var spec = s.TryGetProperty("specifier", out var sp) ? sp.GetString() : null;
+                    SharedEventIds.Add(eid);
+                    SharedSelections.Add((eid, mid, oid, spec));
+                }
 
                 return CreateJsonResponse(_bookingResponse ?? BuildBookingShareResponse("DEFAULT"));
             }

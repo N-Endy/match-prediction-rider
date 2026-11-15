@@ -273,27 +273,47 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             ? await FetchTodayFixturesAsync(baseUrl, soccerSportId, market1X2, ct, useBookingClient: false)
             : await FetchUpcomingFixturesForDateAsync(baseUrl, soccerSportId, market1X2, targetLocalDate, ct);
 
-        return fixtures.Select(fixture => new SourceMarketFixture
+        return fixtures.Select(fixture =>
         {
-            EventId = fixture.EventId,
-            League = fixture.League,
-            HomeTeam = fixture.HomeTeam,
-            AwayTeam = fixture.AwayTeam,
-            MatchTimeUtc = fixture.MatchTimeUtc,
-            HomeWinProbability = fixture.HomeProbability,
-            HomeWinOdds = fixture.HomeOdds,
-            DrawProbability = fixture.DrawProbability,
-            DrawOdds = fixture.DrawOdds,
-            AwayWinProbability = fixture.AwayProbability,
-            AwayWinOdds = fixture.AwayOdds,
-            Over25Probability = fixture.Over25Probability,
-            Over25Odds = fixture.Over25Odds,
-            Under25Probability = fixture.Under25Probability,
-            Under25Odds = fixture.Under25Odds,
-            BttsYesProbability = fixture.BttsYesProbability,
-            BttsYesOdds = fixture.BttsYesOdds,
-            BttsNoProbability = fixture.BttsNoProbability,
-            BttsNoOdds = fixture.BttsNoOdds
+            var dc1XOdds = fixture.DoubleChance1XOdds ??
+                (fixture.HomeOdds > 1 && fixture.DrawOdds > 1 ? Math.Round(1.0 / (1.0 / fixture.HomeOdds.Value + 1.0 / fixture.DrawOdds.Value), 2) : (double?)null);
+            var dcX2Odds = fixture.DoubleChanceX2Odds ??
+                (fixture.DrawOdds > 1 && fixture.AwayOdds > 1 ? Math.Round(1.0 / (1.0 / fixture.DrawOdds.Value + 1.0 / fixture.AwayOdds.Value), 2) : (double?)null);
+            var dc12Odds = fixture.DoubleChance12Odds ??
+                (fixture.HomeOdds > 1 && fixture.AwayOdds > 1 ? Math.Round(1.0 / (1.0 / fixture.HomeOdds.Value + 1.0 / fixture.AwayOdds.Value), 2) : (double?)null);
+
+            return new SourceMarketFixture
+            {
+                EventId = fixture.EventId,
+                League = fixture.League,
+                HomeTeam = fixture.HomeTeam,
+                AwayTeam = fixture.AwayTeam,
+                MatchTimeUtc = fixture.MatchTimeUtc,
+                HomeWinProbability = fixture.HomeProbability,
+                HomeWinOdds = fixture.HomeOdds,
+                DrawProbability = fixture.DrawProbability,
+                DrawOdds = fixture.DrawOdds,
+                AwayWinProbability = fixture.AwayProbability,
+                AwayWinOdds = fixture.AwayOdds,
+                Over25Probability = fixture.Over25Probability,
+                Over25Odds = fixture.Over25Odds,
+                Under25Probability = fixture.Under25Probability,
+                Under25Odds = fixture.Under25Odds,
+                BttsYesProbability = fixture.BttsYesProbability,
+                BttsYesOdds = fixture.BttsYesOdds,
+                BttsNoProbability = fixture.BttsNoProbability,
+                BttsNoOdds = fixture.BttsNoOdds,
+                Over15Probability = fixture.Over15Probability,
+                Over15Odds = fixture.Over15Odds,
+                Under15Probability = fixture.Under15Probability,
+                Under15Odds = fixture.Under15Odds,
+                DoubleChance1XProbability = fixture.DoubleChance1XProbability,
+                DoubleChance1XOdds = dc1XOdds,
+                DoubleChanceX2Probability = fixture.DoubleChanceX2Probability,
+                DoubleChanceX2Odds = dcX2Odds,
+                DoubleChance12Probability = fixture.DoubleChance12Probability,
+                DoubleChance12Odds = dc12Odds
+            };
         }).ToList();
     }
 
@@ -452,6 +472,16 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                             double? bttsNoProbability = null;
                             double? over25Probability = null;
                             double? under25Probability = null;
+                            double? doubleChance1XProbability = null;
+                            double? doubleChance1XOdds = null;
+                            double? doubleChanceX2Probability = null;
+                            double? doubleChanceX2Odds = null;
+                            double? doubleChance12Probability = null;
+                            double? doubleChance12Odds = null;
+                            double? over15Probability = null;
+                            double? over15Odds = null;
+                            double? under15Probability = null;
+                            double? under15Odds = null;
                             double? homeOdds = null;
                             double? drawOdds = null;
                             double? awayOdds = null;
@@ -507,20 +537,28 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                             {
                                                 var oid = o.GetProperty("id").GetString() ?? "";
                                                 var desc = o.TryGetProperty("desc", out var d) ? d.GetString() ?? "" : "";
+                                                var probability = TryParseProbability(o);
+                                                var decimalOdds = TryParseDecimalOdds(o);
                                                 if (oid == "9" || desc.Contains("1X", StringComparison.OrdinalIgnoreCase) ||
                                                     (desc.Contains("Home", StringComparison.OrdinalIgnoreCase) && desc.Contains("Draw", StringComparison.OrdinalIgnoreCase)))
                                                 {
                                                     doubleChance1XOutcomeId = oid;
+                                                    doubleChance1XProbability = probability;
+                                                    doubleChance1XOdds = decimalOdds;
                                                 }
                                                 else if (oid == "11" || desc.Contains("X2", StringComparison.OrdinalIgnoreCase) ||
                                                          (desc.Contains("Draw", StringComparison.OrdinalIgnoreCase) && desc.Contains("Away", StringComparison.OrdinalIgnoreCase)))
                                                 {
                                                     doubleChanceX2OutcomeId = oid;
+                                                    doubleChanceX2Probability = probability;
+                                                    doubleChanceX2Odds = decimalOdds;
                                                 }
                                                 else if (oid == "10" || desc.Contains("12", StringComparison.OrdinalIgnoreCase) ||
                                                          (desc.Contains("Home", StringComparison.OrdinalIgnoreCase) && desc.Contains("Away", StringComparison.OrdinalIgnoreCase)))
                                                 {
                                                     doubleChance12OutcomeId = oid;
+                                                    doubleChance12Probability = probability;
+                                                    doubleChance12Odds = decimalOdds;
                                                 }
                                             }
                                         }
@@ -561,13 +599,19 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                                 {
                                                     var oid = o.GetProperty("id").GetString() ?? "";
                                                     var desc = o.TryGetProperty("desc", out var d) ? d.GetString() ?? "" : "";
+                                                    var probability = TryParseProbability(o);
+                                                    var decimalOdds = TryParseDecimalOdds(o);
                                                     if (oid == "12" || desc.Contains("Over", StringComparison.OrdinalIgnoreCase))
                                                     {
                                                         over15OutcomeId = oid;
+                                                        over15Probability = probability;
+                                                        over15Odds = decimalOdds;
                                                     }
                                                     else if (oid == "13" || desc.Contains("Under", StringComparison.OrdinalIgnoreCase))
                                                     {
                                                         under15OutcomeId = oid;
+                                                        under15Probability = probability;
+                                                        under15Odds = decimalOdds;
                                                     }
                                                 }
                                             }
@@ -633,7 +677,17 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
                                 BttsYesProbability = bttsYesProbability,
                                 BttsYesOdds = bttsYesOdds,
                                 BttsNoProbability = bttsNoProbability,
-                                BttsNoOdds = bttsNoOdds
+                                BttsNoOdds = bttsNoOdds,
+                                DoubleChance1XProbability = doubleChance1XProbability,
+                                DoubleChance1XOdds = doubleChance1XOdds,
+                                DoubleChanceX2Probability = doubleChanceX2Probability,
+                                DoubleChanceX2Odds = doubleChanceX2Odds,
+                                DoubleChance12Probability = doubleChance12Probability,
+                                DoubleChance12Odds = doubleChance12Odds,
+                                Over15Probability = over15Probability,
+                                Over15Odds = over15Odds,
+                                Under15Probability = under15Probability,
+                                Under15Odds = under15Odds
                             };
                         }
                         catch (Exception ex)
@@ -1191,26 +1245,48 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
         var normalizedMarket = market?.Trim().ToLowerInvariant() ?? string.Empty;
         var normalizedPrediction = prediction?.Trim().ToLowerInvariant() ?? string.Empty;
 
-        if (normalizedMarket.Contains("doublechance") || normalizedMarket.Contains("double chance") || normalizedPrediction.Contains("/"))
+        // Double Chance check
+        if (normalizedMarket.Contains("doublechance") ||
+            normalizedMarket.Contains("double chance") ||
+            normalizedMarket.Contains("double") ||
+            normalizedMarket == "dc" ||
+            normalizedMarket == "10" ||
+            normalizedPrediction is "1x" or "x2" or "12" or "1/x" or "x/2" or "1/2" ||
+            normalizedPrediction.Contains("home or draw") || normalizedPrediction.Contains("home/draw") ||
+            normalizedPrediction.Contains("draw or away") || normalizedPrediction.Contains("draw/away") ||
+            normalizedPrediction.Contains("away or draw") || normalizedPrediction.Contains("away/draw") ||
+            normalizedPrediction.Contains("home or away") || normalizedPrediction.Contains("home/away"))
         {
-            if ((normalizedPrediction.Contains("home") && normalizedPrediction.Contains("draw")) || normalizedPrediction.Contains("1x") || normalizedPrediction == "1x")
+            var compactPred = normalizedPrediction.Replace(" ", "").Replace("/", "").Replace("-", "");
+            if (compactPred.Contains("1x") || (normalizedPrediction.Contains("home") && normalizedPrediction.Contains("draw")) || normalizedPrediction.Contains("1 or x"))
                 return RequestedSportyBetOutcome.DoubleChance1X;
-            if ((normalizedPrediction.Contains("away") && normalizedPrediction.Contains("draw")) || normalizedPrediction.Contains("x2") || normalizedPrediction == "x2")
+            if (compactPred.Contains("x2") || (normalizedPrediction.Contains("away") && normalizedPrediction.Contains("draw")) || normalizedPrediction.Contains("x or 2"))
                 return RequestedSportyBetOutcome.DoubleChanceX2;
-            if ((normalizedPrediction.Contains("home") && normalizedPrediction.Contains("away")) || normalizedPrediction.Contains("12") || normalizedPrediction == "12")
+            if (compactPred.Contains("12") || (normalizedPrediction.Contains("home") && normalizedPrediction.Contains("away")) || normalizedPrediction.Contains("1 or 2"))
                 return RequestedSportyBetOutcome.DoubleChance12;
         }
 
-        if (normalizedMarket.Contains("1.5") || normalizedPrediction.Contains("1.5"))
+        // Over / Under 1.5 check
+        if (normalizedMarket.Contains("1.5") || normalizedMarket.Contains("15") || normalizedPrediction.Contains("1.5") || normalizedPrediction.Contains("15"))
         {
             return (normalizedPrediction.Contains("under") || normalizedMarket.Contains("under"))
                 ? RequestedSportyBetOutcome.Under15
                 : RequestedSportyBetOutcome.Over15;
         }
 
-        if (normalizedMarket.Contains("btts") || normalizedPrediction.Contains("both teams") || normalizedPrediction.Contains("btts"))
+        // BTTS check (handles "BTTS", "BothTeamsScore", "GG/NG", "No BTTS", etc.)
+        if (normalizedMarket.Contains("btts") ||
+            normalizedMarket.Contains("both teams") ||
+            normalizedMarket.Contains("bothteamsscore") ||
+            normalizedMarket.Contains("gg") ||
+            normalizedPrediction.Contains("btts") ||
+            normalizedPrediction.Contains("both teams") ||
+            normalizedPrediction is "yes" or "no" or "gg" or "ng")
         {
-            return normalizedPrediction.Contains("no", StringComparison.OrdinalIgnoreCase)
+            var isNo = normalizedPrediction.Contains("no", StringComparison.OrdinalIgnoreCase) ||
+                       normalizedPrediction.Contains("ng", StringComparison.OrdinalIgnoreCase) ||
+                       normalizedPrediction.Contains("clean sheet", StringComparison.OrdinalIgnoreCase);
+            return isNo
                 ? RequestedSportyBetOutcome.BttsNo
                 : RequestedSportyBetOutcome.BttsYes;
         }
@@ -1441,6 +1517,16 @@ public record SportyBetFixture
     public double? BttsYesOdds { get; init; }
     public double? BttsNoProbability { get; init; }
     public double? BttsNoOdds { get; init; }
+    public double? DoubleChance1XProbability { get; init; }
+    public double? DoubleChance1XOdds { get; init; }
+    public double? DoubleChanceX2Probability { get; init; }
+    public double? DoubleChanceX2Odds { get; init; }
+    public double? DoubleChance12Probability { get; init; }
+    public double? DoubleChance12Odds { get; init; }
+    public double? Over15Probability { get; init; }
+    public double? Over15Odds { get; init; }
+    public double? Under15Probability { get; init; }
+    public double? Under15Odds { get; init; }
 }
 
 public record SportyBetOutcome

@@ -301,6 +301,8 @@ Instructions:
         "BothTeamsScore" => "BTTS",
         "Over2.5Goals" => "Over 2.5",
         "Under2.5Goals" => "Under 2.5",
+        "Over1.5Goals" => "Over 1.5",
+        "DoubleChance" => "Double Chance",
         "StraightWin" => "1X2",
         "Draw" => "Draw",
         _ => category

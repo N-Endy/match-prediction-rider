@@ -178,7 +178,7 @@
         if (!chipsContainer) return;
         chipsContainer.innerHTML = '';
 
-        const sampleSuggestions = ['BTTS Yes', 'Over 2.5 Goals', 'Straight Win', 'Under 2.5', 'EPL Matches'];
+        const sampleSuggestions = ['Over 1.5 Goals', 'Double Chance', 'BTTS Yes', 'No BTTS', 'Straight Win', 'Under 2.5', 'EPL Matches'];
         sampleSuggestions.forEach(opt => {
             const btn = document.createElement('button');
             btn.type = 'button';
@@ -209,7 +209,11 @@
 
         let addedCount = 0;
         currentStagedPicks.forEach(pick => {
-            const cartMarket = pick.market || 'Unknown';
+            let cartMarket = pick.market || 'Unknown';
+            if (cartMarket === 'BothTeamsScore') cartMarket = 'BTTS';
+            else if (cartMarket === 'Over1.5Goals') cartMarket = 'Over1.5';
+            else if (cartMarket === 'Over2.5Goals') cartMarket = 'Over2.5';
+            else if (cartMarket === 'Under2.5Goals') cartMarket = 'Under2.5';
             window.addToCart({
                 homeTeam: pick.homeTeam,
                 awayTeam: pick.awayTeam,
@@ -240,9 +244,15 @@
 
     function formatMarketName(market) {
         switch (market) {
-            case 'BothTeamsScore': return 'BTTS';
-            case 'Over2.5Goals': return 'Over 2.5';
-            case 'Under2.5Goals': return 'Under 2.5';
+            case 'BothTeamsScore':
+            case 'BTTS': return 'BTTS';
+            case 'Over1.5Goals':
+            case 'Over1.5': return 'Over 1.5';
+            case 'DoubleChance': return 'Double Chance';
+            case 'Over2.5Goals':
+            case 'Over2.5': return 'Over 2.5';
+            case 'Under2.5Goals':
+            case 'Under2.5': return 'Under 2.5';
             case 'StraightWin': return '1X2';
             case 'Draw': return 'Draw';
             default: return market || 'Prediction';

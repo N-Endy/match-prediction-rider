@@ -267,7 +267,7 @@ public sealed class QuickSlipService : IQuickSlipService
                 HomeTeam = pred.HomeTeam,
                 AwayTeam = pred.AwayTeam,
                 League = pred.League,
-                Market = pred.PredictionCategory,
+                Market = AiChatContextBuilder.ToCartMarket(pred),
                 Prediction = pred.PredictedOutcome,
                 Odds = odds,
                 ModelProbability = prob,
@@ -323,7 +323,7 @@ public sealed class QuickSlipService : IQuickSlipService
                 "BothTeamsScore" => outcome.Equals("No BTTS", StringComparison.OrdinalIgnoreCase)
                     ? (matchData.BttsNo > 1.0 ? matchData.BttsNo : 0)
                     : (matchData.BttsYes > 1.0 ? matchData.BttsYes : 0),
-                "Over1.5Goals" => matchData.OverTwoGoals > 1.0 ? Math.Max(1.15, Math.Round(matchData.OverTwoGoals * 0.75, 2)) : 0,
+                "Over1.5Goals" => matchData.OverOnePointFive > 1.0 ? matchData.OverOnePointFive : (matchData.OverTwoGoals > 1.0 ? Math.Max(1.15, Math.Round(matchData.OverTwoGoals * 0.75, 2)) : 0),
                 "Over2.5Goals" => matchData.OverTwoGoals > 1.0 ? matchData.OverTwoGoals : 0,
                 "Under2.5Goals" => matchData.UnderTwoGoals > 1.0 ? matchData.UnderTwoGoals : 0,
                 "DoubleChance" => outcome switch

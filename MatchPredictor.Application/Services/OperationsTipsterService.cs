@@ -469,6 +469,8 @@ public class OperationsTipsterService : IOperationsTipsterService
         "BothTeamsScore" => "BTTS",
         "Over2.5Goals" => "Over 2.5",
         "Under2.5Goals" => "Under 2.5",
+        "Over1.5Goals" => "Over 1.5",
+        "DoubleChance" => "Double Chance",
         "StraightWin" => "1X2",
         "Draw" => "Draw",
         _ => category
@@ -486,9 +488,19 @@ public class OperationsTipsterService : IOperationsTipsterService
             var outcome = pred.PredictedOutcome ?? string.Empty;
             double raw = pred.PredictionCategory switch
             {
-                "BothTeamsScore" => md.BttsYes > 1.0 ? md.BttsYes : 0,
+                "BothTeamsScore" => outcome.Contains("no", StringComparison.OrdinalIgnoreCase)
+                    ? (md.BttsNo > 1.0 ? md.BttsNo : 0)
+                    : (md.BttsYes > 1.0 ? md.BttsYes : 0),
                 "Over2.5Goals" => md.OverTwoGoals > 1.0 ? md.OverTwoGoals : 0,
                 "Under2.5Goals" => md.UnderTwoGoals > 1.0 ? md.UnderTwoGoals : 0,
+                "Over1.5Goals" => md.OverOnePointFive > 1.0 ? md.OverOnePointFive : (md.OverTwoGoals > 1.0 ? Math.Max(1.15, Math.Round(md.OverTwoGoals * 0.75, 2)) : 0),
+                "DoubleChance" => outcome.ToUpperInvariant() switch
+                {
+                    "1X" or "1/X" or "HOME OR DRAW" => md.HomeWin > 1.0 && md.Draw > 1.0 ? Math.Round(1.0 / (1.0 / md.HomeWin + 1.0 / md.Draw), 2) : 0,
+                    "X2" or "X/2" or "DRAW OR AWAY" => md.Draw > 1.0 && md.AwayWin > 1.0 ? Math.Round(1.0 / (1.0 / md.Draw + 1.0 / md.AwayWin), 2) : 0,
+                    "12" or "1/2" or "HOME OR AWAY" => md.HomeWin > 1.0 && md.AwayWin > 1.0 ? Math.Round(1.0 / (1.0 / md.HomeWin + 1.0 / md.AwayWin), 2) : 0,
+                    _ => 0
+                },
                 "StraightWin" => outcome.Contains("Home", StringComparison.OrdinalIgnoreCase) || outcome.Contains(pred.HomeTeam, StringComparison.OrdinalIgnoreCase)
                     ? md.HomeWin
                     : md.AwayWin,

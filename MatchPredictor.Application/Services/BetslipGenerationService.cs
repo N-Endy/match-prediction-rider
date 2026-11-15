@@ -29,7 +29,9 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
         "StraightWin",
         "BothTeamsScore",
         "Over2.5Goals",
-        "Under2.5Goals"
+        "Under2.5Goals",
+        "Over1.5Goals",
+        "DoubleChance"
     ];
 
     private readonly ApplicationDbContext _dbContext;
@@ -2114,6 +2116,8 @@ public sealed class BetslipGenerationService : IBetslipGenerationService
             "BothTeamsScore" => "BTTS",
             "Over2.5Goals" => "Over2.5",
             "Under2.5Goals" => "Under2.5",
+            "Over1.5Goals" => "Over1.5",
+            "DoubleChance" => "DoubleChance",
             "Draw" => "1X2",
             "StraightWin" => "StraightWin",
             _ => category
