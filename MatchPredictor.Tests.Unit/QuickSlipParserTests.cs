@@ -59,6 +59,34 @@ public class QuickSlipParserTests
     }
 
     [Fact]
+    public void Parse_Over15Goals_ResolvesProperMarket()
+    {
+        var intent = QuickSlipParser.Parse("3 safe over 1.5 goals picks");
+        Assert.Equal(3, intent.RequestedCount);
+        Assert.Equal("Safe", intent.Bias);
+        Assert.Contains(PredictionMarket.Over15Goals, intent.RequestedMarkets);
+
+        var o15Intent = QuickSlipParser.Parse("4 o1.5 matches tonight");
+        Assert.Equal(4, o15Intent.RequestedCount);
+        Assert.True(o15Intent.IsTonight);
+        Assert.Contains(PredictionMarket.Over15Goals, o15Intent.RequestedMarkets);
+    }
+
+    [Fact]
+    public void Parse_DoubleChance_ResolvesProperMarket()
+    {
+        var intent = QuickSlipParser.Parse("3 double chance picks");
+        Assert.Equal(3, intent.RequestedCount);
+        Assert.Contains(PredictionMarket.DoubleChance, intent.RequestedMarkets);
+
+        var dcIntent = QuickSlipParser.Parse("double chance bankers in La Liga");
+        Assert.Contains(PredictionMarket.DoubleChance, dcIntent.RequestedMarkets);
+        Assert.Equal("LaLiga", dcIntent.LeagueHint);
+        // "double chance" should not set requested count to 2 from the word "double"
+        Assert.Null(dcIntent.RequestedCount);
+    }
+
+    [Fact]
     public void Parse_OddsRangeBetween_ExtractsMinAndMax()
     {
         var intent = QuickSlipParser.Parse("3 value bets between 1.70 and 2.30 odds");

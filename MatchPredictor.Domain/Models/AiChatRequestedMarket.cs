@@ -9,8 +9,10 @@ public class AiChatRequestedMarket
     public string DisplayName => PredictionCategory switch
     {
         "BothTeamsScore" => "BTTS",
+        "Over1.5Goals" => "Over 1.5",
         "Over2.5Goals" => "Over 2.5",
         "Under2.5Goals" => "Under 2.5",
+        "DoubleChance" => "Double Chance",
         "Draw" => "Draw",
         "StraightWin" => "Straight Win",
         _ => PredictionCategory

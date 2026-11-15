@@ -1194,6 +1194,11 @@ public partial class AiChatRequestParser
             return "BothTeamsScore";
         }
 
+        if (normalized.Contains("over1") || normalized.Contains("o1.5") || normalized == "o15")
+        {
+            return "Over1.5Goals";
+        }
+
         if (normalized.Contains("over2") || normalized == "overs" || normalized == "over")
         {
             return "Over2.5Goals";
@@ -1202,6 +1207,15 @@ public partial class AiChatRequestParser
         if (normalized.Contains("under2") || normalized == "unders" || normalized == "under")
         {
             return "Under2.5Goals";
+        }
+
+        if (normalized.Contains("doublechance") ||
+            normalized == "1x" ||
+            normalized == "x2" ||
+            normalized == "12" ||
+            normalized == "dc")
+        {
+            return "DoubleChance";
         }
 
         if (normalized.Contains("draw"))
@@ -1263,7 +1277,7 @@ public partial class AiChatRequestParser
     }
 
     [GeneratedRegex(
-        @"(?:(?:\b(?:a\s+)?(?<count>\d{1,3}|couple|few|several|handful)\b)\s*(?:of\s+)?(?:(?:random(?:ly)?|strong|safe|safer|best|top)\s+)*(?<market>\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|home wins?|away wins?|wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b))|(?:(?<marketAfter>\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|home wins?|away wins?|wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b)\s*(?:(?:random(?:ly)?|strong|safe|safer|best|top)\s+)*(?<countAfter>\d{1,3}|couple|few|several|handful)\b)",
+        @"(?:(?:\b(?:a\s+)?(?<count>\d{1,3}|couple|few|several|handful)\b)\s*(?:of\s+)?(?:(?:random(?:ly)?|strong|safe|safer|best|top)\s+)*(?<market>\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*1(?:\.|,)?5|over1(?:\.|,)?5|o1(?:\.|,)?5|o15|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|double\s*chances?|doublechance|1x|x2|12|dc|straight wins?|straightwins?|straightwin|straights|1x2|home wins?|away wins?|wins?|draws?|draw|overs?(?!\s*[12](?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b))|(?:(?<marketAfter>\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*1(?:\.|,)?5|over1(?:\.|,)?5|o1(?:\.|,)?5|o15|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|double\s*chances?|doublechance|1x|x2|12|dc|straight wins?|straightwins?|straightwin|straights|1x2|home wins?|away wins?|wins?|draws?|draw|overs?(?!\s*[12](?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b)\s*(?:(?:random(?:ly)?|strong|safe|safer|best|top)\s+)*(?<countAfter>\d{1,3}|couple|few|several|handful)\b)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex ExplicitMarketCountRegex();
 
@@ -1279,11 +1293,11 @@ public partial class AiChatRequestParser
     [GeneratedRegex(@"\b(?:(?:i\s+)?(?:asked|wanted|needed|said)\s+for|(?:make\s+it)|(?:give\s+me)|(?:need))\s+(?<count>\d{1,3}|couple|few|several|handful)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex CountFollowUpRegex();
 
-    [GeneratedRegex(@"\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|draws?|draw|straight wins?|straightwins?|straightwin|straights|1x2|wins?|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    [GeneratedRegex(@"\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*1(?:\.|,)?5|over1(?:\.|,)?5|o1(?:\.|,)?5|o15|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|double\s*chances?|doublechance|1x|x2|12|dc|draws?|draw|straight wins?|straightwins?|straightwin|straights|1x2|wins?|overs?(?!\s*[12](?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex MarketMentionRegex();
 
     [GeneratedRegex(
-        @"\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b\s*(?:and|&|/|\+|plus)\s*\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|straight wins?|straightwins?|straightwin|straights|1x2|wins?|draws?|draw|overs?(?!\s*2(?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b",
+        @"\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*1(?:\.|,)?5|over1(?:\.|,)?5|o1(?:\.|,)?5|o15|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|double\s*chances?|doublechance|1x|x2|12|dc|straight wins?|straightwins?|straightwin|straights|1x2|wins?|draws?|draw|overs?(?!\s*[12](?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b\s*(?:and|&|/|\+|plus)\s*\b(?:both teams to score|both teams score|goal\s*goal|goalgoal|btts|bts|gg|over\s*1(?:\.|,)?5|over1(?:\.|,)?5|o1(?:\.|,)?5|o15|over\s*2(?:\.|,)?5|over2(?:\.|,)?5|under\s*2(?:\.|,)?5|under2(?:\.|,)?5|double\s*chances?|doublechance|1x|x2|12|dc|straight wins?|straightwins?|straightwin|straights|1x2|wins?|draws?|draw|overs?(?!\s*[12](?:\.|,)?5)|unders?(?!\s*2(?:\.|,)?5))\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex SameFixtureMarketPairRegex();
 }

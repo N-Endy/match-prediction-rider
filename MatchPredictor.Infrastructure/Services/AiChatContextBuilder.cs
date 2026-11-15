@@ -285,8 +285,10 @@ public static partial class AiChatContextBuilder
         return prediction.PredictionCategory switch
         {
             "BothTeamsScore" => "BTTS",
+            "Over1.5Goals" => "Over1.5",
             "Over2.5Goals" => "Over2.5",
             "Under2.5Goals" => "Under2.5",
+            "DoubleChance" => "DoubleChance",
             _ => "1X2"
         };
     }
@@ -599,9 +601,31 @@ public static partial class AiChatContextBuilder
             filters.Add("BothTeamsScore");
         }
 
-        if (promptTokens.Contains("over") ||
-            promptTokens.Contains("goals") ||
-            promptTokens.Any(token => token.StartsWith("over", StringComparison.OrdinalIgnoreCase)))
+        var mentionsOver15 = promptTokens.Contains("o1.5") ||
+                             promptTokens.Contains("over1.5") ||
+                             promptTokens.Contains("o15") ||
+                             (promptTokens.Contains("over") && (promptTokens.Contains("1.5") || promptTokens.Contains("1")));
+
+        var mentionsDoubleChance = promptTokens.Contains("doublechance") ||
+                                   promptTokens.Contains("1x") ||
+                                   promptTokens.Contains("x2") ||
+                                   promptTokens.Contains("dc") ||
+                                   (promptTokens.Contains("double") && promptTokens.Contains("chance"));
+
+        if (mentionsOver15)
+        {
+            filters.Add("Over1.5Goals");
+        }
+
+        if (mentionsDoubleChance)
+        {
+            filters.Add("DoubleChance");
+        }
+
+        if (!mentionsOver15 &&
+            (promptTokens.Contains("over") ||
+             promptTokens.Contains("goals") ||
+             promptTokens.Any(token => token.StartsWith("over", StringComparison.OrdinalIgnoreCase))))
         {
             filters.Add("Over2.5Goals");
         }
@@ -778,10 +802,19 @@ public static partial class AiChatContextBuilder
         AddMarketMention(matches, userPrompt, "goalgoal", "BothTeamsScore");
         AddMarketMention(matches, userPrompt, "goal goal", "BothTeamsScore");
         AddMarketMention(matches, userPrompt, "both teams to score", "BothTeamsScore");
+        AddMarketMention(matches, userPrompt, "over 1.5", "Over1.5Goals");
+        AddMarketMention(matches, userPrompt, "over1.5", "Over1.5Goals");
+        AddMarketMention(matches, userPrompt, "o1.5", "Over1.5Goals");
+        AddMarketMention(matches, userPrompt, "o15", "Over1.5Goals");
         AddMarketMention(matches, userPrompt, "over 2.5", "Over2.5Goals");
         AddMarketMention(matches, userPrompt, "over2.5", "Over2.5Goals");
         AddMarketMention(matches, userPrompt, "under 2.5", "Under2.5Goals");
         AddMarketMention(matches, userPrompt, "under2.5", "Under2.5Goals");
+        AddMarketMention(matches, userPrompt, "double chance", "DoubleChance");
+        AddMarketMention(matches, userPrompt, "doublechance", "DoubleChance");
+        AddMarketMention(matches, userPrompt, "1x", "DoubleChance");
+        AddMarketMention(matches, userPrompt, "x2", "DoubleChance");
+        AddMarketMention(matches, userPrompt, "dc", "DoubleChance");
         AddMarketMention(matches, userPrompt, "draw", "Draw");
         AddMarketMention(matches, userPrompt, "straight win", "StraightWin");
         AddMarketMention(matches, userPrompt, "straightwin", "StraightWin");
@@ -922,6 +955,11 @@ public static partial class AiChatContextBuilder
             return "BothTeamsScore";
         }
 
+        if (normalized.Contains("over1") || normalized.Contains("o1.5") || normalized == "o15")
+        {
+            return "Over1.5Goals";
+        }
+
         if (normalized.Contains("over"))
         {
             return "Over2.5Goals";
@@ -930,6 +968,15 @@ public static partial class AiChatContextBuilder
         if (normalized.Contains("under"))
         {
             return "Under2.5Goals";
+        }
+
+        if (normalized.Contains("doublechance") ||
+            normalized == "1x" ||
+            normalized == "x2" ||
+            normalized == "12" ||
+            normalized == "dc")
+        {
+            return "DoubleChance";
         }
 
         if (normalized.Contains("draw"))
@@ -1154,8 +1201,10 @@ public static partial class AiChatContextBuilder
         predictionCategory switch
         {
             "BothTeamsScore" => "BTTS",
+            "Over1.5Goals" => "Over 1.5",
             "Over2.5Goals" => "Over 2.5",
             "Under2.5Goals" => "Under 2.5",
+            "DoubleChance" => "Double Chance",
             "Draw" => "Draw",
             "StraightWin" => "Straight Win",
             _ => predictionCategory
@@ -1478,8 +1527,10 @@ public static partial class AiChatContextBuilder
         public string DisplayName => PredictionCategory switch
         {
             "BothTeamsScore" => "BTTS",
+            "Over1.5Goals" => "Over 1.5",
             "Over2.5Goals" => "Over 2.5",
             "Under2.5Goals" => "Under 2.5",
+            "DoubleChance" => "Double Chance",
             "Draw" => "Draw",
             "StraightWin" => "Straight Win",
             _ => PredictionCategory

@@ -59,7 +59,7 @@ public static partial class QuickSlipParser
         // If no market was named and no team specified, ask clarification
         if (markets.Count == 0 && teams.Count == 0)
         {
-            questions.Add("Which market do you prefer? (e.g. BTTS, Over 2.5 Goals, Straight Win, or Draw)");
+            questions.Add("Which market do you prefer? (e.g. BTTS, Over 2.5 Goals, Over 1.5 Goals, Double Chance, Straight Win, or Draw)");
         }
 
         var isAmbiguous = questions.Count > 0;
@@ -89,6 +89,12 @@ public static partial class QuickSlipParser
             markets.Add(PredictionMarket.BothTeamsScore);
         }
 
+        // Over 1.5
+        if (Regex.IsMatch(lower, @"\b(o1\.5|over\s*1\.5|over\s*1(?!\.5|\s*x|x)|o15)\b"))
+        {
+            markets.Add(PredictionMarket.Over15Goals);
+        }
+
         // Over 2.5
         if (Regex.IsMatch(lower, @"\b(o2\.5|over\s*2\.5|over\s*2|overs|high\s*scoring)\b"))
         {
@@ -101,9 +107,15 @@ public static partial class QuickSlipParser
             markets.Add(PredictionMarket.Under25Goals);
         }
 
+        // Double Chance
+        if (Regex.IsMatch(lower, @"\b(double\s*chance|1x|x2|12|dc)\b"))
+        {
+            markets.Add(PredictionMarket.DoubleChance);
+        }
+
         // Straight Win / 1X2
         if (Regex.IsMatch(lower, @"\b(straight\s*wins?|home\s*wins?|away\s*wins?|1x2|winners?|wins?)\b") &&
-            !Regex.IsMatch(lower, @"\b(over\s*2|under\s*2|btts|gg)\b"))
+            !Regex.IsMatch(lower, @"\b(over\s*2|under\s*2|over\s*1|o1\.5|btts|gg|double\s*chance)\b"))
         {
             markets.Add(PredictionMarket.StraightWin);
         }
@@ -122,13 +134,26 @@ public static partial class QuickSlipParser
         // Check word numbers first ("3-fold", "4 fold", "double", "treble")
         foreach (var (word, val) in WordCounts)
         {
+            // Do not treat "double" in "double chance" as a count of 2 picks
+            if (word.Equals("double", StringComparison.OrdinalIgnoreCase) && Regex.IsMatch(lower, @"\bdouble\s*chance\b"))
+            {
+                continue;
+            }
+
             if (Regex.IsMatch(lower, $@"\b{word}\b"))
             {
                 return val;
             }
         }
 
-        var match = Regex.Match(lower, @"\b(?<num>\d{1,2})\s*(-|\s)?(fold|legs?|picks?|games?|bets?|matches?)\b");
+        var marketCountMatch = Regex.Match(lower, @"(?<![\.\d])\b(?<num>\d{1,2})\s+(btts|gg|both\s*teams|o1\.?5|o2\.?5|over|under|double\s*chance|straight|wins?|draws?|accas?|combos?|fixtures?)\b");
+        if (marketCountMatch.Success && int.TryParse(marketCountMatch.Groups["num"].Value, out var mCount) && mCount is > 0 and <= 20)
+        {
+            return mCount;
+        }
+
+        // Avoid matching decimal points like "1.5 matches" or "2.5 matches"
+        var match = Regex.Match(lower, @"(?<![\.\d])\b(?<num>\d{1,2})\s*(-|\s)?(fold|legs?|picks?|games?|bets?|matches?)\b");
         if (match.Success && int.TryParse(match.Groups["num"].Value, out var count) && count is > 0 and <= 20)
         {
             return count;
@@ -138,12 +163,6 @@ public static partial class QuickSlipParser
         if (loneDigitMatch.Success && int.TryParse(loneDigitMatch.Groups["num"].Value, out var loneCount) && loneCount is > 0 and <= 20)
         {
             return loneCount;
-        }
-
-        var marketCountMatch = Regex.Match(lower, @"\b(?<num>\d{1,2})\s+(btts|gg|both\s*teams|over|under|straight|wins?|draws?|accas?|combos?|fixtures?)\b");
-        if (marketCountMatch.Success && int.TryParse(marketCountMatch.Groups["num"].Value, out var mCount) && mCount is > 0 and <= 20)
-        {
-            return mCount;
         }
 
         return null;

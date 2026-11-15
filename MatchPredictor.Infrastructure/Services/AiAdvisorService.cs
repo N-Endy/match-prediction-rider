@@ -1277,7 +1277,7 @@ public class AiAdvisorService : IAiAdvisorService
         var requests = new List<AiChatFootballInsightRequest>();
         foreach (var candidate in candidates)
         {
-            if (candidate.PredictionCategory is not ("BothTeamsScore" or "Over2.5Goals" or "Under2.5Goals" or "Draw" or "StraightWin"))
+            if (candidate.PredictionCategory is not ("BothTeamsScore" or "Over2.5Goals" or "Under2.5Goals" or "Over1.5Goals" or "DoubleChance" or "Draw" or "StraightWin"))
             {
                 continue;
             }
@@ -1347,8 +1347,10 @@ public class AiAdvisorService : IAiAdvisorService
         return market switch
         {
             "BTTS" => "BothTeamsScore",
+            "Over1.5" => "Over1.5Goals",
             "Over2.5" => "Over2.5Goals",
             "Under2.5" => "Under2.5Goals",
+            "DoubleChance" => "DoubleChance",
             "1X2" => "Draw",
             "StraightWin" => "StraightWin",
             _ => predictionCategory
@@ -1590,7 +1592,7 @@ public class AiAdvisorService : IAiAdvisorService
             return false;
         }
 
-        if (candidate.PredictionCategory is not ("BothTeamsScore" or "Over2.5Goals" or "Under2.5Goals" or "Draw" or "StraightWin"))
+        if (candidate.PredictionCategory is not ("BothTeamsScore" or "Over2.5Goals" or "Under2.5Goals" or "Over1.5Goals" or "DoubleChance" or "Draw" or "StraightWin"))
         {
             return false;
         }
@@ -1739,8 +1741,10 @@ public class AiAdvisorService : IAiAdvisorService
         var rawScore = candidate.PredictionCategory switch
         {
             "StraightWin" => ComputeStraightWinSupport(candidate, snapshot),
+            "DoubleChance" => ComputeDoubleChanceSupport(candidate, snapshot),
             "Draw" => ComputeDrawSupport(snapshot),
             "BothTeamsScore" => ComputeBttsSupport(candidate, snapshot),
+            "Over1.5Goals" => ComputeTotalsSupport(snapshot, wantOver: true),
             "Over2.5Goals" => ComputeTotalsSupport(snapshot, wantOver: true),
             "Under2.5Goals" => ComputeTotalsSupport(snapshot, wantOver: false),
             _ => 0d
@@ -1783,6 +1787,24 @@ public class AiAdvisorService : IAiAdvisorService
             (cleanSheetEdge * 0.10d),
             -1d,
             1d);
+    }
+
+    private static double ComputeDoubleChanceSupport(
+        AiChatContextBuilder.AiChatContextCandidate candidate,
+        FootballMatchInsightSnapshot snapshot)
+    {
+        var outcome = candidate.PredictedOutcome ?? string.Empty;
+        if (outcome.Contains("1X", StringComparison.OrdinalIgnoreCase))
+        {
+            var netPpm = snapshot.HomeForm.VenuePointsPerMatch - snapshot.AwayForm.VenuePointsPerMatch;
+            return Math.Clamp((netPpm * 0.4d) + (snapshot.HomeForm.DrawRate * 0.3d) + 0.2d, -1d, 1d);
+        }
+        if (outcome.Contains("X2", StringComparison.OrdinalIgnoreCase))
+        {
+            var netPpm = snapshot.AwayForm.VenuePointsPerMatch - snapshot.HomeForm.VenuePointsPerMatch;
+            return Math.Clamp((netPpm * 0.4d) + (snapshot.AwayForm.DrawRate * 0.3d) + 0.2d, -1d, 1d);
+        }
+        return 0.3d;
     }
 
     private static double ComputeDrawSupport(FootballMatchInsightSnapshot snapshot)
@@ -1877,8 +1899,10 @@ public class AiAdvisorService : IAiAdvisorService
         var summary = candidate.PredictionCategory switch
         {
             "StraightWin" => BuildStraightWinAnalysisSummary(candidate, snapshot),
+            "DoubleChance" => BuildDoubleChanceAnalysisSummary(candidate, snapshot),
             "Draw" => BuildDrawAnalysisSummary(snapshot),
             "BothTeamsScore" => BuildBttsAnalysisSummary(candidate, snapshot),
+            "Over1.5Goals" => BuildOver15AnalysisSummary(snapshot),
             "Over2.5Goals" => BuildTotalsAnalysisSummary(snapshot, wantOver: true),
             "Under2.5Goals" => BuildTotalsAnalysisSummary(snapshot, wantOver: false),
             _ => null
@@ -1928,6 +1952,18 @@ public class AiAdvisorService : IAiAdvisorService
             : $"Recent totals lean lower, with enough defensive control in the sample to support the under angle.";
     }
 
+    private static string BuildDoubleChanceAnalysisSummary(
+        AiChatContextBuilder.AiChatContextCandidate candidate,
+        FootballMatchInsightSnapshot snapshot)
+    {
+        return $"{candidate.PredictedOutcome} has strong structural backing from venue performance and draw trends between {snapshot.HomeTeam} and {snapshot.AwayTeam}.";
+    }
+
+    private static string BuildOver15AnalysisSummary(FootballMatchInsightSnapshot snapshot)
+    {
+        return $"Both {snapshot.HomeTeam} and {snapshot.AwayTeam} maintain consistent scoring and conceding trends, making the 1.5 goal line favorable.";
+    }
+
     private static List<string> BuildFootballInsightBullets(AiChatContextBuilder.AiChatContextCandidate candidate)
     {
         if (candidate.FootballInsight is null)
@@ -1946,8 +1982,10 @@ public class AiAdvisorService : IAiAdvisorService
         var marketBullet = candidate.PredictionCategory switch
         {
             "StraightWin" => $"{snapshot.HomeTeam} home PPM {snapshot.HomeForm.VenuePointsPerMatch:0.00} vs {snapshot.AwayTeam} away PPM {snapshot.AwayForm.VenuePointsPerMatch:0.00}.",
+            "DoubleChance" => $"Double chance support: {candidate.PredictedOutcome} with {snapshot.HomeTeam} home PPM {snapshot.HomeForm.VenuePointsPerMatch:0.00} vs {snapshot.AwayTeam} away PPM {snapshot.AwayForm.VenuePointsPerMatch:0.00}.",
             "Draw" => $"Draw rates: {snapshot.HomeTeam} {snapshot.HomeForm.DrawRate * 100:0}% and {snapshot.AwayTeam} {snapshot.AwayForm.DrawRate * 100:0}%; under 2.5 average {(snapshot.HomeForm.Under25Rate + snapshot.AwayForm.Under25Rate) * 50:0}%.",
             "BothTeamsScore" => $"BTTS rates: {snapshot.HomeTeam} {snapshot.HomeForm.BttsRate * 100:0}% and {snapshot.AwayTeam} {snapshot.AwayForm.BttsRate * 100:0}%.",
+            "Over1.5Goals" => $"Over 1.5 trends: {snapshot.HomeTeam} {snapshot.HomeForm.Over25Rate * 100:0}% over 2.5 and average {(snapshot.HomeForm.GoalsForPerMatch + snapshot.AwayForm.GoalsForPerMatch):0.0} goals.",
             "Over2.5Goals" => $"Over 2.5 rates: {snapshot.HomeTeam} {snapshot.HomeForm.Over25Rate * 100:0}% and {snapshot.AwayTeam} {snapshot.AwayForm.Over25Rate * 100:0}%.",
             "Under2.5Goals" => $"Under 2.5 rates: {snapshot.HomeTeam} {snapshot.HomeForm.Under25Rate * 100:0}% and {snapshot.AwayTeam} {snapshot.AwayForm.Under25Rate * 100:0}%.",
             _ => string.Empty
@@ -2429,13 +2467,49 @@ public class AiAdvisorService : IAiAdvisorService
             return marketProbability > 0;
         }
 
+        if (prediction.PredictionCategory == "Over1.5Goals")
+        {
+            if (prediction.ConfidenceScore.HasValue && (double)prediction.ConfidenceScore.Value > 0)
+            {
+                marketProbability = (double)prediction.ConfidenceScore.Value;
+                return true;
+            }
+
+            if (match.TryGetNormalizedOver25Pair(out var overUnder25))
+            {
+                marketProbability = Math.Min(0.95, overUnder25.over25 * 1.18);
+                return marketProbability > 0;
+            }
+        }
+
         if ((prediction.PredictionCategory == "Over2.5Goals" || prediction.PredictionCategory == "Under2.5Goals") &&
-            match.TryGetNormalizedOver25Pair(out var overUnder25))
+            match.TryGetNormalizedOver25Pair(out var overUnder25Pair))
         {
             marketProbability = prediction.PredictedOutcome.Equals("Under 2.5", StringComparison.OrdinalIgnoreCase)
-                ? overUnder25.under25
-                : overUnder25.over25;
+                ? overUnder25Pair.under25
+                : overUnder25Pair.over25;
             return marketProbability > 0;
+        }
+
+        if (prediction.PredictionCategory == "DoubleChance")
+        {
+            if (prediction.ConfidenceScore.HasValue && (double)prediction.ConfidenceScore.Value > 0)
+            {
+                marketProbability = (double)prediction.ConfidenceScore.Value;
+                return true;
+            }
+
+            if (match.TryGetNormalizedOneX2(out var oneX2Pair))
+            {
+                marketProbability = prediction.PredictedOutcome switch
+                {
+                    "1X" => oneX2Pair.home + oneX2Pair.draw,
+                    "X2" => oneX2Pair.away + oneX2Pair.draw,
+                    "12" => oneX2Pair.home + oneX2Pair.away,
+                    _ => 0
+                };
+                return marketProbability > 0;
+            }
         }
 
         if ((prediction.PredictionCategory == "StraightWin" || prediction.PredictionCategory == "Draw") &&
@@ -2685,8 +2759,10 @@ public class AiAdvisorService : IAiAdvisorService
         predictionCategory switch
         {
             "BothTeamsScore" => "BTTS",
+            "Over1.5Goals" => "Over 1.5",
             "Over2.5Goals" => "Over 2.5",
             "Under2.5Goals" => "Under 2.5",
+            "DoubleChance" => "Double Chance",
             "Draw" => "Draw",
             "StraightWin" => "Straight Win",
             _ => predictionCategory
@@ -3336,9 +3412,9 @@ public class AiAdvisorService : IAiAdvisorService
             - If requestedPredictionCount is missing or 0, choose a researched set from the full supplied card. Size it from the evidence, not from a hidden default of 5.
             - If the user asks for more legs than the payload contains, recommend every suitable bookable candidate and say how many were actually supplied. Do not invent fixtures.
             - "Best" and "safe" picks should still respect model threshold, but blend in form, venue, and head-to-head when footballInsight is present.
-            - "Safe" requests: prefer Straight Win, confidence >= threshold + 8pp, estimatedOdds <= 1.75, and signal agreement when available — unless research clearly warns against a candidate.
+            - "Safe" requests: prefer Straight Win, Double Chance, or Over 1.5 Goals, confidence >= threshold + 8pp, estimatedOdds <= 1.75, and signal agreement when available — unless research clearly warns against a candidate.
             - "Value" requests: require modelEdgePoints > 0 and mention edge in the explanation.
-            - Prefer low-variance Straight Win setups when the user asks for safer options.
+            - Prefer low-variance Straight Win, Double Chance, or Over 1.5 setups when the user asks for safer options.
             - When footballInsight is present, cite 1-2 concrete football signals from the supplied stats in the explanation.
             - If footballInsight.dataQuality is Low or footballInsight.isLowConfidence is true, lean more on the model edge than the thin form sample.
             - If multiple picks are suggested, keep them grounded and avoid hype or guarantees.
@@ -3922,8 +3998,10 @@ public class AiAdvisorService : IAiAdvisorService
             Market = candidate.PredictionCategory switch
             {
                 "BothTeamsScore" => "BTTS",
+                "Over1.5Goals" => "Over1.5",
                 "Over2.5Goals" => "Over2.5",
                 "Under2.5Goals" => "Under2.5",
+                "DoubleChance" => "DoubleChance",
                 _ => "1X2"
             },
             Prediction = candidate.PredictedOutcome,

@@ -320,9 +320,19 @@ public sealed class QuickSlipService : IQuickSlipService
 
             double rawOdds = cat switch
             {
-                "BothTeamsScore" => matchData.BttsYes > 1.0 ? matchData.BttsYes : 0,
+                "BothTeamsScore" => outcome.Equals("No BTTS", StringComparison.OrdinalIgnoreCase)
+                    ? (matchData.BttsNo > 1.0 ? matchData.BttsNo : 0)
+                    : (matchData.BttsYes > 1.0 ? matchData.BttsYes : 0),
+                "Over1.5Goals" => matchData.OverTwoGoals > 1.0 ? Math.Max(1.15, Math.Round(matchData.OverTwoGoals * 0.75, 2)) : 0,
                 "Over2.5Goals" => matchData.OverTwoGoals > 1.0 ? matchData.OverTwoGoals : 0,
                 "Under2.5Goals" => matchData.UnderTwoGoals > 1.0 ? matchData.UnderTwoGoals : 0,
+                "DoubleChance" => outcome switch
+                {
+                    "1X" when matchData.HomeWin > 1.0 && matchData.Draw > 1.0 => Math.Max(1.10, Math.Round(1.0 / ((1.0 / matchData.HomeWin) + (1.0 / matchData.Draw)), 2)),
+                    "X2" when matchData.AwayWin > 1.0 && matchData.Draw > 1.0 => Math.Max(1.10, Math.Round(1.0 / ((1.0 / matchData.AwayWin) + (1.0 / matchData.Draw)), 2)),
+                    "12" when matchData.HomeWin > 1.0 && matchData.AwayWin > 1.0 => Math.Max(1.10, Math.Round(1.0 / ((1.0 / matchData.HomeWin) + (1.0 / matchData.AwayWin)), 2)),
+                    _ => 0
+                },
                 "StraightWin" => outcome.Contains("Home", StringComparison.OrdinalIgnoreCase) || outcome.Contains(prediction.HomeTeam, StringComparison.OrdinalIgnoreCase)
                     ? matchData.HomeWin
                     : matchData.AwayWin,
@@ -399,10 +409,10 @@ public sealed class QuickSlipService : IQuickSlipService
         {
             var system = """
                 You are MatchPredictor Slip Assistant. Convert a betting prompt into structured JSON.
-                Supported Markets: BothTeamsScore, Over25Goals, Under25Goals, StraightWin, Draw.
+                Supported Markets: BothTeamsScore, Over25Goals, Under25Goals, Over15Goals, DoubleChance, StraightWin, Draw.
                 Output Schema:
                 {
-                  "markets": ["BothTeamsScore" | "Over25Goals" | "Under25Goals" | "StraightWin" | "Draw"],
+                  "markets": ["BothTeamsScore" | "Over25Goals" | "Under25Goals" | "Over15Goals" | "DoubleChance" | "StraightWin" | "Draw"],
                   "count": number or null,
                   "bias": "Safe" | "Value" | "Balanced",
                   "league": string or null,

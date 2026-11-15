@@ -794,7 +794,7 @@ public class AiChatFootballInsightService : IAiChatFootballInsightService
 
     private static bool IsEligibleFootballRequest(AiChatFootballInsightRequest request)
     {
-        return request.PredictionCategory is "BothTeamsScore" or "Over2.5Goals" or "Under2.5Goals" or "Draw" or "StraightWin";
+        return request.PredictionCategory is "BothTeamsScore" or "Over2.5Goals" or "Under2.5Goals" or "Over1.5Goals" or "DoubleChance" or "Draw" or "StraightWin";
     }
 
     private static bool TryParseScore(string? score, out int homeGoals, out int awayGoals)

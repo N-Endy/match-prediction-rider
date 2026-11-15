@@ -45,6 +45,27 @@ public class AiChatRequestParserTests
     }
 
     [Fact]
+    public void ParseDeterministic_ParsesOver15AndDoubleChance()
+    {
+        var result = AiChatRequestParser.ParseDeterministic(
+            "Give me 3 over 1.5 and 2 double chance picks",
+            null,
+            hasWorkingSlip: false,
+            hasContextCandidates: false);
+
+        Assert.Equal(AiChatIntent.MixedMarketRecommendation, result.Request.Intent);
+        Assert.Equal(5, result.Request.RequestedTotalCount);
+        Assert.Contains(result.Request.RequestedMarkets, market =>
+            market.PredictionCategory == "Over1.5Goals" &&
+            market.Count == 3 &&
+            market.ExplicitCount);
+        Assert.Contains(result.Request.RequestedMarkets, market =>
+            market.PredictionCategory == "DoubleChance" &&
+            market.Count == 2 &&
+            market.ExplicitCount);
+    }
+
+    [Fact]
     public void ParseDeterministic_ParsesMixedPromptTotalAcrossNamedMarkets()
     {
         var result = AiChatRequestParser.ParseDeterministic(

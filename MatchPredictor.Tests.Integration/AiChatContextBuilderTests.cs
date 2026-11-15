@@ -30,6 +30,47 @@ public class AiChatContextBuilderTests
     }
 
     [Fact]
+    public void BuildSelection_FiltersOver15Predictions_WhenRequested()
+    {
+        var predictions = new[]
+        {
+            CreatePrediction(1, "Over1.5Goals", "Over 1.5", "Arsenal", "Chelsea", "England - Premier League", 0.88m),
+            CreatePrediction(2, "Over2.5Goals", "Over 2.5", "Barcelona", "Valencia", "Spain - La Liga", 0.72m),
+            CreatePrediction(3, "Over1.5Goals", "Over 1.5", "Inter", "Milan", "Italy - Serie A", 0.82m)
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me the best over 1.5 predictions",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(2, selection.Candidates.Count);
+        Assert.All(selection.Candidates, candidate => Assert.Equal("Over1.5Goals", candidate.PredictionCategory));
+        Assert.Equal(1, selection.Candidates[0].PredictionId);
+    }
+
+    [Fact]
+    public void BuildSelection_FiltersDoubleChancePredictions_WhenRequested()
+    {
+        var predictions = new[]
+        {
+            CreatePrediction(1, "DoubleChance", "1X", "Arsenal", "Chelsea", "England - Premier League", 0.85m),
+            CreatePrediction(2, "StraightWin", "Home Win", "Barcelona", "Valencia", "Spain - La Liga", 0.80m),
+            CreatePrediction(3, "DoubleChance", "X2", "Inter", "Milan", "Italy - Serie A", 0.81m)
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me double chance picks",
+            DateTime.UtcNow);
+
+        Assert.False(selection.NoRelevantMatchesFound);
+        Assert.Equal(2, selection.Candidates.Count);
+        Assert.All(selection.Candidates, candidate => Assert.Equal("DoubleChance", candidate.PredictionCategory));
+    }
+
+    [Fact]
     public void BuildSelection_IgnoresNamedTeams_OnPickListPrompts()
     {
         var predictions = new[]
