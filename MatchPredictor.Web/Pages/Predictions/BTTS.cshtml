@@ -20,6 +20,22 @@
         <div class="mp-date-badge">@today</div>
     </div>
 
+    @{
+        string BuildOutcomeUrl(string outcome)
+        {
+            var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(HttpContext.Request.QueryString.Value ?? string.Empty);
+            var dict = query.ToDictionary(k => k.Key, v => (string?)v.Value.ToString());
+            dict["OutcomeFilter"] = outcome;
+            return Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString(HttpContext.Request.Path, dict);
+        }
+    }
+
+    <div class="mp-subfilter-tabs" style="display: flex; gap: 8px; margin-bottom: 1.25rem; flex-wrap: wrap;">
+        <a href="@BuildOutcomeUrl("all")" class="mp-filter-pill @(Model.OutcomeFilter is "all" or "" ? "active" : "")">All BTTS (@Model.TotalMatchCount)</a>
+        <a href="@BuildOutcomeUrl("yes")" class="mp-filter-pill @(Model.OutcomeFilter == "yes" ? "active" : "")">⚽ BTTS: Yes</a>
+        <a href="@BuildOutcomeUrl("no")" class="mp-filter-pill @(Model.OutcomeFilter == "no" ? "active" : "")">🛡️ BTTS: No (Clean Sheet)</a>
+    </div>
+
     <partial name="_PredictionPageFilters" model="Model" />
 
     @if (Model.VisibleMatchCount > 0)

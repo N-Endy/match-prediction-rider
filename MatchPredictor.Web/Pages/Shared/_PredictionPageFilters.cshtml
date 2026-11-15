@@ -1,6 +1,10 @@
 @model MatchPredictor.Web.Pages.Predictions.FilteredPredictionPageModel
 
 <form method="get" class="mp-prediction-toolbar">
+    @if (!string.IsNullOrWhiteSpace(Model.OutcomeFilter) && Model.OutcomeFilter != "all")
+    {
+        <input type="hidden" name="OutcomeFilter" value="@Model.OutcomeFilter" />
+    }
     <div class="mp-prediction-toolbar-grid">
         <label class="mp-filter-field">
             <span>Search</span>

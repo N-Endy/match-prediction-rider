@@ -167,6 +167,12 @@ public class ValueBetsService : IValueBetsService
                         continue;
                     }
 
+                    if (forecastCandidate.PredictionCategory is "Over1.5Goals" or "DoubleChance" && marketQuote.DecimalOdds < 1.25)
+                    {
+                        IncrementExclusion(exclusionCounts, "odds_below_floor");
+                        continue;
+                    }
+
                     var expectedValuePercent = BetPricingMath.CalculateExpectedValuePercent(calibratedProbability, marketQuote.DecimalOdds) ?? 0d;
                     currentPredictionLookup.TryGetValue(
                         BuildCurrentPredictionLookupKey(
@@ -409,6 +415,30 @@ public class ValueBetsService : IValueBetsService
             selected.Add(bestTotalsCandidate);
         }
 
+        var bestOver15Candidate = candidateList
+            .Where(candidate => candidate.PredictionCategory == "Over1.5Goals")
+            .OrderByDescending(candidate => candidate.ExpectedValuePercent)
+            .ThenByDescending(candidate => candidate.Edge)
+            .ThenByDescending(candidate => candidate.MathematicalProbability)
+            .FirstOrDefault();
+
+        if (bestOver15Candidate != null)
+        {
+            selected.Add(bestOver15Candidate);
+        }
+
+        var bestDoubleChanceCandidate = candidateList
+            .Where(candidate => candidate.PredictionCategory == "DoubleChance")
+            .OrderByDescending(candidate => candidate.ExpectedValuePercent)
+            .ThenByDescending(candidate => candidate.Edge)
+            .ThenByDescending(candidate => candidate.MathematicalProbability)
+            .FirstOrDefault();
+
+        if (bestDoubleChanceCandidate != null)
+        {
+            selected.Add(bestDoubleChanceCandidate);
+        }
+
         selected.AddRange(candidateList.Where(candidate => candidate.PredictionCategory == "BothTeamsScore"));
         return selected;
     }
@@ -423,6 +453,8 @@ public class ValueBetsService : IValueBetsService
             PredictionMarket.Draw => _thresholdTuningService.GetThresholdDecision(PredictionMarket.Draw, _settings.DrawStrongThreshold),
             PredictionMarket.HomeWin => _thresholdTuningService.GetThresholdDecision(PredictionMarket.HomeWin, _settings.HomeWinStrong),
             PredictionMarket.AwayWin => _thresholdTuningService.GetThresholdDecision(PredictionMarket.AwayWin, _settings.AwayWinStrong),
+            PredictionMarket.Over15Goals => _thresholdTuningService.GetThresholdDecision(PredictionMarket.Over15Goals, _settings.OverOneFiveStrongThreshold),
+            PredictionMarket.DoubleChance => _thresholdTuningService.GetThresholdDecision(PredictionMarket.DoubleChance, _settings.DoubleChanceStrongThreshold),
             _ => new ThresholdDecision
             {
                 Threshold = 1.0,
@@ -691,6 +723,8 @@ public class ValueBetsService : IValueBetsService
             "BothTeamsScore" => homeGoals > 0 && awayGoals > 0 ? "BTTS" : "No BTTS",
             "Over2.5Goals" => homeGoals + awayGoals > 2 ? "Over 2.5" : "Under 2.5",
             "Under2.5Goals" => homeGoals + awayGoals > 2 ? "Over 2.5" : "Under 2.5",
+            "Over1.5Goals" => homeGoals + awayGoals >= 2 ? "Over 1.5" : "Under 1.5",
+            "DoubleChance" => PredictionScoreClassHelper.IsPredictionCorrect(prediction) ? (prediction.PredictedOutcome ?? "Double Chance") : "Loss",
             "StraightWin" => homeGoals > awayGoals ? "Home Win" : awayGoals > homeGoals ? "Away Win" : "Draw",
             "Draw" => homeGoals == awayGoals ? "Draw" : "Not Draw",
             _ => null

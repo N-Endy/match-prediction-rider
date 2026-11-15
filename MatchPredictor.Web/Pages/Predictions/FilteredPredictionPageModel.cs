@@ -35,6 +35,9 @@ public abstract class FilteredPredictionPageModel : PageModel
     [BindProperty(SupportsGet = true)]
     public string ConfidenceBand { get; set; } = "all";
 
+    [BindProperty(SupportsGet = true)]
+    public string OutcomeFilter { get; set; } = "all";
+
     public List<Prediction> Matches { get; private set; } = [];
     public List<Prediction> FilteredMatches { get; private set; } = [];
     public List<string> LeagueOptions { get; private set; } = [];
@@ -69,15 +72,21 @@ public abstract class FilteredPredictionPageModel : PageModel
         }
 
         await LoadScoreNearMissHintsAsync();
-        ViewData["ScoreNearMissHints"] = ScoreNearMissHints;
-        ViewData["IsAdminOperator"] = HttpContext.IsAdminOperator();
+        if (PageContext?.ViewData is not null)
+        {
+            ViewData["ScoreNearMissHints"] = ScoreNearMissHints;
+            if (HttpContext is not null)
+            {
+                ViewData["IsAdminOperator"] = HttpContext.IsAdminOperator();
+            }
+        }
 
         return Page();
     }
 
     private async Task LoadScoreNearMissHintsAsync()
     {
-        if (!HttpContext.IsAdminOperator() || FilteredMatches.Count == 0)
+        if (HttpContext is null || !HttpContext.IsAdminOperator() || FilteredMatches.Count == 0)
         {
             ScoreNearMissHints = new Dictionary<int, ScoreNearMissHintSet>();
             return;
@@ -119,9 +128,26 @@ public abstract class FilteredPredictionPageModel : PageModel
         var normalizedConfidence = string.IsNullOrWhiteSpace(ConfidenceBand)
             ? "all"
             : ConfidenceBand.Trim().ToLowerInvariant();
+        var normalizedOutcome = string.IsNullOrWhiteSpace(OutcomeFilter)
+            ? "all"
+            : OutcomeFilter.Trim().ToLowerInvariant();
 
         foreach (var prediction in predictions)
         {
+            if (normalizedOutcome is "yes" or "btts")
+            {
+                if (prediction.PredictedOutcome != null && prediction.PredictedOutcome.Contains("no", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+            }
+            else if (normalizedOutcome is "no" or "nobtts")
+            {
+                if (prediction.PredictedOutcome == null || !prediction.PredictedOutcome.Contains("no", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+            }
             if (!string.IsNullOrWhiteSpace(normalizedSearch))
             {
                 var haystack = $"{prediction.League} {prediction.HomeTeam} {prediction.AwayTeam} {prediction.PredictedOutcome}";

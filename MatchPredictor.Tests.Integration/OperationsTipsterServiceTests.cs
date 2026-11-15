@@ -176,4 +176,137 @@ public class OperationsTipsterServiceTests
         Assert.True(valueEdge.CombinedOdds >= 3.0m);
         Assert.True(valueEdge.Legs.Count >= 2);
     }
+
+    [Fact]
+    public async Task GetOperationsDossierAsync_CompounderPillar_IncludesOver15AndDoubleChance1X_ExcludesDoubleChance12()
+    {
+        await using var db = CreateInMemoryDb();
+        var bookingService = new StubSportyBetBookingService();
+        var service = new OperationsTipsterService(db, bookingService, NullLogger<OperationsTipsterService>.Instance);
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        // Add 10 fixtures so slate qualifies for Grade B
+        for (int i = 1; i <= 10; i++)
+        {
+            var pred = new Prediction
+            {
+                Id = 200 + i,
+                FixtureKey = $"compounder-fx-{i}",
+                HomeTeam = $"Team H{i}",
+                AwayTeam = $"Team A{i}",
+                League = "Premier League",
+                MatchLocalDate = today,
+                MatchDateTime = DateTime.UtcNow.AddHours(2),
+                Date = today.ToString("yyyy-MM-dd"),
+                Time = "16:00",
+                PredictionCategory = "StraightWin",
+                PredictedOutcome = $"Team H{i} Win",
+                ConfidenceScore = 0.55m,
+                IsCurrentRevision = true,
+                WasPublished = true
+            };
+            db.Predictions.Add(pred);
+        }
+
+        // Add Double Chance 12 with very high confidence (0.85m) - must be excluded from Compounder
+        var dc12Pred = new Prediction
+        {
+            Id = 301,
+            FixtureKey = "fx-dc12",
+            HomeTeam = "Rivals A",
+            AwayTeam = "Rivals B",
+            League = "Premier League",
+            MatchLocalDate = today,
+            MatchDateTime = DateTime.UtcNow.AddHours(2),
+            Date = today.ToString("yyyy-MM-dd"),
+            Time = "16:00",
+            PredictionCategory = "DoubleChance",
+            PredictedOutcome = "12",
+            ConfidenceScore = 0.85m,
+            IsCurrentRevision = true,
+            WasPublished = true
+        };
+        db.Predictions.Add(dc12Pred);
+        db.PredictionOddsSnapshots.Add(new PredictionOddsSnapshot
+        {
+            PredictionId = 301,
+            SourceName = "SportyBet",
+            Market = "Double Chance",
+            Outcome = "12",
+            DecimalOdds = 1.30,
+            CapturedAtUtc = DateTime.UtcNow
+        });
+
+        // Add Double Chance 1X with high confidence (0.80m) - eligible for Compounder
+        var dc1XPred = new Prediction
+        {
+            Id = 302,
+            FixtureKey = "fx-dc1x",
+            HomeTeam = "Arsenal",
+            AwayTeam = "Chelsea",
+            League = "Premier League",
+            MatchLocalDate = today,
+            MatchDateTime = DateTime.UtcNow.AddHours(2),
+            Date = today.ToString("yyyy-MM-dd"),
+            Time = "16:00",
+            PredictionCategory = "DoubleChance",
+            PredictedOutcome = "1X",
+            ConfidenceScore = 0.80m,
+            IsCurrentRevision = true,
+            WasPublished = true
+        };
+        db.Predictions.Add(dc1XPred);
+        db.PredictionOddsSnapshots.Add(new PredictionOddsSnapshot
+        {
+            PredictionId = 302,
+            SourceName = "SportyBet",
+            Market = "Double Chance",
+            Outcome = "1X",
+            DecimalOdds = 1.35,
+            CapturedAtUtc = DateTime.UtcNow
+        });
+
+        // Add Over 1.5 Goals with high confidence (0.78m) - eligible for Compounder
+        var over15Pred = new Prediction
+        {
+            Id = 303,
+            FixtureKey = "fx-o15",
+            HomeTeam = "Liverpool",
+            AwayTeam = "Everton",
+            League = "Premier League",
+            MatchLocalDate = today,
+            MatchDateTime = DateTime.UtcNow.AddHours(2),
+            Date = today.ToString("yyyy-MM-dd"),
+            Time = "16:00",
+            PredictionCategory = "Over1.5Goals",
+            PredictedOutcome = "Over 1.5",
+            ConfidenceScore = 0.78m,
+            IsCurrentRevision = true,
+            WasPublished = true
+        };
+        db.Predictions.Add(over15Pred);
+        db.PredictionOddsSnapshots.Add(new PredictionOddsSnapshot
+        {
+            PredictionId = 303,
+            SourceName = "SportyBet",
+            Market = "Over/Under",
+            Outcome = "Over 1.5",
+            DecimalOdds = 1.35,
+            CapturedAtUtc = DateTime.UtcNow
+        });
+
+        await db.SaveChangesAsync();
+
+        var dossier = await service.GetOperationsDossierAsync(today);
+
+        var compounder = dossier.Tickets.First(t => t.PillarKind == OperationsPillarKind.Compounder);
+        Assert.False(compounder.IsPreserved);
+        Assert.NotEmpty(compounder.Legs);
+        // Excludes Double Chance 12
+        Assert.DoesNotContain(compounder.Legs, l => l.Market == "Double Chance" && (l.Prediction == "12" || l.Prediction == "1/2"));
+        // Contains 1X and Over 1.5
+        Assert.Contains(compounder.Legs, l => l.Market == "Double Chance" && l.Prediction == "1X");
+        Assert.Contains(compounder.Legs, l => l.Market == "Over 1.5" && l.Prediction == "Over 1.5");
+    }
 }

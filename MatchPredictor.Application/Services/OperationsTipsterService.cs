@@ -199,8 +199,10 @@ public class OperationsTipsterService : IOperationsTipsterService
         CancellationToken ct)
     {
         // Pillar 1: 1.50 - 2.25x odds, lowest variance, high model confidence (>= 0.65)
+        // Strictly restrict Double Chance to 1X and X2 (exclude 12 to guarantee draw absorption safety)
         var eligible = pool
             .Where(c => c.ModelProbability >= 0.65m && c.Odds >= 1.22m && c.Odds <= 2.20m)
+            .Where(c => !(c.Prediction.PredictionCategory == "DoubleChance" && (c.Prediction.PredictedOutcome == "12" || c.Prediction.PredictedOutcome == "1/2")))
             .OrderByDescending(c => c.ModelProbability)
             .ThenByDescending(c => c.Edge)
             .ToList();

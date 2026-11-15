@@ -709,6 +709,142 @@ public class ValueBetsServiceTests
         Assert.Equal(0.0, bet.KellyStakeFraction, 6);
     }
 
+    [Fact]
+    public async Task GetTopValueBetsAsync_IncludesOver15AndDoubleChance_WhenAboveOddsFloorAndEdgeMet()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetUpcomingKickoffForToday(2);
+        var date = DateTimeProvider.GetLocalDate().ToString("dd-MM-yyyy");
+        var time = kickoff.ToString("HH:mm");
+
+        context.MatchDatas.Add(new MatchData
+        {
+            Date = date,
+            Time = time,
+            MatchLocalDate = DateTimeProvider.GetLocalDate(),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+            MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            FixtureKey = "test-league|city|united",
+            League = "Test League",
+            HomeTeam = "City",
+            AwayTeam = "United",
+            HomeWin = 0.65,
+            Draw = 0.20,
+            AwayWin = 0.15,
+            OverOnePointFive = 1.35,
+            UnderOnePointFive = 3.30
+        });
+
+        await context.SaveChangesAsync();
+
+        var analyzer = new FakeDataAnalyzerService();
+        analyzer.Seed(
+            "City",
+            "United",
+            [
+                CreateCandidate(PredictionMarket.Over15Goals, "Over1.5Goals", "Over 1.5", 0.85, 0.85, homeTeam: "City", awayTeam: "United"),
+                CreateCandidate(PredictionMarket.DoubleChance, "DoubleChance", "1X", 0.82, 0.82, homeTeam: "City", awayTeam: "United")
+            ]);
+
+        var service = new ValueBetsService(
+            context,
+            analyzer,
+            new FakeThresholdTuningService(),
+            new FakeAiAdvisorService(_ => "{}"),
+            new FakeSourceMarketPricingService
+            {
+                Fixtures =
+                [
+                    new SourceMarketFixture
+                    {
+                        HomeTeam = "City",
+                        AwayTeam = "United",
+                        League = "Test League",
+                        Over15Probability = 0.70,
+                        Over15Odds = 1.35,
+                        DoubleChance1XProbability = 0.72,
+                        DoubleChance1XOdds = 1.32
+                    }
+                ]
+            },
+            Options.Create(new PredictionSettings { ValueBetMinimumEdge = 0.03, OverOneFiveStrongThreshold = 0.70, DoubleChanceStrongThreshold = 0.74 }),
+            NullLogger<ValueBetsService>.Instance);
+
+        var report = await service.GetValueBetReportAsync();
+
+        Assert.NotNull(report);
+        Assert.NotEmpty(report.Bets);
+        Assert.Contains(report.Bets, p => p.PredictionCategory == "Over1.5Goals");
+        Assert.Contains(report.Bets, p => p.PredictionCategory == "DoubleChance");
+    }
+
+    [Fact]
+    public async Task GetTopValueBetsAsync_ExcludesOver15AndDoubleChance_WhenBelowOddsFloor()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        var kickoff = GetUpcomingKickoffForToday(2);
+        var date = DateTimeProvider.GetLocalDate().ToString("dd-MM-yyyy");
+        var time = kickoff.ToString("HH:mm");
+
+        context.MatchDatas.Add(new MatchData
+        {
+            Date = date,
+            Time = time,
+            MatchLocalDate = DateTimeProvider.GetLocalDate(),
+            MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+            MatchDateTime = DateTimeProvider.ConvertLocalToUtc(kickoff),
+            FixtureKey = "test-league|bayern|bochum",
+            League = "Test League",
+            HomeTeam = "Bayern",
+            AwayTeam = "Bochum"
+        });
+
+        await context.SaveChangesAsync();
+
+        var analyzer = new FakeDataAnalyzerService();
+        analyzer.Seed(
+            "Bayern",
+            "Bochum",
+            [
+                CreateCandidate(PredictionMarket.Over15Goals, "Over1.5Goals", "Over 1.5", 0.92, 0.92, homeTeam: "Bayern", awayTeam: "Bochum")
+            ]);
+
+        var service = new ValueBetsService(
+            context,
+            analyzer,
+            new FakeThresholdTuningService(),
+            new FakeAiAdvisorService(_ => "{}"),
+            new FakeSourceMarketPricingService
+            {
+                Fixtures =
+                [
+                    new SourceMarketFixture
+                    {
+                        HomeTeam = "Bayern",
+                        AwayTeam = "Bochum",
+                        League = "Test League",
+                        Over15Probability = 0.84,
+                        Over15Odds = 1.16 // Below 1.25 odds floor!
+                    }
+                ]
+            },
+            Options.Create(new PredictionSettings { ValueBetMinimumEdge = 0.03, OverOneFiveStrongThreshold = 0.70 }),
+            NullLogger<ValueBetsService>.Instance);
+
+        var report = await service.GetValueBetReportAsync();
+
+        Assert.NotNull(report);
+        Assert.DoesNotContain(report.Bets, p => p.PredictionCategory == "Over1.5Goals");
+    }
+
     private static PredictionCandidate CreateCandidate(
         PredictionMarket market,
         string category,
