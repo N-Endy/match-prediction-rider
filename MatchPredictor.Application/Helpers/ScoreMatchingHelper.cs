@@ -51,6 +51,8 @@ public static class ScoreMatchingHelper
                     "Draw"           => DetermineDrawOutcome(match.Score),
                     "Over2.5Goals"   => DetermineOver25Outcome(match.Score),
                     "Under2.5Goals"  => DetermineOver25Outcome(match.Score),
+                    "Over1.5Goals"   => DetermineOver15Outcome(match.Score),
+                    "DoubleChance"   => DetermineDoubleChanceOutcome(match.Score),
                     "StraightWin"    => DetermineStraightWinOutcome(match.Score),
                     _                => null
                 };
@@ -88,6 +90,8 @@ public static class ScoreMatchingHelper
                 "Draw"           => DetermineDrawOutcome(match.Score),
                 "Over2.5Goals"   => DetermineOver25Outcome(match.Score),
                 "Under2.5Goals"  => DetermineOver25Outcome(match.Score),
+                "Over1.5Goals"   => DetermineOver15Outcome(match.Score),
+                "DoubleChance"   => DetermineDoubleChanceOutcome(match.Score),
                 "StraightWin"    => DetermineStraightWinOutcome(match.Score),
                 _                => null
             };
@@ -253,5 +257,21 @@ public static class ScoreMatchingHelper
 
         if (h > a) return "Home Win";
         return h < a ? "Away Win" : "Draw";
+    }
+
+    private static string DetermineOver15Outcome(string score)
+    {
+        var (h, a, isValid) = ParseScore(score);
+        return isValid ? ((h + a) >= 2 ? "Over 1.5" : "Under 1.5") : "Unknown";
+    }
+
+    private static string DetermineDoubleChanceOutcome(string score)
+    {
+        var (h, a, isValid) = ParseScore(score);
+        if (!isValid) return "Unknown";
+
+        if (h > a) return "1X, 12";
+        if (h == a) return "1X, X2";
+        return "X2, 12";
     }
 }

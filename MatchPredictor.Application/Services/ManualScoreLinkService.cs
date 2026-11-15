@@ -664,8 +664,8 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
 
         forecast.IsSettled = true;
         forecast.SettledAt = DateTime.UtcNow;
-        forecast.OutcomeOccurred = DetermineForecastOutcomeOccurred(forecast.Market, score, bttsLabel);
-        forecast.ActualOutcome = DetermineForecastActualOutcome(forecast.Market, score, bttsLabel);
+        forecast.OutcomeOccurred = DetermineForecastOutcomeOccurred(forecast.Market, score, bttsLabel, forecast.PredictedOutcome);
+        forecast.ActualOutcome = DetermineForecastActualOutcome(forecast.Market, score, bttsLabel, forecast.PredictedOutcome);
     }
 
     private static bool DetermineEffectivePredictionIsLive(
@@ -707,6 +707,7 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
         {
             PredictionMarket.BothTeamsScore => HasBothTeamsScored(score, bttsLabel),
             PredictionMarket.Over25Goals => HasOver25BeenMet(score),
+            PredictionMarket.Over15Goals => HasOver15BeenMet(score),
             _ => false
         };
     }
@@ -724,6 +725,9 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
     private static bool HasOver25BeenMet(string score) =>
         TryParseScore(score, out var homeGoals, out var awayGoals) && homeGoals + awayGoals > 2;
 
+    private static bool HasOver15BeenMet(string score) =>
+        TryParseScore(score, out var homeGoals, out var awayGoals) && homeGoals + awayGoals >= 2;
+
     private static string? DeterminePredictionActualOutcome(string predictionCategory, string score, bool? bttsLabel) =>
         predictionCategory switch
         {
@@ -731,11 +735,13 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
             "Draw" => DetermineDrawOutcome(score),
             "Over2.5Goals" => DetermineOver25Outcome(score),
             "Under2.5Goals" => DetermineOver25Outcome(score),
+            "Over1.5Goals" => DetermineOver15Outcome(score),
+            "DoubleChance" => DetermineDoubleChanceOutcome(score),
             "StraightWin" => DetermineStraightWinOutcome(score),
             _ => null
         };
 
-    private static bool? DetermineForecastOutcomeOccurred(PredictionMarket market, string score, bool bttsLabel) =>
+    private static bool? DetermineForecastOutcomeOccurred(PredictionMarket market, string score, bool bttsLabel, string? predictedOutcome = null) =>
         market switch
         {
             PredictionMarket.BothTeamsScore => TryParseScore(score, out var h, out var a)
@@ -748,19 +754,39 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
             PredictionMarket.AwayWin => TryParseScore(score, out var ha, out var aa) ? aa > ha : null,
             PredictionMarket.StraightWin =>
                 DetermineStraightWinOutcome(score) is "Home Win" or "Away Win",
+            PredictionMarket.Over15Goals => TryParseScore(score, out var ho15, out var ao15) ? ho15 + ao15 >= 2 : null,
+            PredictionMarket.DoubleChance => DetermineDoubleChanceOutcomeOccurred(score, predictedOutcome),
             _ => null
         };
 
-    private static string? DetermineForecastActualOutcome(PredictionMarket market, string score, bool bttsLabel) =>
+    private static bool? DetermineDoubleChanceOutcomeOccurred(string score, string? predictedOutcome)
+    {
+        if (TryParseScore(score, out var homeGoals, out var awayGoals))
+        {
+            var norm = (predictedOutcome ?? string.Empty).Trim().ToLowerInvariant();
+            return norm switch
+            {
+                "1x" or "1/x" or "home or draw" or "home/draw" => homeGoals >= awayGoals,
+                "x2" or "x/2" or "draw or away" or "draw/away" => awayGoals >= homeGoals,
+                "12" or "1/2" or "home or away" or "home/away" => homeGoals != awayGoals,
+                _ => homeGoals >= awayGoals
+            };
+        }
+        return null;
+    }
+
+    private static string? DetermineForecastActualOutcome(PredictionMarket market, string score, bool bttsLabel, string? predictedOutcome = null) =>
         market switch
         {
-            PredictionMarket.BothTeamsScore => (DetermineForecastOutcomeOccurred(market, score, bttsLabel) ?? false) ? "BTTS" : "No BTTS",
+            PredictionMarket.BothTeamsScore => (DetermineForecastOutcomeOccurred(market, score, bttsLabel, predictedOutcome) ?? false) ? "BTTS" : "No BTTS",
             PredictionMarket.Over25Goals => DetermineOver25Outcome(score),
             PredictionMarket.Under25Goals => DetermineOver25Outcome(score),
             PredictionMarket.Draw => DetermineDrawOutcome(score),
-            PredictionMarket.HomeWin => (DetermineForecastOutcomeOccurred(market, score, bttsLabel) ?? false) ? "Home Win" : "Not Home Win",
-            PredictionMarket.AwayWin => (DetermineForecastOutcomeOccurred(market, score, bttsLabel) ?? false) ? "Away Win" : "Not Away Win",
+            PredictionMarket.HomeWin => (DetermineForecastOutcomeOccurred(market, score, bttsLabel, predictedOutcome) ?? false) ? "Home Win" : "Not Home Win",
+            PredictionMarket.AwayWin => (DetermineForecastOutcomeOccurred(market, score, bttsLabel, predictedOutcome) ?? false) ? "Away Win" : "Not Away Win",
             PredictionMarket.StraightWin => DetermineStraightWinOutcome(score),
+            PredictionMarket.Over15Goals => DetermineOver15Outcome(score),
+            PredictionMarket.DoubleChance => DetermineDoubleChanceOutcome(score),
             _ => null
         };
 
@@ -798,6 +824,17 @@ public sealed class ManualScoreLinkService : IManualScoreLinkService
         }
 
         return h < a ? "Away Win" : "Draw";
+    }
+
+    private static string DetermineOver15Outcome(string score) =>
+        TryParseScore(score, out var h, out var a) ? (h + a >= 2 ? "Over 1.5" : "Under 1.5") : "Unknown";
+
+    private static string DetermineDoubleChanceOutcome(string score)
+    {
+        if (!TryParseScore(score, out var h, out var a)) return "Unknown";
+        if (h > a) return "1X, 12";
+        if (h == a) return "1X, X2";
+        return "X2, 12";
     }
 
     private static bool TryParseScore(string score, out int home, out int away)

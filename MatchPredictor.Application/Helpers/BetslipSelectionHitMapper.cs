@@ -202,6 +202,21 @@ public static class BetslipSelectionHitMapper
             return "Under2.5Goals";
         }
 
+        if (market.Contains("Over 1.5", StringComparison.OrdinalIgnoreCase) ||
+            outcome.Contains("Over 1.5", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Over1.5Goals";
+        }
+
+        if (market.Contains("Double Chance", StringComparison.OrdinalIgnoreCase) ||
+            market.Contains("DC", StringComparison.OrdinalIgnoreCase) ||
+            outcome.Equals("1X", StringComparison.OrdinalIgnoreCase) ||
+            outcome.Equals("X2", StringComparison.OrdinalIgnoreCase) ||
+            outcome.Equals("12", StringComparison.OrdinalIgnoreCase))
+        {
+            return "DoubleChance";
+        }
+
         if (market.Contains("Draw", StringComparison.OrdinalIgnoreCase) ||
             outcome.Equals("Draw", StringComparison.OrdinalIgnoreCase))
         {

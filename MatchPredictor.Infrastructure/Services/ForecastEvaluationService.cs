@@ -435,6 +435,8 @@ public class ForecastEvaluationService : IForecastEvaluationService
             "BothTeamsScore" => PredictionMarket.BothTeamsScore.ToDisplayName(),
             "Over2.5Goals" => PredictionMarket.Over25Goals.ToDisplayName(),
             "Under2.5Goals" => PredictionMarket.Under25Goals.ToDisplayName(),
+            "Over1.5Goals" => PredictionMarket.Over15Goals.ToDisplayName(),
+            "DoubleChance" => PredictionMarket.DoubleChance.ToDisplayName(),
             "StraightWin" => PredictionMarket.StraightWin.ToDisplayName(),
             "Draw" => PredictionMarket.Draw.ToDisplayName(),
             _ => category
@@ -493,6 +495,8 @@ public class ForecastEvaluationService : IForecastEvaluationService
             "BothTeamsScore" => forecast.Market == PredictionMarket.BothTeamsScore,
             "Over2.5Goals" => forecast.Market == PredictionMarket.Over25Goals,
             "Under2.5Goals" => forecast.Market == PredictionMarket.Under25Goals,
+            "Over1.5Goals" => forecast.Market == PredictionMarket.Over15Goals,
+            "DoubleChance" => forecast.Market == PredictionMarket.DoubleChance,
             "StraightWin" => forecast.Market == PredictionMarket.StraightWin,
             "Draw" => forecast.Market == PredictionMarket.Draw,
             _ => string.Equals(forecast.Market.ToString(), category, StringComparison.OrdinalIgnoreCase)
@@ -518,6 +522,8 @@ public class ForecastEvaluationService : IForecastEvaluationService
                 "BothTeamsScore" => DoesBttsPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 "Over2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 "Under2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+                "Over1.5Goals" => DoesOver15PredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+                "DoubleChance" => DoesDoubleChancePredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 "Draw" => DoesDrawPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 "StraightWin" => DoesStraightWinPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 _ => OutcomesMatch(prediction.PredictedOutcome, ResolvePredictionActualOutcome(prediction))
@@ -555,6 +561,8 @@ public class ForecastEvaluationService : IForecastEvaluationService
             "BothTeamsScore" => homeGoals > 0 && awayGoals > 0 ? "BTTS" : "No BTTS",
             "Over2.5Goals" => homeGoals + awayGoals > 2 ? "Over 2.5" : "Under 2.5",
             "Under2.5Goals" => homeGoals + awayGoals > 2 ? "Over 2.5" : "Under 2.5",
+            "Over1.5Goals" => homeGoals + awayGoals >= 2 ? "Over 1.5" : "Under 1.5",
+            "DoubleChance" => homeGoals > awayGoals ? "1X, 12" : (homeGoals == awayGoals ? "1X, X2" : "X2, 12"),
             "Draw" => homeGoals == awayGoals ? "Draw" : "Not Draw",
             "StraightWin" => homeGoals > awayGoals ? "Home Win" : awayGoals > homeGoals ? "Away Win" : "Draw",
             _ => null
@@ -928,14 +936,54 @@ public class ForecastEvaluationService : IForecastEvaluationService
         };
     }
 
+    private static bool DoesOver15PredictionMatch(string? predictedOutcome, int homeGoals, int awayGoals)
+    {
+        var isOver15 = homeGoals + awayGoals >= 2;
+        var normalized = NormalizeOutcome(predictedOutcome);
+
+        if (normalized.Contains("under"))
+        {
+            return !isOver15;
+        }
+
+        return isOver15;
+    }
+
+    private static bool DoesDoubleChancePredictionMatch(string? predictedOutcome, int homeGoals, int awayGoals)
+    {
+        var normalized = NormalizeOutcome(predictedOutcome);
+
+        return normalized switch
+        {
+            "1x" or "1/x" or "home or draw" or "home/draw" => homeGoals >= awayGoals,
+            "x2" or "x/2" or "draw or away" or "draw/away" => awayGoals >= homeGoals,
+            "12" or "1/2" or "home or away" or "home/away" => homeGoals != awayGoals,
+            _ => false
+        };
+    }
+
     private static bool OutcomesMatch(string? predictedOutcome, string? actualOutcome)
     {
         var normalizedPredicted = NormalizeOutcome(predictedOutcome);
         var normalizedActual = NormalizeOutcome(actualOutcome);
 
-        return normalizedPredicted.Length > 0 &&
-               normalizedActual.Length > 0 &&
-               normalizedPredicted == normalizedActual;
+        if (normalizedPredicted.Length == 0 || normalizedActual.Length == 0)
+        {
+            return false;
+        }
+
+        if (normalizedPredicted == normalizedActual)
+        {
+            return true;
+        }
+
+        if (normalizedActual.Contains(','))
+        {
+            var parts = normalizedActual.Split(',', StringSplitOptions.TrimEntries);
+            return parts.Contains(normalizedPredicted);
+        }
+
+        return false;
     }
 
     private static string NormalizeOutcome(string? outcome)

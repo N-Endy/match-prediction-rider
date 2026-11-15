@@ -492,6 +492,254 @@ public class ForecastEvaluationServiceTests
         Assert.True(stats.CategoryStats.ContainsKey("BothTeamsScore"));
     }
 
+    [Fact]
+    public void CalculateStats_ComputesDoubleChanceCategoryStats_Correctly()
+    {
+        var service = new ForecastEvaluationService();
+        var kickoff = DateTime.UtcNow.Date.AddHours(18);
+        var localDate = DateOnly.FromDateTime(kickoff);
+
+        var predictions = new[]
+        {
+            // 1X with 2:1 (Home Win) -> Correct
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|team-a|team-b",
+                League = "Premier League",
+                HomeTeam = "Team A",
+                AwayTeam = "Team B",
+                PredictionCategory = "DoubleChance",
+                PredictedOutcome = "1X",
+                ActualScore = "2:1",
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 0.82m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            // 1X with 1:1 (Draw) -> Correct
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|team-c|team-d",
+                League = "Premier League",
+                HomeTeam = "Team C",
+                AwayTeam = "Team D",
+                PredictionCategory = "DoubleChance",
+                PredictedOutcome = "1X",
+                ActualScore = "1:1",
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 0.78m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            // 1X with 0:2 (Away Win) -> Incorrect
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|team-e|team-f",
+                League = "Premier League",
+                HomeTeam = "Team E",
+                AwayTeam = "Team F",
+                PredictionCategory = "DoubleChance",
+                PredictedOutcome = "1X",
+                ActualScore = "0:2",
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 0.75m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            // X2 with 1:1 (Draw) -> Correct
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|team-g|team-h",
+                League = "La Liga",
+                HomeTeam = "Team G",
+                AwayTeam = "Team H",
+                PredictionCategory = "DoubleChance",
+                PredictedOutcome = "X2",
+                ActualScore = "1:1",
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 0.76m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            // 12 with 3:1 (Home Win) -> Correct
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|team-i|team-j",
+                League = "Serie A",
+                HomeTeam = "Team I",
+                AwayTeam = "Team J",
+                PredictionCategory = "DoubleChance",
+                PredictedOutcome = "12",
+                ActualScore = "3:1",
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 0.80m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            // 12 with 0:0 (Draw) -> Incorrect
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|team-k|team-l",
+                League = "Serie A",
+                HomeTeam = "Team K",
+                AwayTeam = "Team L",
+                PredictionCategory = "DoubleChance",
+                PredictedOutcome = "12",
+                ActualScore = "0:0",
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 0.79m,
+                CreatedAt = kickoff.AddHours(-2)
+            }
+        };
+
+        var stats = service.CalculateStats(predictions, Array.Empty<ForecastObservation>());
+
+        Assert.Equal(6, stats.TotalPredictions);
+        Assert.Equal(6, stats.CompletedPredictions);
+        Assert.Equal(4, stats.CorrectPredictions);
+
+        Assert.True(stats.CategoryStats.ContainsKey("DoubleChance"));
+        var dcStat = stats.CategoryStats["DoubleChance"];
+        Assert.Equal("Double Chance", dcStat.DisplayName);
+        Assert.Equal(6, dcStat.Total);
+        Assert.Equal(4, dcStat.Correct);
+        Assert.Equal(4.0 / 6.0, dcStat.Accuracy, 4);
+    }
+
+    [Fact]
+    public void CalculateStats_ComputesOver15CategoryStats_Correctly()
+    {
+        var service = new ForecastEvaluationService();
+        var kickoff = DateTime.UtcNow.Date.AddHours(18);
+        var localDate = DateOnly.FromDateTime(kickoff);
+
+        var predictions = new[]
+        {
+            // Over 1.5 with 2:0 -> Correct
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|o15-a|o15-b",
+                League = "Premier League",
+                HomeTeam = "O15 A",
+                AwayTeam = "O15 B",
+                PredictionCategory = "Over1.5Goals",
+                PredictedOutcome = "Over 1.5",
+                ActualScore = "2:0",
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 0.85m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            // Over 1.5 with 1:1 -> Correct
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|o15-c|o15-d",
+                League = "Premier League",
+                HomeTeam = "O15 C",
+                AwayTeam = "O15 D",
+                PredictionCategory = "Over1.5Goals",
+                PredictedOutcome = "Over 1.5",
+                ActualScore = "1:1",
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 0.81m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            // Over 1.5 with 1:0 -> Incorrect
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|o15-e|o15-f",
+                League = "Bundesliga",
+                HomeTeam = "O15 E",
+                AwayTeam = "O15 F",
+                PredictionCategory = "Over1.5Goals",
+                PredictedOutcome = "Over 1.5",
+                ActualScore = "1:0",
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 0.83m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            // Under 1.5 with 0:0 -> Correct
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|o15-g|o15-h",
+                League = "Ligue 1",
+                HomeTeam = "O15 G",
+                AwayTeam = "O15 H",
+                PredictionCategory = "Over1.5Goals",
+                PredictedOutcome = "Under 1.5",
+                ActualScore = "0:0",
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 0.72m,
+                CreatedAt = kickoff.AddHours(-2)
+            },
+            // Under 1.5 with 2:1 -> Incorrect
+            new Prediction
+            {
+                MatchLocalDate = localDate,
+                MatchLocalTime = TimeOnly.FromDateTime(kickoff),
+                MatchDateTime = kickoff,
+                FixtureKey = "league|o15-i|o15-j",
+                League = "Ligue 1",
+                HomeTeam = "O15 I",
+                AwayTeam = "O15 J",
+                PredictionCategory = "Over1.5Goals",
+                PredictedOutcome = "Under 1.5",
+                ActualScore = "2:1",
+                IsLive = false,
+                WasPublished = true,
+                ConfidenceScore = 0.70m,
+                CreatedAt = kickoff.AddHours(-2)
+            }
+        };
+
+        var stats = service.CalculateStats(predictions, Array.Empty<ForecastObservation>());
+
+        Assert.Equal(5, stats.TotalPredictions);
+        Assert.Equal(5, stats.CompletedPredictions);
+        Assert.Equal(3, stats.CorrectPredictions);
+
+        Assert.True(stats.CategoryStats.ContainsKey("Over1.5Goals"));
+        var o15Stat = stats.CategoryStats["Over1.5Goals"];
+        Assert.Equal("Over 1.5", o15Stat.DisplayName);
+        Assert.Equal(5, o15Stat.Total);
+        Assert.Equal(3, o15Stat.Correct);
+        Assert.Equal(3.0 / 5.0, o15Stat.Accuracy, 4);
+    }
+
     private static ForecastObservation CreateForecast(
         double rawProbability,
         double calibratedProbability,
