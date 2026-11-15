@@ -11,9 +11,14 @@ public sealed record PartialMatchProbabilities(
     double? Under25 = null,
     double? Draw = null,
     double? HomeWin = null,
-    double? AwayWin = null)
+    double? AwayWin = null,
+    double? Over15 = null,
+    double? DoubleChance1X = null,
+    double? DoubleChanceX2 = null,
+    double? DoubleChance12 = null)
 {
     public bool HasAnySignal =>
         Btts.HasValue || Over25.HasValue || Under25.HasValue ||
-        Draw.HasValue || HomeWin.HasValue || AwayWin.HasValue;
+        Draw.HasValue || HomeWin.HasValue || AwayWin.HasValue ||
+        Over15.HasValue || DoubleChance1X.HasValue || DoubleChanceX2.HasValue || DoubleChance12.HasValue;
 }

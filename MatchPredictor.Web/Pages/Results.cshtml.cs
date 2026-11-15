@@ -164,6 +164,8 @@ public class ResultsModel : PageModel
             "Under2.5Goals" => "Under 2.5",
             "StraightWin" => "Straight Win",
             "Draw" => "Draw",
+            "Over1.5Goals" => "Over 1.5",
+            "DoubleChance" => "Double Chance",
             _ => string.IsNullOrWhiteSpace(category) ? "Other" : category
         };
     }

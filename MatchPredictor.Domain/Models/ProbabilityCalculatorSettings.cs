@@ -26,6 +26,8 @@ public class ProbabilityCalculatorSettings
     /// Default: 0.85. Set to 0.0 to disable.
     /// </summary>
     public double BttsWeakerTeamFloorXg { get; set; } = 0.85;
+    public double Over15SourceWeight { get; set; } = 0.70;
+    public double Over15PoissonWeight { get; set; } = 0.30;
     public double Over15XgWeight { get; set; } = 0.90;
     public double Over25XgWeight { get; set; } = 1.45;
     public double Over35XgWeight { get; set; } = 0.75;

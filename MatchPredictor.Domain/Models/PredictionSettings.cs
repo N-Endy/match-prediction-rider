@@ -8,6 +8,53 @@ public class PredictionSettings
     public double OverTwoGoalsStrongThreshold { get; set; } = 0.58;
     public double UnderTwoGoalsStrongThreshold { get; set; } = 0.58;
     public double DrawStrongThreshold { get; set; } = 0.30;
+    public double OverOneFiveStrongThreshold { get; set; } = 0.74;
+    public double DoubleChanceStrongThreshold { get; set; } = 0.74;
+
+    /// <summary>
+    /// Minimum Dominance Ratio (P(Win) / (P(Draw) + P(Loss))) required to publish a Straight Win.
+    /// Filters out draw-contaminated favorites where failure risk is high.
+    /// Set to 0.0 to disable.
+    /// </summary>
+    public double MinDominanceRatioForWin { get; set; } = 1.25;
+
+    /// <summary>
+    /// Minimum Win-to-Draw probability ratio required to publish a Straight Win.
+    /// Set to 0.0 to disable.
+    /// </summary>
+    public double MinWinToDrawRatio { get; set; } = 1.70;
+
+    /// <summary>
+    /// Maximum allowed Under 2.5 calibrated probability for publishing Over 2.5 Goals.
+    /// Eliminates the "2-goal cluster trap" (1-1, 2-0).
+    /// </summary>
+    public double MaxUnder25ProbForOver25 { get; set; } = 0.45;
+
+    /// <summary>
+    /// Maximum favorite win probability allowed when publishing Under 2.5 Goals.
+    /// In heavy blowouts (favorite win > 0.72), the favorite alone can produce 3+ goals.
+    /// </summary>
+    public double MaxFavoriteWinProbForUnder25 { get; set; } = 0.72;
+
+    /// <summary>
+    /// Maximum allowed win probability for the underdog when publishing Double Chance (1X or X2).
+    /// </summary>
+    public double MaxUnderdogProbabilityForDoubleChance { get; set; } = 0.22;
+
+    /// <summary>
+    /// When true, enables qualifying and publishing Over 1.5 Goals banker selections.
+    /// </summary>
+    public bool EnableOver15Predictions { get; set; } = true;
+
+    /// <summary>
+    /// When true, enables qualifying and publishing Double Chance (1X, X2) selections.
+    /// </summary>
+    public bool EnableDoubleChancePredictions { get; set; } = true;
+
+    /// <summary>
+    /// When true, also allows publishing Double Chance "12" (no draw) in attacking open fixtures.
+    /// </summary>
+    public bool EnableDoubleChance12 { get; set; } = false;
 
     /// <summary>
     /// Minimum Draw Affinity Index (P(Under 2.5) * (1 - |P_Home - P_Away|)) required to publish a Draw.

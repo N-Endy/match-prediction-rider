@@ -21,4 +21,14 @@ public class SourceMarketFixture
     public double? BttsYesOdds { get; set; }
     public double? BttsNoProbability { get; set; }
     public double? BttsNoOdds { get; set; }
+    public double? Over15Probability { get; set; }
+    public double? Over15Odds { get; set; }
+    public double? Under15Probability { get; set; }
+    public double? Under15Odds { get; set; }
+    public double? DoubleChance1XProbability { get; set; }
+    public double? DoubleChance1XOdds { get; set; }
+    public double? DoubleChanceX2Probability { get; set; }
+    public double? DoubleChanceX2Odds { get; set; }
+    public double? DoubleChance12Probability { get; set; }
+    public double? DoubleChance12Odds { get; set; }
 }

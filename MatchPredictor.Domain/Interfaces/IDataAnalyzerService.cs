@@ -21,4 +21,6 @@ public interface IDataAnalyzerService
     IReadOnlyList<PredictionCandidate> OverTwoGoals(IEnumerable<MatchData> matches);
     IReadOnlyList<PredictionCandidate> UnderTwoGoals(IEnumerable<MatchData> matches);
     IReadOnlyList<PredictionCandidate> StraightWin(IEnumerable<MatchData> matches);
+    IReadOnlyList<PredictionCandidate> Over15Goals(IEnumerable<MatchData> matches) => [];
+    IReadOnlyList<PredictionCandidate> DoubleChance(IEnumerable<MatchData> matches) => [];
 }

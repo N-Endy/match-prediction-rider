@@ -31,10 +31,21 @@ public static class MarketQuoteResolver
         bool isBttsNo,
         out MarketQuote quote)
     {
+        return TryResolve(match, sourceFixture, market, isBttsNo ? "No BTTS" : null, out quote);
+    }
+
+    public static bool TryResolve(
+        MatchData match,
+        SourceMarketFixture? sourceFixture,
+        PredictionMarket market,
+        string? outcome,
+        out MarketQuote quote)
+    {
         quote = new MarketQuote();
 
-        var liveProbability = GetLiveProbability(sourceFixture, market, isBttsNo);
-        var storedProbability = GetStoredProbability(match, market, isBttsNo);
+        var isBttsNo = IsBttsNoOutcome(outcome);
+        var liveProbability = GetLiveProbability(sourceFixture, market, outcome);
+        var storedProbability = GetStoredProbability(match, market, outcome);
         var selectedProbability = liveProbability ?? storedProbability;
 
         if (selectedProbability is null or <= 0d)
@@ -42,7 +53,7 @@ public static class MarketQuoteResolver
             return false;
         }
 
-        var rawOdds = GetLiveRawOdds(sourceFixture, market, isBttsNo);
+        var rawOdds = GetLiveRawOdds(sourceFixture, market, outcome);
         var decimalOdds = rawOdds is > 1d
             ? rawOdds.Value
             : liveProbability is > 0d
@@ -65,7 +76,7 @@ public static class MarketQuoteResolver
         // probabilities used on the other path. Without this, raw-odds quotes carry the
         // vig and systematically understate edges relative to derived quotes.
         var effectiveMarketProbability = rawOdds is > 1d
-            ? DeVigImpliedProbability(sourceFixture, market, impliedProbability, isBttsNo)
+            ? DeVigImpliedProbability(sourceFixture, market, impliedProbability, outcome)
             : selectedProbability.Value;
 
         quote = new MarketQuote
@@ -98,7 +109,7 @@ public static class MarketQuoteResolver
             return false;
         }
 
-        return TryResolve(match, sourceFixture, market, IsBttsNo(prediction), out quote);
+        return TryResolve(match, sourceFixture, market, prediction.PredictedOutcome, out quote);
     }
 
     /// <summary>
@@ -132,7 +143,7 @@ public static class MarketQuoteResolver
         var marketProbability = impliedProbability;
         if (TryResolvePredictionMarket(prediction, out var market))
         {
-            marketProbability = DeVigImpliedProbability(sourceFixture, market, impliedProbability);
+            marketProbability = DeVigImpliedProbability(sourceFixture, market, impliedProbability, prediction.PredictedOutcome);
         }
 
         quote = new MarketQuote
@@ -163,15 +174,14 @@ public static class MarketQuoteResolver
             return false;
         }
 
-        var isBttsNo = IsBttsNo(prediction);
-        var rawOdds = GetLiveRawOdds(sourceFixture, market, isBttsNo);
+        var rawOdds = GetLiveRawOdds(sourceFixture, market, prediction.PredictedOutcome);
         if (rawOdds is > 1d)
         {
             decimalOdds = rawOdds.Value;
             return true;
         }
 
-        var derived = BetPricingMath.ConvertProbabilityToDecimalOdds(GetLiveProbability(sourceFixture, market, isBttsNo));
+        var derived = BetPricingMath.ConvertProbabilityToDecimalOdds(GetLiveProbability(sourceFixture, market, prediction.PredictedOutcome));
         if (derived is > 1d)
         {
             decimalOdds = derived.Value;
@@ -191,6 +201,8 @@ public static class MarketQuoteResolver
             "Draw" => PredictionMarket.Draw,
             "StraightWin" when prediction.PredictedOutcome.Equals("Home Win", StringComparison.OrdinalIgnoreCase) => PredictionMarket.HomeWin,
             "StraightWin" when prediction.PredictedOutcome.Equals("Away Win", StringComparison.OrdinalIgnoreCase) => PredictionMarket.AwayWin,
+            "Over1.5Goals" => PredictionMarket.Over15Goals,
+            "DoubleChance" => PredictionMarket.DoubleChance,
             _ => default
         };
 
@@ -201,6 +213,8 @@ public static class MarketQuoteResolver
             "Under2.5Goals" => true,
             "Draw" => true,
             "StraightWin" => market is PredictionMarket.HomeWin or PredictionMarket.AwayWin,
+            "Over1.5Goals" => true,
+            "DoubleChance" => true,
             _ => false
         };
     }
@@ -209,8 +223,11 @@ public static class MarketQuoteResolver
         SourceMarketFixture? sourceFixture,
         PredictionMarket market,
         double impliedProbability,
-        bool isBttsNo = false)
+        string? outcome = null)
     {
+        var isBttsNo = IsBttsNoOutcome(outcome);
+        var normOutcome = (outcome ?? string.Empty).Trim().ToLowerInvariant();
+
         // (odds set, index of the requested outcome within the set)
         (double?[] Odds, int OutcomeIndex)? outcomeSet = market switch
         {
@@ -226,6 +243,11 @@ public static class MarketQuoteResolver
                 ([sourceFixture?.Over25Odds, sourceFixture?.Under25Odds], 1),
             PredictionMarket.BothTeamsScore =>
                 ([sourceFixture?.BttsYesOdds, sourceFixture?.BttsNoOdds], isBttsNo ? 1 : 0),
+            PredictionMarket.Over15Goals =>
+                ([sourceFixture?.Over15Odds, sourceFixture?.Under15Odds], 0),
+            PredictionMarket.DoubleChance =>
+                ([sourceFixture?.DoubleChance1XOdds, sourceFixture?.DoubleChanceX2Odds, sourceFixture?.DoubleChance12Odds],
+                 normOutcome switch { "x2" or "x/2" => 1, "12" or "1/2" => 2, _ => 0 }),
             _ => null
         };
 
@@ -246,8 +268,10 @@ public static class MarketQuoteResolver
         return Math.Clamp(fairProbabilities[set.OutcomeIndex], 0d, 1d);
     }
 
-    private static double? GetLiveProbability(SourceMarketFixture? sourceFixture, PredictionMarket market, bool isBttsNo = false)
+    private static double? GetLiveProbability(SourceMarketFixture? sourceFixture, PredictionMarket market, string? outcome = null)
     {
+        var isBttsNo = IsBttsNoOutcome(outcome);
+        var norm = (outcome ?? string.Empty).Trim().ToLowerInvariant();
         return market switch
         {
             PredictionMarket.HomeWin => sourceFixture?.HomeWinProbability,
@@ -256,12 +280,21 @@ public static class MarketQuoteResolver
             PredictionMarket.Over25Goals => sourceFixture?.Over25Probability,
             PredictionMarket.Under25Goals => sourceFixture?.Under25Probability,
             PredictionMarket.BothTeamsScore => isBttsNo ? sourceFixture?.BttsNoProbability : sourceFixture?.BttsYesProbability,
+            PredictionMarket.Over15Goals => sourceFixture?.Over15Probability,
+            PredictionMarket.DoubleChance when norm is "x2" or "x/2" => sourceFixture?.DoubleChanceX2Probability,
+            PredictionMarket.DoubleChance when norm is "12" or "1/2" => sourceFixture?.DoubleChance12Probability,
+            PredictionMarket.DoubleChance => sourceFixture?.DoubleChance1XProbability,
             _ => null
         };
     }
 
-    private static double? GetLiveRawOdds(SourceMarketFixture? sourceFixture, PredictionMarket market, bool isBttsNo = false)
+    private static double? GetLiveProbability(SourceMarketFixture? sourceFixture, PredictionMarket market, bool isBttsNo) =>
+        GetLiveProbability(sourceFixture, market, isBttsNo ? "No BTTS" : null);
+
+    private static double? GetLiveRawOdds(SourceMarketFixture? sourceFixture, PredictionMarket market, string? outcome = null)
     {
+        var isBttsNo = IsBttsNoOutcome(outcome);
+        var norm = (outcome ?? string.Empty).Trim().ToLowerInvariant();
         return market switch
         {
             PredictionMarket.HomeWin => sourceFixture?.HomeWinOdds,
@@ -270,12 +303,22 @@ public static class MarketQuoteResolver
             PredictionMarket.Over25Goals => sourceFixture?.Over25Odds,
             PredictionMarket.Under25Goals => sourceFixture?.Under25Odds,
             PredictionMarket.BothTeamsScore => isBttsNo ? sourceFixture?.BttsNoOdds : sourceFixture?.BttsYesOdds,
+            PredictionMarket.Over15Goals => sourceFixture?.Over15Odds,
+            PredictionMarket.DoubleChance when norm is "x2" or "x/2" => sourceFixture?.DoubleChanceX2Odds,
+            PredictionMarket.DoubleChance when norm is "12" or "1/2" => sourceFixture?.DoubleChance12Odds,
+            PredictionMarket.DoubleChance => sourceFixture?.DoubleChance1XOdds,
             _ => null
         };
     }
 
-    private static double? GetStoredProbability(MatchData match, PredictionMarket market, bool isBttsNo = false)
+    private static double? GetLiveRawOdds(SourceMarketFixture? sourceFixture, PredictionMarket market, bool isBttsNo) =>
+        GetLiveRawOdds(sourceFixture, market, isBttsNo ? "No BTTS" : null);
+
+    private static double? GetStoredProbability(MatchData match, PredictionMarket market, string? outcome = null)
     {
+        var isBttsNo = IsBttsNoOutcome(outcome);
+        var norm = (outcome ?? string.Empty).Trim().ToLowerInvariant();
+
         if (market is PredictionMarket.HomeWin or PredictionMarket.Draw or PredictionMarket.AwayWin &&
             match.TryGetNormalizedOneX2(out var oneX2))
         {
@@ -303,12 +346,32 @@ public static class MarketQuoteResolver
             return isBttsNo ? bttsPair.no : bttsPair.yes;
         }
 
+        if (market == PredictionMarket.Over15Goals)
+        {
+            return match.OverOnePointFive > 0 ? match.OverOnePointFive : null;
+        }
+
+        if (market == PredictionMarket.DoubleChance && match.TryGetNormalizedOneX2(out var dcOneX2))
+        {
+            return norm switch
+            {
+                "x2" or "x/2" => dcOneX2.away + dcOneX2.draw,
+                "12" or "1/2" => dcOneX2.home + dcOneX2.away,
+                _ => dcOneX2.home + dcOneX2.draw
+            };
+        }
+
         return null;
     }
 
+    private static double? GetStoredProbability(MatchData match, PredictionMarket market, bool isBttsNo) =>
+        GetStoredProbability(match, market, isBttsNo ? "No BTTS" : null);
+
+    private static bool IsBttsNoOutcome(string? outcome) =>
+        outcome is not null && (outcome.Equals("No BTTS", StringComparison.OrdinalIgnoreCase) || outcome.Equals("BTTS No", StringComparison.OrdinalIgnoreCase));
+
     private static bool IsBttsNo(Prediction prediction) =>
-        string.Equals(prediction.PredictedOutcome, "No BTTS", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(prediction.PredictedOutcome, "BTTS No", StringComparison.OrdinalIgnoreCase);
+        IsBttsNoOutcome(prediction.PredictedOutcome);
 }
 
 public sealed class MarketQuote

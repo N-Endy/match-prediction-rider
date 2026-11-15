@@ -61,13 +61,18 @@ public class ProbabilityCalculator : IProbabilityCalculator
             var hasOverUnder = match.TryGetNormalizedOver25Pair(out var overUnder25);
             var sourceOver25 = hasOverUnder ? overUnder25.over25 : 0.0;
             var sourceUnder25 = hasOverUnder ? Math.Clamp(1.0 - sourceOver25, 0.0, 1.0) : 0.0;
+            var sourceOver15 = match.OverOnePointFive > 0 ? match.OverOnePointFive : (sourceOver25 > 0 ? Math.Min(sourceOver25 + 0.20, 1.0) : 0.0);
             return new MatchProbabilities(
                 Btts: match.TryGetNormalizedBttsPair(out var bttsPair) ? bttsPair.yes : 0.0,
                 Over25: sourceOver25,
                 Under25: sourceUnder25,
                 Draw: drawSource,
                 HomeWin: homeWinSource,
-                AwayWin: awayWinSource);
+                AwayWin: awayWinSource,
+                Over15: sourceOver15,
+                DoubleChance1X: Math.Clamp(homeWinSource + drawSource, 0.0, 1.0),
+                DoubleChanceX2: Math.Clamp(awayWinSource + drawSource, 0.0, 1.0),
+                DoubleChance12: Math.Clamp(homeWinSource + awayWinSource, 0.0, 1.0));
         }
 
         var strengthBias = EstimateStrengthBias(match, homeWinSource, awayWinSource);
@@ -141,13 +146,33 @@ public class ProbabilityCalculator : IProbabilityCalculator
             btts = Math.Min(btts, effectiveOver15 * 0.92);
         }
 
+        var over15 = BlendAvailable(
+            (match.OverOnePointFive > 0 ? match.OverOnePointFive : (double?)null, settings.Over15SourceWeight),
+            (poisson.Over15, settings.Over15PoissonWeight));
+        if (over15 <= 0 && poisson.Over15 > 0)
+        {
+            over15 = poisson.Over15;
+        }
+        if (over25 > 0 && over15 < over25)
+        {
+            over15 = Math.Min(over25 + 0.15, 0.98);
+        }
+
+        var dc1X = Math.Clamp(homeWin + draw, 0.0, 1.0);
+        var dcX2 = Math.Clamp(awayWin + draw, 0.0, 1.0);
+        var dc12 = Math.Clamp(homeWin + awayWin, 0.0, 1.0);
+
         return new MatchProbabilities(
             Btts: Math.Clamp(btts, 0.0, 1.0),
             Over25: Math.Clamp(over25, 0.0, 1.0),
             Under25: Math.Clamp(1.0 - over25, 0.0, 1.0),
             Draw: Math.Clamp(draw, 0.0, 1.0),
             HomeWin: Math.Clamp(homeWin, 0.0, 1.0),
-            AwayWin: Math.Clamp(awayWin, 0.0, 1.0));
+            AwayWin: Math.Clamp(awayWin, 0.0, 1.0),
+            Over15: Math.Clamp(over15, 0.0, 1.0),
+            DoubleChance1X: dc1X,
+            DoubleChanceX2: dcX2,
+            DoubleChance12: dc12);
     }
 
     private static double EstimateTotalXg(MatchData match, ProbabilityCalculatorSettings settings)
@@ -487,6 +512,7 @@ public class ProbabilityCalculator : IProbabilityCalculator
         var draw = 0.0;
         var awayWin = 0.0;
         var over25 = 0.0;
+        var over15 = 0.0;
         var btts = 0.0;
         var includedMass = 0.0;
 
@@ -531,6 +557,11 @@ public class ProbabilityCalculator : IProbabilityCalculator
                     over25 += probability;
                 }
 
+                if (homeGoals + awayGoals >= 2)
+                {
+                    over15 += probability;
+                }
+
                 if (homeGoals > 0 && awayGoals > 0)
                 {
                     btts += probability;
@@ -540,7 +571,7 @@ public class ProbabilityCalculator : IProbabilityCalculator
 
         if (includedMass <= 0)
         {
-            return new PoissonOutcomeModel(HomeWin: 0.0, Draw: 0.0, AwayWin: 0.0, Over25: 0.0, Btts: 0.0);
+            return new PoissonOutcomeModel(HomeWin: 0.0, Draw: 0.0, AwayWin: 0.0, Over25: 0.0, Btts: 0.0, Over15: 0.0);
         }
 
         // Normalize by the grid's included mass so any truncated tail (goals > cap) is
@@ -550,7 +581,8 @@ public class ProbabilityCalculator : IProbabilityCalculator
             Draw: Math.Clamp(draw / includedMass, 0.0, 1.0),
             AwayWin: Math.Clamp(awayWin / includedMass, 0.0, 1.0),
             Over25: Math.Clamp(over25 / includedMass, 0.0, 1.0),
-            Btts: Math.Clamp(btts / includedMass, 0.0, 1.0));
+            Btts: Math.Clamp(btts / includedMass, 0.0, 1.0),
+            Over15: Math.Clamp(over15 / includedMass, 0.0, 1.0));
     }
 
     private static double[] BuildPoissonDistribution(double lambda, int goalCap)
@@ -593,5 +625,6 @@ public class ProbabilityCalculator : IProbabilityCalculator
         double Draw,
         double AwayWin,
         double Over25,
-        double Btts);
+        double Btts,
+        double Over15);
 }

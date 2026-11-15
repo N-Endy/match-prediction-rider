@@ -1,0 +1,51 @@
+@page
+@model MatchPredictor.Web.Pages.Predictions.DoubleChance
+
+@{
+    ViewData["Title"] = "Double Chance";
+    ViewData["Description"] = "Today’s calibrated Double Chance predictions (1X, X2) from MatchPredictor — covering two of three match outcomes for high-floor stability.";
+    var today = MatchPredictor.Infrastructure.Utils.DateTimeProvider.GetLocalTime().ToString("dd MMM yyyy");
+}
+
+<div class="mp-container">
+    <div class="mp-page-header">
+        <div>
+            <p class="mp-page-kicker">Today’s card</p>
+            <div class="mp-page-title">
+                <div class="mp-page-title-icon mp-icon-win">🛡️</div>
+                <h1>Double Chance</h1>
+            </div>
+            <p class="mp-page-subtext">Scan for high-safety 1X and X2 predictions where the underdog has minimal win probability.</p>
+        </div>
+        <div class="mp-date-badge">@today</div>
+    </div>
+
+    <partial name="_PredictionPageFilters" model="Model" />
+
+    @if (Model.VisibleMatchCount > 0)
+    {
+        <div class="mp-predictions-list">
+            @{ int adIndex = 0; }
+            @foreach (var match in Model.FilteredMatches)
+            {
+                if (adIndex > 0 && adIndex % 5 == 0)
+                {
+                    <partial name="_AdBanner" />
+                }
+
+                <partial name="_PredictionCard" model="match" />
+                adIndex++;
+            }
+        </div>
+    }
+    else
+    {
+        <div class="mp-empty-state">
+            <div class="mp-empty-state-icon">🛡️</div>
+            <p>@(Model.TotalMatchCount > 0 ? "No Double Chance predictions match the current filters." : "No Double Chance predictions available for today yet.")</p>
+            <p class="mp-empty-state-hint">
+                @(Model.TotalMatchCount > 0 ? "Try widening the filters or checking another kickoff window." : "Predictions are updated daily. Check back soon!")
+            </p>
+        </div>
+    }
+</div>

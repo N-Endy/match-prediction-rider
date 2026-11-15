@@ -6,4 +6,8 @@ public sealed record MatchProbabilities(
     double Under25,
     double Draw,
     double HomeWin,
-    double AwayWin);
+    double AwayWin,
+    double Over15 = 0.0,
+    double DoubleChance1X = 0.0,
+    double DoubleChanceX2 = 0.0,
+    double DoubleChance12 = 0.0);

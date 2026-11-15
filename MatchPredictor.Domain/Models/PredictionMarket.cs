@@ -8,7 +8,9 @@ public enum PredictionMarket
     Draw = 3,
     HomeWin = 4,
     AwayWin = 5,
-    Under25Goals = 6
+    Under25Goals = 6,
+    Over15Goals = 7,
+    DoubleChance = 8
 }
 
 public static class PredictionMarketExtensions
@@ -24,6 +26,8 @@ public static class PredictionMarketExtensions
             PredictionMarket.AwayWin => "StraightWin",
             PredictionMarket.StraightWin => "StraightWin",
             PredictionMarket.Draw => "Draw",
+            PredictionMarket.Over15Goals => "Over1.5Goals",
+            PredictionMarket.DoubleChance => "DoubleChance",
             _ => throw new ArgumentOutOfRangeException(nameof(market), market, null)
         };
     }
@@ -39,6 +43,8 @@ public static class PredictionMarketExtensions
             PredictionMarket.HomeWin => "Home Win",
             PredictionMarket.AwayWin => "Away Win",
             PredictionMarket.StraightWin => "Straight Win",
+            PredictionMarket.Over15Goals => "Over 1.5",
+            PredictionMarket.DoubleChance => "Double Chance",
             _ => market.ToString()
         };
     }
@@ -52,9 +58,11 @@ public static class PredictionMarketExtensions
             "Under2.5Goals" => PredictionMarket.Under25Goals,
             "StraightWin" => PredictionMarket.StraightWin,
             "Draw" => PredictionMarket.Draw,
+            "Over1.5Goals" => PredictionMarket.Over15Goals,
+            "DoubleChance" => PredictionMarket.DoubleChance,
             _ => default
         };
 
-        return category is "BothTeamsScore" or "Over2.5Goals" or "Under2.5Goals" or "StraightWin" or "Draw";
+        return category is "BothTeamsScore" or "Over2.5Goals" or "Under2.5Goals" or "StraightWin" or "Draw" or "Over1.5Goals" or "DoubleChance";
     }
 }

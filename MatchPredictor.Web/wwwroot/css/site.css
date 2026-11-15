@@ -805,6 +805,18 @@ a:hover {
   border: 1px solid rgba(6, 182, 212, 0.2);
 }
 
+.mp-badge-over15 {
+  background: rgba(6, 182, 212, 0.12);
+  color: var(--accent-cyan);
+  border: 1px solid rgba(6, 182, 212, 0.2);
+}
+
+.mp-badge-double-chance {
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--accent-emerald);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
 /* ─── Score Display ─── */
 .mp-score {
   flex-shrink: 0;
@@ -5659,6 +5671,16 @@ a:hover {
 .mp-dot-draw {
   background: #94a3b8;
   box-shadow: 0 0 8px rgba(148, 163, 184, 0.6);
+}
+
+.mp-dot-over15 {
+  background: #06b6d4;
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.6);
+}
+
+.mp-dot-dc {
+  background: #10b981;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
 }
 
 /* Navbar Tip Button */

@@ -37,6 +37,12 @@ public class CachedPredictionQueries : IPredictionQueries
     public Task<IReadOnlyList<Prediction>> GetDrawAsync(DateTime date) =>
         GetOrCreateAsync($"predictions:draw:{date:yyyy-MM-dd}", () => _inner.GetDrawAsync(date));
 
+    public Task<IReadOnlyList<Prediction>> GetOver15Async(DateTime date) =>
+        GetOrCreateAsync($"predictions:over15:{date:yyyy-MM-dd}", () => _inner.GetOver15Async(date));
+
+    public Task<IReadOnlyList<Prediction>> GetDoubleChanceAsync(DateTime date) =>
+        GetOrCreateAsync($"predictions:doublechance:{date:yyyy-MM-dd}", () => _inner.GetDoubleChanceAsync(date));
+
     public Task<IReadOnlyList<Prediction>> GetRecentSettledPublishedAsync(int days = 30)
     {
         var windowDays = Math.Clamp(days, 1, 90);

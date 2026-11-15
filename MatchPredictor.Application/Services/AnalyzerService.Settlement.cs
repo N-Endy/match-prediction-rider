@@ -1539,8 +1539,30 @@ public partial class AnalyzerService
             "Over2.5Goals" => DetermineOver25Outcome(score),
             "Under2.5Goals" => DetermineOver25Outcome(score),
             "StraightWin" => DetermineStraightWinOutcome(score),
+            "Over1.5Goals" => DetermineOver15Outcome(score),
+            "DoubleChance" => DetermineDoubleChanceOutcome(score),
             _ => null
         };
+    }
+
+    private string DetermineOver15Outcome(string score)
+    {
+        if (TryParseScore(score, out var homeGoals, out var awayGoals))
+        {
+            return homeGoals + awayGoals >= 2 ? "Over 1.5" : "Under 1.5";
+        }
+        return "Unknown";
+    }
+
+    private string DetermineDoubleChanceOutcome(string score)
+    {
+        if (TryParseScore(score, out var homeGoals, out var awayGoals))
+        {
+            if (homeGoals > awayGoals) return "1X, 12";
+            if (homeGoals == awayGoals) return "1X, X2";
+            return "X2, 12";
+        }
+        return "Unknown";
     }
 
     private string DetermineBttsOutcome(string score, bool? fallbackBttsLabel)
@@ -1647,6 +1669,25 @@ public partial class AnalyzerService
                 }
                 return DetermineStraightWinOutcome(score) == "Home Win" || DetermineStraightWinOutcome(score) == "Away Win";
 
+            case PredictionMarket.Over15Goals:
+                return TryParseScore(score, out var homeO15, out var awayO15)
+                    ? homeO15 + awayO15 >= 2
+                    : null;
+
+            case PredictionMarket.DoubleChance:
+                if (TryParseScore(score, out var homeDc, out var awayDc))
+                {
+                    var norm = (predictedOutcome ?? string.Empty).Trim().ToLowerInvariant();
+                    return norm switch
+                    {
+                        "1x" or "1/x" or "home or draw" or "home/draw" => homeDc >= awayDc,
+                        "x2" or "x/2" or "draw or away" or "draw/away" => awayDc >= homeDc,
+                        "12" or "1/2" or "home or away" or "home/away" => homeDc != awayDc,
+                        _ => homeDc >= awayDc
+                    };
+                }
+                return null;
+
             default:
                 return null;
         }
@@ -1663,6 +1704,8 @@ public partial class AnalyzerService
             PredictionMarket.HomeWin => (DetermineForecastOutcomeOccurred(market, score, bttsLabel) ?? false) ? "Home Win" : "Not Home Win",
             PredictionMarket.AwayWin => (DetermineForecastOutcomeOccurred(market, score, bttsLabel) ?? false) ? "Away Win" : "Not Away Win",
             PredictionMarket.StraightWin => DetermineStraightWinOutcome(score),
+            PredictionMarket.Over15Goals => DetermineOver15Outcome(score),
+            PredictionMarket.DoubleChance => DetermineDoubleChanceOutcome(score),
             _ => null
         };
     }
@@ -1704,6 +1747,7 @@ public partial class AnalyzerService
         {
             PredictionMarket.BothTeamsScore => HasBothTeamsScored(score, bttsLabel),
             PredictionMarket.Over25Goals => HasOver25BeenMet(score),
+            PredictionMarket.Over15Goals => HasOver15BeenMet(score),
             _ => false
         };
     }
@@ -1722,6 +1766,12 @@ public partial class AnalyzerService
     {
         return TryParseScore(score, out var homeGoals, out var awayGoals) &&
                homeGoals + awayGoals > 2;
+    }
+
+    private static bool HasOver15BeenMet(string score)
+    {
+        return TryParseScore(score, out var homeGoals, out var awayGoals) &&
+               homeGoals + awayGoals >= 2;
     }
 
     

@@ -23,7 +23,9 @@ public class CalibrationService : ICalibrationService
         PredictionMarket.Under25Goals,
         PredictionMarket.HomeWin,
         PredictionMarket.AwayWin,
-        PredictionMarket.Draw
+        PredictionMarket.Draw,
+        PredictionMarket.Over15Goals,
+        PredictionMarket.DoubleChance
     ];
     private readonly ApplicationDbContext _dbContext;
     private List<MarketCalibrationProfile>? _profiles;

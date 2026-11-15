@@ -55,6 +55,8 @@ public static partial class PredictionScoreClassHelper
                 "Under2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 "Draw" => DoesDrawPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 "StraightWin" => DoesStraightWinPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+                "Over1.5Goals" => DoesOver15PredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
+                "DoubleChance" => DoesDoubleChancePredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
                 _ => OutcomesMatch(prediction.PredictedOutcome, prediction.ActualOutcome)
             };
         }
@@ -79,6 +81,7 @@ public static partial class PredictionScoreClassHelper
             "BothTeamsScore" => DoesBttsPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
             "Over2.5Goals" => DoesOverPredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
             "Under2.5Goals" => false,
+            "Over1.5Goals" => DoesOver15PredictionMatch(prediction.PredictedOutcome, homeGoals, awayGoals),
             _ => false
         };
     }
@@ -98,6 +101,7 @@ public static partial class PredictionScoreClassHelper
             "BothTeamsScore" => bothTeamsScored,
             "Over2.5Goals" => totalGoals > 2,
             "Under2.5Goals" => totalGoals > 2,
+            "Over1.5Goals" => totalGoals >= 2,
             _ => false
         };
     }
@@ -174,6 +178,32 @@ public static partial class PredictionScoreClassHelper
             "home win" or "home" or "1" => homeGoals > awayGoals,
             "away win" or "away" or "2" => awayGoals > homeGoals,
             "draw" or "x" => homeGoals == awayGoals,
+            _ => false
+        };
+    }
+
+    private static bool DoesOver15PredictionMatch(string? predictedOutcome, int homeGoals, int awayGoals)
+    {
+        var isOver15 = homeGoals + awayGoals >= 2;
+        var normalized = NormalizeOutcome(predictedOutcome);
+
+        if (normalized.Contains("under"))
+        {
+            return !isOver15;
+        }
+
+        return isOver15;
+    }
+
+    private static bool DoesDoubleChancePredictionMatch(string? predictedOutcome, int homeGoals, int awayGoals)
+    {
+        var normalized = NormalizeOutcome(predictedOutcome);
+
+        return normalized switch
+        {
+            "1x" or "1/x" or "home or draw" or "home/draw" => homeGoals >= awayGoals,
+            "x2" or "x/2" or "draw or away" or "draw/away" => awayGoals >= homeGoals,
+            "12" or "1/2" or "home or away" or "home/away" => homeGoals != awayGoals,
             _ => false
         };
     }

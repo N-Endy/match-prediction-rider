@@ -1250,6 +1250,8 @@ public class SportyBetBookingService : ISportyBetBookingService, ISourceMarketPr
             "BothTeamsScore" => "BTTS",
             "Over2.5Goals" => "Over2.5",
             "Under2.5Goals" => "Under2.5",
+            "Over1.5Goals" => "Over1.5",
+            "DoubleChance" => "DoubleChance",
             _ => "1X2"
         };
     }

@@ -31,6 +31,12 @@ public class PredictionQueries : IPredictionQueries
     public Task<IReadOnlyList<Prediction>> GetDrawAsync(DateTime date) =>
         GetByCategoryAsync(date, "Draw");
 
+    public Task<IReadOnlyList<Prediction>> GetOver15Async(DateTime date) =>
+        GetByCategoryAsync(date, "Over1.5Goals");
+
+    public Task<IReadOnlyList<Prediction>> GetDoubleChanceAsync(DateTime date) =>
+        GetByCategoryAsync(date, "DoubleChance");
+
     public async Task<IReadOnlyList<Prediction>> GetRecentSettledPublishedAsync(int days = 30)
     {
         var windowDays = Math.Clamp(days, 1, 90);

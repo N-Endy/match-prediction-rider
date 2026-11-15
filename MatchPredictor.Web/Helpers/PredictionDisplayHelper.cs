@@ -74,6 +74,8 @@ public static class PredictionDisplayHelper
             "Draw" => "mp-badge-draw",
             "StraightWin" when string.Equals(prediction.PredictedOutcome, "Away Win", StringComparison.OrdinalIgnoreCase) => "mp-badge-win-away",
             "StraightWin" => "mp-badge-win-home",
+            "Over1.5Goals" => "mp-badge-over15",
+            "DoubleChance" => "mp-badge-double-chance",
             _ => "mp-badge-combined"
         };
     }
@@ -86,6 +88,8 @@ public static class PredictionDisplayHelper
             "Over2.5Goals" or "Under2.5Goals" => prediction.PredictedOutcome ?? prediction.PredictionCategory,
             "Draw" => "Draw",
             "StraightWin" => prediction.PredictedOutcome ?? "Win",
+            "Over1.5Goals" => prediction.PredictedOutcome ?? "Over 1.5",
+            "DoubleChance" => prediction.PredictedOutcome ?? "Double Chance",
             _ => prediction.PredictedOutcome ?? prediction.PredictionCategory
         };
     }
@@ -99,6 +103,8 @@ public static class PredictionDisplayHelper
             "Under2.5Goals" => "Under2.5",
             "Draw" => "1X2",
             "StraightWin" => "StraightWin",
+            "Over1.5Goals" => "Over1.5",
+            "DoubleChance" => "DoubleChance",
             _ => prediction.PredictionCategory
         };
     }
