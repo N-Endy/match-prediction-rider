@@ -1137,7 +1137,11 @@ public class DataAnalyzerService : IDataAnalyzerService
                 ["under25"] = probabilities.Under25,
                 ["homeWin"] = probabilities.HomeWin,
                 ["awayWin"] = probabilities.AwayWin,
-                ["draw"] = probabilities.Draw
+                ["draw"] = probabilities.Draw,
+                ["over15"] = probabilities.Over15,
+                ["doubleChance1X"] = probabilities.DoubleChance1X,
+                ["doubleChanceX2"] = probabilities.DoubleChanceX2,
+                ["doubleChance12"] = probabilities.DoubleChance12
             },
             ["statisticalSignal"] = statisticalSignal is null
                 ? null
@@ -1147,7 +1151,11 @@ public class DataAnalyzerService : IDataAnalyzerService
                     statisticalSignal.Under25,
                     statisticalSignal.HomeWin,
                     statisticalSignal.AwayWin,
-                    statisticalSignal.Draw),
+                    statisticalSignal.Draw,
+                    statisticalSignal.Over15,
+                    statisticalSignal.DoubleChance1X,
+                    statisticalSignal.DoubleChanceX2,
+                    statisticalSignal.DoubleChance12),
             ["statisticalSignalApplied"] = statisticalSignal is not null,
             ["calculatorSignal"] = BuildProbabilitySignalMap(
                 calculatorSignal.Btts,
@@ -1155,7 +1163,11 @@ public class DataAnalyzerService : IDataAnalyzerService
                 calculatorSignal.Under25,
                 calculatorSignal.HomeWin,
                 calculatorSignal.AwayWin,
-                calculatorSignal.Draw),
+                calculatorSignal.Draw,
+                calculatorSignal.Over15,
+                calculatorSignal.DoubleChance1X,
+                calculatorSignal.DoubleChanceX2,
+                calculatorSignal.DoubleChance12),
             ["bookmakerSignal"] = bookmakerSignal is null
                 ? null
                 : BuildProbabilitySignalMap(
@@ -1164,7 +1176,8 @@ public class DataAnalyzerService : IDataAnalyzerService
                     bookmakerSignal.Under25,
                     bookmakerSignal.HomeWin,
                     bookmakerSignal.AwayWin,
-                    bookmakerSignal.Draw),
+                    bookmakerSignal.Draw,
+                    bookmakerSignal.Over15),
             ["bookmakerSignalApplied"] = bookmakerSignal is not null,
             ["mlSignal"] = mlSignal,
             ["mlSignalApplied"] = mlSignal is not null,
@@ -1182,9 +1195,17 @@ public class DataAnalyzerService : IDataAnalyzerService
         double? under25,
         double? homeWin,
         double? awayWin,
-        double? draw)
+        double? draw,
+        double? over15 = null,
+        double? dc1X = null,
+        double? dcX2 = null,
+        double? dc12 = null)
     {
         var resolvedUnder25 = under25 ?? (over25 is double over ? 1.0 - over : null);
+        var resolvedDc1X = dc1X ?? (homeWin.HasValue && draw.HasValue ? Math.Clamp(homeWin.Value + draw.Value, 0.0, 1.0) : null);
+        var resolvedDcX2 = dcX2 ?? (awayWin.HasValue && draw.HasValue ? Math.Clamp(awayWin.Value + draw.Value, 0.0, 1.0) : null);
+        var resolvedDc12 = dc12 ?? (homeWin.HasValue && awayWin.HasValue ? Math.Clamp(homeWin.Value + awayWin.Value, 0.0, 1.0) : null);
+
         return new Dictionary<string, double?>
         {
             ["btts"] = btts,
@@ -1192,7 +1213,11 @@ public class DataAnalyzerService : IDataAnalyzerService
             ["under25"] = resolvedUnder25,
             ["homeWin"] = homeWin,
             ["awayWin"] = awayWin,
-            ["draw"] = draw
+            ["draw"] = draw,
+            ["over15"] = over15,
+            ["doubleChance1X"] = resolvedDc1X,
+            ["doubleChanceX2"] = resolvedDcX2,
+            ["doubleChance12"] = resolvedDc12
         };
     }
 

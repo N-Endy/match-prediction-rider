@@ -65,10 +65,11 @@ public static partial class AiChatContextBuilder
         string userPrompt,
         DateTime nowUtc,
         IReadOnlyDictionary<int, AiChatCandidatePricing>? pricingByPredictionId = null,
-        int limit = 40)
+        int limit = 40,
+        IReadOnlyDictionary<int, string>? featureContributionsByPredictionId = null)
     {
         var parsed = AiChatRequestParser.ParseDeterministic(userPrompt, null, false, false);
-        return BuildSelection(predictions, parsed.Request, nowUtc, pricingByPredictionId, limit);
+        return BuildSelection(predictions, parsed.Request, nowUtc, pricingByPredictionId, limit, featureContributionsByPredictionId);
     }
 
     public static AiChatContextSelection BuildSelection(
@@ -76,11 +77,16 @@ public static partial class AiChatContextBuilder
         AiChatNormalizedRequest request,
         DateTime nowUtc,
         IReadOnlyDictionary<int, AiChatCandidatePricing>? pricingByPredictionId = null,
-        int limit = 40)
+        int limit = 40,
+        IReadOnlyDictionary<int, string>? featureContributionsByPredictionId = null)
     {
         var nowLocal = DateTimeProvider.ConvertUtcToLocal(nowUtc);
         var todayLocalDate = DateOnly.FromDateTime(nowLocal);
-        var candidates = BuildCandidateCatalog(predictions, nowUtc, pricingByPredictionId);
+        var candidates = BuildCandidateCatalog(
+            predictions,
+            nowUtc,
+            pricingByPredictionId,
+            featureContributionsByPredictionId);
 
         if (candidates.Count == 0)
         {

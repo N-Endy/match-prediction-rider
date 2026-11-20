@@ -247,7 +247,12 @@ public class AiAdvisorService : IAiAdvisorService
             ? predictions.Where(prediction => contextCandidates.Any(candidate => candidate.PredictionId == prediction.Id)).ToList()
             : predictions;
 
-        var selection = AiChatContextBuilder.BuildSelection(predictionsForSelection, normalizedRequest, DateTime.UtcNow, pricingByPredictionId);
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictionsForSelection,
+            normalizedRequest,
+            DateTime.UtcNow,
+            pricingByPredictionId,
+            featureContributionsByPredictionId: featureContributionsByPredictionId);
         var relevantCandidates = selection.Candidates.Count > 0 ? selection.Candidates : contextCandidates;
         var llmConfigured = _chatClient.IsConfigured;
 
@@ -3393,10 +3398,12 @@ public class AiAdvisorService : IAiAdvisorService
             - If footballInsight is absent, do not claim form or team-performance stats.
             - If a candidate includes actualScore or actualOutcome, you may explain why it settled green/red using only those fields.
 
-            SIGNAL INTERPRETATION:
-            - When allSignalsAlign is true or signalSpreadPoints < 5: call it consensus — higher conviction (tag as BANKER).
-            - When modelEdgePoints is positive: tag as VALUE.
-            - Solid high-probability picks: tag as SOLID.
+            SIGNAL INTERPRETATION & CONVICTION TAGS:
+            - BANKER (Anchor picks with highest conviction):
+              * When signal agreement data is present: Qualifies if sub-model consensus is confirmed (allSignalsAlign is true or signalSpreadPoints < 5), OR dual-qualification: ultra-high confidence (calibratedConfidence >= 0.80 and marginAboveThreshold >= 0.10) in low-variance markets (Straight Win, Double Chance 1X/X2, or Over 1.5 Goals).
+              * When modelSignals or signalAgreement are null/unavailable: Qualifies as BANKER under Safe Anchor rules: calibratedConfidence >= 0.75 (75%+), marginAboveThreshold >= 0.10 (>= 10pp), estimatedOdds <= 1.50 (or odds unavailable), and low-variance market (Straight Win, Double Chance 1X/X2, or Over 1.5 Goals). In this case, explain that conviction is anchored by high calibrated probability and safety margin rather than signal consensus.
+            - VALUE: When modelEdgePoints is positive (> 0).
+            - SOLID: Safe, high-probability picks meeting publish thresholds that do not meet BANKER or VALUE criteria.
             - When modelEdgePoints is positive but modelDivergesFromBookmaker is true: flag as model-only edge and use lower conviction language.
             - When footballInsight contradicts the model edge, you may drop or demote that pick. Do not treat the C# ranking as final.
             - When footballInsight supports a lower-confidence candidate (strong form, venue, or head-to-head), you may promote it over a weaker-research high-confidence pick.

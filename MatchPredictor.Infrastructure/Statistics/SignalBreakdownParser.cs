@@ -154,8 +154,36 @@ public static class SignalBreakdownParser
             "Under2.5Goals" => "under25",
             "Draw" => "draw",
             "StraightWin" => predictedOutcome.Contains("Away", StringComparison.OrdinalIgnoreCase) ? "awayWin" : "homeWin",
+            "Over1.5Goals" => "over15",
+            "DoubleChance" => ResolveDoubleChanceSignalKey(predictedOutcome),
             _ => null
         };
+    }
+
+    private static string? ResolveDoubleChanceSignalKey(string predictedOutcome)
+    {
+        if (predictedOutcome.Contains("1X", StringComparison.OrdinalIgnoreCase) ||
+            predictedOutcome.Contains("Home/Draw", StringComparison.OrdinalIgnoreCase) ||
+            predictedOutcome.Contains("Home or Draw", StringComparison.OrdinalIgnoreCase))
+        {
+            return "doubleChance1X";
+        }
+
+        if (predictedOutcome.Contains("X2", StringComparison.OrdinalIgnoreCase) ||
+            predictedOutcome.Contains("Draw/Away", StringComparison.OrdinalIgnoreCase) ||
+            predictedOutcome.Contains("Draw or Away", StringComparison.OrdinalIgnoreCase))
+        {
+            return "doubleChanceX2";
+        }
+
+        if (predictedOutcome.Contains("12", StringComparison.OrdinalIgnoreCase) ||
+            predictedOutcome.Contains("Home/Away", StringComparison.OrdinalIgnoreCase) ||
+            predictedOutcome.Contains("Home or Away", StringComparison.OrdinalIgnoreCase))
+        {
+            return "doubleChance12";
+        }
+
+        return null;
     }
 
     private static double? ReadSectionProbability(JsonElement root, string sectionName, string signalKey)
@@ -167,12 +195,50 @@ public static class SignalBreakdownParser
             return null;
         }
 
-        if (!section.TryGetProperty(signalKey, out var value) || value.ValueKind != JsonValueKind.Number)
+        if (section.TryGetProperty(signalKey, out var value) && value.ValueKind == JsonValueKind.Number)
         {
-            return null;
+            return value.TryGetDouble(out var probability) ? probability : null;
         }
 
-        return value.TryGetDouble(out var probability) ? probability : null;
+        if (signalKey == "doubleChance1X")
+        {
+            var home = ReadDoubleProperty(section, "homeWin");
+            var draw = ReadDoubleProperty(section, "draw");
+            if (home.HasValue && draw.HasValue)
+            {
+                return Math.Clamp(home.Value + draw.Value, 0.0, 1.0);
+            }
+        }
+        else if (signalKey == "doubleChanceX2")
+        {
+            var away = ReadDoubleProperty(section, "awayWin");
+            var draw = ReadDoubleProperty(section, "draw");
+            if (away.HasValue && draw.HasValue)
+            {
+                return Math.Clamp(away.Value + draw.Value, 0.0, 1.0);
+            }
+        }
+        else if (signalKey == "doubleChance12")
+        {
+            var home = ReadDoubleProperty(section, "homeWin");
+            var away = ReadDoubleProperty(section, "awayWin");
+            if (home.HasValue && away.HasValue)
+            {
+                return Math.Clamp(home.Value + away.Value, 0.0, 1.0);
+            }
+        }
+
+        return null;
+    }
+
+    private static double? ReadDoubleProperty(JsonElement element, string propertyName)
+    {
+        if (element.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.Number)
+        {
+            return prop.TryGetDouble(out var val) ? val : null;
+        }
+
+        return null;
     }
 
     private static double? RoundProbability(double? value) =>

@@ -758,6 +758,49 @@ public class AiChatContextBuilderTests
         Assert.Contains(selection.Candidates, candidate => candidate.PredictionCategory == "Over2.5Goals");
     }
 
+    [Fact]
+    public void BuildSelection_PopulatesSignalBreakdown_WhenFeatureContributionsProvided()
+    {
+        var nowUtc = DateTime.UtcNow;
+        var predictions = new[]
+        {
+            CreatePrediction(10, "DoubleChance", "1X", "Arsenal", "Chelsea", "England - Premier League", 0.85m, matchDateTimeUtc: nowUtc.AddHours(2))
+        };
+
+        const string featureContributionsJson = """
+            {
+              "market": "DoubleChance",
+              "calculatorSignal": { "homeWin": 0.55, "draw": 0.30, "awayWin": 0.15 },
+              "bookmakerSignal": { "homeWin": 0.53, "draw": 0.31, "awayWin": 0.16 },
+              "statisticalSignal": { "homeWin": 0.56, "draw": 0.29, "awayWin": 0.15 },
+              "modelOutputs": { "doubleChance1X": 0.85 },
+              "statisticalSignalApplied": true
+            }
+            """;
+
+        var contributionsByPredictionId = new Dictionary<int, string>
+        {
+            [10] = featureContributionsJson
+        };
+
+        var selection = AiChatContextBuilder.BuildSelection(
+            predictions,
+            "Give me today's safe double chance picks",
+            nowUtc,
+            pricingByPredictionId: null,
+            limit: 10,
+            featureContributionsByPredictionId: contributionsByPredictionId);
+
+        Assert.Single(selection.Candidates);
+        var candidate = selection.Candidates[0];
+        Assert.NotNull(candidate.SignalBreakdown);
+        Assert.NotNull(candidate.SignalBreakdown!.ModelSignals);
+        Assert.NotNull(candidate.SignalBreakdown.SignalAgreement);
+        Assert.True(candidate.SignalBreakdown.SignalAgreement.AllSignalsAlign);
+        Assert.Equal(85.0, candidate.SignalBreakdown.ModelSignals.Feed);
+        Assert.Equal(84.0, candidate.SignalBreakdown.ModelSignals.Bookmaker);
+    }
+
     private static Prediction CreatePrediction(
         int id,
         string category,
