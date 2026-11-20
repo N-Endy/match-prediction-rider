@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using MatchPredictor.Domain.Helpers;
 using MatchPredictor.Domain.Interfaces;
 using MatchPredictor.Domain.Models;
@@ -512,7 +513,7 @@ public class AiAdvisorService : IAiAdvisorService
             ct,
             jsonMode: !useWebSearch,
             temperature: 0.2,
-            maxTokens: useWebSearch ? 4000 : 2500,
+            maxTokens: useWebSearch ? 4500 : 4000,
             useWebSearch: useWebSearch,
             timeoutSeconds: useWebSearch ? OpenAiCompatibleChatCompletionsClient.WebSearchTimeoutSeconds : null);
 
@@ -3421,6 +3422,7 @@ public class AiAdvisorService : IAiAdvisorService
             - "Best" and "safe" picks should still respect model threshold, but blend in form, venue, and head-to-head when footballInsight is present.
             - "Safe" requests: prefer Straight Win, Double Chance, or Over 1.5 Goals, confidence >= threshold + 8pp, estimatedOdds <= 1.75, and signal agreement when available — unless research clearly warns against a candidate.
             - "Value" requests: require modelEdgePoints > 0 and mention edge in the explanation.
+            - When the user asks for "all games" or "all banker picks", recommend every candidate from the supplied card that qualifies as BANKER (recommend up to 8 strongest qualifying legs in the recommendations array, and summarize all findings in the message).
             - Prefer low-variance Straight Win, Double Chance, or Over 1.5 setups when the user asks for safer options.
             - When footballInsight is present, cite 1-2 concrete football signals from the supplied stats in the explanation.
             - If footballInsight.dataQuality is Low or footballInsight.isLowConfidence is true, lean more on the model edge than the thin form sample.
@@ -3852,14 +3854,18 @@ public class AiAdvisorService : IAiAdvisorService
 
     private static List<AiChatAction> BuildDeterministicFallbackActions(AiChatContextBuilder.AiChatContextSelection selection)
     {
-        if (selection.RequestedCandidateCount <= 0)
+        var targetCount = selection.RequestedCandidateCount > 0
+            ? Math.Min(selection.RequestedCandidateCount, MaxRecommendedActions)
+            : Math.Min(5, Math.Min(selection.Candidates.Count, MaxRecommendedActions));
+
+        if (targetCount <= 0 || selection.Candidates.Count == 0)
         {
             return [];
         }
 
         return selection.Candidates
             .Where(candidate => candidate.CanBook)
-            .Take(Math.Min(selection.RequestedCandidateCount, MaxRecommendedActions))
+            .Take(targetCount)
             .Select(candidate => CreateAction(candidate, BuildDefaultActionExplanation(candidate)))
             .ToList();
     }
@@ -3969,22 +3975,237 @@ public class AiAdvisorService : IAiAdvisorService
             return false;
         }
 
-        try
-        {
-            response = JsonSerializer.Deserialize<ChatModelResponse>(rawResponse, JsonOptions()) ?? new ChatModelResponse();
-            return true;
-        }
-        catch
+        var cleaned = ExtractJsonPayload(rawResponse);
+        if (string.IsNullOrWhiteSpace(cleaned))
         {
             return false;
         }
+
+        // 1. Direct deserialization attempt with permissive options
+        try
+        {
+            response = JsonSerializer.Deserialize<ChatModelResponse>(cleaned, JsonOptions()) ?? new ChatModelResponse();
+            if (!string.IsNullOrWhiteSpace(response.Message) || (response.Recommendations?.Count ?? 0) > 0)
+            {
+                return true;
+            }
+        }
+        catch
+        {
+            // Fall through to control character sanitization
+        }
+
+        // 2. Control character sanitization (literal unescaped newlines/tabs inside string literals)
+        try
+        {
+            var sanitized = SanitizeJsonStringLiterals(cleaned);
+            response = JsonSerializer.Deserialize<ChatModelResponse>(sanitized, JsonOptions()) ?? new ChatModelResponse();
+            if (!string.IsNullOrWhiteSpace(response.Message) || (response.Recommendations?.Count ?? 0) > 0)
+            {
+                return true;
+            }
+        }
+        catch
+        {
+            // Fall through to salvage extraction
+        }
+
+        // 3. Salvage parser for truncated or semi-malformed JSON from LLM
+        return TrySalvageChatModelResponse(cleaned, out response);
+    }
+
+    private static string ExtractJsonPayload(string raw)
+    {
+        var text = raw.Trim();
+
+        // Strip markdown code fences if wrapping the string
+        if (text.StartsWith("```", StringComparison.Ordinal))
+        {
+            var firstLineBreak = text.IndexOf('\n');
+            if (firstLineBreak >= 0)
+            {
+                text = text[(firstLineBreak + 1)..].Trim();
+            }
+            else
+            {
+                text = text.TrimStart('`').Trim();
+            }
+        }
+
+        if (text.EndsWith("```", StringComparison.Ordinal))
+        {
+            var lastFence = text.LastIndexOf("```", StringComparison.Ordinal);
+            if (lastFence >= 0)
+            {
+                text = text[..lastFence].Trim();
+            }
+        }
+
+        // Isolate outermost JSON object if conversational preamble or postscript is present
+        var firstBrace = text.IndexOf('{');
+        var lastBrace = text.LastIndexOf('}');
+
+        if (firstBrace >= 0 && lastBrace > firstBrace)
+        {
+            return text.Substring(firstBrace, lastBrace - firstBrace + 1);
+        }
+
+        if (firstBrace >= 0)
+        {
+            return text[firstBrace..];
+        }
+
+        return text;
+    }
+
+    private static string SanitizeJsonStringLiterals(string json)
+    {
+        var sb = new StringBuilder(json.Length + 100);
+        var inString = false;
+        var isEscaped = false;
+
+        for (var i = 0; i < json.Length; i++)
+        {
+            var c = json[i];
+
+            if (c == '\\' && inString)
+            {
+                isEscaped = !isEscaped;
+                sb.Append(c);
+                continue;
+            }
+
+            if (c == '"' && !isEscaped)
+            {
+                inString = !inString;
+                sb.Append(c);
+                continue;
+            }
+
+            if (inString && !isEscaped)
+            {
+                switch (c)
+                {
+                    case '\r':
+                        break;
+                    case '\n':
+                        sb.Append("\\n");
+                        break;
+                    case '\t':
+                        sb.Append("\\t");
+                        break;
+                    default:
+                        if (char.IsControl(c))
+                        {
+                            sb.Append($"\\u{(int)c:x4}");
+                        }
+                        else
+                        {
+                            sb.Append(c);
+                        }
+                        break;
+                }
+            }
+            else
+            {
+                sb.Append(c);
+            }
+
+            isEscaped = false;
+        }
+
+        return sb.ToString();
+    }
+
+    private static bool TrySalvageChatModelResponse(string cleaned, out ChatModelResponse response)
+    {
+        response = new ChatModelResponse();
+
+        if (string.IsNullOrWhiteSpace(cleaned))
+        {
+            return false;
+        }
+
+        // Must at least have some JSON-like marker or recommendations keyword
+        if (!cleaned.Contains("\"message\"", StringComparison.OrdinalIgnoreCase) &&
+            !cleaned.Contains("\"recommendations\"", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var messageMatch = Regex.Match(
+            cleaned,
+            @"""message""\s*:\s*""(?<msg>(?:\\.|[^""\\])*)",
+            RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+        var extractedMessage = string.Empty;
+        if (messageMatch.Success)
+        {
+            var rawMsg = messageMatch.Groups["msg"].Value;
+            try
+            {
+                extractedMessage = Regex.Unescape(rawMsg);
+            }
+            catch
+            {
+                extractedMessage = rawMsg.Replace("\\n", "\n").Replace("\\\"", "\"").Replace("\\\\", "\\");
+            }
+        }
+
+        var recommendations = new List<ChatModelRecommendation>();
+        var actionMatches = Regex.Matches(
+            cleaned,
+            @"""actionKey""\s*:\s*""(?<key>[^""]+)""(?:[^{}]*?""explanation""\s*:\s*""(?<exp>(?:\\.|[^""\\])*)"")?",
+            RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+        foreach (Match match in actionMatches)
+        {
+            var key = match.Groups["key"].Value.Trim();
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            var exp = match.Groups["exp"].Success ? match.Groups["exp"].Value : string.Empty;
+            try
+            {
+                exp = Regex.Unescape(exp);
+            }
+            catch
+            {
+                exp = exp.Replace("\\n", "\n").Replace("\\\"", "\"");
+            }
+
+            recommendations.Add(new ChatModelRecommendation
+            {
+                ActionKey = key,
+                Explanation = exp
+            });
+        }
+
+        var showBookAll = Regex.IsMatch(cleaned, @"""showBookAll""\s*:\s*true", RegexOptions.IgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(extractedMessage) || recommendations.Count > 0)
+        {
+            response = new ChatModelResponse
+            {
+                Message = extractedMessage,
+                Recommendations = recommendations,
+                ShowBookAll = showBookAll
+            };
+            return true;
+        }
+
+        return false;
     }
 
     private static JsonSerializerOptions JsonOptions()
     {
         return new JsonSerializerOptions
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
+            AllowTrailingCommas = true,
+            ReadCommentHandling = JsonCommentHandling.Skip
         };
     }
 

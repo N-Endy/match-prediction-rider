@@ -74,6 +74,77 @@ public class AiAdvisorServiceTests
     }
 
     [Fact]
+    public async Task GetAdviceAsync_ParsesMarkdownFencedJsonResponse()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(context, 2);
+        var validActionKey = $"P{predictions[0].Id}";
+
+        var fencedJson = $$"""
+            ```json
+            {
+              "message": "🎟️ BANKER Ticket done — 1 leg at 1.45x odds\n\n1. ⚽ Match 1 vs Opponent 1\n🎯 Straight Win — Home Win @1.45 — BANKER",
+              "recommendations": [
+                { "actionKey": "{{validActionKey}}", "explanation": "Solid 80% model confidence." }
+              ],
+              "showBookAll": false
+            }
+            ```
+            """;
+
+        var handler = new SequenceHttpMessageHandler(BuildGroqResponse(fencedJson));
+        var service = CreateService(context, handler);
+
+        var response = await service.GetAdviceAsync("List all games tagged as BANKER on today's card.", "session-fenced");
+
+        Assert.Contains("BANKER Ticket", response.Message);
+        var action = Assert.Single(response.Actions);
+        Assert.Equal(validActionKey, action.ActionKey);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_SalvagesTruncatedJsonResponse()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(context, 2);
+        var validActionKey = $"P{predictions[0].Id}";
+
+        // Simulating JSON truncated mid-stream because token limit was hit
+        var truncatedJson = $$"""
+            {
+              "message": "Here is today's banker breakdown across the slate.",
+              "recommendations": [
+                { "actionKey": "{{validActionKey}}", "explanation": "79% confidence anchor." },
+                { "actionKey": "P99999", "explanation": "Incomplete
+            """;
+
+        var handler = new SequenceHttpMessageHandler(BuildGroqResponse(truncatedJson));
+        var service = CreateService(context, handler);
+
+        var response = await service.GetAdviceAsync("Show me all banker picks across today's card.", "session-truncated");
+
+        Assert.Contains("banker breakdown", response.Message);
+        var action = Assert.Single(response.Actions);
+        Assert.Equal(validActionKey, action.ActionKey);
+    }
+
+    [Fact]
+    public async Task GetAdviceAsync_DeterministicFallback_LinesUpPicksWhenNoCountSpecified()
+    {
+        await using var context = CreateContext();
+        var predictions = await SeedPredictionsAsync(context, 3);
+
+        var handler = new SequenceHttpMessageHandler(BuildGroqResponse("Not valid json whatsoever."));
+        var service = CreateService(context, handler);
+
+        var response = await service.GetAdviceAsync("Show me all banker picks across today's card.", "session-fallback-nocount");
+
+        Assert.Equal("I couldn't generate a clean response just now. I lined up the strongest published picks from today's card instead.", response.Message);
+        Assert.NotEmpty(response.Actions);
+        Assert.True(response.Actions.Count <= 5);
+    }
+
+    [Fact]
     public async Task GetAdviceAsync_DoesNotPadResearchedShortlist_WhenModelReturnsFewerKeys()
     {
         await using var context = CreateContext();

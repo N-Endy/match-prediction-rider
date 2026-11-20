@@ -437,11 +437,23 @@ public static partial class AiChatContextBuilder
         if (string.Equals(request.SafetyBias, "safer", StringComparison.OrdinalIgnoreCase))
         {
             score += candidate.PredictionCategory == "StraightWin" ? 20d : 0d;
+            score += (candidate.PredictionCategory == "DoubleChance" || candidate.PredictionCategory == "Over1.5Goals") ? 25d : 0d;
             score -= candidate.PredictionCategory == "Draw" ? 10d : 0d;
 
             if (candidate.EstimatedOdds is > 0)
             {
                 score += candidate.EstimatedOdds <= 1.65 ? 12d : Math.Max(-18d, 12d - ((candidate.EstimatedOdds.Value - 1.65d) * 20d));
+            }
+
+            if (candidate.ConfidenceScore >= 0.75m)
+            {
+                score += 30d;
+            }
+
+            if (candidate.SignalBreakdown?.SignalAgreement.AllSignalsAlign == true ||
+                candidate.SignalBreakdown?.SignalAgreement.SignalSpreadPoints < 5.0)
+            {
+                score += 25d;
             }
         }
 
